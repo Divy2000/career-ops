@@ -443,6 +443,23 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(writers('generate-latex.mjs'), 'node generate-latex.mjs output/cv.tex --compileonly');
   });
 
+  it('scripts that read paths by index: a flag can never fill a path slot, even when fewer paths are given', () => {
+    const writers = (script: string) => ({ ...pdf, bash: [['node', script]] });
+    // The review trigger: build-cv-latex reads [input, output] = argv, so a lone input makes --template=... the output.
+    no(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs output/cv.json --template=x/../cv.md');
+    no(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs output/cv.json --template=x/../data/applications.md');
+    no(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs output/cv.json --test');
+    ok(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs output/cv.json output/cv.tex --template=cjk');
+    no(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs --test');
+    // build-cv-html reads [input, output, template] = argv (or input and template after --preview).
+    no(writers('build-cv-html.mjs'), 'node build-cv-html.mjs output/cv.json --test');
+    no(writers('build-cv-html.mjs'), 'node build-cv-html.mjs output/cv.json output/cv.html --test');
+    no(writers('build-cv-html.mjs'), 'node build-cv-html.mjs --preview output/cv.json --test');
+    ok(writers('build-cv-html.mjs'), 'node build-cv-html.mjs output/cv.json output/cv.html');
+    ok(writers('build-cv-html.mjs'), 'node build-cv-html.mjs output/cv.json output/cv.html templates/cv-modern.html --test');
+    ok(writers('build-cv-html.mjs'), 'node build-cv-html.mjs --preview output/cv.json');
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();

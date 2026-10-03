@@ -98,8 +98,9 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
  *   single dash, as the scripts do) and its role;
  * - eq: flags accepted as --flag=value and the value's role;
  * - positionals: the role of each positional, in order (no more are accepted);
- * - indexed: the script reads positionals by raw argv index, so flags must come
- *   after them; modes: a first token that switches to other positional roles.
+ * - indexed: the script reads positionals by raw argv index, so no flag may sit
+ *   in any of those slots (with fewer paths given, a trailing flag would be read
+ *   as the missing path); modes: a first token that switches to other roles.
  * Roles: 'input' (read inside the roots), 'output' (inside the write scope),
  * 'value' (plain). Any other dash token is refused: these parsers would treat it
  * as a path (path.resolve turns -x/../cv.md into cv.md).
@@ -244,14 +245,13 @@ function checkWriterScript(policy, script, spec, args, label) {
     rest = args.slice(1);
   }
   let positionals = 0;
-  let sawFlag = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
+    if (spec.indexed && i < roles.length && a.startsWith('-')) return `${label}: ${script} reads argument ${i + 1} as the ${roles[i]} path, so a flag cannot go there (${a}); give all ${roles.length} paths first`;
     if (a.startsWith('-')) {
       const eqAt = a.indexOf('=');
       const name = eqAt === -1 ? a : a.slice(0, eqAt);
       if (OUTPUT_FLAG.test(a) && !(spec.next?.[name] === 'output' || spec.eq?.[name] === 'output' || spec.optionalNext?.[name] === 'output')) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
-      sawFlag = true;
       if (eqAt !== -1) {
         const role = spec.eq?.[name];
         if (!role) return `${label}: ${script} does not accept ${name}=...; it would read the token as a path`;
@@ -275,7 +275,6 @@ function checkWriterScript(policy, script, spec, args, label) {
       if (!spec.switches?.includes(a)) return `${label}: ${script} does not accept ${a}; it would read the token as a path`;
       continue;
     }
-    if (spec.indexed && sawFlag) return `${label}: ${script} reads its paths by position, so put flags after them (${a})`;
     const role = roles[positionals];
     positionals += 1;
     if (!role) return `${label}: ${script} takes at most ${roles.length} path argument${roles.length === 1 ? '' : 's'} (${a})`;
