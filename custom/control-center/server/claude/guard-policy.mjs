@@ -91,23 +91,26 @@ const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|--vcf|--batch|--save|--write-to)(=|$)|^-o/;
 
 /**
- * Scripts that write to a path their caller names. Every path-like argument
- * must then be inside the write scope, except the values of `inputFlags`
- * (read anywhere inside the roots); `outFlags` are the output flags they accept.
+ * Scripts that write to a path their caller names. The first positional is the
+ * input (anywhere inside the roots); every later positional and every value of
+ * an `outFlags` flag is an output and must be inside the write scope, whether
+ * or not it looks like a path (`LICENSE`, `cv`). `inputFlags` values are read
+ * anywhere inside the roots, `valueFlags` values are plain values; any other
+ * flag is taken to have no separate value.
  */
 const WRITER_SCRIPTS = {
   'generate-pdf.mjs': { outFlags: [], denyFlags: ['--batch'] },
-  'generate-cover-letter.mjs': { outFlags: ['--out'], inputFlags: ['--payload'] },
+  'generate-cover-letter.mjs': { outFlags: ['--out'], inputFlags: ['--payload'], valueFlags: ['--format', '--report'] },
   'build-cv-latex.mjs': {},
   'generate-latex.mjs': {},
   'build-cv-html.mjs': {},
   'patch-latex-content.mjs': {},
   'extract-latex-content.mjs': { outFlags: ['--out'] },
-  'application-artifacts.mjs': { outFlags: ['--root'], valueFlags: ['--company', '--role'] },
+  'application-artifacts.mjs': { outFlags: ['--root'], valueFlags: ['--report', '--company', '--role', '--version'] },
   'contacts.mjs': { outFlags: ['--vcf'] },
-  'discover-new-companies.mjs': { outFlags: ['--out'] },
-  'hired-share.mjs': { outFlags: ['--root'] },
-  'weekly-digest.mjs': { outFlags: ['--dir'] },
+  'discover-new-companies.mjs': { outFlags: ['--out'], valueFlags: ['--since', '--min-rows', '--limit'] },
+  'hired-share.mjs': { outFlags: ['--root'], valueFlags: ['--report', '--anonymity', '--story', '--weeks', '--feature', '--mark'] },
+  'weekly-digest.mjs': { outFlags: ['--dir'], valueFlags: ['--from', '--to'] },
 };
 
 const GIT_FLAGS = {
@@ -218,29 +221,54 @@ function checkGit(policy, sub, args, label) {
   return null;
 }
 
-function checkScript(policy, script, args, label) {
-  const writer = WRITER_SCRIPTS[script];
-  const outFlags = writer?.outFlags ?? [];
-  const inputFlags = writer?.inputFlags ?? [];
-  const valueFlags = writer?.valueFlags ?? [];
-  let pending = null; // the flag whose separate value token comes next
+function checkWriterScript(policy, script, writer, args, label) {
+  const outFlags = writer.outFlags ?? [];
+  const inputFlags = writer.inputFlags ?? [];
+  const valueFlags = writer.valueFlags ?? [];
+  const role = (flag) => (outFlags.includes(flag) ? 'output' : inputFlags.includes(flag) ? 'input' : valueFlags.includes(flag) ? 'value' : null);
+  const check = (kind, value) => (kind === 'output' ? writable(policy, value, label) : kind === 'input' ? readable(policy, value, label) : null);
+  let pending = null; // a declared value flag whose separate value token comes next
+  let positionals = 0;
   for (const a of args) {
-    const flag = a.startsWith('-') ? a.split('=')[0] : null;
-    if (flag) {
-      if (writer?.denyFlags?.includes(flag)) return `${label}: ${script} ${flag} is not allowed in sessions`;
+    if (a.startsWith('-')) {
+      const flag = a.split('=')[0];
+      if (writer.denyFlags?.includes(flag)) return `${label}: ${script} ${flag} is not allowed in sessions`;
       if (OUTPUT_FLAG.test(a) && !outFlags.includes(flag)) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
       const value = inlineValue(a);
-      pending = value === null ? flag : null;
-      if (value !== null && isPathLike(value)) {
-        const why = writer && !inputFlags.includes(flag) && !valueFlags.includes(flag) ? writable(policy, value, label) : readable(policy, value, label);
+      const kind = role(flag);
+      pending = value === null && kind ? kind : null;
+      if (value !== null) {
+        const why = kind ? check(kind, value) : isPathLike(value) ? writable(policy, value, label) : null;
         if (why) return why;
       }
       continue;
     }
-    const via = pending;
-    pending = null;
-    if (!isPathLike(a)) continue;
-    const why = writer && !inputFlags.includes(via) && !valueFlags.includes(via) ? writable(policy, a, label) : readable(policy, a, label);
+    if (pending) {
+      const why = check(pending, a);
+      pending = null;
+      if (why) return why;
+      continue;
+    }
+    positionals += 1;
+    const why = positionals === 1 ? readable(policy, a, label) : writable(policy, a, label);
+    if (why) return why;
+  }
+  return null;
+}
+
+function checkScript(policy, script, args, label) {
+  const writer = WRITER_SCRIPTS[script];
+  if (writer) return checkWriterScript(policy, script, writer, args, label);
+  // Scripts that write only to their own fixed files: path arguments are read inside the roots and never protected.
+  for (const a of args) {
+    if (a.startsWith('-')) {
+      if (OUTPUT_FLAG.test(a)) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
+      const value = inlineValue(a);
+      const why = value !== null && isPathLike(value) ? readable(policy, value, label) : null;
+      if (why) return why;
+      continue;
+    }
+    const why = isPathLike(a) ? readable(policy, a, label) : null;
     if (why) return why;
   }
   return null;

@@ -384,6 +384,24 @@ describe('checkBash: exact per-command argument grammars', () => {
     for (const cmd of ['node build-cv-latex.mjs output/cv.json data/x.tex', 'node generate-cover-letter.mjs --payload output/p.json --out reports/c.pdf', 'node generate-cover-letter.mjs --payload output/p.json --out=../c.pdf']) no(pdf, cmd);
   });
 
+  it('writer scripts: every positional after the first and every output flag value is checked against the write scope, path-like or not', () => {
+    for (const cmd of [
+      'node generate-pdf.mjs output/x.html LICENSE',
+      'node generate-pdf.mjs output/x.html cv',
+      'node generate-pdf.mjs --allow-reorder output/x.html Makefile',
+      'node generate-pdf.mjs output/x.html output/x.pdf README',
+    ])
+      no(oferta, cmd);
+    for (const cmd of ['node build-cv-latex.mjs output/cv.json Makefile', 'node generate-cover-letter.mjs --out LICENSE --payload output/p.json', 'node generate-cover-letter.mjs --payload output/p.json --out=LICENSE']) no(pdf, cmd);
+    for (const cmd of ['node generate-pdf.mjs output/x.html output/x.pdf --format=letter --report=008', 'node generate-pdf.mjs --allow-reorder output/x.html output/x.pdf']) ok(oferta, cmd);
+    for (const cmd of ['node generate-cover-letter.mjs --payload output/p.json --out output/c.pdf --format letter --report 008', 'node build-cv-latex.mjs output/cv.json output/cv.tex --template=cjk']) ok(pdf, cmd);
+    // Values of declared value flags are not outputs; --root is.
+    const artifacts = { ...oferta, bash: [['node', 'application-artifacts.mjs']] };
+    ok(artifacts, 'node application-artifacts.mjs --report 12 --company "Acme Robotics" --role Backend --version 2');
+    no(artifacts, 'node application-artifacts.mjs --report 12 --company Acme --role Backend --root data');
+    ok(artifacts, 'node application-artifacts.mjs --report 12 --company Acme --role Backend --root output/artifacts');
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
