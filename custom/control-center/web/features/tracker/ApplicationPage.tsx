@@ -5,6 +5,8 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { useApplication } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone } from '../../components/ui';
+import { DocumentsTab } from './DocumentsTab';
+import { DangerZone } from './DangerZone';
 import type { ReportFull } from '@shared/api';
 
 const route = getRouteApi('/tracker/$n');
@@ -180,7 +182,14 @@ export function ApplicationPage() {
               </div>
             )}
 
-            {tab !== 'report' && tab !== 'timeline' && tab !== 'sponsorship' && (
+            {tab === 'documents' && (
+              <div className="stack">
+                <DocumentsTab n={q.data.row.num} />
+                <DangerZone n={q.data.row.num} />
+              </div>
+            )}
+
+            {tab !== 'report' && tab !== 'timeline' && tab !== 'sponsorship' && tab !== 'documents' && (
               <div className="card">
                 <Empty>This tab lands in a later build phase.</Empty>
               </div>

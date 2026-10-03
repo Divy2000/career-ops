@@ -27,6 +27,8 @@ export function useLiveInvalidation(): void {
       }
     };
     es.addEventListener('data.changed', onChanged);
+    es.addEventListener('daily.status', () => void qc.invalidateQueries({ queryKey: ['system', 'daily'] }));
+    es.addEventListener('run.status', () => void qc.invalidateQueries({ queryKey: ['runs'] }));
     return () => es.close();
   }, [qc]);
 }

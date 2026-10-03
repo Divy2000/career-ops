@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiSend, type ApiError } from '../../lib/api';
 import type { TrackerRow } from '@shared/api';
+import { HiredDialog } from './HiredDialog';
 
 export const STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
 export const DISCARD_REASONS = ['comp below floor', 'no visa sponsorship', 'location mismatch', 'level mismatch', 'staffing agency', 'posting closed', 'culture concerns'];
@@ -13,6 +14,7 @@ export function StatusControl({ row }: { row: TrackerRow }) {
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hired, setHired] = useState(false);
   const ordered = [row.status, ...STATES.filter((s) => s !== row.status)];
   const predicted = row.summary?.discardReasons ?? [];
   const reasons = [...new Set([...predicted, ...DISCARD_REASONS])];
@@ -23,6 +25,7 @@ export function StatusControl({ row }: { row: TrackerRow }) {
     try {
       await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: row.num, state, ...(note ? { note } : {}) } });
       setMessage(`Status set to ${state}`);
+      if (state === 'Hired' && row.report !== null) setHired(true);
       setPending(null);
       setReason('');
       await qc.invalidateQueries({ queryKey: ['tracker'] });
@@ -85,6 +88,7 @@ export function StatusControl({ row }: { row: TrackerRow }) {
           {message}
         </p>
       )}
+      {hired && row.report !== null && <HiredDialog report={row.report} company={row.company} onClose={() => setHired(false)} />}
     </div>
   );
 }

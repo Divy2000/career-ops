@@ -8,6 +8,7 @@ import { SponsorshipPage, type SponsorshipTab } from './features/sponsorship/Spo
 import { InsightsPage, type InsightsTab } from './features/insights/InsightsPage';
 import { FollowupsPage } from './features/followups/FollowupsPage';
 import { RunsPage } from './features/runs/RunsPage';
+import { DiscoverPage, type DiscoverTab } from './features/discover/DiscoverPage';
 import { PlaceholderPage } from './components/PlaceholderPage';
 
 const rootRoute = createRootRoute({ component: Shell });
@@ -70,6 +71,13 @@ const insightsRoute = createRoute({
 
 const followupsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/followups', component: FollowupsPage });
 
+const discoverRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/discover',
+  component: DiscoverPage,
+  validateSearch: (s: Loose): { tab: DiscoverTab } => ({ tab: oneOf(['network', 'portal', 'ai', 'fresh', 'funded', 'reposts'] as const, s.tab, 'network') }),
+});
+
 const routeTree = rootRoute.addChildren([
   todayRoute,
   trackerRoute,
@@ -80,7 +88,7 @@ const routeTree = rootRoute.addChildren([
   followupsRoute,
   placeholder('/apply', 'Apply'),
   placeholder('/interviews', 'Interviews'),
-  placeholder('/discover', 'Discover'),
+  discoverRoute,
   placeholder('/sessions', 'Sessions'),
   createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
   placeholder('/profile', 'Profile & CV'),

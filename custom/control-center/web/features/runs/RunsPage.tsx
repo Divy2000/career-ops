@@ -41,7 +41,7 @@ function LogViewer({ run }: { run: RunMeta }) {
         </h2>
         <span className="faint small">{done ? `ended: ${done}` : run.status === 'running' ? 'live' : run.status}</span>
       </div>
-      <pre ref={pre} className="log" aria-live="polite" aria-label="Run log">
+      <pre ref={pre} className="log" aria-live="polite" aria-label="Run log" tabIndex={0}>
         {lines.length === 0 ? <span className="faint">No output yet.</span> : lines.map((l) => (
           <div key={l.seq} className={l.stream === 'stderr' ? 'log__err' : ''}>
             <span className="faint">{l.ts.slice(11, 19)} </span>

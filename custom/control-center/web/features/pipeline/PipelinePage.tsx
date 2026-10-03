@@ -1,6 +1,10 @@
 import { useMemo, useState } from 'react';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useShortlist } from '../../lib/queries';
+import { apiSend } from '../../lib/api';
+import { describeError, useActions, useRunAction } from '../../lib/actions';
+import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone } from '../../components/ui';
 
 const route = getRouteApi('/pipeline');
@@ -27,17 +31,98 @@ export function PipelinePage() {
       />
       {tab === 'inbox' && <Inbox />}
       {tab === 'shortlist' && <Shortlist />}
-      {tab === 'batch' && (
-        <div className="card">
-          <Empty>The batch runner form lands with the runner phase.</Empty>
-        </div>
-      )}
+      {tab === 'batch' && <BatchTab />}
     </section>
+  );
+}
+
+function BatchTab() {
+  const actions = useActions();
+  const { run, message } = useRunAction();
+  const [urls, setUrls] = useState('');
+  const [parallel, setParallel] = useState(1);
+  const list = urls.split(/\s+/).filter(Boolean);
+  return (
+    <div className="card stack">
+      <h2>Batch evaluate</h2>
+      <p className="muted">Each URL becomes one evaluation through batch/batch-runner.sh. Paste one URL per line.</p>
+      <textarea aria-label="Batch URLs" rows={6} value={urls} onChange={(e) => setUrls(e.target.value)} />
+      <label className="row gap">
+        <span className="muted">Parallel</span>
+        <input type="number" aria-label="Parallelism" min={1} max={4} value={parallel} onChange={(e) => setParallel(Number(e.target.value) || 1)} />
+      </label>
+      <div className="row gap">
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.batchRun')} disabled={list.length === 0} params={{ urls: list, parallel }} onRun={(p) => void run('pipeline.batchRun', p)} />
+        <span className="faint">{list.length} URLs</span>
+      </div>
+      <Message message={message} />
+    </div>
+  );
+}
+
+function AddUrls({ onDone }: { onDone: (added: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const urls = text.split(/\s+/).filter(Boolean);
+    if (urls.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await apiSend<{ added: number }>('POST', '/api/pipeline/urls', { urls });
+      setText('');
+      setOpen(false);
+      onDone(r.added);
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}>
+        Add URLs
+      </button>
+    );
+  }
+  return (
+    <div className="card stack" role="dialog" aria-label="Add URLs to the pipeline">
+      <textarea aria-label="Posting URLs" rows={4} placeholder="One posting URL per line" value={text} onChange={(e) => setText(e.target.value)} />
+      {error && (
+        <p role="alert" className="danger-text">
+          {error}
+        </p>
+      )}
+      <div className="row gap">
+        <button type="button" disabled={busy || !text.trim()} onClick={() => void submit()}>
+          Add to pipeline
+        </button>
+        <button type="button" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
 function Inbox() {
   const q = usePipeline();
+  const qc = useQueryClient();
+  const actions = useActions();
+  const { run, message, setMessage } = useRunAction();
+  const [skipError, setSkipError] = useState<string | null>(null);
+  const skip = async (url: string, done: boolean) => {
+    setSkipError(null);
+    try {
+      await apiSend('POST', '/api/pipeline/skip', { url, done });
+      await qc.invalidateQueries({ queryKey: ['pipeline'] });
+    } catch (err) {
+      setSkipError(`Could not ${done ? 'skip' : 'restore'}: ${describeError(err)}`);
+    }
+  };
   const [text, setText] = useState('');
   const [source, setSource] = useState('');
   const [seniority, setSeniority] = useState('');
@@ -55,6 +140,20 @@ function Inbox() {
   );
   return (
     <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
+      <div className="toolbar" aria-label="Inbox actions">
+        <AddUrls onDone={(n) => { setMessage({ tone: 'ok', text: `Added ${n} URL${n === 1 ? '' : 's'} to the pipeline` }); void qc.invalidateQueries({ queryKey: ['pipeline'] }); }} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
+          Rank (50)
+        </ActionButton>
+      </div>
+      <Message message={message} />
+      {skipError && (
+        <p role="alert" className="danger-text">
+          {skipError}
+        </p>
+      )}
       <div className="toolbar">
         <input type="search" aria-label="Filter inbox" placeholder="Filter company, role, location" value={text} onChange={(e) => setText(e.target.value)} />
         <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -88,6 +187,9 @@ function Inbox() {
               <th scope="col">Level</th>
               <th scope="col">First seen</th>
               <th scope="col">Posted</th>
+              <th scope="col">
+                <span className="sr-only">Row actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -97,10 +199,10 @@ function Inbox() {
                   <ScorePill score={r.rank} />
                   {r.rankReason && <div className="faint small">{r.rankReason}</div>}
                 </td>
-                <td>{r.company}</td>
+                <td>{r.company || <span className="faint">unknown company</span>}</td>
                 <td>
                   <a href={r.url} target="_blank" rel="noreferrer noopener">
-                    {r.role}
+                    {r.role || r.url}
                   </a>
                   {r.done && <Pill>skipped</Pill>}
                 </td>
@@ -111,6 +213,11 @@ function Inbox() {
                 <td className="muted">{r.seniority ?? ''}</td>
                 <td className="mono muted">{r.firstSeen ?? ''}</td>
                 <td className="mono muted">{r.postedAt ?? ''}</td>
+                <td>
+                  <button type="button" aria-label={`${r.done ? 'Restore' : 'Skip'} ${r.company || r.url}`} onClick={() => void skip(r.url, !r.done)}>
+                    {r.done ? 'Undo skip' : 'Skip'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

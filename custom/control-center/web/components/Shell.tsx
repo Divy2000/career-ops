@@ -4,6 +4,17 @@ import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
 import { useLiveInvalidation } from '../lib/sse';
 import type { SystemStatus } from '@shared/types';
+import type { DailyStatus } from '@shared/api';
+
+function DailyBanner() {
+  const q = useQuery({ queryKey: ['system', 'daily'], queryFn: () => apiGet<DailyStatus>('/api/system/daily'), refetchInterval: 10_000 });
+  if (!q.data?.running) return null;
+  return (
+    <div className="banner" role="status">
+      The daily job (run-daily.sh) is running. Writers stay available; the core locks serialize them.
+    </div>
+  );
+}
 
 function HealthChip() {
   const q = useQuery({ queryKey: ['system', 'status'], queryFn: () => apiGet<SystemStatus>('/api/system/status') });
@@ -44,6 +55,7 @@ export function Shell() {
         <HealthChip />
       </header>
       <main className="shell__main" id="main">
+        <DailyBanner />
         <Outlet />
       </main>
     </div>
