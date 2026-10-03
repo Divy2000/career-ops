@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
-import { DEVCHAT_DENIED_WRITES, getModePolicy } from '../../server/claude/modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { snapshotKey } from '../../server/claude/guard-policy.mjs';
+import { checkBash, snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 
@@ -232,6 +232,149 @@ describe('guard hook', () => {
     expect(r.status).toBe(0);
     const lines = fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { path: string });
     expect(lines.at(-1)!.path).toBe('reports/002-new.md');
+  });
+});
+
+describe('checkBash: exact per-command argument grammars', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bash-')));
+  for (const d of ['custom/immigration', 'custom/pipeline', 'custom/control-center/tests/unit', 'output', 'reports', 'data', 'jds']) fs.mkdirSync(path.join(root, d), { recursive: true });
+  const policyFor = (mode: string, deny: string[]) => {
+    const p = getModePolicy(mode)!;
+    return { codeRoot: root, dataRoot: root, allow: p.writeGlobs, deny, bash: p.bashPrefixes };
+  };
+  const devchat = policyFor('devchat', [...DEVCHAT_DENIED_WRITES]);
+  const oferta = policyFor('oferta', [...ALWAYS_DENIED_WRITES]);
+  const pdf = policyFor('pdf', [...ALWAYS_DENIED_WRITES]);
+  const ok = (policy: typeof devchat, cmd: string) => expect(checkBash(cmd, policy, root), cmd).toBeNull();
+  const no = (policy: typeof devchat, cmd: string) => expect(checkBash(cmd, policy, root), cmd).toEqual(expect.any(String));
+
+  it('rejects the review triggers', () => {
+    no(devchat, 'git status\nrm -rf ~/Documents');
+    no(devchat, 'git diff --no-index --output=data/applications.md /dev/null README.md');
+    no(oferta, 'node generate-pdf.mjs output/x.html /Users/me/anywhere.pdf');
+    no(devchat, 'node --test custom/immigration/../../../tmp/x.mjs');
+  });
+
+  it('rejects line breaks, control characters and every shell operator or expansion, even inside quotes', () => {
+    for (const cmd of [
+      'git status\rrm -rf x',
+      'git status\u0000',
+      'git status\tx',
+      'git status\u2028x',
+      'git status; rm -rf x',
+      'git status && rm -rf x',
+      'git status || rm -rf x',
+      'git status & rm -rf x',
+      'git status | tee x',
+      'git status > x',
+      'git status < x',
+      'git log $(id)',
+      'git log `id`',
+      'git log $HOME',
+      'git log "${HOME}"',
+      'git log "$(id)"',
+      'git diff (x)',
+      'git diff {a,b}',
+      'git diff *',
+      'git diff custom/?',
+      'git diff [ab]',
+      'git diff ~/x',
+      'git diff --relative=~/x',
+      'git diff !x',
+      'git diff #x',
+      'git diff a\\ b',
+      'git diff HEAD^',
+      'git diff "unbalanced',
+      'node --test =node',
+    ])
+      no(devchat, cmd);
+  });
+
+  it('git: only status, diff and log with read-only flags and in-repo paths; never --output, -o or --no-index', () => {
+    for (const cmd of ['git status', 'git status --short custom/control-center/package.json', 'git status -s -b', 'git diff', 'git diff --stat -- custom/', 'git diff --cached --name-only', 'git diff HEAD~1 -- custom/control-center/server', 'git diff main..feat/x --stat', 'git log --oneline -n 5', 'git log --oneline -5 -- custom/', 'git log --format=%h --since=2.weeks'])
+      ok(devchat, cmd);
+    for (const cmd of [
+      'git diff --output=x.patch',
+      'git diff --output x.patch',
+      'git log --output=data/applications.md',
+      'git diff -o x',
+      'git diff -ox',
+      'git diff --no-index a b',
+      'git diff --ext-diff',
+      'git status ../../etc',
+      'git diff /etc/passwd',
+      'git -C / status',
+      'git push origin main',
+      'git status --porcelain=v3 --exec=x',
+      'git log --output-indicator-new=x',
+    ])
+      no(devchat, cmd);
+  });
+
+  it('npm and npx: the exact scripts and vitest filters inside the app tests, nothing else', () => {
+    for (const cmd of ['npm --prefix custom/control-center run test', 'npm --prefix custom/control-center run typecheck', 'npm --prefix custom/control-center run lint', 'npm --prefix custom/control-center run build', 'npx --prefix custom/control-center vitest run', 'npx --prefix custom/control-center vitest run recovery', 'npx --prefix custom/control-center vitest run custom/control-center/tests/unit/recovery.test.ts'])
+      ok(devchat, cmd);
+    for (const cmd of [
+      'npm --prefix custom/control-center run test -- --config /tmp/x.ts',
+      'npm --prefix custom/control-center run start',
+      'npm --prefix custom/control-center run test x',
+      'npm --prefix /tmp run test',
+      'npx --prefix custom/control-center vitest run --config /tmp/evil.ts',
+      'npx --prefix custom/control-center vitest run ../../../tmp/x.test.ts',
+      'npx --prefix custom/control-center vitest run /tmp/x.test.ts',
+      'npx --prefix custom/control-center vitest watch',
+    ])
+      no(devchat, cmd);
+  });
+
+  it('node --test: one or more paths that stay inside the allowed directory, and no node flags', () => {
+    for (const cmd of ['node --test custom/immigration/freshness.test.mjs', 'node --test custom/immigration/', 'node --test custom/pipeline/a.test.mjs custom/pipeline/b.test.mjs', 'node --test ./custom/pipeline/a.test.mjs']) ok(devchat, cmd);
+    for (const cmd of ['node --test', 'node --test custom/pipeline/../immigration2/x.mjs', 'node --test custom/pipelinex/a.test.mjs', 'node --test --import /tmp/evil.mjs custom/immigration/x.test.mjs', 'node --test custom/immigration/x.test.mjs --import=/tmp/evil.mjs', 'node --test /tmp/x.test.mjs', 'node --test custom/immigration/a.mjs custom/pipeline/b.mjs'])
+      no(devchat, cmd);
+  });
+
+  it('scripts: path arguments stay inside the roots, outputs inside the write scope, protected files never appear', () => {
+    for (const cmd of [
+      'node validate-portals.mjs',
+      'node validate-portals.mjs --file portals.yml',
+      'node validate-profile.mjs --profile config/profile.yml --json',
+    ])
+      ok(devchat, cmd);
+    for (const cmd of ['node validate-portals.mjs --file /etc/passwd', 'node validate-portals.mjs --file=../x.yml', 'node validate-profile.mjs --profile data/control-center/settings.json', 'node set-status.mjs --row 3 Applied']) no(devchat, cmd);
+    for (const cmd of [
+      'node set-status.mjs --row 3 Applied --source web',
+      'node set-status.mjs 8 Applied --note "Recruiter called, follow up next week"',
+      'node merge-tracker.mjs',
+      'node reserve-report-num.mjs --release 008',
+      'node check-liveness.mjs https://jobs.example.com/x/1',
+      'node custom/immigration/freshness.mjs "Acme Robotics"',
+      'node plugins/h1b-sponsor/check.mjs Acme',
+      'node jd-skill-gap.mjs jds/acme.md --summary',
+      'node generate-pdf.mjs output/x.html output/x.pdf --format=letter --report=008',
+    ])
+      ok(oferta, cmd);
+    for (const cmd of [
+      'node generate-pdf.mjs output/x.html ../anywhere.pdf',
+      'node generate-pdf.mjs output/x.html cv.md',
+      'node generate-pdf.mjs output/x.html data/applications.md',
+      'node generate-pdf.mjs --batch=output/manifest.json',
+      'node generate-pdf.mjs --batch output/manifest.json',
+      'node set-status.mjs --row 3 Applied --output data/applications.md',
+      'node set-status.mjs --row 3 Applied -o x',
+      'node merge-tracker.mjs data/blacklist.md',
+      'node check-liveness.mjs --file /etc/passwd',
+      'node scan.mjs',
+      'NODE_OPTIONS=--require=/tmp/x.js node merge-tracker.mjs',
+      'curl https://x.example',
+    ])
+      no(oferta, cmd);
+    for (const cmd of ['node build-cv-latex.mjs output/cv.json output/cv.tex', 'node generate-cover-letter.mjs --payload output/p.json --out output/c.pdf']) ok(pdf, cmd);
+    for (const cmd of ['node build-cv-latex.mjs output/cv.json data/x.tex', 'node generate-cover-letter.mjs --payload output/p.json --out reports/c.pdf', 'node generate-cover-letter.mjs --payload output/p.json --out=../c.pdf']) no(pdf, cmd);
+  });
+
+  it('refuses Bash when the session is not running from the repo root', () => {
+    expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
+    expect(checkBash('git status', devchat, root)).toBeNull();
   });
 });
 

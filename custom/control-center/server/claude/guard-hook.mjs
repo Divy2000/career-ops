@@ -64,7 +64,7 @@ function main() {
   }
 
   if (tool === 'Bash') {
-    const reason = checkBash(String(input.command ?? ''), policy.bash ?? []);
+    const reason = checkBash(String(input.command ?? ''), policy, typeof payload.cwd === 'string' ? payload.cwd : undefined);
     if (reason) deny(reason);
     process.exit(0);
   }
