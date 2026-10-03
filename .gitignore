@@ -246,6 +246,9 @@ plan/
 # (see DATA_CONTRACT.md). Re-include them past the unanchored user-layer
 # patterns above (cv.md, portals.yml).
 !test-fixtures/**
+# The Control Center's synthetic data root: its tracker, follow-ups, CV and portals
+# fixtures share names with the user-layer patterns above and must stay tracked.
+!custom/control-center/tests/fixtures/**
 
 # Profile intake sources (master CV / LinkedIn export / diplomas / references
 # — user PII, never commit). Ship only the system-owned scaffold. #1723
