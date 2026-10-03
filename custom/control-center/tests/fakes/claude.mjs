@@ -59,9 +59,9 @@ function runHook(kind, toolName, toolInput) {
   for (const group of hooks) {
     if (group.matcher && !new RegExp(group.matcher).test(toolName)) continue;
     for (const h of group.hooks ?? []) {
-      const [cmd, ...args] = String(h.command).split(' ');
+      // Like the real CLI, command hooks run through a shell.
       const payload = JSON.stringify({ session_id: sessionId, cwd: process.cwd(), hook_event_name: kind, tool_name: toolName, tool_input: toolInput });
-      const r = spawnSync(cmd, args, { input: payload, encoding: 'utf8', env: process.env });
+      const r = spawnSync('/bin/sh', ['-c', String(h.command)], { input: payload, encoding: 'utf8', env: process.env });
       if (r.status === 2) return { blocked: true, reason: r.stderr.trim() };
     }
   }

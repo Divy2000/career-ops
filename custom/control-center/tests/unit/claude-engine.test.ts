@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile } from '../../server/claude/invocation.js';
-import { getModePolicy } from '../../server/claude/modes.js';
+import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
+import { DEVCHAT_DENIED_WRITES, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { snapshotKey } from '../../server/claude/guard-hook.mjs';
+import { snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 
@@ -126,6 +126,54 @@ describe('guard hook', () => {
     expect(pre('mcp__playwright__browser_click', { element: 'Next page', ref: 'e13' }).status).toBe(0);
     expect(pre('mcp__playwright__browser_press_key', { key: 'Enter', element: 'Apply now' }).status).toBe(2);
   });
+  it('folds case on a case-insensitive volume: Blacklist.md, APPLICATIONS.md and Supervisor/ are still protected', () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-case-')));
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(path.join(root, 'data', 'blacklist.md'), '# blacklist\n');
+    fs.mkdirSync(path.join(root, 'custom', 'control-center', 'supervisor'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'custom', 'control-center', 'supervisor', 'index.ts'), 'ok\n');
+    const dir = path.join(root, 'guard');
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (p: string, tool = 'Write') => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { file_path: p, content: 'x' }, cwd: root, session_id: 's' });
+    // Existing protected file reached through a different case: realpath.native returns the on-disk case.
+    const viaCase = write(path.join(root, 'data', 'Blacklist.md'));
+    expect(viaCase.status, viaCase.stderr).toBe(2);
+    expect(viaCase.stderr).toMatch(/data\/blacklist\.md is always protected/);
+    expect(write(path.join(root, 'DATA', 'BLACKLIST.MD'), 'Edit').status).toBe(2);
+    // Not-yet-existing protected file: the tail keeps the caller's case, so globs compare case-insensitively.
+    expect(write(path.join(root, 'data', 'APPLICATIONS.md')).status).toBe(2);
+    fs.writeFileSync(path.join(root, 'data', 'applications.md'), '| # |\n');
+    expect(write(path.join(root, 'data', 'Applications.MD')).status).toBe(2);
+    expect(write(path.join(root, 'custom', 'control-center', 'Supervisor', 'index.ts')).status).toBe(2);
+    expect(write(path.join(root, 'custom', 'control-center', 'SUPERVISOR', 'new-file.ts')).status).toBe(2);
+    expect(write(path.join(root, 'custom', 'notes', 'Fine.md')).status).toBe(0);
+  });
+
+  it('quotes the hook command so a checkout path with spaces still runs the guard, and fails closed on any hook failure', () => {
+    const spaced = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc hook space ')));
+    const nodePath = path.join(spaced, 'node bin');
+    const hookPath = path.join(spaced, 'guard hook.mjs');
+    fs.symlinkSync(process.execPath, nodePath);
+    fs.symlinkSync(GUARD_HOOK_PATH, hookPath);
+    const dir = path.join(spaced, 'session dir');
+    const settingsFile = writeSettingsFile(dir, { nodePath, hookPath });
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as { hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }>; PostToolUse: Array<{ hooks: Array<{ command: string }> }> } };
+    const command = settings.hooks.PreToolUse[0]!.hooks[0]!.command;
+    expect(settings.hooks.PostToolUse[0]!.hooks[0]!.command).toBe(command);
+    // Claude Code runs command hooks through a shell; only exit 2 blocks the tool call.
+    const sh = (cmd: string, input: string, env: NodeJS.ProcessEnv) => spawnSync('/bin/sh', ['-c', cmd], { input, encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+    const env = { CC_POLICY_FILE: policyFile, CC_SESSION_DIR: sessionDir };
+    const write = (file: string) => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: realRoot });
+    expect(sh(command, write(path.join(realRoot, 'reports', '003-spaced.md')), env).status).toBe(0);
+    expect(sh(command, write(path.join(realRoot, 'data', 'blacklist.md')), env).status).toBe(2);
+    // Unparsable stdin, a missing policy and a hook that cannot even start all block.
+    expect(sh(command, 'not json', env).status).toBe(2);
+    expect(sh(command, write(path.join(realRoot, 'reports', '003-spaced.md')), {}).status).toBe(2);
+    expect(sh(command, write(path.join(realRoot, 'reports', '003-spaced.md')), { ...env, CC_POLICY_FILE: path.join(spaced, 'missing.json') }).status).toBe(2);
+    fs.rmSync(hookPath);
+    expect(sh(command, write(path.join(realRoot, 'reports', '003-spaced.md')), env).status).toBe(2);
+  });
+
   it('records changed paths after a write', () => {
     const r = hookRun(sessionDir, policyFile, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '002-new.md') }, tool_response: {}, cwd: realRoot });
     expect(r.status).toBe(0);

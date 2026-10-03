@@ -151,9 +151,23 @@ export function writePolicyFile(sessionDir: string, opts: { codeRoot: string; da
   return file;
 }
 
+/** POSIX single-quoting: the hook command runs through a shell, and checkouts can live under paths with spaces. */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Claude Code blocks a tool call only when a hook exits 2; any other failure
+ * (a split path, a missing file, a crash before the hook's own try/catch) is
+ * non-blocking. `|| exit 2` turns every failure into a block.
+ */
+export function guardHookCommand(nodePath: string = process.execPath, hookPath: string = GUARD_HOOK_PATH): string {
+  return `${shellQuote(nodePath)} ${shellQuote(hookPath)} || exit 2`;
+}
+
 /** Session settings with the PreToolUse/PostToolUse guard hook (inline hooks are accepted per P0). */
-export function writeSettingsFile(sessionDir: string): string {
-  const command = `${process.execPath} ${GUARD_HOOK_PATH}`;
+export function writeSettingsFile(sessionDir: string, opts: { nodePath?: string; hookPath?: string } = {}): string {
+  const command = guardHookCommand(opts.nodePath, opts.hookPath);
   const settings = {
     hooks: {
       PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__playwright__browser_click|mcp__playwright__browser_press_key', hooks: [{ type: 'command', command }] }],

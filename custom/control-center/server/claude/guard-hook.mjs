@@ -2,91 +2,19 @@
 // PreToolUse / PostToolUse guard (spec 4.4). Plain .mjs: the Claude CLI runs it
 // with the hook JSON on stdin; CC_POLICY_FILE points at the session policy.
 // Exit 2 blocks the tool call and the stderr text becomes the reason.
+// This file is only ever an entry point: it runs unconditionally, so no
+// argv/URL comparison (which a symlink or a space in the path defeats) can
+// turn the guard into a silent no-op. Importable helpers live in guard-policy.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
-import { parse as shellParse } from 'shell-quote';
+import { checkBash, locate, matches, snapshotKey } from './guard-policy.mjs';
 
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-const NETWORK_BINS = new Set(['curl', 'wget', 'nc', 'ncat', 'ssh', 'scp', 'sftp', 'ftp', 'telnet', 'rsync']);
 
 function deny(reason) {
   process.stderr.write(`${reason}\n`);
   process.exit(2);
-}
-
-export function globToRegExp(glob) {
-  let re = '';
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === '*') {
-      if (glob[i + 1] === '*') {
-        if (glob[i + 2] === '/') {
-          re += '(?:.*/)?';
-          i += 2;
-        } else {
-          re += '.*';
-          i += 1;
-        }
-      } else re += '[^/]*';
-    } else if (c === '?') re += '[^/]';
-    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(`^${re}$`);
-}
-
-function matches(rel, globs) {
-  return globs.some((g) => globToRegExp(g).test(rel));
-}
-
-/** Realpath with a possibly missing tail: resolve the deepest existing ancestor, then re-append. */
-export function resolveReal(p) {
-  let dir = p;
-  const tail = [];
-  while (!fs.existsSync(dir)) {
-    tail.unshift(path.basename(dir));
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return path.join(fs.realpathSync(dir), ...tail);
-}
-
-export function relativeToRoot(codeRoot, target) {
-  const root = fs.realpathSync(codeRoot);
-  const abs = resolveReal(path.resolve(codeRoot, target));
-  const rel = path.relative(root, abs);
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  return rel.split(path.sep).join('/');
-}
-
-/** The data root wins when it differs from the code root (relative paths resolve against the code root, the session cwd). */
-export function locate(policy, target) {
-  const roots = [...new Set([policy.dataRoot || policy.codeRoot, policy.codeRoot])];
-  for (const root of roots) {
-    const rel = relativeToRoot(root, path.isAbsolute(target) ? target : path.resolve(policy.codeRoot, target));
-    if (rel) return { rel, abs: path.resolve(root, rel), root: root === policy.codeRoot ? 'code' : 'data' };
-  }
-  return null;
-}
-
-export function checkBash(command, allowed) {
-  if (/[`]|\$\(/.test(command)) return 'Bash: command substitution is not allowed';
-  // Glob tokens (node --test custom/immigration/*) are kept as their pattern; operators are rejected.
-  const tokens = shellParse(command).map((t) => (t && typeof t === 'object' && t.op === 'glob' ? t.pattern : t));
-  if (tokens.some((t) => typeof t !== 'string')) return 'Bash: operators (; && | > <) and comments are not allowed';
-  const first = tokens[0];
-  if (!first) return 'Bash: empty command';
-  if (NETWORK_BINS.has(first)) return `Bash: ${first} is not allowed (network tools are denied)`;
-  // A prefix ending in "/" matches the start of the next token (node --test custom/immigration/...).
-  const ok = allowed.some((prefix) => prefix.every((p, i) => (p.endsWith('/') ? typeof tokens[i] === 'string' && tokens[i].startsWith(p) : tokens[i] === p)));
-  if (first === 'git' && !ok) return 'Bash: git is not allowed in sessions (Dev Chat may run git status, diff and log)';
-  return ok ? null : `Bash: only these commands are allowed: ${allowed.map((p) => p.join(' ')).join(', ')}`;
-}
-
-/** First-touch snapshot keyed by the absolute path, so code-root and data-root files never collide. */
-export function snapshotKey(sessionDir, abs) {
-  return path.join(sessionDir, 'before', encodeURIComponent(abs));
 }
 
 function snapshot(sessionDir, abs) {
@@ -144,10 +72,8 @@ function main() {
   process.exit(0);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
-  try {
-    main();
-  } catch (err) {
-    deny(`guard hook failed: ${err && err.message}`);
-  }
+try {
+  main();
+} catch (err) {
+  deny(`guard hook failed: ${err && err.message}`);
 }
