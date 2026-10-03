@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
-import { preflight, formatPreflight } from './preflight.js';
+import { preflight, formatPreflight, resolveClaudeBin } from './preflight.js';
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
 import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
   const dataRoot = await resolveDataRoot();
   const sessionsDir = path.join(dataRoot, 'data', 'control-center', 'sessions');
   const guardRoot = resolveGuardRoot({ env: process.env, codeRoot: CODE_ROOT, dataRoot, home: os.homedir(), platform: process.platform });
-  const claudeBin = process.env.CC_CLAUDE_BIN ?? 'claude';
+  const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN ?? 'claude');
   const pf = await preflight({ claudeBin, nodeVersion: process.version, env: process.env });
   const report = formatPreflight(pf);
   if (report) console.error(report);
