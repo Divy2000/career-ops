@@ -111,6 +111,15 @@ describe('tracker', () => {
     expect(await readTracker(DEFAULT_CODE_ROOT, empty)).toMatchObject({ kind: 'ok', rows: [] });
   });
 
+  it.each([
+    ['a "num" first column', '| num | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|-----|------|---------|------|-------|--------|-----|--------|-------|\n'],
+    ['a header that does not start with the number column', '| Company | Role | # | Date | Score | Status | PDF | Report | Notes |\n|---------|------|---|------|-------|--------|-----|--------|-------|\n'],
+  ])('treats a header-only tracker with %s as empty, not malformed', async (_name, table) => {
+    const empty = copyFixtureRoot();
+    fs.writeFileSync(path.join(empty, 'data', 'applications.md'), `# Applications Tracker\n\n${table}`);
+    expect(await readTracker(DEFAULT_CODE_ROOT, empty)).toMatchObject({ kind: 'ok', rows: [] });
+  });
+
   it('still reports malformed when the table has data lines but none parse', async () => {
     const bad = copyFixtureRoot();
     fs.writeFileSync(path.join(bad, 'data', 'applications.md'), '# Applications Tracker\n\n| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|------|---------|------|-------|--------|-----|--------|-------|\n| x | y |\n');

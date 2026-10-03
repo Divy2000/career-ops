@@ -133,7 +133,13 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
       parsed = undefined;
     }
     // The script exits 1 with a JSON error for a tracker with no rows. That is a new user's normal state, not a failure.
-    if (r.code !== 0 && isNoApplications(parsed)) return emptyFollowups(parsed.cadenceDefaults, now());
+    if (r.code !== 0 && isNoApplications(parsed)) {
+      // The script says "no applications" for any tracker whose rows it cannot parse too; only a missing or row-less tracker is the empty state.
+      const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
+      if (tracker.kind === 'malformed') return reply.code(502).send({ error: 'followup-cadence: tracker is malformed', detail: tracker.error, path: tracker.path });
+      if (tracker.kind === 'ok' && tracker.rows.length > 0) return reply.code(502).send({ error: 'followup-cadence reported no applications but the tracker has rows', exit: r.code });
+      return emptyFollowups(parsed.cadenceDefaults, now());
+    }
     if (r.code !== 0) return reply.code(502).send({ error: 'followup-cadence failed', exit: r.code, stderr: r.stderr.slice(-2000) });
     if (parsed === undefined) return reply.code(502).send({ error: 'followup-cadence printed non-JSON', stdout: r.stdout.slice(0, 400) });
     return parsed;

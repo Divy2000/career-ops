@@ -37,6 +37,7 @@ interface TrackerParse {
   parseTrackerRow: (line: string, colmap: Record<string, number>) => Record<string, string> & { num: number } | null;
   extractTrackerReportNumbers: (reportCell: string, notesCell?: string) => number[];
   isSeparatorRow: (line: string) => boolean;
+  isHeaderRow: (line: string) => boolean;
 }
 interface PathResolver {
   resolveTrackerPath: (root: string) => string;
@@ -95,7 +96,7 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
     });
   }
   // A header and separator with no rows is a new user's valid empty tracker; only unparseable data lines are malformed.
-  const dataRowLines = dataLines.filter((l) => l.split('|')[1]?.trim() !== '#');
+  const dataRowLines = dataLines.filter((l) => !tp.isHeaderRow(l));
   if (rows.length === 0 && dataRowLines.length > 0) return { kind: 'malformed', path: trackerPath, error: 'table has a header but no parseable rows' };
   return { kind: 'ok', path: trackerPath, rows, etag: read.etag };
 }

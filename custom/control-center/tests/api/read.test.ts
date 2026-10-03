@@ -134,6 +134,24 @@ describe('GET /api/followups on an empty tracker', () => {
     await t2.close();
   });
 
+  it('does not hide a tracker whose rows all fail to parse behind an empty cadence', async () => {
+    const t2 = await makeTestApp();
+    fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), `${HEADER_ONLY}| x | y |\n`);
+    expect((await t2.app.inject({ method: 'GET', url: '/api/tracker', headers: t2.authed })).json().kind).toBe('malformed');
+    const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/malformed/);
+    await t2.close();
+  });
+
+  it('returns 502 when the script claims no applications but the tracker has rows', async () => {
+    const t2 = await makeTestApp({}, { exec: async () => ({ code: 1, stdout: JSON.stringify({ error: 'No applications found in tracker.' }), stderr: '' }) });
+    const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/tracker has rows/);
+    await t2.close();
+  });
+
   const failing: Array<[string, { code: number; stdout: string; stderr: string }]> = [
     ['non-JSON output with exit 0', { code: 0, stdout: 'not json at all', stderr: '' }],
     ['an unrelated JSON error with exit 1', { code: 1, stdout: JSON.stringify({ error: 'templates/states.yml is unreadable' }), stderr: '' }],
