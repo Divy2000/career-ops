@@ -18,7 +18,11 @@ set -uo pipefail
 
 LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
 WT="$HOME/.career-ops-sync"
-STATE_DIR="$LIVE/data/upstream-sync"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# Logs and reports follow career-ops' data-root contract (CAREER_OPS_ROOT /
+# .career-ops-data), the same root the control center reads them from.
+DATA="$(cd "$LIVE" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+STATE_DIR="$DATA/data/upstream-sync"
 TODAY="$(date +%Y-%m-%d)"
 BRANCH="sync/upstream-$TODAY"
 FORK="Divy2000/career-ops"
