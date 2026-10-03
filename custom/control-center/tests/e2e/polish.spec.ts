@@ -32,6 +32,36 @@ test.describe('P3 editors and P6 polish', () => {
     await axeClean(page);
   });
 
+  test('a stale structured save shows the merge UI and saving again applies the pending edits on top', async ({ page }) => {
+    await page.goto('/settings');
+    const days = page.getByRole('spinbutton', { name: 'max_posting_age_days' });
+    await days.fill('21');
+    await days.press('Enter');
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    // The live watcher refetches on any real disk change, so the stale-ETag answer is simulated once:
+    // the first PUT gets the server's 409 shape with a "changed outside" version of the file.
+    const current = await (await page.request.get('/api/config/portals')).json();
+    let intercepted = false;
+    await page.route('**/api/config/portals', async (route) => {
+      if (route.request().method() === 'PUT' && !intercepted) {
+        intercepted = true;
+        await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'the file changed since you loaded it', current: { ...current, raw: `# changed outside the editor\n${current.raw}` } }) });
+        return;
+      }
+      await route.continue();
+    });
+    await page.getByRole('button', { name: 'Validate and save' }).click();
+    await expect(page.getByRole('alert')).toContainText('changed on disk');
+    await expect(page.getByText('Current version on disk')).toBeVisible();
+    await expect(page.getByText('# changed outside the editor')).toBeVisible();
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    await page.getByRole('button', { name: 'Validate and save' }).click();
+    await expect(page.getByRole('status')).toContainText('Saved portals.yml');
+    const merged = await (await page.request.get('/api/config/portals')).json();
+    expect(merged.doc.max_posting_age_days).toBe(21);
+    expect(merged.raw.startsWith('# Synthetic portals config for tests')).toBe(true);
+  });
+
   test('profile form adds a section and the cadence form writes followup_cadence', async ({ page }) => {
     await page.goto('/settings?tab=profile');
     await page.getByRole('button', { name: 'Add language' }).click();
