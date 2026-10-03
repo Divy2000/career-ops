@@ -49,6 +49,8 @@ describe('invocation builder', () => {
     expect(env.CAREER_OPS_ROOT).toBe('/data/root');
     expect(env.CC_POLICY_FILE).toBe(base.policyFile);
     expect(env.CC_POLICY_SHA256).toBe('ab'.repeat(32));
+    // The CLI's own switch: its Bash and hook children run without CLAUDE_CODE_OAUTH_TOKEN and the other credentials.
+    expect(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB).toBe('1');
     expect(buildArgv({ ...base, policy: getModePolicy('oferta')! }).join(' ')).not.toContain('tok-secret');
     expect(redact('stderr says tok-secret twice tok-secret', 'tok-secret')).toBe('stderr says [redacted] twice [redacted]');
   });
@@ -204,9 +206,19 @@ describe('guard hook', () => {
       'custom/control-center/tests/fakes/claude.mjs',
       'custom/control-center/scripts/no-em-dash.mjs',
       'custom/control-center/node_modules/vitest/index.js',
+      // Run outside any session guard: by launchd (daily and weekly jobs, with the OAuth token) or by the user.
+      'custom/immigration/run-daily.sh',
+      'custom/immigration/daily-prompt.md',
+      'custom/upstream-sync/sync.sh',
+      'custom/upstream-sync/sync-prompt.md',
+      'custom/launchd/install.sh',
+      // Tests there are run by the user and CI.
+      'custom/immigration/tests/watch.test.mjs',
+      'custom/pipeline/tests/shortlist.test.mjs',
+      'custom/immigration/freshness.test.mjs',
     ];
     for (const rel of protectedPaths) expect(write(rel).status, rel).toBe(2);
-    for (const rel of ['custom/control-center/server/routes/read.ts', 'custom/control-center/web/features/today/TodayPage.tsx', 'custom/immigration/run-daily.sh', 'data/notes/devchat.md', 'modes/_custom.md']) expect(write(rel).status, rel).toBe(0);
+    for (const rel of ['custom/control-center/server/routes/read.ts', 'custom/control-center/web/features/today/TodayPage.tsx', 'data/notes/devchat.md', 'modes/_custom.md']) expect(write(rel).status, rel).toBe(0);
   });
 
   it('a tampered or unverifiable policy fails closed for every tool call', () => {
@@ -327,9 +339,9 @@ describe('checkBash: exact per-command argument grammars', () => {
       no(devchat, cmd);
   });
 
-  it('node --test: one or more paths that stay inside the allowed directory, and no node flags', () => {
-    for (const cmd of ['node --test custom/immigration/freshness.test.mjs', 'node --test custom/immigration/', 'node --test custom/pipeline/a.test.mjs custom/pipeline/b.test.mjs', 'node --test ./custom/pipeline/a.test.mjs']) ok(devchat, cmd);
-    for (const cmd of ['node --test', 'node --test custom/pipeline/../immigration2/x.mjs', 'node --test custom/pipelinex/a.test.mjs', 'node --test --import /tmp/evil.mjs custom/immigration/x.test.mjs', 'node --test custom/immigration/x.test.mjs --import=/tmp/evil.mjs', 'node --test /tmp/x.test.mjs', 'node --test custom/immigration/a.mjs custom/pipeline/b.mjs'])
+  it('node --test is not allowed at all: the tests import modules Dev Chat can edit and run them outside any guard', () => {
+    expect(getModePolicy('devchat')!.bashPrefixes.some((p) => p[0] === 'node' && p[1] === '--test')).toBe(false);
+    for (const cmd of ['node --test custom/immigration/freshness.test.mjs', 'node --test custom/immigration/', 'node --test custom/pipeline/a.test.mjs custom/pipeline/b.test.mjs', 'node --test', 'node --test custom/immigration/../../../tmp/x.mjs'])
       no(devchat, cmd);
   });
 

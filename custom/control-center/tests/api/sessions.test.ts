@@ -196,6 +196,8 @@ describe('Claude sessions', () => {
       const { events } = await settle(id);
       const line = events.map((e) => e.event).find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-env: '));
       expect(String(line?.text).replace('fake-claude-env: ', '').split(',')).toEqual(['CC_MODE', 'CC_POLICY_FILE', 'CC_POLICY_SHA256', 'CC_SESSION_DIR', 'CC_TURN_DIR']);
+      // Only the claude process holds the OAuth token; its Bash and hook children do not.
+      expect(events.map((e) => e.event).find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-token: '))?.text).toBe('fake-claude-token: self=present children=absent');
     } finally {
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
       Object.assign(process.env, saved);

@@ -196,16 +196,6 @@ function checkVitest(policy, args, label) {
   return null;
 }
 
-function checkNodeTest(policy, dir, args, label) {
-  if (args.length === 0) return `${label} needs at least one test file under ${dir}`;
-  const base = argPath(policy, dir);
-  for (const a of args) {
-    if (a.startsWith('-')) return `${label}: node flags are not allowed (${a})`;
-    if (!isInsideDir(base, argPath(policy, a))) return `${label}: ${a} is not inside ${dir}`;
-  }
-  return null;
-}
-
 function checkGit(policy, sub, args, label) {
   const spec = GIT_FLAGS[sub];
   if (!spec) return `${label}: git ${sub} is not allowed`;
@@ -261,7 +251,6 @@ function checkArgs(policy, prefix, args, label) {
   const [bin, second] = prefix;
   if (bin === 'npm' && prefix.length === 5 && prefix[1] === '--prefix' && prefix[3] === 'run') return checkExact(args, label);
   if (bin === 'npx' && prefix.length === 5 && prefix[1] === '--prefix' && prefix[3] === 'vitest' && prefix[4] === 'run') return checkVitest(policy, args, label);
-  if (bin === 'node' && second === '--test' && prefix.length === 3) return checkNodeTest(policy, prefix[2], args, label);
   if (bin === 'git' && prefix.length === 2) return checkGit(policy, second, args, label);
   if ((bin === 'node' || bin === 'bash') && prefix.length === 2 && !second.startsWith('-')) return checkScript(policy, second, args, label);
   return `${label}: unsupported command shape`;
@@ -283,15 +272,14 @@ export function checkBash(command, policy, cwd) {
   if (!first) return 'Bash: empty command';
   if (NETWORK_BINS.has(first)) return `Bash: ${first} is not allowed (network tools are denied)`;
   if (cwd !== undefined && cwd !== null && resolveReal(path.resolve(String(cwd))) !== fs.realpathSync.native(policy.codeRoot)) return 'Bash: the session must run from the repo root';
-  const candidates = allowed.filter((prefix) => prefix.every((p, i) => (prefix.length === 3 && prefix[1] === '--test' && i === 2) || tokens[i] === p));
+  const candidates = allowed.filter((prefix) => prefix.every((p, i) => tokens[i] === p));
   if (candidates.length === 0) {
     if (first === 'git') return 'Bash: git is not allowed in sessions (Dev Chat may run git status, diff and log)';
     return `Bash: only these commands are allowed: ${allowed.map((p) => p.join(' ')).join(', ')}`;
   }
   let reason = null;
   for (const prefix of candidates) {
-    const fixed = prefix.length === 3 && prefix[1] === '--test' ? 2 : prefix.length;
-    const why = checkArgs(policy, prefix, tokens.slice(fixed), `Bash: ${prefix.join(' ')}`);
+    const why = checkArgs(policy, prefix, tokens.slice(prefix.length), `Bash: ${prefix.join(' ')}`);
     if (!why) return null;
     reason ??= why;
   }

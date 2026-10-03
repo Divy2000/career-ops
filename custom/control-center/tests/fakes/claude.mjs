@@ -53,9 +53,15 @@ if (settingsArg) {
   settings = settingsArg.trim().startsWith('{') ? JSON.parse(settingsArg) : JSON.parse(fs.readFileSync(settingsArg, 'utf8'));
 }
 
-// Opt-in instrumentation for env tests: the CC_ names this child received, as one stderr line.
+// Like the real CLI (2.1.288), CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps credentials out of Bash and hook children.
+const CREDENTIALS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_REFRESH_TOKEN'];
+const scrub = /^(1|true|yes|on)$/i.test(String(process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB ?? '').trim());
+const subprocessEnv = scrub ? Object.fromEntries(Object.entries(process.env).filter(([k]) => !CREDENTIALS.includes(k))) : process.env;
+
+// Opt-in instrumentation for env tests: the CC_ names this child received, and where the OAuth token reaches.
 if (process.env.FAKE_CLAUDE_REPORT_ENV === '1') {
   console.error(`fake-claude-env: ${Object.keys(process.env).filter((k) => k.startsWith('CC_')).sort().join(',')}`);
+  console.error(`fake-claude-token: self=${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'present' : 'absent'} children=${subprocessEnv.CLAUDE_CODE_OAUTH_TOKEN ? 'present' : 'absent'}`);
 }
 
 const denials = [];
@@ -67,7 +73,7 @@ function runHook(kind, toolName, toolInput) {
     for (const h of group.hooks ?? []) {
       // Like the real CLI, command hooks run through a shell.
       const payload = JSON.stringify({ session_id: sessionId, cwd: process.cwd(), hook_event_name: kind, tool_name: toolName, tool_input: toolInput });
-      const r = spawnSync('/bin/sh', ['-c', String(h.command)], { input: payload, encoding: 'utf8', env: process.env });
+      const r = spawnSync('/bin/sh', ['-c', String(h.command)], { input: payload, encoding: 'utf8', env: subprocessEnv });
       if (r.status === 2) return { blocked: true, reason: r.stderr.trim() };
     }
   }
@@ -109,7 +115,7 @@ for (const ev of events) {
       continue;
     }
     const [cmd, ...args] = ev.__bash.split(' ');
-    const r = spawnSync(cmd === 'node' ? process.execPath : cmd, args, { encoding: 'utf8', env: process.env, cwd: process.cwd() });
+    const r = spawnSync(cmd === 'node' ? process.execPath : cmd, args, { encoding: 'utf8', env: subprocessEnv, cwd: process.cwd() });
     const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.slice(-1500);
     emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: r.status !== 0, content: `exit ${r.status}\n${out}` }] } });
     continue;

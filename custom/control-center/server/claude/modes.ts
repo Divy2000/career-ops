@@ -165,8 +165,7 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
       ['npm', '--prefix', 'custom/control-center', 'run', 'lint'],
       ['npm', '--prefix', 'custom/control-center', 'run', 'build'],
       ['npx', '--prefix', 'custom/control-center', 'vitest', 'run'],
-      ['node', '--test', 'custom/immigration/'],
-      ['node', '--test', 'custom/pipeline/'],
+      // No `node --test custom/...`: those tests import modules Dev Chat can edit, and they would run outside any guard.
       ['node', 'validate-portals.mjs'],
       ['node', 'validate-profile.mjs'],
       ['git', 'status'],
@@ -182,9 +181,12 @@ export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md'
  * Dev Chat keeps the tracker and blacklist rules and additionally protects the
  * app's own state, the guard and its policy code, recovery, dependencies, and
  * everything its allowed npm/npx commands execute besides the app sources
- * (manifests, build and test configs, tests, scripts). Dev Chat can still edit
- * server/**, which those commands load: it is a trusted code-editing agent and
- * this list prevents accidents, it is not a sandbox (README section 5).
+ * (manifests, build and test configs, tests, scripts), and what launchd or the
+ * user runs outside any session guard: the daily and weekly job scripts and
+ * prompts, the launchd installer, and the custom/ test suites. Dev Chat can still
+ * edit server/** and the custom/immigration and custom/pipeline modules, which
+ * those commands and jobs load: it is a trusted code-editing agent and this list
+ * prevents accidents, it is not a sandbox (README section 5).
  */
 export const DEVCHAT_DENIED_WRITES = [
   ...ALWAYS_DENIED_WRITES,
@@ -199,6 +201,14 @@ export const DEVCHAT_DENIED_WRITES = [
   'custom/control-center/tsconfig*.json',
   'custom/control-center/tests/**',
   'custom/control-center/scripts/**',
+  'custom/immigration/run-daily.sh',
+  'custom/immigration/daily-prompt.md',
+  'custom/immigration/tests/**',
+  'custom/immigration/**/*.test.*',
+  'custom/pipeline/tests/**',
+  'custom/pipeline/**/*.test.*',
+  'custom/upstream-sync/**',
+  'custom/launchd/**',
   '**/node_modules/**',
   'writing-samples/README.md',
 ];

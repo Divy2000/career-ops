@@ -84,7 +84,17 @@ export function buildArgv(input: InvocationInput): string[] {
 
 /** The hook re-hashes the policy file on every call and refuses everything when it no longer matches CC_POLICY_SHA256. */
 export function buildEnv(base: NodeJS.ProcessEnv, opts: { token: string; dataRoot: string; policyFile: string; policySha256: string; sessionDir: string }): NodeJS.ProcessEnv {
-  return { ...base, CLAUDE_CODE_OAUTH_TOKEN: opts.token, ANTHROPIC_API_KEY: '', CAREER_OPS_ROOT: opts.dataRoot, CC_POLICY_FILE: opts.policyFile, CC_POLICY_SHA256: opts.policySha256, CC_SESSION_DIR: opts.sessionDir };
+  return {
+    ...base,
+    CLAUDE_CODE_OAUTH_TOKEN: opts.token,
+    ANTHROPIC_API_KEY: '',
+    // Claude Code's own switch (present in 2.1.288): Bash and hook children run without the OAuth token and other credentials.
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    CAREER_OPS_ROOT: opts.dataRoot,
+    CC_POLICY_FILE: opts.policyFile,
+    CC_POLICY_SHA256: opts.policySha256,
+    CC_SESSION_DIR: opts.sessionDir,
+  };
 }
 
 /** Removes the token from anything we store (stderr, logs). */
@@ -118,7 +128,7 @@ export function buildPreamble(input: PreambleInput): string {
     `5. Write user-facing content in the language code "${input.outputLanguage}" (profile.yml language.output).`,
     p.mcp === 'playwright' ? '6. Playwright MCP is available in this apply session. The browser is headed so the user sees it; you stop before any submit.' : '6. Playwright is unavailable. Use WebFetch when you need a page and mark the result "Verification: unconfirmed (batch mode)".',
     '7. When the mode needs the user to confirm or choose, ask exactly one question and end the turn. The app shows it and resumes you with the answer.',
-    `8. Allowed write scope (paths relative to the repo root): ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope; node --test takes explicit test files)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
+    `8. Allowed write scope (paths relative to the repo root): ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
     `9. Envelope contract: ${ENVELOPE_CONTRACT[p.id] ?? 'none for this mode; report results as markdown.'}`,
   ];
   if (input.reportNum !== undefined) lines.push(`10. Report number ${input.reportNum} is reserved for this evaluation. Use it for the report file name and the tracker row; do not call reserve-report-num.`);
