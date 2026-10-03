@@ -91,26 +91,40 @@ const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|--vcf|--batch|--save|--write-to)(=|$)|^-o/;
 
 /**
- * Scripts that write to a path their caller names. The first positional is the
- * input (anywhere inside the roots); every later positional and every value of
- * an `outFlags` flag is an output and must be inside the write scope, whether
- * or not it looks like a path (`LICENSE`, `cv`). `inputFlags` values are read
- * anywhere inside the roots, `valueFlags` values are plain values; any other
- * flag is taken to have no separate value.
+ * Scripts that write to a path their caller names, modelled on their own
+ * argument parsers so the guard reads every token the way the script will:
+ * - switches: exact flag tokens with no value;
+ * - next: flags whose value is the next token (taken even when it starts with a
+ *   single dash, as the scripts do) and its role;
+ * - eq: flags accepted as --flag=value and the value's role;
+ * - positionals: the role of each positional, in order (no more are accepted);
+ * - indexed: the script reads positionals by raw argv index, so flags must come
+ *   after them; modes: a first token that switches to other positional roles.
+ * Roles: 'input' (read inside the roots), 'output' (inside the write scope),
+ * 'value' (plain). Any other dash token is refused: these parsers would treat it
+ * as a path (path.resolve turns -x/../cv.md into cv.md).
  */
+const COVER_FLAGS = { '--payload': 'input', '--out': 'output', '--format': 'value', '--report': 'value' };
+const ARTIFACT_FLAGS = { '--report': 'value', '--company': 'value', '--role': 'value', '--version': 'value', '--root': 'output' };
+const HIRED_FLAGS = { '--report': 'value', '--anonymity': 'value', '--story': 'value', '--weeks': 'value', '--feature': 'value', '--mark': 'value', '--root': 'output' };
+const DIGEST_FLAGS = { '--from': 'value', '--to': 'value', '--dir': 'input' };
 const WRITER_SCRIPTS = {
-  'generate-pdf.mjs': { outFlags: [], denyFlags: ['--batch'] },
-  'generate-cover-letter.mjs': { outFlags: ['--out'], inputFlags: ['--payload'], valueFlags: ['--format', '--report'] },
-  'build-cv-latex.mjs': {},
-  'generate-latex.mjs': {},
-  'build-cv-html.mjs': {},
-  'patch-latex-content.mjs': {},
-  'extract-latex-content.mjs': { outFlags: ['--out'] },
-  'application-artifacts.mjs': { outFlags: ['--root'], valueFlags: ['--report', '--company', '--role', '--version'] },
-  'contacts.mjs': { outFlags: ['--vcf'] },
-  'discover-new-companies.mjs': { outFlags: ['--out'], valueFlags: ['--since', '--min-rows', '--limit'] },
-  'hired-share.mjs': { outFlags: ['--root'], valueFlags: ['--report', '--anonymity', '--story', '--weeks', '--feature', '--mark'] },
-  'weekly-digest.mjs': { outFlags: ['--dir'], valueFlags: ['--from', '--to'] },
+  'generate-pdf.mjs': {
+    switches: ['--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--strict-pages', '--skip-fact-check'],
+    eq: { '--format': 'value', '--report': 'value', '--kind': 'value', '--max-pages': 'value' },
+    positionals: ['input', 'output'],
+  },
+  'generate-cover-letter.mjs': { switches: ['--help', '-h'], next: COVER_FLAGS, eq: COVER_FLAGS, positionals: [] },
+  'build-cv-latex.mjs': { switches: ['--help', '--test'], eq: { '--template': 'value' }, positionals: ['input', 'output'], indexed: true },
+  'generate-latex.mjs': { switches: ['--compile-only', '--help', '-h'], positionals: ['input', 'output'] },
+  'build-cv-html.mjs': { switches: ['--help', '--test'], positionals: ['input', 'output', 'input'], indexed: true, modes: { '--preview': ['input', 'input'] } },
+  'patch-latex-content.mjs': { switches: ['--help'], positionals: ['input', 'input', 'output'] },
+  'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
+  'application-artifacts.mjs': { switches: ['--init', '--help', '-h'], next: ARTIFACT_FLAGS, eq: ARTIFACT_FLAGS, positionals: [] },
+  'contacts.mjs': { switches: ['--summary', '--self-test', '--caller-id', '--vcf', '--help', '-h'], optionalNext: { '--vcf': 'output' }, eq: { '--vcf': 'output' }, positionals: [] },
+  'discover-new-companies.mjs': { switches: ['--added-only', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
+  'hired-share.mjs': { switches: ['--open', '--dry-run', '--status', '--help', '-h'], next: HIRED_FLAGS, eq: HIRED_FLAGS, positionals: [] },
+  'weekly-digest.mjs': { switches: ['--summary', '--self-test', '--help', '-h'], next: DIGEST_FLAGS, eq: DIGEST_FLAGS, positionals: [] },
 };
 
 const GIT_FLAGS = {
@@ -221,47 +235,67 @@ function checkGit(policy, sub, args, label) {
   return null;
 }
 
-function checkWriterScript(policy, script, writer, args, label) {
-  const outFlags = writer.outFlags ?? [];
-  const inputFlags = writer.inputFlags ?? [];
-  const valueFlags = writer.valueFlags ?? [];
-  const role = (flag) => (outFlags.includes(flag) ? 'output' : inputFlags.includes(flag) ? 'input' : valueFlags.includes(flag) ? 'value' : null);
-  const check = (kind, value) => (kind === 'output' ? writable(policy, value, label) : kind === 'input' ? readable(policy, value, label) : null);
-  let pending = null; // a declared value flag whose separate value token comes next
+function checkWriterScript(policy, script, spec, args, label) {
+  const check = (role, value) => (role === 'output' ? writable(policy, value, label) : role === 'input' ? readable(policy, value, label) : null);
+  let roles = spec.positionals;
+  let rest = args;
+  if (spec.modes && args[0] !== undefined && Object.hasOwn(spec.modes, args[0])) {
+    roles = spec.modes[args[0]];
+    rest = args.slice(1);
+  }
   let positionals = 0;
-  for (const a of args) {
+  let sawFlag = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
     if (a.startsWith('-')) {
-      const flag = a.split('=')[0];
-      if (writer.denyFlags?.includes(flag)) return `${label}: ${script} ${flag} is not allowed in sessions`;
-      if (OUTPUT_FLAG.test(a) && !outFlags.includes(flag)) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
-      const value = inlineValue(a);
-      const kind = role(flag);
-      pending = value === null && kind ? kind : null;
-      if (value !== null) {
-        const why = kind ? check(kind, value) : isPathLike(value) ? writable(policy, value, label) : null;
+      const eqAt = a.indexOf('=');
+      const name = eqAt === -1 ? a : a.slice(0, eqAt);
+      if (OUTPUT_FLAG.test(a) && !(spec.next?.[name] === 'output' || spec.eq?.[name] === 'output' || spec.optionalNext?.[name] === 'output')) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
+      sawFlag = true;
+      if (eqAt !== -1) {
+        const role = spec.eq?.[name];
+        if (!role) return `${label}: ${script} does not accept ${name}=...; it would read the token as a path`;
+        const why = check(role, a.slice(eqAt + 1));
         if (why) return why;
+        continue;
       }
+      const role = spec.next?.[name] ?? spec.optionalNext?.[name];
+      if (role) {
+        const value = rest[i + 1];
+        // Like the scripts' own parsers: the next token is the value unless it is another --flag.
+        if (value === undefined || value.startsWith('--')) {
+          if (spec.optionalNext?.[name]) continue;
+          return `${label}: ${script} ${name} needs a value`;
+        }
+        i += 1;
+        const why = check(role, value);
+        if (why) return why;
+        continue;
+      }
+      if (!spec.switches?.includes(a)) return `${label}: ${script} does not accept ${a}; it would read the token as a path`;
       continue;
     }
-    if (pending) {
-      const why = check(pending, a);
-      pending = null;
-      if (why) return why;
-      continue;
-    }
+    if (spec.indexed && sawFlag) return `${label}: ${script} reads its paths by position, so put flags after them (${a})`;
+    const role = roles[positionals];
     positionals += 1;
-    const why = positionals === 1 ? readable(policy, a, label) : writable(policy, a, label);
+    if (!role) return `${label}: ${script} takes at most ${roles.length} path argument${roles.length === 1 ? '' : 's'} (${a})`;
+    const why = check(role, a);
     if (why) return why;
   }
   return null;
 }
 
+// A dash token a script will parse as a flag: a name without path characters, or a number.
+const FLAG_SHAPE = /^(--?[A-Za-z][A-Za-z0-9_-]*(=.*)?|-\d+(\.\d+)?)$/;
+
 function checkScript(policy, script, args, label) {
   const writer = WRITER_SCRIPTS[script];
   if (writer) return checkWriterScript(policy, script, writer, args, label);
   // Scripts that write only to their own fixed files: path arguments are read inside the roots and never protected.
+  // A dash token that is not a plain flag name (-x/../../etc) is refused: lax parsers take it as a path.
   for (const a of args) {
     if (a.startsWith('-')) {
+      if (!FLAG_SHAPE.test(a)) return `${label}: ${a} is not a flag; a path may not start with -`;
       if (OUTPUT_FLAG.test(a)) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
       const value = inlineValue(a);
       const why = value !== null && isPathLike(value) ? readable(policy, value, label) : null;

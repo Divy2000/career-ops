@@ -411,6 +411,38 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(artifacts, 'node application-artifacts.mjs --report 12 --company Acme --role Backend --root output/artifacts');
   });
 
+  it('a dash-prefixed token a script would read as a path is refused, never skipped as a flag', () => {
+    // The review triggers: generate-pdf takes any unrecognized token as a positional, and path.resolve normalizes -x/.. away.
+    no(oferta, 'node generate-pdf.mjs output/a.html -x/../data/applications.md');
+    no(oferta, 'node generate-pdf.mjs -x/../output/a.html cv.md');
+    // jd-skill-gap takes the first token not starting with -- as its input.
+    no(oferta, 'node jd-skill-gap.mjs -x/../../../etc/passwd --summary');
+    ok(oferta, 'node jd-skill-gap.mjs jds/acme.md --summary');
+    no(oferta, 'node set-status.mjs --row 3 -x/../../etc/passwd');
+    // generate-pdf only knows --format=, --report[=], --kind[=], --max-pages= and its boolean switches.
+    ok(oferta, 'node generate-pdf.mjs output/a.html output/a.pdf --format=letter --report=008 --kind=cv --max-pages=2 --allow-reorder --strict-pages');
+    no(oferta, 'node generate-pdf.mjs output/a.html output/a.pdf --format letter');
+    no(oferta, 'node generate-pdf.mjs output/a.html output/a.pdf --report 008');
+    no(oferta, 'node generate-pdf.mjs output/a.html output/a.pdf --unknown-flag');
+    no(oferta, 'node generate-pdf.mjs output/a.html output/a.pdf output/b.pdf');
+    const writers = (script: string) => ({ ...pdf, bash: [['node', script]] });
+    // Value flags take the next token even when it starts with a single dash; it is still checked as an output.
+    no(writers('generate-cover-letter.mjs'), 'node generate-cover-letter.mjs --payload output/p.json --out -x/../cv.md');
+    ok(writers('generate-cover-letter.mjs'), 'node generate-cover-letter.mjs --payload=output/p.json --out=output/c.pdf --format=a4');
+    no(writers('generate-cover-letter.mjs'), 'node generate-cover-letter.mjs --payload output/p.json --open');
+    // Scripts that read positionals by index: a flag before them would become a path.
+    no(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs --template=cjk output/cv.json output/cv.tex');
+    ok(writers('build-cv-latex.mjs'), 'node build-cv-latex.mjs output/cv.json output/cv.tex --template=cjk');
+    no(writers('patch-latex-content.mjs'), 'node patch-latex-content.mjs -x/../cv.tex output/p.json output/cv.tex');
+    ok(writers('patch-latex-content.mjs'), 'node patch-latex-content.mjs output/cv.tex output/p.json output/cv-new.tex');
+    ok(writers('build-cv-html.mjs'), 'node build-cv-html.mjs --preview output/cv.json templates/cv-modern.html');
+    no(writers('build-cv-html.mjs'), 'node build-cv-html.mjs output/cv.json --preview templates/cv-modern.html');
+    no(writers('extract-latex-content.mjs'), 'node extract-latex-content.mjs --out=output/m.json output/cv.tex');
+    ok(writers('extract-latex-content.mjs'), 'node extract-latex-content.mjs output/cv.tex --out output/m.json');
+    ok(writers('generate-latex.mjs'), 'node generate-latex.mjs output/cv.tex output/cv.pdf --compile-only');
+    no(writers('generate-latex.mjs'), 'node generate-latex.mjs output/cv.tex --compileonly');
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
