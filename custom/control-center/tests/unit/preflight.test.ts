@@ -150,6 +150,16 @@ describe('resolveClaudeBin', () => {
     expect(claudeCandidates('claude', { env: { PATH: path.dirname(onPath) }, home, candidates: [brew, local] })).toEqual([onPath, local, brew]);
   });
 
+  it('counts a symlink to the same binary once and keeps the first path listed for it', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const local = touch(path.join(home, '.local', 'bin'));
+    const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-link-'));
+    const link = path.join(linkDir, 'claude');
+    fs.symlinkSync(local, link);
+    expect(claudeCandidates('claude', { env: { PATH: '/nonexistent' }, home, candidates: [link] })).toEqual([local]);
+    expect(claudeCandidates('claude', { env: { PATH: linkDir }, home, candidates: [] })).toEqual([link]);
+  });
+
   it('returns the bare name when nothing is found so the probe can report ENOENT', () => {
     expect(resolveClaudeBin('claude', { env: { PATH: '/nonexistent' }, home: '/nonexistent-home', candidates: [] })).toBe('claude');
   });

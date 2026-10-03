@@ -70,13 +70,21 @@ function isExecutable(file: string): boolean {
  * Absolute path of the claude binary: a name with a slash is taken as given, a bare name is looked up on PATH,
  * then in the usual install locations. A bare name that is found nowhere is returned unchanged so the probe reports ENOENT.
  */
-/** Every distinct executable `bin` resolves to, in pick order: PATH, the native installer's ~/.local/bin, then Homebrew and /usr/local. */
+/** Every distinct executable (by real file) `bin` resolves to, in pick order: PATH, the native installer's ~/.local/bin, then Homebrew and /usr/local. */
 export function claudeCandidates(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string[] {
   const env = opts.env ?? process.env;
   const home = opts.home ?? os.homedir();
   const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
   const all = [...dirs.map((d) => path.join(d, bin)), path.join(home, '.local', 'bin', bin), ...(opts.candidates ?? CLAUDE_FALLBACKS)];
-  return [...new Set(all.filter((c) => path.isAbsolute(c) && isExecutable(c)))];
+  // Two paths to the same file (a symlink into ~/.local/bin is common) are one install; the first path listed stands for it.
+  const seen = new Set<string>();
+  return all.filter((c) => {
+    if (!path.isAbsolute(c) || !isExecutable(c)) return false;
+    const real = fs.realpathSync(c);
+    if (seen.has(real)) return false;
+    seen.add(real);
+    return true;
+  });
 }
 
 /**
