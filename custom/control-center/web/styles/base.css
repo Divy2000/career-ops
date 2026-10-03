@@ -570,6 +570,19 @@ input[type='checkbox'] {
   z-index: 10;
 }
 
+.log {
+  max-height: 420px;
+  min-height: 120px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+}
+.log__err {
+  color: var(--warning);
+}
+.danger-text {
+  color: var(--danger);
+}
+
 /* Bars and skeletons */
 .bar {
   display: grid;

@@ -106,7 +106,7 @@ test.describe('read-only pages render fixture data', () => {
   test('Follow-ups cadence table', async ({ page }) => {
     await page.goto('/followups');
     await expect(page.getByRole('heading', { level: 1, name: 'Follow-ups' })).toBeVisible();
-    await expect(page.getByRole('cell', { name: 'overdue' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'overdue' }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: 'Globex Payments' })).toBeVisible();
     await axeClean(page);
   });

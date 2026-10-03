@@ -30,7 +30,25 @@ Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-op
 
 ## Pages
 
-Work: Today, Pipeline, Tracker, Apply, Follow-ups, Interviews. Intel: Discover, Sponsorship, Insights. System: Sessions, Runs & Schedule, Profile & CV, Settings, Dev Chat. See `../../../.cc-build-SPEC.md` style notes in the repo spec for the full inventory; pages fill in phase by phase.
+Work: Today, Pipeline, Tracker, Apply, Follow-ups, Interviews. Intel: Discover, Sponsorship, Insights. System: Sessions, Runs & Schedule, Profile & CV, Settings, Dev Chat.
+
+Implemented so far (read models, phase P1):
+
+- Today: shortlist top 15 with sponsor tiers, excluded-by-alert list, daily job result parsed from the latest `data/immigration/logs/<date>.log`, digest staleness, policy bullets and company alerts, follow-ups due, decisions (Evaluated rows), fresh matches (scan-history rows not yet evaluated, keyed on company and role through the core `normalizeTextKey`).
+- Tracker: status tabs with counts, Top 4+ filter, search across company, role and notes, sorting on every column, grouped or flat view, column picker (per browser), keyboard navigation (j/k, g/G, Enter, o, /, v, ?), side preview with archetype, TL;DR, remote and comp from the report.
+- Application: verdict callout (score, 4.0 apply line, recommendation, legitimacy, discard reasons), report sections with progressive disclosure and sanitized markdown, machine summary, timeline (status-log, follow-ups, pinned next date, company history), sponsorship panel. Missing, reserved and malformed reports are shown as distinct states.
+- Pipeline: inbox with source, seniority and text facets plus skipped rows; shortlist table with the excluded list.
+- Sponsorship: digest sections, policy changes, official feed, company alerts, company checks, tier cache.
+- Insights: overview tiles, status and transition bars, funnel, rates, score distribution, weekly activity, archetype and work-mode breakdowns.
+- Follow-ups: cadence table from `followup-cadence.mjs --json`.
+
+Every page re-fetches when the data root changes: a chokidar watcher maps files to domains and pushes `data.changed` over `GET /api/events` (SSE).
+
+Runner and actions (phase P2, partial):
+
+- `server/actions/registry.ts` is the only way to run scripts. Each action builds an argv array for `spawn(..., { shell: false })`; the client never sends a command string. Registered so far: `tracker.setStatus` (sync, exit codes map to 400/404/409/503), `system.doctor`, `insights.stats`, `tracker.verify`, `pipeline.prioritize`, `pipeline.shortlist`, `daily.runNow` (confirm).
+- Async actions run through `server/runner/wrapper.mjs`, started detached so server reloads never kill them. The wrapper writes `raw.ndjson` (NDJSON lines) and `exit.json` under `{DATA_ROOT}/data/control-center/runs/<id>/`. The runner orders runs that share a resource (FIFO), caps Claude runs, cancels by SIGTERM on the process group (SIGKILL after 5 s), reconciles running runs after a restart, and keeps the last 500 finished runs.
+- `GET /api/runs/:id/events` replays the log from `Last-Event-ID` and then tails it; the Runs page shows it live. The Tracker preview changes a status through `tracker.setStatus`, with a discard-reason picker for Discarded and SKIP.
 
 ## AI sessions and permissions
 

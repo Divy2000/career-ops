@@ -7,6 +7,7 @@ import { PipelinePage, type PipelineTab } from './features/pipeline/PipelinePage
 import { SponsorshipPage, type SponsorshipTab } from './features/sponsorship/SponsorshipPage';
 import { InsightsPage, type InsightsTab } from './features/insights/InsightsPage';
 import { FollowupsPage } from './features/followups/FollowupsPage';
+import { RunsPage } from './features/runs/RunsPage';
 import { PlaceholderPage } from './components/PlaceholderPage';
 
 const rootRoute = createRootRoute({ component: Shell });
@@ -81,7 +82,7 @@ const routeTree = rootRoute.addChildren([
   placeholder('/interviews', 'Interviews'),
   placeholder('/discover', 'Discover'),
   placeholder('/sessions', 'Sessions'),
-  placeholder('/runs', 'Runs & Schedule'),
+  createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
   placeholder('/profile', 'Profile & CV'),
   placeholder('/settings', 'Settings'),
   placeholder('/dev', 'Dev Chat'),

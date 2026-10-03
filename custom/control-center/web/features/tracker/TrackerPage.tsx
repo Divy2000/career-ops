@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useTracker } from '../../lib/queries';
 import { DataState, Empty, ScorePill, StatusPill, Tabs } from '../../components/ui';
+import { StatusControl } from './StatusControl';
 import type { TrackerRow } from '@shared/api';
 
 export type TrackerTab = 'all' | 'evaluated' | 'interview' | 'responded' | 'applied' | 'top' | 'skip' | 'rejected' | 'discarded';
@@ -120,7 +121,7 @@ export function TrackerPage() {
   const current = visible.find((r) => r.num === selected) ?? null;
   const visibleCols = COLUMNS.filter((c) => !c.optional || cols.has(c.key));
 
-  const update = (patch: Partial<TrackerSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
+  const update = (patch: Partial<TrackerSearch>) => void navigate({ to: '/tracker', search: (prev: TrackerSearch) => ({ ...prev, ...patch }) });
   const toggleSort = (key: SortKey) => update({ sort: key, dir: search.sort === key && search.dir === 'asc' ? 'desc' : 'asc' });
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -239,6 +240,9 @@ export function TrackerPage() {
                 <div className="row gap">
                   <ScorePill score={current.score} />
                   <StatusPill status={current.status} />
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <StatusControl key={current.num} row={current} />
                 </div>
                 <dl className="kv" style={{ marginTop: 12 }}>
                   <dt>Archetype</dt>
