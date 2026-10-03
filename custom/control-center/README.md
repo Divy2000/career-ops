@@ -113,3 +113,11 @@ Note: `custom/` is public. `custom/immigration/daily-prompt.md` describes the us
 - "launchctl bootstrap failed": the plist is written and linted first; check that `/bin/bash` has Full Disk Access when the checkout lives under `~/Desktop` or `~/Documents`.
 - A structured save returns 409: the file changed on disk (another editor, Dev Chat or the daily job). Your pending edits stay in the form on top of the current version; review and save again, or discard.
 - The usage meter says "No Claude Code logs": set `CC_CLAUDE_PROJECTS_DIR` if your Claude Code config lives elsewhere.
+
+## 11. Known limitations
+
+- The session guard is defense in depth for sessions you start, not a sandbox. Dev Chat in particular edits and reloads this app's code, so it can always run code it writes; the guard stops accidents.
+- `generate-latex.mjs`: the guard derives the compile's side files (`<base>.pdf`, aux files, tectonic files) from a fixed list rather than requiring the input's whole folder to be writable. Every scope that ships today allows the whole `output/` folder, so this only matters for a future narrower scope; inputs should end in `.tex`.
+- `node build-cv-html.mjs --test` and `node build-cv-latex.mjs --test` are refused inside sessions, because the guard never lets a flag occupy a path slot of a script that reads paths by position. Run those self-tests from a terminal.
+- `pipeline/prioritize.mjs` reads `data/scan-history.tsv` under the pipeline lock, but `scan.mjs` writes its history row after releasing it; a prioritize run in that gap can order a just-scanned job slightly lower. Nothing is lost.
+- Playwright MCP has not been probed on this machine, so the Apply page drafts answers but does not fill the live form.
