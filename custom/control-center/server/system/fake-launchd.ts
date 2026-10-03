@@ -23,9 +23,19 @@ export function plistToJson(xml: string): Record<string, unknown> {
   return { Label: label, ProgramArguments: programArguments, StartCalendarInterval: sci };
 }
 
-export function fakeLaunchdExec(fallback: Exec = execNoShell): { exec: Exec; calls: LaunchdCall[]; loaded: Set<string> } {
+export function fakeLaunchdExec(fallback: Exec = execNoShell): { exec: Exec; calls: LaunchdCall[]; loaded: Set<string>; disabled: Set<string>; login: (agentsDir: string) => void } {
   const calls: LaunchdCall[] = [];
   const loaded = new Set<string>();
+  // launchctl disable/enable state: it outlives bootout and is what launchd consults at login.
+  const disabled = new Set<string>();
+  /** What launchd does at login: load every plist in the agents dir whose label is not disabled. */
+  const login = (agentsDir: string) => {
+    loaded.clear();
+    for (const name of fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : []) {
+      const label = path.basename(name, '.plist');
+      if (name.endsWith('.plist') && !disabled.has(label)) loaded.add(label);
+    }
+  };
   const exec: Exec = async (cmd, args, opts) => {
     if (cmd !== 'launchctl' && cmd !== 'plutil') return fallback(cmd, args, opts);
     calls.push({ cmd, args: [...args] });
@@ -50,12 +60,23 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): { exec: Exec; cal
       return loaded.delete(label) ? { code: 0, stdout: '', stderr: '' } : { code: 113, stdout: '', stderr: 'Boot-out failed: 113: Could not find specified service' };
     }
     if (sub === 'bootstrap') {
-      loaded.add(path.basename(args[2] ?? '', '.plist'));
+      const label = path.basename(args[2] ?? '', '.plist');
+      if (disabled.has(label)) return { code: 119, stdout: '', stderr: 'Bootstrap failed: 119: Service is disabled' };
+      loaded.add(label);
       return { code: 0, stdout: '', stderr: '' };
+    }
+    if (sub === 'disable' || sub === 'enable') {
+      const label = (args[1] ?? '').split('/').pop() ?? '';
+      if (sub === 'disable') disabled.add(label);
+      else disabled.delete(label);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (sub === 'print-disabled') {
+      return { code: 0, stdout: `disabled services = {\n${[...disabled].map((l) => `\t"${l}" => disabled\n`).join('')}}\n`, stderr: '' };
     }
     return { code: 2, stdout: '', stderr: `fake launchctl: unsupported subcommand ${sub}` };
   };
-  return { exec, calls, loaded };
+  return { exec, calls, loaded, disabled, login };
 }
 
 /** Test builds only: swap the real launchctl/plutil for the fake when asked. */

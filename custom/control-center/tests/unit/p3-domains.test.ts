@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
-import { computeNextFire, parseLaunchctlPrint, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
+import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
 import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings } from '../../server/domains/settings.js';
 
@@ -118,6 +118,15 @@ Some intro text about the file.
 });
 
 describe('launchd schedule helpers', () => {
+  it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
+    const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';
+    expect(parsePrintDisabled(out, 'com.career-ops.immigration-watch')).toBe(true);
+    expect(parsePrintDisabled(out, 'com.career-ops.upstream-sync')).toBe(false);
+    expect(parsePrintDisabled(out, 'com.old.style')).toBe(true);
+    expect(parsePrintDisabled(out, 'com.apple.Siri.agent')).toBe(false);
+    expect(parsePrintDisabled(out, 'com.not.listed')).toBe(false);
+    expect(parsePrintDisabled(out, 'com.career-ops.immigration')).toBe(false);
+  });
   it('renders a plist that keeps ProgramArguments on the fork script and lints as XML', () => {
     const job = SCHEDULE_JOBS.find((j) => j.label === 'com.career-ops.upstream-sync')!;
     const xml = renderPlist('/repo', job, { hour: 3, minute: 15, weekday: 0 });

@@ -36,6 +36,8 @@ export interface ScheduleState {
   weekday: number | null;
   programArgumentsOk: boolean;
   loaded: boolean;
+  /** `launchctl disable` state: launchd skips the job at login even though its plist stays in LaunchAgents. */
+  disabled: boolean;
   state: string | null;
   lastExit: number | null;
   nextFire: string | null;
@@ -88,6 +90,13 @@ export function parseLaunchctlPrint(out: string): { state: string | null; lastEx
   return { state, lastExit: exit ? Number(exit[1]) : null };
 }
 
+/** True when `launchctl print-disabled gui/<uid>` lists the label as disabled ("=> disabled", or "=> true" on older macOS). */
+export function parsePrintDisabled(out: string, label: string): boolean {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp(`^\\s*"${escaped}"\\s*=>\\s*(\\w+)`, 'm').exec(out);
+  return m?.[1] === 'disabled' || m?.[1] === 'true';
+}
+
 interface PlistJson {
   Label?: string;
   ProgramArguments?: string[];
@@ -115,7 +124,7 @@ export class ScheduleService {
 
   async readOne(job: ScheduleJob): Promise<ScheduleState> {
     const plistPath = this.plistPath(job);
-    const base: ScheduleState = { label: job.label, kind: job.kind, title: job.title, script: job.script, logDir: job.logDir, plistPath, plist: 'missing', hour: null, minute: null, weekday: null, programArgumentsOk: false, loaded: false, state: null, lastExit: null, nextFire: null, error: null };
+    const base: ScheduleState = { label: job.label, kind: job.kind, title: job.title, script: job.script, logDir: job.logDir, plistPath, plist: 'missing', hour: null, minute: null, weekday: null, programArgumentsOk: false, loaded: false, disabled: false, state: null, lastExit: null, nextFire: null, error: null };
     if (fs.existsSync(plistPath)) {
       const r = await this.deps.exec('plutil', ['-convert', 'json', '-o', '-', plistPath], { timeoutMs: 10_000 });
       if (r.code !== 0) {
@@ -144,13 +153,19 @@ export class ScheduleService {
       base.state = parsed.state;
       base.lastExit = parsed.lastExit;
     }
+    const disabled = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
+    base.disabled = disabled.code === 0 && parsePrintDisabled(disabled.stdout, job.label);
     if (base.loaded && base.hour !== null && base.minute !== null) {
       base.nextFire = computeNextFire((this.deps.now ?? (() => new Date()))(), base.hour, base.minute, base.weekday).toISOString();
     }
     return base;
   }
 
-  /** Writes the plist, lints it, boots the job out and (when enabled) bootstraps it again. */
+  /**
+   * Writes the plist and lints it. Enabling runs launchctl enable, bootout and
+   * bootstrap; disabling runs launchctl disable (persistent: launchd would
+   * otherwise load the plist again at the next login) and bootout.
+   */
   async write(job: ScheduleJob, input: ScheduleInput): Promise<{ ok: true; state: ScheduleState } | { ok: false; status: number; error: string; stderr: string }> {
     const plistPath = this.plistPath(job);
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
@@ -160,6 +175,13 @@ export class ScheduleService {
     const lint = await this.deps.exec('plutil', ['-lint', plistPath], { timeoutMs: 10_000 });
     if (lint.code !== 0) return { ok: false, status: 500, error: `plutil -lint rejected the plist (exit ${lint.code})`, stderr: lint.stderr.trim() };
     const target = `gui/${this.deps.uid}/${job.label}`;
+    if (input.enabled) {
+      const enable = await this.deps.exec('launchctl', ['enable', target], { timeoutMs: 20_000 });
+      if (enable.code !== 0) return { ok: false, status: 502, error: `launchctl enable failed (exit ${enable.code})`, stderr: enable.stderr.trim() };
+    } else {
+      const disable = await this.deps.exec('launchctl', ['disable', target], { timeoutMs: 20_000 });
+      if (disable.code !== 0) return { ok: false, status: 502, error: `launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, stderr: disable.stderr.trim() };
+    }
     // bootout fails when the job is not loaded; that is the expected state before the first install.
     await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
     if (input.enabled) {

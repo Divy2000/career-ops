@@ -188,12 +188,14 @@ describe('launchd schedule through the injectable executor (never the real launc
     const uid = String(process.getuid?.() ?? 0);
     expect(fake.calls.map((c) => [c.cmd, ...c.args].join(' '))).toEqual([
       `plutil -lint ${plist}`,
+      `launchctl enable gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootout gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootstrap gui/${uid} ${plist}`,
       `plutil -convert json -o - ${plist}`,
       `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
+      `launchctl print-disabled gui/${uid}`,
     ]);
-    expect(res.json()).toMatchObject({ label: 'com.career-ops.upstream-sync', plist: 'ok', loaded: true, hour: 4, minute: 30, weekday: 0, programArgumentsOk: true, lastExit: 0 });
+    expect(res.json()).toMatchObject({ label: 'com.career-ops.upstream-sync', plist: 'ok', loaded: true, disabled: false, hour: 4, minute: 30, weekday: 0, programArgumentsOk: true, lastExit: 0 });
     expect(typeof res.json().nextFire).toBe('string');
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
@@ -202,11 +204,31 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(res.statusCode, res.body).toBe(200);
     expect(fake.calls.some((c) => c.args[0] === 'bootstrap')).toBe(false);
     expect(fake.calls.some((c) => c.args[0] === 'bootout')).toBe(true);
-    expect(res.json()).toMatchObject({ plist: 'ok', loaded: false, hour: 8, minute: 0, weekday: null });
+    const uid = String(process.getuid?.() ?? 0);
+    expect(fake.calls.map((c) => [c.cmd, ...c.args].join(' '))).toContain(`launchctl disable gui/${uid}/com.career-ops.immigration-watch`);
+    expect(res.json()).toMatchObject({ plist: 'ok', loaded: false, disabled: true, hour: 8, minute: 0, weekday: null });
     const all = (await get('/api/schedule')).json().jobs;
     expect(all[0]).toMatchObject({ loaded: false });
     expect(all[1]).toMatchObject({ loaded: true });
   });
+  it('a disabled job stays off after a logout or reboot (launchd loads every plist that is not disabled), and enabling brings it back', async () => {
+    const login = fakeLaunchdExec();
+    const app = await makeTestApp({}, { exec: login.exec });
+    try {
+      const put = (enabled: boolean) => app.app.inject({ method: 'PUT', url: '/api/schedule/com.career-ops.immigration-watch', headers: app.authedWrite, payload: { hour: 7, minute: 15, enabled } });
+      const daily = async () => (await app.app.inject({ method: 'GET', url: '/api/schedule', headers: app.authed })).json().jobs[0];
+      expect((await put(true)).statusCode).toBe(200);
+      expect((await put(false)).statusCode).toBe(200);
+      login.login(app.cfg.launchAgentsDir);
+      expect(await daily()).toMatchObject({ plist: 'ok', loaded: false, disabled: true, nextFire: null });
+      expect((await put(true)).statusCode).toBe(200);
+      login.login(app.cfg.launchAgentsDir);
+      expect(await daily()).toMatchObject({ loaded: true, disabled: false });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('validates the label and the body', async () => {
     expect((await send('PUT', '/api/schedule/com.evil', { hour: 1, minute: 1, enabled: true })).statusCode).toBe(404);
     expect((await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 25, minute: 0, enabled: true })).statusCode).toBe(400);

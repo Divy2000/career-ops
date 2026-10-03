@@ -40,6 +40,7 @@ function JobCard({ job }: { job: ScheduleState }) {
         <div className="row gap">
           <Pill tone={job.plist === 'ok' ? 'neutral' : job.plist === 'missing' ? 'warn' : 'danger'}>{job.plist === 'ok' ? 'plist ok' : job.plist === 'missing' ? 'not installed' : 'plist malformed'}</Pill>
           <Pill tone={job.loaded ? 'ok' : 'warn'}>{job.loaded ? `loaded${job.state ? `: ${job.state}` : ''}` : 'not loaded'}</Pill>
+          {job.disabled && <Pill tone="neutral">disabled at login</Pill>}
         </div>
       </div>
       <dl className="kv">
@@ -81,7 +82,7 @@ function JobCard({ job }: { job: ScheduleState }) {
         <button type="button" className="button--primary" onClick={() => void put(true)}>
           {job.loaded ? 'Save time' : 'Install and enable'}
         </button>
-        <button type="button" disabled={!job.loaded} onClick={() => void put(false)}>
+        <button type="button" disabled={job.plist === 'missing' || (!job.loaded && job.disabled)} onClick={() => void put(false)}>
           Disable
         </button>
         {job.kind === 'daily' && <ActionButton meta={actions.data?.find((a) => a.id === 'daily.runNow')} onRun={() => void run('daily.runNow', {})} />}
@@ -103,7 +104,7 @@ export function ScheduleCards() {
       {(q.data?.jobs ?? []).map((j) => (
         <JobCard key={j.label} job={j} />
       ))}
-      {q.data && <p className="faint small">Plists live in {q.data.agentsDir}. Changes go through plutil -lint, launchctl bootout and bootstrap.</p>}
+      {q.data && <p className="faint small">Plists live in {q.data.agentsDir}. Changes go through plutil -lint, launchctl enable or disable (kept across logins), bootout and bootstrap.</p>}
     </DataState>
   );
 }

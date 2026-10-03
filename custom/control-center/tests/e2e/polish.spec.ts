@@ -128,7 +128,14 @@ test.describe('P3 editors and P6 polish', () => {
     await expect(weekly.getByText('loaded: waiting')).toBeVisible();
     await expect(weekly.getByText('plist ok')).toBeVisible();
     const schedule = await (await page.request.get('/api/schedule')).json();
-    expect(schedule.jobs[1]).toMatchObject({ loaded: true, hour: 4, weekday: 0 });
+    expect(schedule.jobs[1]).toMatchObject({ loaded: true, disabled: false, hour: 4, weekday: 0 });
+    // Disable is persistent (launchctl disable), so the card says the job stays off at login.
+    await weekly.getByRole('button', { name: 'Disable' }).click();
+    await expect(weekly.getByText('disabled at login')).toBeVisible();
+    expect((await (await page.request.get('/api/schedule')).json()).jobs[1]).toMatchObject({ loaded: false, disabled: true });
+    await weekly.getByRole('button', { name: 'Install and enable' }).click();
+    await expect(weekly.getByText('loaded: waiting')).toBeVisible();
+    expect((await (await page.request.get('/api/schedule')).json()).jobs[1]).toMatchObject({ loaded: true, disabled: false });
     await expect(page.getByLabel('Log 2026-10-03')).toBeVisible();
     await axeClean(page);
   });
