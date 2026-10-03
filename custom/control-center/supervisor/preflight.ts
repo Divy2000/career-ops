@@ -12,6 +12,8 @@ export interface PreflightInput {
   exec?: (cmd: string, args: string[]) => Promise<number>;
   /** Per-attempt limit for `claude --version`; a cold first start can self-update before it answers. */
   claudeTimeoutMs?: number;
+  /** Every claude binary found on this machine; more than one is a warning, since the first is pinned for the server. */
+  claudeCandidates?: string[];
 }
 
 export const CLAUDE_TIMEOUT_MS = 30_000;
@@ -68,13 +70,22 @@ function isExecutable(file: string): boolean {
  * Absolute path of the claude binary: a name with a slash is taken as given, a bare name is looked up on PATH,
  * then in the usual install locations. A bare name that is found nowhere is returned unchanged so the probe reports ENOENT.
  */
-export function resolveClaudeBin(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string {
-  if (bin.includes('/')) return bin;
+/** Every distinct executable `bin` resolves to, in pick order: PATH, the native installer's ~/.local/bin, then Homebrew and /usr/local. */
+export function claudeCandidates(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string[] {
   const env = opts.env ?? process.env;
   const home = opts.home ?? os.homedir();
   const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  const candidates = [...dirs.map((d) => path.join(d, bin)), ...(opts.candidates ?? CLAUDE_FALLBACKS), path.join(home, '.local', 'bin', bin)];
-  return candidates.find((c) => path.isAbsolute(c) && isExecutable(c)) ?? bin;
+  const all = [...dirs.map((d) => path.join(d, bin)), path.join(home, '.local', 'bin', bin), ...(opts.candidates ?? CLAUDE_FALLBACKS)];
+  return [...new Set(all.filter((c) => path.isAbsolute(c) && isExecutable(c)))];
+}
+
+/**
+ * Absolute path of the claude binary: a name with a slash is taken as given, a bare name is looked up in claudeCandidates order.
+ * A bare name that is found nowhere is returned unchanged so the probe reports ENOENT.
+ */
+export function resolveClaudeBin(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string {
+  if (bin.includes('/')) return bin;
+  return claudeCandidates(bin, opts)[0] ?? bin;
 }
 
 function claudeFailure(bin: string, p: Probe, timeoutMs: number): string {
@@ -125,6 +136,10 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
   const skipKeychain = input.env.NODE_ENV === 'test' && input.env.CC_SKIP_KEYCHAIN !== '0';
   if (!skipKeychain && (await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'])) !== 0) {
     errors.push(KEYCHAIN_HELP);
+  }
+  const others = (input.claudeCandidates ?? []).filter((c) => c !== input.claudeBin);
+  if (others.length > 0) {
+    warnings.push(`Several claude binaries are installed. Using ${input.claudeBin}; also found ${others.join(', ')}. Set CC_CLAUDE_BIN to choose another.`);
   }
   if (input.env.ANTHROPIC_API_KEY) {
     warnings.push('ANTHROPIC_API_KEY is set in this shell. Sessions force it empty and use the Keychain token.');

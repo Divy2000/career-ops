@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { preflight, resolveClaudeBin, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
+import { preflight, resolveClaudeBin, claudeCandidates, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
 
 const execOk = async () => 0;
 
@@ -57,6 +57,20 @@ function fakeClaude(body: string): string {
 const base = { nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test' } };
 
 describe('preflight claude probe', () => {
+  it('warns when more than one claude binary is installed, naming the one in use', async () => {
+    const r = await preflight({ ...base, claudeBin: '/a/claude', claudeCandidates: ['/a/claude', '/b/claude'], exec: async () => 0 });
+    expect(r.ok).toBe(true);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('/a/claude');
+    expect(r.warnings[0]).toContain('/b/claude');
+    expect(r.warnings[0]).toContain('CC_CLAUDE_BIN');
+  });
+
+  it('does not warn for a single claude binary', async () => {
+    const r = await preflight({ ...base, claudeBin: '/a/claude', claudeCandidates: ['/a/claude'], exec: async () => 0 });
+    expect(r.warnings).toEqual([]);
+  });
+
   it('waits for a slow cold start instead of failing at the old 8 second limit', async () => {
     const bin = fakeClaude("setTimeout(() => { console.log('2.0.0 (Claude Code)'); }, 1200);");
     const r = await preflight({ ...base, claudeBin: bin, claudeTimeoutMs: 5000 });
@@ -119,6 +133,21 @@ describe('resolveClaudeBin', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
     const local = touch(path.join(home, '.local', 'bin'));
     expect(resolveClaudeBin('claude', { env: { PATH: '/nonexistent' }, home, candidates: ['/nonexistent/a/claude'] })).toBe(local);
+  });
+
+  it('prefers the native installer location over Homebrew and /usr/local when PATH has no claude', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const local = touch(path.join(home, '.local', 'bin'));
+    const brew = touch(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-brew-')));
+    expect(resolveClaudeBin('claude', { env: { PATH: '/nonexistent' }, home, candidates: [brew] })).toBe(local);
+  });
+
+  it('lists every distinct claude it can find, in the order it would pick them', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const local = touch(path.join(home, '.local', 'bin'));
+    const brew = touch(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-brew-')));
+    const onPath = touch(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-path-')));
+    expect(claudeCandidates('claude', { env: { PATH: path.dirname(onPath) }, home, candidates: [brew, local] })).toEqual([onPath, local, brew]);
   });
 
   it('returns the bare name when nothing is found so the probe can report ENOENT', () => {
