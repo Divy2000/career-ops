@@ -14,9 +14,10 @@ import { etagOf } from '../domains/files.js';
 import { applyYamlOps, parseYamlDoc, yamlOpSchema, YamlOpsError, type YamlOp } from '../domains/yamlOps.js';
 import { listPlugins, PLUGINS_CONFIG_REL, readPluginsConfig } from '../domains/plugins.js';
 
+/** A file is written only when its validator exits 0 (findings then come back as warnings); any other exit, a crash or a timeout included, writes nothing. */
 export const CONFIG_FILES = {
-  portals: { rel: 'portals.yml', validator: 'validatePortals' as const, flag: '--file', failExit: [1], jsonFlag: false },
-  profile: { rel: 'config/profile.yml', validator: 'validateProfile' as const, flag: '--profile', failExit: [2], jsonFlag: true },
+  portals: { rel: 'portals.yml', validator: 'validatePortals' as const, flag: '--file', jsonFlag: false },
+  profile: { rel: 'config/profile.yml', validator: 'validateProfile' as const, flag: '--profile', jsonFlag: true },
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_FILES;
@@ -54,8 +55,26 @@ export function etagMatches(currentEtag: string | null, header: unknown): boolea
 export type SaveInput = { raw: string } | { ops: YamlOp[] };
 export type SaveResult = { status: 200; body: { ok: true; etag: string; path: string; warnings: unknown; validatorExit: number } } | { status: 400 | 409 | 422; body: Record<string, unknown> };
 
+// One save at a time per file: the validator takes seconds, and two saves that both
+// passed the If-Match check before it would otherwise both be written.
+const saveLocks = new Map<string, Promise<unknown>>();
+
+function withSaveLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const run = (saveLocks.get(file) ?? Promise.resolve()).then(fn, fn);
+  const settled = run.catch(() => undefined);
+  saveLocks.set(file, settled);
+  void settled.then(() => {
+    if (saveLocks.get(file) === settled) saveLocks.delete(file);
+  });
+  return run;
+}
+
 /** Validates through the core CLI on a temp file and renames atomically; nothing is written on failure. */
-export async function saveConfigFile(cfg: ServerConfig, exec: Exec, bus: EventBus, key: ConfigKey, input: SaveInput, ifMatch: unknown): Promise<SaveResult> {
+export function saveConfigFile(cfg: ServerConfig, exec: Exec, bus: EventBus, key: ConfigKey, input: SaveInput, ifMatch: unknown): Promise<SaveResult> {
+  return withSaveLock(path.join(cfg.dataRoot, CONFIG_FILES[key].rel), () => saveConfigFileLocked(cfg, exec, bus, key, input, ifMatch));
+}
+
+async function saveConfigFileLocked(cfg: ServerConfig, exec: Exec, bus: EventBus, key: ConfigKey, input: SaveInput, ifMatch: unknown): Promise<SaveResult> {
   const def = CONFIG_FILES[key];
   const current = readConfigFile(cfg.dataRoot, key);
   if (!etagMatches(current.etag, ifMatch)) return { status: 409, body: { error: 'the file changed since you loaded it', current } };
@@ -84,9 +103,12 @@ export async function saveConfigFile(cfg: ServerConfig, exec: Exec, bus: EventBu
         /* keep text */
       }
     }
-    if ((def.failExit as readonly number[]).includes(r.code)) {
+    if (r.code !== 0) {
       return { status: 422, body: { error: `${def.validator} rejected the file (exit ${r.code}); nothing was written`, exit: r.code, findings, stderr: r.stderr.trim().slice(-2000) } };
     }
+    // The file may have changed while the validator ran (a session, another editor): never clobber it.
+    const latest = readConfigFile(cfg.dataRoot, key);
+    if (latest.etag !== current.etag) return { status: 409, body: { error: 'the file changed while it was being validated; nothing was written', current: latest } };
     const abs = path.join(cfg.dataRoot, def.rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.renameSync(tmp, abs);

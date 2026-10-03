@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { execNoShell, type Exec } from '../../server/routes/system.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -56,5 +57,83 @@ describe('config/profile.yml editor', () => {
     expect(good.statusCode, JSON.stringify(good.json())).toBe(200);
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'), 'utf8')).toContain('first_followup_days: 7');
     expect((await get('/api/config/profile')).json().kind).toBe('ok');
+  });
+});
+
+describe('config saves are serialized per file and never clobber a newer file', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** The real validators, slowed down so saves and outside edits overlap the validation window. */
+  const slowValidators = (onValidate?: () => void): Exec => async (cmd, args, opts) => {
+    if (args.some((a) => /validate-(portals|profile)\.mjs$/.test(a))) {
+      onValidate?.();
+      await wait(250);
+    }
+    return execNoShell(cmd, args, opts);
+  };
+
+  it('two saves with the same ETag: the first is written, the second gets 409 and nothing is lost', async () => {
+    const app = await makeTestApp({}, { exec: slowValidators() });
+    try {
+      const put = (raw: string, etag: string) => app.app.inject({ method: 'PUT', url: '/api/config/portals', headers: { ...app.authedWrite, 'if-match': etag }, payload: { raw } });
+      const before = (await app.app.inject({ method: 'GET', url: '/api/config/portals', headers: app.authed })).json();
+      const [a, b] = await Promise.all([put(`# tab A\n${before.raw}`, before.etag), put(`# tab B\n${before.raw}`, before.etag)]);
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+      const winner = a.statusCode === 200 ? '# tab A' : '# tab B';
+      expect(fs.readFileSync(path.join(app.cfg.dataRoot, 'portals.yml'), 'utf8')).toBe(`${winner}\n${before.raw}`);
+      expect((a.statusCode === 409 ? a : b).json().current.raw.startsWith(winner)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('an edit that lands on disk while the validator runs wins: the save returns 409 and writes nothing', async () => {
+    let dataRoot = '';
+    const app = await makeTestApp({}, { exec: slowValidators(() => setTimeout(() => fs.appendFileSync(path.join(dataRoot, 'portals.yml'), '# edited by a fix-portal session\n'), 50)) });
+    dataRoot = app.cfg.dataRoot;
+    try {
+      const before = (await app.app.inject({ method: 'GET', url: '/api/config/portals', headers: app.authed })).json();
+      const res = await app.app.inject({ method: 'PUT', url: '/api/config/portals', headers: { ...app.authedWrite, 'if-match': before.etag }, payload: { raw: `# from the editor\n${before.raw}` } });
+      expect(res.statusCode).toBe(409);
+      const onDisk = fs.readFileSync(path.join(dataRoot, 'portals.yml'), 'utf8');
+      expect(onDisk).toBe(`${before.raw}# edited by a fix-portal session\n`);
+      expect(res.json().current.raw).toBe(onDisk);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('config/profile.yml is written only when validate-profile exits 0', () => {
+  for (const [label, result] of [
+    ['a crash (exit 1)', { code: 1, stdout: '', stderr: 'TypeError: cannot read properties of undefined' }],
+    ['a timeout (killed, reported as exit 1)', { code: 1, stdout: '', stderr: '' }],
+    ['an unknown exit code', { code: 3, stdout: '', stderr: 'unexpected' }],
+  ] as const) {
+    it(`${label} rejects the save with 422 and writes nothing`, async () => {
+      const exec: Exec = async (cmd, args, opts) => (args.some((a) => a.endsWith('validate-profile.mjs')) ? { ...result } : execNoShell(cmd, args, opts));
+      const app = await makeTestApp({}, { exec });
+      try {
+        const res = await app.app.inject({ method: 'PUT', url: '/api/config/profile', headers: app.authedWrite, payload: { raw: 'language:\n  output: en\n' } });
+        expect(res.statusCode).toBe(422);
+        expect(res.json()).toMatchObject({ exit: result.code, error: expect.stringMatching(/nothing was written/) });
+        expect(fs.existsSync(path.join(app.cfg.dataRoot, 'config', 'profile.yml'))).toBe(false);
+      } finally {
+        await app.close();
+      }
+    });
+  }
+
+  it('exit 0 with findings writes the file and returns the findings as warnings', async () => {
+    const findings = { profile: 'x', findings: [{ level: 'warning', code: 'unknown-key', message: 'styel is not a known key' }] };
+    const exec: Exec = async (cmd, args, opts) => (args.some((a) => a.endsWith('validate-profile.mjs')) ? { code: 0, stdout: JSON.stringify(findings), stderr: '' } : execNoShell(cmd, args, opts));
+    const app = await makeTestApp({}, { exec });
+    try {
+      const res = await app.app.inject({ method: 'PUT', url: '/api/config/profile', headers: app.authedWrite, payload: { raw: 'styel:\n  x: 1\n' } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, validatorExit: 0, warnings: findings });
+      expect(fs.readFileSync(path.join(app.cfg.dataRoot, 'config', 'profile.yml'), 'utf8')).toBe('styel:\n  x: 1\n');
+    } finally {
+      await app.close();
+    }
   });
 });
