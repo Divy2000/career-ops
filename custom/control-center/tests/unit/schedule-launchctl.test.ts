@@ -50,6 +50,8 @@ describe('ScheduleService.readOne against launchctl output', () => {
     const svc = new ScheduleService({ exec, agentsDir, uid: 501, codeRoot: '/code', dataRoot: '/data', now: () => now });
     const s = await svc.readOne(job);
     expect(s).toMatchObject({ loaded: true, state: 'not running', lastExit: null, disabled: false });
+    // 08:00 Pacific daylight time is 15:00 UTC; the UTC slice of this string is what the page used to show.
+    expect(s.nextFire).toBe('2026-10-04T15:00:00.000Z');
     expect(formatLocalMinute(s.nextFire!)).toBe('2026-10-04 08:00');
   });
 });
