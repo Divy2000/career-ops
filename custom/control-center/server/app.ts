@@ -14,6 +14,8 @@ import { DailyJobWatch } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
 import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
 import { sessionRoutes } from './routes/sessions.js';
+import { fileRoutes } from './routes/files.js';
+import { devchatRoutes } from './routes/devchat.js';
 
 export interface AppDeps {
   /** Injectable process runner (tests fake pgrep and launchctl). */
@@ -56,6 +58,8 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   sessions.reconcile();
   closers.push(async () => sessions.close());
   await app.register(sessionRoutes, { cfg, manager: sessions });
+  await app.register(fileRoutes, { cfg, bus });
+  await app.register(devchatRoutes, { cfg, manager: sessions, exec });
 
   if (cfg.watch) {
     const watcher = startWatcher(cfg.dataRoot, bus);

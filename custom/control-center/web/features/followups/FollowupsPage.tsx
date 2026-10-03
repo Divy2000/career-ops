@@ -67,6 +67,8 @@ function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg:
   );
 }
 
+import { ModeLauncher } from '../../components/ModeLauncher';
+
 export function FollowupsPage() {
   const q = useFollowups();
   const qc = useQueryClient();
@@ -103,6 +105,13 @@ export function FollowupsPage() {
           </span>
         )}
       </div>
+      <ModeLauncher
+        heading="AI drafts"
+        modes={[
+          { id: 'followup', label: 'Draft follow-ups', prompt: 'Draft follow-up messages for every overdue and urgent application.' },
+          { id: 'reply-watch', label: 'Reply watch', prompt: 'Review the reply candidates and suggest status changes (ask before any change).' },
+        ]}
+      />
       {message && (
         <p role="status" className={message.startsWith('Could not') ? 'danger-text' : 'muted'}>
           {message}

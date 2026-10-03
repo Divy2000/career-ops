@@ -6,6 +6,8 @@ import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
+import { AiSearchTab } from './AiSearchTab';
+import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
 
 const route = getRouteApi('/discover');
@@ -70,8 +72,15 @@ export function DiscoverPage() {
       {tab === 'network' && <NetworkScan />}
       {tab === 'portal' && <ScriptTab id="scan.portals" intro="Scans every enabled portal in portals.yml and appends new postings to the pipeline." params={{ verify: false, includeBlacklisted: false }} />}
       {tab === 'ai' && (
-        <div className="card">
-          <Empty>AI search (describe the role in plain words) arrives with the Claude engine phase.</Empty>
+        <div className="stack">
+          <AiSearchTab />
+          <ModeLauncher
+            heading="AI scan modes"
+            modes={[
+              { id: 'scan', label: 'AI portal scan', prompt: 'Scan the configured portals with judgment and add strong matches to the pipeline.' },
+              { id: 'discover', label: 'Discover ATS boards', prompt: 'Find the ATS boards for these companies and append them to portals.yml: ' },
+            ]}
+          />
         </div>
       )}
       {tab === 'fresh' && <Fresh />}

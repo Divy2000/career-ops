@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone } from '../../components/ui';
+import { QuickEvaluate } from './QuickEvaluate';
 
 function DailyJobChip() {
   const q = useImmigration();
@@ -40,6 +41,8 @@ export function TodayPage() {
           <DigestChip />
         </div>
       </div>
+
+      <QuickEvaluate />
 
       {trackerMissing && (
         <div className="card hero">

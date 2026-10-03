@@ -10,6 +10,10 @@ import { FollowupsPage } from './features/followups/FollowupsPage';
 import { RunsPage } from './features/runs/RunsPage';
 import { DiscoverPage, type DiscoverTab } from './features/discover/DiscoverPage';
 import { PlaceholderPage } from './components/PlaceholderPage';
+import { SessionsPage, SessionDetailPage } from './features/sessions/SessionsPage';
+import { ApplyPage, ApplyRowPage } from './features/apply/ApplyPage';
+import { ProfilePage } from './features/profile/ProfilePage';
+import { DevChatPage } from './features/dev/DevChatPage';
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -86,14 +90,16 @@ const routeTree = rootRoute.addChildren([
   sponsorshipRoute,
   insightsRoute,
   followupsRoute,
-  placeholder('/apply', 'Apply'),
+  createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: ApplyPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/apply/$n', component: ApplyRowPage }),
   placeholder('/interviews', 'Interviews'),
   discoverRoute,
-  placeholder('/sessions', 'Sessions'),
+  createRoute({ getParentRoute: () => rootRoute, path: '/sessions', component: SessionsPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: SessionDetailPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
-  placeholder('/profile', 'Profile & CV'),
+  createRoute({ getParentRoute: () => rootRoute, path: '/profile', component: ProfilePage }),
   placeholder('/settings', 'Settings'),
-  placeholder('/dev', 'Dev Chat'),
+  createRoute({ getParentRoute: () => rootRoute, path: '/dev', component: DevChatPage }),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

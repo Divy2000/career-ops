@@ -1,6 +1,7 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useDashboard } from '../../lib/queries';
 import { Bar, DataState, Empty, Tabs } from '../../components/ui';
+import { ModeLauncher } from '../../components/ModeLauncher';
 
 const route = getRouteApi('/insights');
 export type InsightsTab = 'overview' | 'progress' | 'breakdown' | 'velocity' | 'patterns' | 'salary' | 'skills' | 'legitimacy' | 'ai';
@@ -31,6 +32,17 @@ export function InsightsPage() {
         value={tab}
         onChange={(t: InsightsTab) => void navigate({ search: { tab: t } })}
       />
+      {tab === 'ai' && (
+        <ModeLauncher
+          heading="AI analyses"
+          modes={[
+            { id: 'patterns', label: 'Patterns', prompt: 'Analyze the patterns across my evaluations and outcomes.' },
+            { id: 'calibrate', label: 'Calibrate', prompt: 'Calibrate my scoring against outcomes so far.' },
+            { id: 'upskill', label: 'Upskill', prompt: 'Which skills would most improve my match rate? Propose a plan.' },
+            { id: 'titles', label: 'Titles', prompt: 'Which job titles should I target, given my profile and results?' },
+          ]}
+        />
+      )}
       <DataState query={q} missing={<span>No tracker yet, so nothing to measure.</span>}>
         {d && tab === 'overview' && (
           <div className="stack">

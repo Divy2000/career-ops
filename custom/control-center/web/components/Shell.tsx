@@ -3,8 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
 import { useLiveInvalidation } from '../lib/sse';
+import { useCallback, useState } from 'react';
+import { AskDrawer, useAskHotkey } from './AskDrawer';
+import { useReloadStatus } from '../features/dev/DevChatPage';
 import type { SystemStatus } from '@shared/types';
-import type { DailyStatus } from '@shared/api';
+import type { DailyStatus, RunMeta, SessionMeta } from '@shared/api';
 
 function DailyBanner() {
   const q = useQuery({ queryKey: ['system', 'daily'], queryFn: () => apiGet<DailyStatus>('/api/system/daily'), refetchInterval: 10_000 });
@@ -29,8 +32,34 @@ function HealthChip() {
   );
 }
 
+function ReloadBanner() {
+  const q = useReloadStatus();
+  const s = q.data;
+  if (!s || s.state !== 'failed') return null;
+  return (
+    <div className="banner" role="alert">
+      Server reload failed: {s.error}. The previous server keeps running. Review the change in <Link to="/dev">Dev Chat</Link> or open <a href="/__recovery">/__recovery</a>.
+    </div>
+  );
+}
+
+function ActivityChip() {
+  const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => apiGet<SessionMeta[]>('/api/sessions'), refetchInterval: 5000 });
+  const runs = useQuery({ queryKey: ['runs'], queryFn: () => apiGet<RunMeta[]>('/api/runs'), refetchInterval: 5000 });
+  const active = (sessions.data ?? []).filter((s) => s.status === 'running' || s.status === 'queued').length + (runs.data ?? []).filter((r) => (r.status === 'running' || r.status === 'queued') && !r.actionId.startsWith('session.')).length;
+  const waiting = (sessions.data ?? []).filter((s) => s.status === 'awaiting_user').length;
+  return (
+    <Link to="/sessions" className={`chip ${active ? 'chip--info' : waiting ? 'chip--warn' : 'chip--neutral'}`} aria-label={`Activity: ${active} running, ${waiting} waiting for you`}>
+      {active ? `${active} running` : waiting ? `${waiting} waiting for you` : 'Idle'}
+    </Link>
+  );
+}
+
 export function Shell() {
   useLiveInvalidation();
+  const [ask, setAsk] = useState(false);
+  const toggleAsk = useCallback(() => setAsk((o) => !o), []);
+  useAskHotkey(toggleAsk);
   return (
     <div className="shell">
       <nav className="shell__side" aria-label="Primary">
@@ -52,12 +81,18 @@ export function Shell() {
       <header className="shell__top">
         <span className="muted">career-ops</span>
         <span style={{ flex: 1 }} />
+        <ActivityChip />
         <HealthChip />
+        <button type="button" onClick={toggleAsk} aria-expanded={ask} aria-label="Open Ask drawer" title="Ask the advisor (Cmd+J)">
+          Ask
+        </button>
       </header>
       <main className="shell__main" id="main">
+        <ReloadBanner />
         <DailyBanner />
         <Outlet />
       </main>
+      <AskDrawer open={ask} onClose={() => setAsk(false)} />
     </div>
   );
 }

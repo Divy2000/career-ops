@@ -7,7 +7,35 @@ import { useApplication } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone } from '../../components/ui';
 import { DocumentsTab } from './DocumentsTab';
 import { DangerZone } from './DangerZone';
+import { ModeLauncher } from '../../components/ModeLauncher';
+import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
+import { useSessions } from '../../lib/sessions';
 import type { ReportFull } from '@shared/api';
+
+/** Every session whose target is this application (spec 2.4). */
+function ApplicationSessions({ n }: { n: number }) {
+  const q = useSessions();
+  const mine = (q.data ?? []).filter((s) => s.target.type === 'app' && s.target.value === String(n));
+  return (
+    <div className="card">
+      <h2>Sessions for this application</h2>
+      {mine.length === 0 ? (
+        <Empty>No sessions target this row yet. Start one from the Documents, Outreach, Interview or Offer tabs.</Empty>
+      ) : (
+        <ul className="bullets">
+          {mine.map((s) => (
+            <li key={s.id}>
+              <Link to="/sessions/$id" params={{ id: s.id }}>
+                {s.mode}
+              </Link>{' '}
+              <StatusLabel status={s.status} /> <span className="mono faint small">{s.updatedAt.slice(0, 16).replace('T', ' ')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 const route = getRouteApi('/tracker/$n');
 type Tab = 'report' | 'documents' | 'sponsorship' | 'outreach' | 'interview' | 'offer' | 'timeline' | 'sessions';
@@ -172,26 +200,72 @@ export function ApplicationPage() {
                     <dd className="mono">{q.data.sponsorship.companyFile.checkedAt ?? 'never'}</dd>
                   </dl>
                 ) : (
-                  <Empty>No company sponsorship file yet. The check session arrives with the Claude engine phase.</Empty>
+                  <Empty>No company sponsorship file yet. Run the check below to create one.</Empty>
                 )}
                 {q.data.sponsorship.alert && (
                   <p>
                     <Pill tone={alertTone(String(q.data.sponsorship.alert.status))}>{String(q.data.sponsorship.alert.status)}</Pill> {String(q.data.sponsorship.alert.headline)}
                   </p>
                 )}
+                <SessionPanel mode="sponsorship-check" title="Refresh sponsorship check" target={{ type: 'company', value: q.data.row.company }} initialPrompt={`Check visa sponsorship for ${q.data.row.company} following the procedure in modes/_custom.md, then write the company file under data/immigration/companies/.`} startLabel="Refresh check" />
               </div>
             )}
+
+            {tab === 'outreach' && (
+              <ModeLauncher
+                heading="Outreach and research"
+                target={{ type: 'app', value: String(q.data.row.num) }}
+                modes={[
+                  { id: 'cover', label: 'Cover letter', prompt: `Write the cover letter for tracker row #${q.data.row.num} (${q.data.row.company}).` },
+                  { id: 'email', label: 'Outreach email', prompt: `Draft an outreach email for tracker row #${q.data.row.num} (${q.data.row.company}).` },
+                  { id: 'contacto', label: 'Find contacts', prompt: `Find hiring contacts for ${q.data.row.company} (row #${q.data.row.num}); ask before writing contacts.tsv.` },
+                  { id: 'deep', label: 'Deep research', prompt: `Deep research on ${q.data.row.company} for row #${q.data.row.num}.` },
+                ]}
+              />
+            )}
+
+            {tab === 'interview' && (
+              <ModeLauncher
+                heading="Interview"
+                target={{ type: 'app', value: String(q.data.row.num) }}
+                modes={[
+                  { id: 'interview-prep', label: 'Interview prep', prompt: `Prepare me for the interview at ${q.data.row.company} (row #${q.data.row.num}).` },
+                  { id: 'interview/plan', label: 'Plan', prompt: `Plan the interview process for row #${q.data.row.num}.` },
+                  { id: 'interview/practice', label: 'Practice (multi-turn)', prompt: `Run a mock interview for row #${q.data.row.num} at ${q.data.row.company}.` },
+                  { id: 'interview/debrief', label: 'Debrief', prompt: `Debrief my interview for row #${q.data.row.num}.` },
+                  { id: 'interview-redflag', label: 'Red flags', prompt: `Check for red flags in the interview process at ${q.data.row.company}.` },
+                ]}
+              />
+            )}
+
+            {tab === 'offer' && (
+              <ModeLauncher
+                heading="Offer and outcome"
+                target={{ type: 'app', value: String(q.data.row.num) }}
+                modes={[
+                  { id: 'offer-prep', label: 'Offer prep', prompt: `Prepare the offer negotiation for row #${q.data.row.num} (${q.data.row.company}).` },
+                  { id: 'outcome', label: 'Record outcome', prompt: `Record the outcome for row #${q.data.row.num}.` },
+                ]}
+              />
+            )}
+
+            {tab === 'sessions' && <ApplicationSessions n={q.data.row.num} />}
 
             {tab === 'documents' && (
               <div className="stack">
                 <DocumentsTab n={q.data.row.num} />
+                <ModeLauncher
+                  heading="Generate with AI"
+                  target={{ type: 'app', value: String(q.data.row.num) }}
+                  modes={[
+                    { id: 'pdf', label: 'Tailored CV PDF', prompt: `Generate the tailored CV PDF for tracker row #${q.data.row.num} (${q.data.row.company}).` },
+                    { id: 'pdf/hm-audit', label: 'PDF with hiring-manager audit', prompt: `Generate the tailored CV PDF for row #${q.data.row.num} and run the hiring-manager audit.` },
+                    { id: 'text', label: 'Plain text CV', prompt: `Export the tailored CV for row #${q.data.row.num} as plain text.` },
+                    { id: 'latex', label: 'LaTeX CV', prompt: `Build the LaTeX CV for row #${q.data.row.num}.` },
+                    { id: 'latex-tex', label: 'LaTeX from .tex source', prompt: `Rebuild the PDF from the .tex source for row #${q.data.row.num}.` },
+                  ]}
+                />
                 <DangerZone n={q.data.row.num} />
-              </div>
-            )}
-
-            {tab !== 'report' && tab !== 'timeline' && tab !== 'sponsorship' && tab !== 'documents' && (
-              <div className="card">
-                <Empty>This tab lands in a later build phase.</Empty>
               </div>
             )}
           </>

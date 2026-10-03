@@ -5,6 +5,10 @@ import rehypeSanitize from 'rehype-sanitize';
 import { useImmigration } from '../../lib/queries';
 import { DataState, Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
 import { Tabs } from '../../components/ui';
+import { useState } from 'react';
+import { useActions, useRunAction } from '../../lib/actions';
+import { ActionButton, Message } from '../../components/ActionBar';
+import { SessionPanel } from '../../components/SessionPanel';
 
 const route = getRouteApi('/sponsorship');
 export type SponsorshipTab = 'overview' | 'changes' | 'feed' | 'alerts' | 'companies' | 'lookup' | 'tiers';
@@ -14,19 +18,31 @@ export function SponsorshipPage() {
   const navigate = useNavigate({ from: '/sponsorship' });
   const q = useImmigration();
   const d = q.data;
+  const actions = useActions();
+  const { run, message } = useRunAction();
+  const [policyPass, setPolicyPass] = useState(false);
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
         <h1 id="page-title">Sponsorship</h1>
         <div className="row gap">
-          <button type="button" disabled title="Script runs arrive with the runner phase">
+          <ActionButton meta={actions.data?.find((a) => a.id === 'immigration.watch')} onRun={() => void run('immigration.watch', {}, 'Feed check started; see Runs for its log')}>
             Check official feeds now
-          </button>
-          <button type="button" disabled title="Sessions arrive with the Claude engine phase">
-            Run AI policy pass
+          </ActionButton>
+          <button type="button" onClick={() => setPolicyPass(true)} disabled={policyPass}>
+            Run AI policy pass <Pill tone="warn">Uses tokens</Pill>
           </button>
         </div>
       </div>
+      <Message message={message} />
+      {policyPass && (
+        <SessionPanel
+          mode="immigration-policy"
+          title="AI policy pass"
+          autoStart
+          initialPrompt={`Run the daily immigration policy pass for ${new Date().toISOString().slice(0, 10)}: read the pending watch items under data/immigration, update policy-digest.md and policy-changes.tsv, and append company alerts. Follow custom/immigration/daily-prompt.md.`}
+        />
+      )}
       <Tabs
         label="Sponsorship sections"
         tabs={[

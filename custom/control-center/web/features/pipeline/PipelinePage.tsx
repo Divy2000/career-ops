@@ -108,6 +108,8 @@ function AddUrls({ onDone }: { onDone: (added: number) => void }) {
   );
 }
 
+import { InboxAi } from './InboxAi';
+
 function Inbox() {
   const q = usePipeline();
   const qc = useQueryClient();
@@ -148,6 +150,7 @@ function Inbox() {
           Rank (50)
         </ActionButton>
       </div>
+      <InboxAi urls={visible.filter((r) => !r.done).map((r) => r.url)} />
       <Message message={message} />
       {skipError && (
         <p role="alert" className="danger-text">

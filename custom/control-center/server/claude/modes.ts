@@ -27,7 +27,8 @@ export type PolicyClass =
   | 'immigration-policy'
   | 'sponsorship-check'
   | 'read-only'
-  | 'update';
+  | 'update'
+  | 'devchat';
 
 export type NetworkTool = 'WebFetch' | 'WebSearch';
 
@@ -36,6 +37,8 @@ export interface PolicyClassDef {
   network: NetworkTool[];
   /** Scripts (relative to the code root) the class may run with Bash. */
   extraBash: string[];
+  /** Exact-prefix Bash allowlist that replaces the script-derived one (Dev Chat). */
+  bashPrefixes?: string[][];
   allowsTask?: boolean;
   mcp?: 'playwright';
 }
@@ -131,10 +134,52 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
     network: [],
     extraBash: [],
   },
+  // Spec 4.6: the user layer plus custom/**; the supervisor and node_modules stay out of reach.
+  devchat: {
+    writeGlobs: [
+      'cv.md',
+      'article-digest.md',
+      'voice-dna.md',
+      'config/profile.yml',
+      'config/plugins.yml',
+      'config/cv-facts.json',
+      'config/benchmarks.yml',
+      'modes/_profile.md',
+      'modes/_custom.md',
+      'modes/_brief.md',
+      'portals.yml',
+      'data/**',
+      'reports/**',
+      'output/**',
+      'interview-prep/**',
+      'writing-samples/**',
+      'jds/**',
+      'documents/**',
+      'custom/**',
+    ],
+    network: ['WebFetch', 'WebSearch'],
+    extraBash: [],
+    bashPrefixes: [
+      ['npm', '--prefix', 'custom/control-center', 'run', 'test'],
+      ['npm', '--prefix', 'custom/control-center', 'run', 'typecheck'],
+      ['npm', '--prefix', 'custom/control-center', 'run', 'lint'],
+      ['npm', '--prefix', 'custom/control-center', 'run', 'build'],
+      ['npx', '--prefix', 'custom/control-center', 'vitest', 'run'],
+      ['node', '--test', 'custom/immigration/'],
+      ['node', '--test', 'custom/pipeline/'],
+      ['node', 'validate-portals.mjs'],
+      ['node', 'validate-profile.mjs'],
+      ['git', 'status'],
+      ['git', 'diff'],
+      ['git', 'log'],
+    ],
+  },
 };
 
 /** Denied for every non Dev Chat session, regardless of class (enforced by the hook). */
 export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md'];
+/** Dev Chat keeps the tracker and blacklist rules and additionally protects recovery and dependencies. */
+export const DEVCHAT_DENIED_WRITES = [...ALWAYS_DENIED_WRITES, 'custom/control-center/supervisor/**', '**/node_modules/**', 'writing-samples/README.md'];
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
@@ -145,6 +190,7 @@ export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyC
   'fix-portal': { title: 'Fix portal slug', policyClass: 'fix-portal' },
   'immigration-policy': { title: 'Immigration policy pass', policyClass: 'immigration-policy' },
   'sponsorship-check': { title: 'Company sponsorship check', policyClass: 'sponsorship-check' },
+  devchat: { title: 'Dev Chat (edit the user layer and custom/)', policyClass: 'devchat' },
 };
 
 const BASENAME_CLASS: Record<string, PolicyClass> = {
@@ -211,12 +257,18 @@ export interface ModePolicy {
   scripts: string[];
   /** Permission rule strings for --allowedTools. */
   bashRules: string[];
+  /** Exact token prefixes the guard hook accepts for Bash. */
+  bashPrefixes: string[][];
   allowsTask: boolean;
   mcp?: 'playwright';
 }
 
 export function bashRuleFor(script: string): string {
   return script.endsWith('.sh') ? `Bash(bash ${script}:*)` : `Bash(node ${script}:*)`;
+}
+
+export function bashPrefixFor(script: string): string[] {
+  return script.endsWith('.sh') ? ['bash', script] : ['node', script];
 }
 
 export function getModePolicy(id: string): ModePolicy | null {
@@ -226,6 +278,7 @@ export function getModePolicy(id: string): ModePolicy | null {
   const policyClass = classForMode(id);
   const def = POLICY_CLASSES[policyClass];
   const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].sort();
+  const bashPrefixes = def.bashPrefixes ?? scripts.map(bashPrefixFor);
   return {
     id,
     title: derived?.title ?? virtual!.title,
@@ -233,7 +286,8 @@ export function getModePolicy(id: string): ModePolicy | null {
     writeGlobs: [...def.writeGlobs],
     network: virtual?.network ?? [...def.network],
     scripts,
-    bashRules: scripts.map(bashRuleFor),
+    bashRules: def.bashPrefixes ? def.bashPrefixes.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
+    bashPrefixes,
     allowsTask: id === 'pdf/hm-audit',
     ...(def.mcp ? { mcp: def.mcp } : {}),
   };

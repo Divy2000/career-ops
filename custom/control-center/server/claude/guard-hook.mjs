@@ -72,13 +72,15 @@ export function locate(policy, target) {
 
 export function checkBash(command, allowed) {
   if (/[`]|\$\(/.test(command)) return 'Bash: command substitution is not allowed';
-  const tokens = shellParse(command);
-  if (tokens.some((t) => typeof t !== 'string')) return 'Bash: operators (; && | > <), globs and comments are not allowed';
+  // Glob tokens (node --test custom/immigration/*) are kept as their pattern; operators are rejected.
+  const tokens = shellParse(command).map((t) => (t && typeof t === 'object' && t.op === 'glob' ? t.pattern : t));
+  if (tokens.some((t) => typeof t !== 'string')) return 'Bash: operators (; && | > <) and comments are not allowed';
   const first = tokens[0];
   if (!first) return 'Bash: empty command';
-  if (first === 'git') return 'Bash: git is not allowed in sessions';
   if (NETWORK_BINS.has(first)) return `Bash: ${first} is not allowed (network tools are denied)`;
-  const ok = allowed.some((prefix) => prefix.every((p, i) => tokens[i] === p));
+  // A prefix ending in "/" matches the start of the next token (node --test custom/immigration/...).
+  const ok = allowed.some((prefix) => prefix.every((p, i) => (p.endsWith('/') ? typeof tokens[i] === 'string' && tokens[i].startsWith(p) : tokens[i] === p)));
+  if (first === 'git' && !ok) return 'Bash: git is not allowed in sessions (Dev Chat may run git status, diff and log)';
   return ok ? null : `Bash: only these commands are allowed: ${allowed.map((p) => p.join(' ')).join(', ')}`;
 }
 
@@ -101,6 +103,8 @@ function main() {
   if (!policyFile) deny('guard hook: CC_POLICY_FILE is not set');
   const policy = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
   const sessionDir = process.env.CC_SESSION_DIR || policy.sessionDir;
+  // Snapshots are per turn (CC_TURN_DIR) so a turn can be reverted on its own; files.ndjson stays per session.
+  const snapDir = process.env.CC_TURN_DIR || sessionDir;
   const tool = String(payload.tool_name ?? '');
   const input = payload.tool_input ?? {};
   const event = payload.hook_event_name;
@@ -122,7 +126,7 @@ function main() {
     const { rel, abs } = found;
     if (matches(rel, policy.deny)) deny(`${tool}: ${rel} is always protected (blacklist and tracker are edited only through the app or core CLIs)`);
     if (!matches(rel, policy.allow)) deny(`${tool}: ${rel} is not in the write scope (${policy.allow.join(', ') || 'none'})`);
-    snapshot(sessionDir, abs);
+    snapshot(snapDir, abs);
     process.exit(0);
   }
 

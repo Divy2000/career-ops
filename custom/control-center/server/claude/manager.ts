@@ -14,7 +14,7 @@ import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { buildArgv, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from './invocation.js';
-import { ALWAYS_DENIED_WRITES, getModePolicy, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy, type ModePolicy } from './modes.js';
 import { decideTurnOutcome, detectNewReports, snapshotReports, type NewReport } from './honesty.js';
 
 export type TokenReader = () => Promise<string>;
@@ -230,7 +230,8 @@ export class SessionManager {
 
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean }): Promise<SessionMeta> {
     const sessionDir = this.store.dirOf(meta.id);
-    const deny = opts.blacklistAllowed ? ALWAYS_DENIED_WRITES.filter((p) => p !== 'data/blacklist.md') : undefined;
+    const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
+    const deny = opts.blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
     const policyFile = writePolicyFile(sessionDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, policy, extraAllow: opts.blacklistAllowed ? ['data/blacklist.md'] : [], deny });
     const settingsFile = writeSettingsFile(sessionDir);
     const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed: opts.blacklistAllowed });
@@ -244,9 +245,12 @@ export class SessionManager {
       this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
       return this.store.read(meta.id)!;
     }
+    const n = meta.turns.length + 1;
     const env = buildEnv({}, { token, dataRoot: this.cfg.dataRoot, policyFile, sessionDir });
     env.CC_MODE = meta.mode;
+    env.CC_TURN_DIR = path.join(sessionDir, 'turns', String(n));
     env.NO_COLOR = '1';
+    fs.mkdirSync(env.CC_TURN_DIR, { recursive: true });
     const argv = buildArgv({
       claudeBin: this.cfg.claudeBin,
       codeRoot: this.cfg.codeRoot,
@@ -262,7 +266,6 @@ export class SessionManager {
       model: meta.model ?? undefined,
       preamble,
     });
-    const n = meta.turns.length + 1;
     const state: TurnState = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id) };
     const run = this.runner.start({
       actionId: `session.${meta.mode}`,

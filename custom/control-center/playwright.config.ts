@@ -37,6 +37,9 @@ export default defineConfig({
       CC_TOKEN: E2E_TOKEN,
       CC_DATA_ROOT: dataRoot,
       CC_CLAUDE_BIN: path.join(here, 'tests/fakes/claude.mjs'),
+      // Sessions in e2e use the fake CLI's per-mode scenarios and never touch the Keychain.
+      CC_FAKE_SCENARIO_DIR: path.join(here, 'tests/fixtures/scenarios'),
+      CC_FAKE_TOKEN: 'e2e-fake-oauth-token',
       CC_NO_OPEN: '1',
     },
   },
