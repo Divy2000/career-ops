@@ -1,9 +1,27 @@
 import { Link } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone } from '../../components/ui';
-import { MdInline } from '../../components/Md';
-import { summarizeDigest } from '../../lib/digestSummary';
+import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
+
+const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
+
+function DigestLine({ spans }: { spans: DigestSpan[] }) {
+  return (
+    <span className="md-inline">
+      {spans.map((s, i) => {
+        const text = s.bold ? <strong>{s.text}</strong> : s.text;
+        return s.href && SAFE_HREF.test(s.href) ? (
+          <a key={i} href={s.href} target="_blank" rel="noreferrer noopener">
+            {text}
+          </a>
+        ) : (
+          <span key={i}>{text}</span>
+        );
+      })}
+    </span>
+  );
+}
 
 function DailyJobChip() {
   const q = useImmigration();
@@ -145,7 +163,7 @@ export function TodayPage() {
                   <ul className="bullets" aria-label="Policy highlights">
                     {summarizeDigest(immigration.data.digest.sections[0].body).map((line, i) => (
                       <li key={i}>
-                        <MdInline text={line} />
+                        <DigestLine spans={line} />
                       </li>
                     ))}
                   </ul>
