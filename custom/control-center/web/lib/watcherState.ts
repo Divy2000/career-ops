@@ -5,10 +5,11 @@ export interface WatcherSummary {
   lastSuccess?: string;
   seenCount: number;
   pendingCount: number | null;
+  pendingError?: string;
 }
 
 /** Condenses data/immigration/seen.json for display; the raw file stays behind a disclosure. */
-export function summarizeWatcher(seen: unknown, pendingCount: number | null): WatcherSummary | { error: string } | null {
+export function summarizeWatcher(seen: unknown, pendingCount: number | null, pendingError: string | null = null): WatcherSummary | { error: string } | null {
   if (seen === null || seen === undefined) return null;
   if (typeof seen !== 'object') return { error: 'seen.json is not an object' };
   const o = seen as Record<string, unknown>;
@@ -19,6 +20,7 @@ export function summarizeWatcher(seen: unknown, pendingCount: number | null): Wa
     seenCount: Array.isArray(o.ids) ? o.ids.length : 0,
     pendingCount,
   };
+  if (pendingError) out.pendingError = pendingError;
   if (typeof o.last_success === 'string') out.lastSuccess = o.last_success;
   else if (o.last_success && typeof o.last_success === 'object') {
     out.sources = Object.entries(o.last_success as Record<string, unknown>)

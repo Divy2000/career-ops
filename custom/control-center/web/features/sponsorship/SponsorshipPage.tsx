@@ -13,8 +13,8 @@ import { summarizeWatcher } from '../../lib/watcherState';
 
 const route = getRouteApi('/sponsorship');
 
-function WatcherState({ seen, pendingCount }: { seen: unknown; pendingCount: number | null }) {
-  const s = summarizeWatcher(seen, pendingCount);
+function WatcherState({ seen, pendingCount, pendingError }: { seen: unknown; pendingCount: number | null; pendingError: string | null }) {
+  const s = summarizeWatcher(seen, pendingCount, pendingError);
   return (
     <div className="card" aria-labelledby="watcher-state">
       <h2 id="watcher-state">Watcher state</h2>
@@ -48,7 +48,7 @@ function WatcherState({ seen, pendingCount }: { seen: unknown; pendingCount: num
           </div>
           <div className="kv__pair">
             <dt>Pending for the AI pass</dt>
-            <dd className="mono">{s.pendingCount ?? 'n/a'}</dd>
+            <dd className="mono">{s.pendingError ? <span className="danger-text">{s.pendingError}</span> : (s.pendingCount ?? 'n/a')}</dd>
           </div>
         </dl>
       )}
@@ -130,7 +130,7 @@ export function SponsorshipPage() {
                     </details>
                   ))
                 )}
-                <WatcherState seen={d.seen} pendingCount={d.pendingCount} />
+                <WatcherState seen={d.seen} pendingCount={d.pendingCount} pendingError={d.pendingError} />
               </div>
             )}
             {tab === 'changes' && (

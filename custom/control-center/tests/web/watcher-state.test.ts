@@ -16,6 +16,10 @@ describe('watcher state summary', () => {
     expect(summarizeWatcher({ error: 'malformed JSON', path: '/x/seen.json' }, null)).toEqual({ error: 'malformed JSON' });
   });
 
+  it('carries a pending.json error through to the summary', () => {
+    expect(summarizeWatcher({ ids: [] }, null, 'pending.json is not valid JSON')).toMatchObject({ pendingCount: null, pendingError: 'pending.json is not valid JSON' });
+  });
+
   it('tolerates missing fields', () => {
     expect(summarizeWatcher({}, null)).toEqual({ lastRun: null, sources: [], seenCount: 0, pendingCount: null });
   });

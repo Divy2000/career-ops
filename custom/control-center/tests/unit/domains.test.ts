@@ -50,8 +50,16 @@ describe('immigration overview', () => {
     const withQueue = copyFixtureRoot();
     fs.writeFileSync(path.join(withQueue, 'data/immigration/pending.json'), JSON.stringify([{ id: 'a' }, { id: 'b' }]));
     expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, withQueue, '2026-10-04')).pendingCount).toBe(2);
-    fs.writeFileSync(path.join(withQueue, 'data/immigration/pending.json'), '{not json');
-    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, withQueue, '2026-10-04')).pendingCount).toBeNull();
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, withQueue, '2026-10-04')).pendingError).toBeNull();
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).pendingError).toBeNull();
+  });
+
+  it('reports a corrupt or non-list pending.json as an error, distinct from an absent one', async () => {
+    const bad = copyFixtureRoot();
+    fs.writeFileSync(path.join(bad, 'data/immigration/pending.json'), '{not json');
+    expect(await readImmigrationOverview(DEFAULT_CODE_ROOT, bad, '2026-10-04')).toMatchObject({ pendingCount: null, pendingError: 'pending.json is not valid JSON' });
+    fs.writeFileSync(path.join(bad, 'data/immigration/pending.json'), '{"a":1}');
+    expect(await readImmigrationOverview(DEFAULT_CODE_ROOT, bad, '2026-10-04')).toMatchObject({ pendingCount: null, pendingError: 'pending.json is not a list of items' });
   });
 
   it('reports a missing digest distinctly', async () => {
