@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-10-03",
+  "nodeFloor": "22.6.0",
+  "notes": [
+    "Every CLI below is invoked as node <script> <helpArgs> with cwd at the code root and CAREER_OPS_ROOT at a fixture copy.",
+    "expectExit null means the usage text is checked but the exit code is not pinned.",
+    "flags are substrings that must appear in stdout+stderr of the help run."
+  ],
+  "clis": [
+    { "id": "setStatus", "script": "set-status.mjs", "helpArgs": ["--help"], "expectExit": 0, "flags": ["--row", "--source", "--json", "--note", "--on", "--dry-run", "--report"], "exitCodes": { "ok": 0, "usage": 1, "notFound": 2, "ambiguous": 3, "lockTimeout": 4 } },
+    { "id": "tracker", "script": "tracker.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["delete"] },
+    { "id": "mergeTracker", "script": "merge-tracker.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--dry-run"] },
+    { "id": "reserveReportNum", "script": "reserve-report-num.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--count", "--release"] },
+    { "id": "hiredShare", "script": "hired-share.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--report", "--anonymity", "--story", "--mark"] },
+    { "id": "followupCadence", "script": "followup-cadence.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--json"] },
+    { "id": "doctor", "script": "doctor.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--json"] },
+    { "id": "validatePortals", "script": "validate-portals.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
+    { "id": "validateProfile", "script": "validate-profile.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
+    { "id": "stats", "script": "stats.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
+    { "id": "prioritize", "script": "custom/pipeline/prioritize.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
+    { "id": "shortlist", "script": "custom/pipeline/shortlist.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
+    { "id": "immigrationWatch", "script": "custom/immigration/watch.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
+    { "id": "freshness", "script": "custom/immigration/freshness.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] }
+  ],
+  "exports": [
+    { "module": "path-resolver.mjs", "names": ["getCareerOpsRoot", "resolveTrackerPath", "rawTrackerPath"] },
+    { "module": "tracker-parse.mjs", "names": ["resolveColumns", "parseTrackerRow", "normalizeTextKey", "extractTrackerReportNumbers", "isSeparatorRow", "isHeaderRow"] },
+    { "module": "pipeline-lock.mjs", "names": ["withPipelineLock", "LockTimeoutError"] },
+    { "module": "custom/immigration/lib.mjs", "names": ["parsePolicyChanges", "parseCompanyAlerts", "readCheckedAt", "decideRefresh", "companySlug"] },
+    { "module": "custom/pipeline/lib.mjs", "names": ["parseRow"] }
+  ],
+  "batchRunner": {
+    "script": "batch/batch-runner.sh",
+    "flags": ["--cli", "--model", "--parallel", "--dry-run", "--limit", "--min-score"]
+  },
+  "claude": {
+    "version": "2.1.288 (Claude Code)",
+    "flags": ["--session-id", "--append-system-prompt", "--settings", "--allowedTools", "--disallowedTools", "--permission-mode", "--include-partial-messages", "--strict-mcp-config", "--fork-session", "--resume", "--output-format", "--verbose", "--mcp-config", "--model"],
+    "acceptedButNotInHelp": ["--max-turns"],
+    "probes": {
+      "probedAt": "2026-10-03",
+      "realCalls": 2,
+      "model": "claude-haiku-4-5-20251001",
+      "dontAskDeniesUnlistedTool": true,
+      "editRuleCoversWrite": true,
+      "editRuleSyntax": "Edit(//absolute/path) with the leading double slash for absolute paths",
+      "settingsAcceptsInlineHooksJson": true,
+      "hookStdinKeys": ["cwd", "hook_event_name", "permission_mode", "prompt_id", "session_id", "tool_input", "tool_name", "tool_use_id", "transcript_path"],
+      "hookToolInputKeysForWrite": ["content", "file_path"],
+      "hookExit2Blocks": true,
+      "hookExit2ToolResultPrefix": "PreToolUse:Write hook error:",
+      "dontAskDenialToolResultPrefix": "Permission to use Write has been denied because Claude Code is running in don't ask mode",
+      "appendSystemPromptAccepted": true,
+      "sessionIdHonored": true,
+      "resumeKeepsSessionId": true,
+      "streamJson": {
+        "init": { "type": "system", "subtype": "init", "keys": ["session_id", "tools", "model"] },
+        "delta": { "type": "stream_event", "eventType": "content_block_delta" },
+        "assistantToolUse": { "type": "assistant", "path": "message.content[].type == tool_use" },
+        "userToolResult": { "type": "user", "path": "message.content[].type == tool_result" },
+        "result": { "type": "result", "keys": ["total_cost_usd", "usage", "num_turns", "permission_denials", "is_error", "session_id", "result", "subtype"] }
+      },
+      "permissionDenialShape": ["tool_name", "tool_use_id", "tool_input"],
+      "costUsdProbeA": 0.0645934,
+      "costUsdProbeB": 0.0838954
+    }
+  },
+  "playwrightMcp": {
+    "probed": false,
+    "reason": "Not launched in P0: the apply session is built in P4; until a launch probe passes, Apply degrades to prefill plus answer drafting."
+  }
+}
