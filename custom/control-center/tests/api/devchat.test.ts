@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import os from 'node:os';
+import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { getModePolicy } from '../../server/claude/modes.js';
 import { buildArgv } from '../../server/claude/invocation.js';
 
@@ -138,6 +139,45 @@ describe('Dev Chat', () => {
     expect(ok.statusCode, ok.body).toBe(200);
     expect(fs.readFileSync(custom, 'utf8')).toBe(preSession);
     expect(fs.existsSync(note)).toBe(false);
+  });
+
+  it('a turn that ends while no server runs keeps its own post-turn hashes: a later hand edit blocks the revert', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const scenario = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-scenario-')), 'offline.json');
+    fs.writeFileSync(scenario, JSON.stringify({ events: [{ type: 'system', subtype: 'init', model: 'fake-model', tools: ['Write'] }, { __sleep: 400 }, { __write: { path: '{{DATA_ROOT}}/data/notes/offline.md', content: 'written by the turn\n' } }, { type: 'result', subtype: 'success', result: 'Wrote the note.', total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, num_turns: 1, is_error: false }] }));
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    process.env.FAKE_CLAUDE_SCENARIO = scenario;
+    let started: { id: string; turns: Array<{ runId: string }> };
+    try {
+      started = (await a.app.inject({ method: 'POST', url: '/api/sessions', headers: a.authedWrite, payload: { mode: 'devchat', prompt: 'Leave a note' } })).json();
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCENARIO;
+    }
+    await a.close();
+    const exitFile = path.join(dataRoot, 'data', 'control-center', 'runs', started.turns[0]!.runId, 'exit.json');
+    const deadline = Date.now() + 15_000;
+    while (!fs.existsSync(exitFile)) {
+      if (Date.now() > deadline) throw new Error('the run never finished');
+      await wait(50);
+    }
+    const note = path.join(dataRoot, 'data', 'notes', 'offline.md');
+    fs.writeFileSync(note, 'the user edited this while the server was down\n');
+    const b = await makeTestApp({ dataRoot, guardRoot });
+    try {
+      let meta = b.sessions.read(started.id)!;
+      while (meta.status === 'running' && Date.now() < deadline) {
+        await wait(50);
+        meta = b.sessions.read(started.id)!;
+      }
+      expect(meta.status).toBe('done');
+      const res = await b.app.inject({ method: 'POST', url: '/api/dev/revert', headers: b.authedWrite, payload: { sessionId: started.id, turn: 1 } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toMatch(/data\/notes\/offline\.md changed after turn 1/);
+      expect(fs.readFileSync(note, 'utf8')).toBe('the user edited this while the server was down\n');
+    } finally {
+      await b.close();
+    }
   });
 
   it('serves the read-only git diff of custom/', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy } from '../../server/claude/modes.js';
@@ -237,6 +238,14 @@ describe('guard hook', () => {
     expect(hookRun(dir, pf, { ...inScope, tool_name: 'Bash', tool_input: { command: 'node merge-tracker.mjs' } }).status).toBe(2);
     // No hash in the environment: nothing to verify against, so nothing runs.
     expect(hookRun(dir, { file: pf.file, sha256: '' }, inScope).status).toBe(2);
+  });
+
+  it('records the sha256 of the bytes it just wrote with each change record', () => {
+    const target = path.join(realRoot, 'reports', '003-hashed.md');
+    fs.writeFileSync(target, 'written by the tool\n');
+    expect(hookRun(sessionDir, policy, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: target }, tool_response: {}, cwd: realRoot }).status).toBe(0);
+    const last = JSON.parse(fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8').trim().split('\n').at(-1)!) as { path: string; sha256: string };
+    expect(last).toMatchObject({ path: 'reports/003-hashed.md', sha256: crypto.createHash('sha256').update('written by the tool\n').digest('hex') });
   });
 
   it('records changed paths after a write', () => {

@@ -19,6 +19,8 @@ export interface ChangeRecord {
   root: 'code' | 'data';
   tool: string;
   ts: string;
+  /** sha256 of the file right after this write (null: absent), taken by the PostToolUse hook; missing on old records. */
+  sha256?: string | null;
 }
 
 export interface FileDiff {
@@ -67,7 +69,9 @@ export function readFilesLog(sessionDir: string): ChangeRecord[] {
   for (const line of text.split('\n').filter(Boolean)) {
     try {
       const rec = JSON.parse(line) as Partial<ChangeRecord>;
-      if (rec.abs && rec.path) out.push({ path: rec.path, abs: rec.abs, root: rec.root ?? 'code', tool: rec.tool ?? '', ts: rec.ts ?? '' });
+      if (!rec.abs || !rec.path) continue;
+      const sha256 = rec.sha256 === null || (typeof rec.sha256 === 'string' && /^[0-9a-f]{64}$/.test(rec.sha256)) ? rec.sha256 : undefined;
+      out.push({ path: rec.path, abs: rec.abs, root: rec.root ?? 'code', tool: rec.tool ?? '', ts: rec.ts ?? '', ...(sha256 !== undefined ? { sha256 } : {}) });
     } catch {
       /* torn line */
     }
@@ -177,10 +181,19 @@ function fileHash(abs: string): string | null {
   }
 }
 
-/** Writes turns/<n>/after.json: the sha256 (or null for absent) of every file the turn changed, as the turn left it. */
+/**
+ * Writes turns/<n>/after.json: for every file the turn changed, the sha256 its
+ * last write left (null for absent), as the hook recorded it at write time. The
+ * disk is not read here: finalizing late (after a restart) must not adopt edits
+ * made since. A file whose last record has no hash gets no entry, so a revert
+ * of it is refused.
+ */
 export function recordTurnAfter(sessionDir: string, n: number, fromLine: number): void {
   const files: Record<string, string | null> = {};
-  for (const r of readFilesLog(sessionDir).slice(fromLine)) files[r.abs] = fileHash(r.abs);
+  for (const r of readFilesLog(sessionDir).slice(fromLine)) {
+    if (r.sha256 === undefined) delete files[r.abs];
+    else files[r.abs] = r.sha256;
+  }
   const turnDir = path.join(sessionDir, 'turns', String(n));
   fs.mkdirSync(turnDir, { recursive: true });
   const file = path.join(turnDir, 'after.json');

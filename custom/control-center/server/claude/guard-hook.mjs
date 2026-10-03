@@ -46,7 +46,9 @@ function main() {
     if (WRITE_TOOLS.has(tool)) {
       const target = input.file_path ?? input.notebook_path;
       const found = typeof target === 'string' ? locate(policy, target) : null;
-      if (found) fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), JSON.stringify({ path: found.rel, abs: found.abs, root: found.root, tool, ts: new Date().toISOString() }) + '\n');
+      // The bytes this write left, hashed now: a revert later refuses to overwrite anything that differs.
+      const sha256 = found && fs.existsSync(found.abs) ? crypto.createHash('sha256').update(fs.readFileSync(found.abs)).digest('hex') : null;
+      if (found) fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), JSON.stringify({ path: found.rel, abs: found.abs, root: found.root, tool, sha256, ts: new Date().toISOString() }) + '\n');
     }
     process.exit(0);
   }

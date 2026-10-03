@@ -38,7 +38,7 @@ function fakeSession() {
   fs.copyFileSync(file, snapshotKey(t2, file));
   fs.writeFileSync(file, 'line one\nline TWO\nline three\n');
   fs.writeFileSync(path.join(t2, 'after.json'), JSON.stringify({ files: { [file]: sha('line one\nline TWO\nline three\n') } }));
-  const rec = (p: string) => JSON.stringify({ path: path.relative(root, p), abs: p, root: 'code', tool: 'Write', ts: 't' });
+  const rec = (p: string, sha256?: string | null) => JSON.stringify({ path: path.relative(root, p), abs: p, root: 'code', tool: 'Write', ts: 't', ...(sha256 !== undefined ? { sha256 } : {}) });
   fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), [rec(file), rec(created), rec(file)].join('\n') + '\n');
   const meta = { id: 's1', mode: 'devchat', turns: [{ n: 1 }, { n: 2 }] };
   const ctx = { codeRoot: root, dataRoot: root };
@@ -147,16 +147,23 @@ describe('Dev Chat change sets', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\nline three\n');
   });
 
-  it('records the post-turn sha256 of every file a turn changed (null when it left the file absent)', () => {
-    const { root, sessionDir, rec } = fakeSession();
+  it('post-turn hashes are the ones the hook took at each write (the last write wins), never the disk at finalize time', () => {
+    const { root, sessionDir, rec, ctx } = fakeSession();
     const t3 = path.join(sessionDir, 'turns', '3');
-    fs.mkdirSync(t3, { recursive: true });
+    fs.mkdirSync(path.join(t3, 'before'), { recursive: true });
+    fs.writeFileSync(path.join(t3, 'policy.json'), fs.readFileSync(path.join(sessionDir, 'turns', '1', 'policy.json')));
     const kept = path.join(root, 'custom', 'kept.md');
     const gone = path.join(root, 'custom', 'gone.md');
-    fs.writeFileSync(kept, 'kept\n');
-    fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), `${rec(kept)}\n${rec(gone)}\n${rec(kept)}\n`);
+    const legacy = path.join(root, 'custom', 'legacy.md');
+    fs.writeFileSync(`${snapshotKey(t3, kept)}.absent`, '');
+    fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), `${rec(kept, sha('first\n'))}\n${rec(gone, null)}\n${rec(kept, sha('turn bytes\n'))}\n${rec(legacy)}\n`);
+    // The turn ended long ago; the user edited the file before the server finalized it.
+    fs.writeFileSync(kept, 'the user edit made later\n');
     recordTurnAfter(sessionDir, 3, 3);
-    expect(JSON.parse(fs.readFileSync(path.join(t3, 'after.json'), 'utf8')).files).toEqual({ [kept]: sha('kept\n'), [gone]: null });
+    expect(JSON.parse(fs.readFileSync(path.join(t3, 'after.json'), 'utf8')).files).toEqual({ [kept]: sha('turn bytes\n'), [gone]: null });
+    const r = refusal(() => revertFile(t3, kept, ctx));
+    expect(r.status).toBe(409);
+    expect(fs.readFileSync(kept, 'utf8')).toBe('the user edit made later\n');
   });
 });
 
