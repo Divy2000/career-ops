@@ -29,6 +29,12 @@ export interface AppDeps {
   /** Keychain token reader for Claude sessions (tests inject a constant). */
   readToken?: TokenReader;
   sessionPollMs?: number;
+  /**
+   * Blue/green reload children start passive: they serve requests but do not
+   * reconcile runs and sessions until activate(), which the supervisor sends
+   * once the previous child has stopped its trackers and exited.
+   */
+  deferReconcile?: boolean;
 }
 
 export interface BuiltApp {
@@ -36,6 +42,8 @@ export interface BuiltApp {
   bus: EventBus;
   runner: Runner;
   sessions: SessionManager;
+  /** Reconcile runs and sessions left by a previous process (idempotent). */
+  activate: () => void;
   close: () => Promise<void>;
 }
 
@@ -52,7 +60,6 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
     runnerOpts.claudeSlots = s.claudeConcurrency;
     runner.store.setRetention(s.retention);
   };
-  runner.reconcile();
   closers.push(async () => runner.close());
 
   app.get('/healthz', async () => ({ ok: true, pid: process.pid }));
@@ -67,8 +74,15 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(actionRoutes, { cfg, runner, exec });
   await app.register(writeRoutes, { cfg, daily });
   const sessions = new SessionManager(cfg, runner, bus, { readToken: deps.readToken ?? keychainTokenReader(exec), exec, pollMs: deps.sessionPollMs });
-  sessions.reconcile();
   closers.push(async () => sessions.close());
+  let activated = false;
+  const activate = () => {
+    if (activated) return;
+    activated = true;
+    runner.reconcile();
+    sessions.reconcile();
+  };
+  if (!deps.deferReconcile) activate();
   await app.register(sessionRoutes, { cfg, manager: sessions });
   await app.register(fileRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });
@@ -119,6 +133,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
     bus,
     runner,
     sessions,
+    activate,
     close: async () => {
       bus.drain('server closing');
       for (const c of closers) await c();

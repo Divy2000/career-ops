@@ -1,14 +1,23 @@
 // Blue/green server reload (spec 3.1): spawn the new child, wait for health,
 // swap, drain the old one. On failure the old child stays and the status says
 // why. Spawn and health are injected so the orchestration is unit-tested.
+//
+// Only one server may track detached runs and Claude sessions at a time, or
+// both append the same transcript events and finalize the same turn. A reload
+// child starts passive; it is activated (reconciles) only after every older
+// child has exited, which happens after it stopped its own trackers on drain.
 
 export interface ChildHandle {
   port: number;
   pid: number;
-  /** Ask the child to finish SSE streams and exit on its own. */
+  /** Ask the child to stop its trackers, finish SSE streams and exit on its own. */
   drain(): void;
   kill(): void;
   stderrTail(): string;
+  /** Start the work only one server may do at a time: reconcile runs and sessions. */
+  activate(): void;
+  /** Resolves once the process has exited. */
+  exited: Promise<void>;
 }
 
 export type ReloadState = { state: 'idle' } | { state: 'reloading'; startedAt: string } | { state: 'ok'; at: string; pid: number } | { state: 'failed'; at: string; error: string; stderrTail: string };
@@ -18,6 +27,8 @@ export class BlueGreen {
   private listeners = new Set<(s: ReloadState, active: ChildHandle) => void>();
   private inFlight: Promise<boolean> | null = null;
   private pending = false;
+  /** Settles after every child swapped out so far has exited. */
+  private handover: Promise<void> = Promise.resolve();
 
   constructor(
     public active: ChildHandle,
@@ -66,11 +77,17 @@ export class BlueGreen {
       return false;
     }
     const old = this.active;
-    this.active = fresh;
-    this.set({ state: 'ok', at: now(), pid: fresh.pid });
+    const next = fresh;
+    this.active = next;
+    this.set({ state: 'ok', at: now(), pid: next.pid });
     old.drain();
     const timer = setTimeout(() => old.kill(), this.opts.drainMs ?? 2000);
     if (typeof timer.unref === 'function') timer.unref();
+    this.handover = Promise.all([this.handover, old.exited]).then(() => {
+      clearTimeout(timer);
+      // A later reload may already have replaced (and drained) this child; only the active one reconciles.
+      if (this.active === next) next.activate();
+    });
     return true;
   }
 }

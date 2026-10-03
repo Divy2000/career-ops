@@ -35,6 +35,17 @@ export function detectNewReports(dataRoot: string, before: Set<string>): NewRepo
   return out.sort((a, b) => a.num - b.num);
 }
 
+/**
+ * The reports a turn may claim: with a reserved number, exactly that report;
+ * otherwise only reports the turn itself wrote (its files log), so parallel
+ * sessions never credit each other's reports.
+ */
+export function ownReports(found: NewReport[], opts: { reportNum: number | null; turnFiles: string[] }): NewReport[] {
+  if (opts.reportNum !== null) return found.filter((r) => r.num === opts.reportNum);
+  const written = new Set(opts.turnFiles.filter((p) => p.startsWith('reports/')).map((p) => p.slice('reports/'.length)));
+  return found.filter((r) => written.has(r.file));
+}
+
 /** Modes whose turn is an evaluation of one posting and must leave a report behind. */
 export function isReportGated(modeId: string): boolean {
   return modeId === 'oferta' || modeId === 'auto-pipeline' || modeId.startsWith('regional/') || modeId.endsWith('/oferta');

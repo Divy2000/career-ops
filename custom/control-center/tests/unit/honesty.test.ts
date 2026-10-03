@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { decideTurnOutcome, detectNewReports, endsWithQuestion, snapshotReports } from '../../server/claude/honesty.js';
+import { decideTurnOutcome, detectNewReports, endsWithQuestion, ownReports, snapshotReports } from '../../server/claude/honesty.js';
 import { parseReservedRange, readOutputLanguage } from '../../server/claude/manager.js';
 import { applyRememberedFact, NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 import { copyFixtureRoot } from '../helpers/app.js';
@@ -19,6 +19,18 @@ describe('evaluation honesty gate', () => {
     const fresh = detectNewReports(root, before);
     expect(fresh).toEqual([{ num: 10, file: '010-new-co.md', score: 4.4 }]);
     expect(detectNewReports(root, new Set())).toHaveLength(7);
+  });
+
+  it('credits a turn only with its own report: the reserved number when it has one, else a report in its own files log', () => {
+    const found = [
+      { num: 42, file: '042-acme.md', score: 4 },
+      { num: 43, file: '043-globex.md', score: 3.5 },
+    ];
+    expect(ownReports(found, { reportNum: 42, turnFiles: [] })).toEqual([found[0]]);
+    expect(ownReports(found, { reportNum: 44, turnFiles: ['reports/043-globex.md'] })).toEqual([]);
+    expect(ownReports(found, { reportNum: null, turnFiles: ['reports/043-globex.md', 'output/x.pdf'] })).toEqual([found[1]]);
+    expect(ownReports(found, { reportNum: null, turnFiles: ['jds/043-globex.md'] })).toEqual([]);
+    expect(ownReports(found, { reportNum: null, turnFiles: [] })).toEqual([]);
   });
 
   it('requires a clean exit, output and a new report for an evaluation to be done', () => {

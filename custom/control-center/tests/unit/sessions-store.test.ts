@@ -64,4 +64,25 @@ describe('session store', () => {
     expect(f.status).toBe('queued');
     expect(f.turns).toEqual([]);
   });
+  it('a fork stays pending until the Claude id minted by --fork-session is stored, which happens once', () => {
+    const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    const f = store.fork(s.id);
+    expect(f.forkPending).toBe(true);
+    expect(s.forkPending ?? false).toBe(false);
+    const minted = '22222222-2222-4222-8222-222222222222';
+    expect(store.adoptForkedClaudeSessionId(f.id, minted)).toBe(true);
+    expect(store.read(f.id)).toMatchObject({ claudeSessionId: minted, forkPending: false });
+    expect(store.adoptForkedClaudeSessionId(f.id, '33333333-3333-4333-8333-333333333333')).toBe(false);
+    expect(store.read(f.id)!.claudeSessionId).toBe(minted);
+    expect(store.read(s.id)!.claudeSessionId).toBe(s.claudeSessionId);
+  });
+  it('endTurn is idempotent: a second call never adds the cost again, moves endedAt or changes the outcome', () => {
+    const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    store.beginTurn(s.id, { runId: 'r1', userText: 'go' });
+    const first = store.endTurn(s.id, 1, { costUsd: 0.4, tokens: 100, permissionDenials: 0, status: 'done', reason: 'first' });
+    const second = store.endTurn(s.id, 1, { costUsd: 0.4, tokens: 100, permissionDenials: 0, status: 'error', reason: 'second' });
+    expect(second.totals).toEqual({ costUsd: 0.4, tokens: 100 });
+    expect(second.turns[0]!.endedAt).toBe(first.turns[0]!.endedAt);
+    expect(store.read(s.id)).toMatchObject({ status: 'done', lastReason: 'first', totals: { costUsd: 0.4, tokens: 100 } });
+  });
 });

@@ -22,7 +22,8 @@ function flag(name) {
   return i === -1 ? undefined : argv[i + 1];
 }
 
-const sessionId = flag('--session-id') ?? flag('--resume') ?? crypto.randomUUID();
+// Like the real CLI, --fork-session mints a new conversation id (reported in the init event).
+const sessionId = argv.includes('--fork-session') ? crypto.randomUUID() : (flag('--session-id') ?? flag('--resume') ?? crypto.randomUUID());
 const resumed = argv.includes('--resume');
 const preamble = flag('--append-system-prompt') ?? '';
 const reservedMatch = preamble.match(/Report number (\d+) is reserved/);

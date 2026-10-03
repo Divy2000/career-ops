@@ -7,7 +7,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
 import type { Runner } from '../runner/runner.js';
-import type { RunMeta } from '../runner/store.js';
+import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
@@ -15,7 +15,7 @@ import { SessionStore, type SessionMeta, type StoredEvent } from './sessions.js'
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { buildArgv, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy, type ModePolicy } from './modes.js';
-import { decideTurnOutcome, detectNewReports, snapshotReports, type NewReport } from './honesty.js';
+import { decideTurnOutcome, detectNewReports, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 
 export type TokenReader = () => Promise<string>;
@@ -64,6 +64,27 @@ interface Tracked {
   timer: NodeJS.Timeout;
 }
 
+/** How far into a turn's raw log the transcript got, so a restarted server resumes instead of replaying. */
+interface TurnProgress {
+  rawSeq: number;
+  rawOffset: number;
+}
+
+function readProgress(file: string): TurnProgress | null {
+  try {
+    const p = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<TurnProgress>;
+    return typeof p.rawSeq === 'number' && typeof p.rawOffset === 'number' ? { rawSeq: p.rawSeq, rawOffset: p.rawOffset } : null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function writeProgress(file: string, p: TurnProgress): void {
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(p));
+  fs.renameSync(`${file}.tmp`, file);
+}
+
 export interface ManagerDeps {
   readToken: TokenReader;
   exec: Exec;
@@ -75,6 +96,8 @@ export class SessionManager {
   readonly store: SessionStore;
   private listeners = new Set<(sessionId: string, ev: StoredEvent) => void>();
   private active = new Map<string, Tracked>();
+  /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
+  private sending = new Set<string>();
   readonly playwrightAvailable: boolean;
 
   constructor(
@@ -128,10 +151,18 @@ export class SessionManager {
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const meta = this.must(id);
+    // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
+    if (this.sending.has(id)) throw new BusyError(`session ${id} is starting a turn`);
     if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${id} is ${meta.status}`);
     const policy = this.effectivePolicy(meta.mode);
     if (!policy) throw new Error(`unknown mode ${meta.mode}`);
-    return this.runTurn(meta, policy, prompt, { resume: meta.turns.length > 0, fork: false, blacklistAllowed: opts.blacklistAllowed });
+    this.sending.add(id);
+    try {
+      // A fork that never reported its own Claude id forks again rather than appending to the source.
+      return await this.runTurn(meta, policy, prompt, { resume: meta.turns.length > 0, fork: meta.forkPending === true, blacklistAllowed: opts.blacklistAllowed });
+    } finally {
+      this.sending.delete(id);
+    }
   }
 
   async fork(id: string, prompt: string): Promise<SessionMeta> {
@@ -149,10 +180,21 @@ export class SessionManager {
     const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(input.urls.length)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
     if (r.code !== 0) throw new Error(`reserve-report-num failed (exit ${r.code}): ${r.stderr.trim().slice(-400)}`);
     const reserved = parseReservedRange(r.stdout);
-    if (reserved.length !== input.urls.length) throw new Error(`reserve-report-num returned ${reserved.length} numbers for ${input.urls.length} postings: ${r.stdout.trim()}`);
+    if (reserved.length !== input.urls.length) {
+      for (const num of reserved) await this.releaseReportNum(num, false);
+      throw new Error(`reserve-report-num returned ${reserved.length} numbers for ${input.urls.length} postings: ${r.stdout.trim()}`);
+    }
     const sessions: SessionMeta[] = [];
-    for (const [i, url] of input.urls.entries()) {
-      sessions.push(await this.start({ mode: input.mode, target: { type: 'url', value: url }, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: reserved[i]! }));
+    const handed = new Set<number>();
+    try {
+      for (const [i, url] of input.urls.entries()) {
+        const num = reserved[i]!;
+        sessions.push(await this.start({ mode: input.mode, target: { type: 'url', value: url }, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }));
+        handed.add(num);
+      }
+    } finally {
+      // A session releases its own number; the ones never handed to a session go straight back to the pool.
+      for (const num of reserved) if (!handed.has(num)) await this.releaseReportNum(num, false);
     }
     return { sessions, reserved };
   }
@@ -170,7 +212,7 @@ export class SessionManager {
   }
 
   delete(id: string): boolean {
-    if (this.active.has(id)) throw new BusyError(`session ${id} is still running`);
+    if (this.active.has(id) || this.sending.has(id)) throw new BusyError(`session ${id} is still running`);
     return this.store.delete(id);
   }
 
@@ -178,6 +220,7 @@ export class SessionManager {
   reconcile(): void {
     for (const meta of this.store.list()) {
       if (meta.status !== 'running' && meta.status !== 'queued') continue;
+      if (this.active.has(meta.id)) continue;
       const turn = meta.turns.at(-1);
       const run = turn ? this.runner.store.read(turn.runId) : null;
       if (!turn || !run) {
@@ -229,46 +272,60 @@ export class SessionManager {
     }
   }
 
+  /** A turn that cannot start: the session says why, and its report reservation goes back to the pool. */
+  private async failBeforeSpawn(meta: SessionMeta, message: string): Promise<SessionMeta> {
+    this.store.setStatus(meta.id, 'error', message);
+    this.emit(meta.id, { type: 'error', message });
+    const num = this.store.read(meta.id)?.reportNum ?? null;
+    if (num !== null) {
+      this.store.setReportNum(meta.id, null);
+      await this.releaseReportNum(num, false);
+    }
+    this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
+    return this.store.read(meta.id)!;
+  }
+
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean }): Promise<SessionMeta> {
     // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
     const sessionDir = this.store.guardDirOf(meta.id);
     const n = meta.turns.length + 1;
     const turnDir = path.join(sessionDir, 'turns', String(n));
-    const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
-    const deny = opts.blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
-    const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: opts.blacklistAllowed ? ['data/blacklist.md'] : [], deny });
-    const settingsFile = writeSettingsFile(sessionDir);
-    const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed: opts.blacklistAllowed });
     let token: string;
+    let env: NodeJS.ProcessEnv;
+    let argv: string[];
+    let state: TurnState;
     try {
+      const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
+      const deny = opts.blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
+      const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: opts.blacklistAllowed ? ['data/blacklist.md'] : [], deny });
+      const settingsFile = writeSettingsFile(sessionDir);
+      const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed: opts.blacklistAllowed });
       token = await this.deps.readToken();
+      env = buildEnv({}, { token, dataRoot: this.cfg.dataRoot, policyFile: policyFile.file, policySha256: policyFile.sha256, sessionDir });
+      env.CC_MODE = meta.mode;
+      env.CC_TURN_DIR = turnDir;
+      env.NO_COLOR = '1';
+      argv = buildArgv({
+        claudeBin: this.cfg.claudeBin,
+        codeRoot: this.cfg.codeRoot,
+        dataRoot: this.cfg.dataRoot,
+        sessionDir,
+        policyFile: policyFile.file,
+        settingsFile,
+        policy,
+        userMessage: prompt,
+        claudeSessionId: meta.claudeSessionId,
+        resume: opts.resume,
+        fork: opts.fork,
+        model: meta.model ?? undefined,
+        preamble,
+      });
+      // Written before the run exists, so a restart always finds the turn's starting point.
+      state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id) };
+      fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     } catch (err) {
-      const message = (err as Error).message;
-      this.store.setStatus(meta.id, 'error', message);
-      this.emit(meta.id, { type: 'error', message });
-      this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
-      return this.store.read(meta.id)!;
+      return this.failBeforeSpawn(meta, (err as Error).message);
     }
-    const env = buildEnv({}, { token, dataRoot: this.cfg.dataRoot, policyFile: policyFile.file, policySha256: policyFile.sha256, sessionDir });
-    env.CC_MODE = meta.mode;
-    env.CC_TURN_DIR = turnDir;
-    env.NO_COLOR = '1';
-    const argv = buildArgv({
-      claudeBin: this.cfg.claudeBin,
-      codeRoot: this.cfg.codeRoot,
-      dataRoot: this.cfg.dataRoot,
-      sessionDir,
-      policyFile: policyFile.file,
-      settingsFile,
-      policy,
-      userMessage: prompt,
-      claudeSessionId: meta.claudeSessionId,
-      resume: opts.resume,
-      fork: opts.fork,
-      model: meta.model ?? undefined,
-      preamble,
-    });
-    const state: TurnState = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id) };
     const run = this.runner.start({
       actionId: `session.${meta.mode}`,
       label: `${policy.title}: turn ${n}`,
@@ -280,7 +337,6 @@ export class SessionManager {
       env,
     });
     const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
-    fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     this.emit(meta.id, { type: 'status', status: 'running', turn: n });
     this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
     this.track(meta.id, n, run.id, policy, state, token);
@@ -288,6 +344,8 @@ export class SessionManager {
   }
 
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
+    if (this.active.has(id)) return;
+    const progressFile = path.join(this.store.guardDirOf(id), 'turns', String(n), 'progress.json');
     const parser = new StreamParser();
     let seq = 0;
     let offset = 0;
@@ -296,23 +354,34 @@ export class SessionManager {
     let sawResult = false;
     let turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null = null;
     let finalText = '';
+    const handle = (l: RawLine, emit: boolean) => {
+      seq = l.seq;
+      const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
+      for (const ev of events) {
+        if (ev.type === 'envelope') envelopes++;
+        if (ev.type === 'permission.denied') denials++;
+        if (ev.type === 'turn.done') {
+          turnDone = ev;
+          sawResult = true;
+        }
+        if (ev.type === 'text.done') finalText = ev.text;
+        // A fork's first turn reports the id --fork-session minted; later turns must resume that one.
+        if (ev.type === 'session.init') this.store.adoptForkedClaudeSessionId(id, ev.claudeSessionId);
+        if (emit) this.emit(id, ev);
+      }
+    };
+    // A previous server already turned part of this log into events: rebuild the counters silently and go on from there.
+    const saved = readProgress(progressFile);
+    if (saved) {
+      for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
+      seq = saved.rawSeq;
+      offset = saved.rawOffset;
+    }
     const pull = () => {
       const { lines, offset: next } = this.runner.store.readRaw(runId, seq, offset);
       offset = next;
-      for (const l of lines) {
-        seq = l.seq;
-        const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
-        for (const ev of events) {
-          if (ev.type === 'envelope') envelopes++;
-          if (ev.type === 'permission.denied') denials++;
-          if (ev.type === 'turn.done') {
-            turnDone = ev;
-            sawResult = true;
-          }
-          if (ev.type === 'text.done') finalText = ev.text;
-          this.emit(id, ev);
-        }
-      }
+      for (const l of lines) handle(l, true);
+      if (lines.length) writeProgress(progressFile, { rawSeq: seq, rawOffset: offset });
     };
     const timer = setInterval(() => {
       pull();
@@ -327,9 +396,14 @@ export class SessionManager {
     this.active.set(id, { timer });
   }
 
+  private turnEnded(id: string, n: number): boolean {
+    return Boolean(this.store.read(id)?.turns.find((t) => t.n === n)?.endedAt);
+  }
+
   private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string }): Promise<void> {
     const meta = this.store.read(id);
-    if (!meta) return;
+    // Already finalized (by another server, or before a restart): its cost and report number were settled then.
+    if (!meta || this.turnEnded(id, n)) return;
     // The bytes this turn left behind; a revert refuses to overwrite anything that changed since.
     recordTurnAfter(this.store.guardDirOf(id), n, state.filesOffset);
     const changed = this.changedFiles(id, state.filesOffset);
@@ -337,7 +411,8 @@ export class SessionManager {
       this.emit(id, { type: 'files.changed', paths: changed });
       this.store.addFilesChanged(id, changed);
     }
-    const newReports: NewReport[] = detectNewReports(this.cfg.dataRoot, new Set(state.beforeReports));
+    // Only this turn's own report counts: the reserved number, or a report in its own files log.
+    const newReports: NewReport[] = ownReports(detectNewReports(this.cfg.dataRoot, new Set(state.beforeReports)), { reportNum: meta.reportNum, turnFiles: changed });
     if (newReports.length) this.emit(id, { type: 'evaluation', reports: newReports });
     const cancelled = meta.status === 'cancelled' || run.status === 'cancelled';
     // A lost run (queued at a restart, or its process vanished) says why, instead of looking like a signal exit.
@@ -354,7 +429,13 @@ export class SessionManager {
     });
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;
-    if (meta.reportNum !== null && outcome.status !== 'awaiting_user') reason += `; ${await this.releaseReportNum(id, meta.reportNum, newReports.some((x) => x.num === meta.reportNum))}`;
+    const num = meta.reportNum;
+    if (num !== null && outcome.status !== 'awaiting_user') {
+      // Claimed before the await, so no other finalize of this turn can release the number again.
+      this.store.setReportNum(id, null);
+      reason += `; ${await this.releaseReportNum(num, newReports.some((x) => x.num === num))}`;
+    }
+    if (this.turnEnded(id, n)) return;
     this.store.endTurn(id, n, {
       costUsd: r.turnDone?.costUsd ?? 0,
       tokens: r.turnDone?.tokens ?? 0,
@@ -387,13 +468,9 @@ export class SessionManager {
     return [...out];
   }
 
-  private async releaseReportNum(id: string, num: number, used: boolean): Promise<string> {
+  /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
+  private async releaseReportNum(num: number, used: boolean): Promise<string> {
     const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
-    const meta = this.store.read(id);
-    if (meta) {
-      meta.reportNum = null;
-      this.store.write(meta);
-    }
     if (r.code !== 0) return `could not release the reservation for ${num}: ${(r.stderr || r.stdout).trim().slice(-200)}`;
     return used ? `report number ${num} is now held by the report` : `report number ${num} returned to the pool`;
   }

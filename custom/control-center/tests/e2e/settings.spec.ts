@@ -25,7 +25,8 @@ test.describe('Settings', () => {
     await expect(page.getByText('unprobed: Apply drafts answers only')).toBeVisible();
     await page.getByRole('tab', { name: 'Updates' }).click();
     await expect(page.getByRole('link', { name: 'Latest upstream-sync PR' })).toHaveAttribute('href', /Divy2000\/career-ops\/pulls/);
-    const axe = await new AxeBuilder({ page }).analyze();
+    // The rejected save's error toast may still be fading out; its mid-animation blend is not a page color (as in polish.spec.ts).
+    const axe = await new AxeBuilder({ page }).exclude('[data-sonner-toaster]').analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 });

@@ -4,7 +4,8 @@ import { buildApp } from './app.js';
 import { configFromEnv } from './config.js';
 
 const cfg = configFromEnv();
-const { app, close } = await buildApp(cfg);
+// A blue/green reload child waits for the supervisor's activate message before it reconciles runs and sessions.
+const { app, close, activate } = await buildApp(cfg, { deferReconcile: process.env.CC_DEFER_RECONCILE === '1' });
 const childPort = Number(process.env.CC_CHILD_PORT ?? 0);
 await app.listen({ host: '127.0.0.1', port: childPort });
 const address = app.server.address();
@@ -23,5 +24,7 @@ const shutdown = async (signal: string) => {
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('message', (msg: unknown) => {
-  if (msg && typeof msg === 'object' && (msg as { type?: string }).type === 'drain') void shutdown('drain');
+  const type = msg && typeof msg === 'object' ? (msg as { type?: string }).type : undefined;
+  if (type === 'drain') void shutdown('drain');
+  else if (type === 'activate') activate();
 });

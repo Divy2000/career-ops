@@ -54,6 +54,7 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       shell: false,
     });
     let tail = '';
+    const exited = new Promise<void>((done) => proc.once('exit', () => done()));
     proc.stderr?.on('data', (d: Buffer) => {
       process.stderr.write(d);
       tail = (tail + d.toString()).slice(-4000);
@@ -77,7 +78,20 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
               /* already gone */
             }
           },
-          kill: () => proc.kill('SIGTERM'),
+          activate: () => {
+            try {
+              proc.send({ type: 'activate' });
+            } catch {
+              /* already gone */
+            }
+          },
+          exited,
+          kill: () => {
+            proc.kill('SIGTERM');
+            // A child stuck in shutdown must still exit, or the next child would never be activated.
+            const hard = setTimeout(() => proc.exitCode === null && proc.signalCode === null && proc.kill('SIGKILL'), 5000);
+            hard.unref();
+          },
           stderrTail: () => tail,
         });
       }
@@ -203,7 +217,8 @@ async function main(): Promise<void> {
 
   const first = await spawnChild(childEnv);
   await waitHealthy(first.port, 20_000);
-  const bg = new BlueGreen(first, () => spawnChild(childEnv), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
+  // Reload children start passive (CC_DEFER_RECONCILE) and reconcile only when BlueGreen activates them.
+  const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
 
   // Only the active child's exit stops the supervisor; drained children exit on purpose.
   const watchExit = (c: Child) =>

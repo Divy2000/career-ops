@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
+import { execNoShell, type Exec } from '../../server/routes/system.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -24,6 +25,43 @@ async function settle(id: string, timeoutMs = 30_000) {
     if (TERMINAL.includes(body.meta.status)) return body as { meta: Record<string, unknown> & { status: string; turns: Array<{ runId: string; userText: string }>; claudeSessionId: string }; events: Array<{ seq: number; event: Record<string, unknown> & { type: string } }> };
     if (Date.now() > deadline) throw new Error(`session ${id} still ${body.meta.status}`);
     await wait(100);
+  }
+}
+
+type Settled = { meta: Record<string, unknown> & { status: string; turns: Array<{ n: number; runId: string; userText: string }>; claudeSessionId: string; forkPending?: boolean; totals: { costUsd: number; tokens: number } }; events: Array<{ seq: number; event: Record<string, unknown> & { type: string } }> };
+const call = (app: TestApp, method: 'GET' | 'POST' | 'PUT', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload: method === 'GET' ? undefined : (payload ?? {}) });
+async function settleOn(app: TestApp, id: string, timeoutMs = 30_000): Promise<Settled> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const body = (await call(app, 'GET', `/api/sessions/${id}`)).json();
+    if (TERMINAL.includes(body.meta.status)) return body as Settled;
+    if (Date.now() > deadline) throw new Error(`session ${id} still ${body.meta.status}`);
+    await wait(100);
+  }
+}
+async function until(pred: () => boolean, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await wait(50);
+  }
+}
+const INIT = { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] };
+const delta = (text: string) => ({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+const result = (text: string, cost: number) => ({ type: 'result', subtype: 'success', result: text, total_cost_usd: cost, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false });
+const SLOW = { events: [INIT, delta('before '), { __sleep: 1500 }, delta('after'), result('before after', 0.07)] };
+function scenarioFile(scenario: unknown): string {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-scenario-')), 'scenario.json');
+  fs.writeFileSync(file, JSON.stringify(scenario));
+  return file;
+}
+/** The fake CLI reads FAKE_CLAUDE_SCENARIO from the env captured when the run starts. */
+async function withScenario<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  process.env.FAKE_CLAUDE_SCENARIO = file;
+  try {
+    return await fn();
+  } finally {
+    delete process.env.FAKE_CLAUDE_SCENARIO;
   }
 }
 
@@ -191,6 +229,144 @@ describe('Claude sessions', () => {
         await b.close();
       }
     } finally {
+      await a.close().catch(() => undefined);
+    }
+  });
+
+  it('two concurrent sends on one session: one starts a turn, the other gets 409', async () => {
+    const slow = await makeTestApp({}, { readToken: async () => (await wait(150), FAKE_TOKEN) });
+    try {
+      const { id } = (await call(slow, 'POST', '/api/sessions', { mode: 'interview/practice', target: { type: 'app', value: '3' }, prompt: 'Practice' })).json();
+      expect((await settleOn(slow, id)).meta.status).toBe('awaiting_user');
+      const [one, two] = await Promise.all([call(slow, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Globex Payments' }), call(slow, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Initech Cloud' })]);
+      expect([one.statusCode, two.statusCode].sort()).toEqual([202, 409]);
+      const { meta } = await settleOn(slow, id);
+      expect(meta.turns.map((x) => x.n)).toEqual([1, 2]);
+      const runs = (await call(slow, 'GET', '/api/runs')).json() as Array<{ params: { sessionId?: string } }>;
+      expect(runs.filter((r) => r.params.sessionId === id)).toHaveLength(2);
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it('a fork adopts the Claude session id minted by --fork-session, and its next turn resumes that id, never the source', async () => {
+    const { id } = (await post('/api/sessions', { mode: 'interview/practice', target: { type: 'app', value: '3' }, prompt: 'Practice' })).json();
+    const source = await settle(id);
+    const fork = (await post(`/api/sessions/${id}/fork`, { prompt: 'Try a different angle' })).json();
+    const forked = await settle(fork.id);
+    expect(forked.meta.claudeSessionId).not.toBe(source.meta.claudeSessionId);
+    expect(forked.meta.forkPending).toBe(false);
+    expect((await post(`/api/sessions/${fork.id}/turns`, { prompt: 'Globex Payments' })).statusCode).toBe(202);
+    const again = await settle(fork.id);
+    const args = (await get(`/api/runs/${again.meta.turns[1]!.runId}`)).json().meta.cmd.args as string[];
+    expect(args).toEqual(expect.arrayContaining(['--resume', forked.meta.claudeSessionId]));
+    expect(args).not.toContain('--fork-session');
+    expect(args).not.toContain(source.meta.claudeSessionId);
+    expect((await get(`/api/sessions/${id}`)).json().meta.claudeSessionId).toBe(source.meta.claudeSessionId);
+  });
+
+  it('the honesty gate never credits a session with a report another session wrote while it ran', async () => {
+    const h = await makeTestApp();
+    try {
+      expect((await call(h, 'PUT', '/api/settings/app', { claudeConcurrency: 4 })).statusCode).toBe(200);
+      const silent = scenarioFile({ events: [INIT, { __sleep: 1200 }, result('Evaluation complete.', 0.02)] });
+      const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A2', reportNum: 50 })).json()]);
+      const b = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B' })).json();
+      const bReserved = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B2', reportNum: 51 })).json();
+      const [ra, raReserved, rb, rbReserved] = (await Promise.all([a, aReserved, b, bReserved].map((x) => settleOn(h, x.id)))) as [Settled, Settled, Settled, Settled];
+      expect(rb.meta.status).toBe('done');
+      expect(rbReserved.meta.status).toBe('done');
+      expect(ra.meta).toMatchObject({ status: 'awaiting_user', lastReason: expect.stringMatching(/no new report/) });
+      expect(raReserved.meta).toMatchObject({ status: 'awaiting_user', lastReason: expect.stringMatching(/no new report/) });
+      expect(ra.events.some((e) => e.event.type === 'evaluation')).toBe(false);
+      expect(raReserved.events.some((e) => e.event.type === 'evaluation')).toBe(false);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('reservations go back to the pool when the token read fails and when a fan-out stops halfway', async () => {
+    const reserved = (app: TestApp) => fs.readdirSync(path.join(app.cfg.dataRoot, 'reports')).filter((n) => /^\d+-RESERVED\.md$/.test(n) && n !== '005-RESERVED.md');
+    const urls = ['https://jobs.example.com/synthetic/21', 'https://jobs.example.com/synthetic/22', 'https://jobs.example.com/synthetic/23'];
+    const noToken = await makeTestApp({}, { readToken: async () => { throw new Error('Keychain item career-ops-claude-token not found'); } });
+    try {
+      const res = await call(noToken, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls });
+      expect(res.statusCode).toBe(202);
+      expect(res.json().reserved).toEqual([8, 9, 10]);
+      expect(res.json().sessions.map((x: { status: string; reportNum: number | null }) => [x.status, x.reportNum])).toEqual([['error', null], ['error', null], ['error', null]]);
+      expect(reserved(noToken)).toEqual([]);
+    } finally {
+      await noToken.close();
+    }
+    const half = await makeTestApp();
+    try {
+      const original = half.sessions.start.bind(half.sessions);
+      let calls = 0;
+      vi.spyOn(half.sessions, 'start').mockImplementation(async (input) => {
+        calls += 1;
+        if (calls === 2) throw new Error('disk full');
+        return original(input);
+      });
+      expect((await call(half, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls })).statusCode).toBe(502);
+      const first = half.sessions.list().find((x) => x.reportNum === 8 || x.target.value === urls[0])!;
+      expect((await settleOn(half, first.id)).meta.status).toBe('done');
+      expect(reserved(half)).toEqual([]);
+    } finally {
+      await half.close();
+    }
+  });
+
+  it('a server handover resumes the transcript where the old process stopped: no duplicate events, cost counted once', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    let b: TestApp | null = null;
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      await a.close();
+      b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
+      const seen = b.sessions.store.readEvents(id).length;
+      await wait(400);
+      expect(b.sessions.store.readEvents(id)).toHaveLength(seen);
+      b.activate();
+      const { meta, events } = await settleOn(b, id);
+      const types = events.map((e) => e.event.type);
+      expect(types.filter((x) => x === 'session.init')).toHaveLength(1);
+      expect(events.filter((e) => e.event.type === 'text.delta').map((e) => e.event.text)).toEqual(['before ', 'after']);
+      expect(types.filter((x) => x === 'turn.done')).toHaveLength(1);
+      expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+      expect(meta).toMatchObject({ status: 'done', totals: { costUsd: 0.07, tokens: 15 } });
+    } finally {
+      await b?.close();
+      await a.close().catch(() => undefined);
+    }
+  });
+
+  it('two servers finishing the same turn count its cost and release its report number once', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const releases: string[] = [];
+    const counting: Exec = async (cmd, args, opts) => {
+      if (args.includes('--release')) releases.push(args[args.indexOf('--release') + 1]!);
+      return execNoShell(cmd, args, opts);
+    };
+    const a = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
+    let b: TestApp | null = null;
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research', reportNum: 60 })).json());
+      await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      // The overlap the handover prevents, forced: a second server reconciles while the first still tracks.
+      b = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
+      await settleOn(b, id);
+      await wait(600);
+      const meta = b.sessions.read(id)!;
+      expect(meta.totals).toEqual({ costUsd: 0.07, tokens: 15 });
+      expect(meta.reportNum).toBeNull();
+      expect(releases.filter((r) => r === '60')).toHaveLength(1);
+      expect(b.sessions.store.readEvents(id).filter((e) => e.event.type === 'status' && e.event.status === 'done')).toHaveLength(1);
+    } finally {
+      await b?.close();
       await a.close().catch(() => undefined);
     }
   });

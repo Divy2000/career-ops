@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -227,18 +227,54 @@ describe('guard root (policy and revert bookkeeping outside every session write 
   });
 });
 
-function handle(port: number, pid: number): ChildHandle & { drained: boolean; killed: boolean } {
-  const h = { port, pid, drained: false, killed: false, drain: () => undefined, kill: () => undefined, stderrTail: () => `stderr of ${pid}` };
+type FakeChild = ChildHandle & { drained: boolean; killed: boolean; activated: boolean; exit: () => void };
+
+/** A child that exits when killed, or when the test calls exit() (it finished draining on its own). */
+function handle(port: number, pid: number, log: string[] = []): FakeChild {
+  let resolveExit!: () => void;
+  const exited = new Promise<void>((r) => (resolveExit = r));
+  const h: FakeChild = {
+    port,
+    pid,
+    exited,
+    drained: false,
+    killed: false,
+    activated: false,
+    drain: () => undefined,
+    kill: () => undefined,
+    activate: () => undefined,
+    exit: () => undefined,
+    stderrTail: () => `stderr of ${pid}`,
+  };
+  h.exit = () => {
+    log.push(`exit ${pid}`);
+    resolveExit();
+  };
   h.drain = () => {
     h.drained = true;
+    log.push(`drain ${pid}`);
   };
   h.kill = () => {
     h.killed = true;
+    h.exit();
+  };
+  h.activate = () => {
+    h.activated = true;
+    log.push(`activate ${pid}`);
   };
   return h;
 }
 
+const flush = async () => {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+};
+
 describe('blue/green reload', () => {
+  // A failing fake-timer test must not leave fake timers behind for the next one.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('swaps to the healthy new child and drains then kills the old one', async () => {
     vi.useFakeTimers();
     const first = handle(5001, 11);
@@ -251,10 +287,46 @@ describe('blue/green reload', () => {
     expect(bg.status).toEqual({ state: 'ok', at: 'T', pid: 12 });
     expect(first.drained).toBe(true);
     expect(first.killed).toBe(false);
+    expect(second.activated).toBe(false);
     vi.advanceTimersByTime(150);
     expect(first.killed).toBe(true);
+    await flush();
+    expect(second.activated).toBe(true);
     expect(seen).toEqual(['reloading', 'ok']);
     vi.useRealTimers();
+  });
+
+  it('the new child reconciles (activates) only after the old one stopped its trackers and exited', async () => {
+    const log: string[] = [];
+    const first = handle(5001, 11, log);
+    const second = handle(5002, 12, log);
+    const bg = new BlueGreen(first, async () => second, async () => undefined, { drainMs: 60_000 });
+    expect(await bg.reload()).toBe(true);
+    await flush();
+    expect(log).toEqual(['drain 11']);
+    first.exit();
+    await flush();
+    expect(log).toEqual(['drain 11', 'exit 11', 'activate 12']);
+    expect(first.activated).toBe(false);
+  });
+
+  it('a second reload before the first handover finishes activates only the newest child, after both older ones exited', async () => {
+    const log: string[] = [];
+    const first = handle(5001, 11, log);
+    const second = handle(5002, 12, log);
+    const third = handle(5003, 13, log);
+    const queue = [second, third];
+    const bg = new BlueGreen(first, async () => queue.shift()!, async () => undefined, { drainMs: 60_000 });
+    await bg.reload();
+    await bg.reload();
+    expect(bg.active).toBe(third);
+    second.exit();
+    await flush();
+    expect(third.activated).toBe(false);
+    first.exit();
+    await flush();
+    expect(log).toEqual(['drain 11', 'drain 12', 'exit 12', 'exit 11', 'activate 13']);
+    expect(second.activated).toBe(false);
   });
 
   it('keeps the old child when the new one fails health and reports the stderr tail', async () => {

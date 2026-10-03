@@ -43,6 +43,12 @@ export interface SessionMeta {
   reportNum: number | null;
   /** Why the last turn ended in its status (honesty gate reason). */
   lastReason: string | null;
+  /**
+   * A fork whose first turn has not yet reported the Claude session id that
+   * --fork-session minted; until it has, turns fork again instead of resuming
+   * (and appending to) the source conversation.
+   */
+  forkPending?: boolean;
 }
 
 export interface StoredEvent {
@@ -78,7 +84,7 @@ export class SessionStore {
     return guardSessionDir(this.guardRoot, id);
   }
 
-  create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null }): SessionMeta {
+  create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null; forkPending?: boolean }): SessionMeta {
     const now = monotonicIso();
     const meta: SessionMeta = {
       id: newId(),
@@ -97,6 +103,7 @@ export class SessionStore {
       error: null,
       reportNum: input.reportNum ?? null,
       lastReason: null,
+      ...(input.forkPending ? { forkPending: true } : {}),
     };
     fs.mkdirSync(this.dirOf(meta.id), { recursive: true });
     this.write(meta);
@@ -106,7 +113,24 @@ export class SessionStore {
   /** Fork: a new session id that resumes the same Claude uuid (`--resume <uuid> --fork-session`). */
   fork(id: string): SessionMeta {
     const src = this.mustRead(id);
-    return this.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, claudeSessionId: src.claudeSessionId, forkedFrom: src.id });
+    return this.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, claudeSessionId: src.claudeSessionId, forkedFrom: src.id, forkPending: true });
+  }
+
+  /** Stores the id the CLI minted for a fork's first turn; false when the session is not a pending fork (nothing changes). */
+  adoptForkedClaudeSessionId(id: string, claudeSessionId: string): boolean {
+    const meta = this.mustRead(id);
+    if (!meta.forkPending || !claudeSessionId || claudeSessionId === meta.claudeSessionId) return false;
+    meta.claudeSessionId = claudeSessionId;
+    meta.forkPending = false;
+    this.write(meta);
+    return true;
+  }
+
+  setReportNum(id: string, reportNum: number | null): SessionMeta {
+    const meta = this.mustRead(id);
+    meta.reportNum = reportNum;
+    this.write(meta);
+    return meta;
   }
 
   write(meta: SessionMeta): void {
@@ -153,6 +177,8 @@ export class SessionStore {
     const meta = this.mustRead(id);
     const turn = meta.turns.find((t) => t.n === n);
     if (!turn) throw new Error(`no turn ${n} in session ${id}`);
+    // Idempotent: a turn ends once, so its cost is counted once and its outcome is not overwritten.
+    if (turn.endedAt) return meta;
     turn.endedAt = new Date().toISOString();
     turn.costUsd = result.costUsd;
     turn.tokens = result.tokens;
