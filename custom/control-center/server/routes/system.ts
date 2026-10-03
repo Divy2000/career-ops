@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
 import type { ServerConfig } from '../config.js';
+import { childEnv } from '../system/child-env.js';
 
 export interface SystemStatus {
   node: string;
@@ -16,7 +17,7 @@ export type Exec = (cmd: string, args: string[], opts: { cwd?: string; timeoutMs
 /** spawn() with shell:false, resolving with the exit code instead of throwing. */
 export const execNoShell: Exec = (cmd, args, { cwd, timeoutMs, env }) =>
   new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout: timeoutMs, shell: false, env: { ...process.env, ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, timeout: timeoutMs, shell: false, env: childEnv(env), maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err && typeof (err as NodeJS.ErrnoException).code === 'number' ? ((err as NodeJS.ErrnoException).code as unknown as number) : err ? 1 : 0;
       const stderrText = String(stderr ?? '') + (err && (err as NodeJS.ErrnoException).code === 'ENOENT' ? `\n${cmd}: not found` : '');
       resolve({ code, stdout: String(stdout ?? ''), stderr: stderrText });

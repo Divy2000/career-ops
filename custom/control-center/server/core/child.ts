@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CONTRACT } from './adapter.js';
+import { childEnv } from '../system/child-env.js';
 
 export interface ChildResult {
   code: number;
@@ -19,7 +20,7 @@ export function coreModuleUrl(codeRoot: string, module: string): string {
 
 export function runModule(code: string, opts: { cwd: string; env: NodeJS.ProcessEnv; input: unknown; timeoutMs: number }): Promise<ChildResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { cwd: opts.cwd, env: { ...process.env, ...opts.env }, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { cwd: opts.cwd, env: childEnv(opts.env), shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));

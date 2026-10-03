@@ -22,6 +22,9 @@ export interface RunMeta {
   signal: string | null;
   wrapperPid: number | null;
   childPid: number | null;
+  /** `ps -o lstart` of the wrapper and the child at spawn: a live PID only counts as ours when its start time matches. */
+  wrapperStartedAt?: string | null;
+  childStartedAt?: string | null;
   error: string | null;
 }
 

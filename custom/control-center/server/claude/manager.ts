@@ -340,7 +340,8 @@ export class SessionManager {
     const newReports: NewReport[] = detectNewReports(this.cfg.dataRoot, new Set(state.beforeReports));
     if (newReports.length) this.emit(id, { type: 'evaluation', reports: newReports });
     const cancelled = meta.status === 'cancelled' || run.status === 'cancelled';
-    const outcome = decideTurnOutcome({
+    // A lost run (queued at a restart, or its process vanished) says why, instead of looking like a signal exit.
+    const outcome = run.status === 'lost' && !cancelled ? { status: 'error' as const, reason: run.error ?? 'the run was lost without an exit record' } : decideTurnOutcome({
       modeId: meta.mode,
       policyClass: policy.policyClass,
       cancelled,

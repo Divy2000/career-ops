@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
+import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -146,6 +147,51 @@ describe('Claude sessions', () => {
       expect((await other.app.inject({ method: 'GET', url: '/api/runs', headers: other.authed })).json()).toEqual([]);
     } finally {
       await other.close();
+    }
+  });
+
+  it('a session child never sees the server CC_ internals, only the guard variables set for it', async () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', CC_DATA_ROOT: '/x', CC_GUARD_DIR: '/g', FAKE_CLAUDE_REPORT_ENV: '1' });
+    try {
+      const { id } = (await post('/api/sessions', { mode: 'deep', prompt: 'Research' })).json();
+      const { events } = await settle(id);
+      const line = events.map((e) => e.event).find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-env: '));
+      expect(String(line?.text).replace('fake-claude-env: ', '').split(',')).toEqual(['CC_MODE', 'CC_POLICY_FILE', 'CC_POLICY_SHA256', 'CC_SESSION_DIR', 'CC_TURN_DIR']);
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  });
+
+  it('a turn still queued when the server restarts ends with a clear error instead of hanging', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    const req = (app: TestApp, method: 'GET' | 'POST' | 'PUT', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload });
+    try {
+      expect((await req(a, 'PUT', '/api/settings/app', { claudeConcurrency: 1 })).statusCode).toBe(200);
+      const slowId: string = (await req(a, 'POST', '/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json().id;
+      const queued = (await req(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json();
+      expect(queued.status).toBe('running');
+      expect(a.runner.queuedIds()).toEqual([queued.turns[0].runId]);
+      await a.close();
+      const b = await makeTestApp({ dataRoot, guardRoot });
+      try {
+        const deadline = Date.now() + 15_000;
+        let meta = (await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta;
+        while (meta.status === 'running' && Date.now() < deadline) {
+          await wait(100);
+          meta = (await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta;
+        }
+        expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/queued when the server restarted/) });
+        expect((await req(b, 'GET', `/api/runs/${queued.turns[0].runId}`)).json().meta.status).toBe('lost');
+        expect((await req(b, 'POST', `/api/sessions/${slowId}/cancel`, {})).statusCode).toBe(200);
+      } finally {
+        await b.close();
+      }
+    } finally {
+      await a.close().catch(() => undefined);
     }
   });
 

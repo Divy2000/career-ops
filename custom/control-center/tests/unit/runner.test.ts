@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { RunStore, runsDir } from '../../server/runner/store.js';
-import { Runner, WRAPPER_PATH, pidAlive } from '../../server/runner/runner.js';
+import { Runner, WRAPPER_PATH, pidAlive, processStartTime } from '../../server/runner/runner.js';
+import { childEnv } from '../../server/system/child-env.js';
+import { execNoShell } from '../../server/routes/system.js';
+import { runModule } from '../../server/core/child.js';
 import { EventBus } from '../../server/watch/bus.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 
@@ -154,6 +157,102 @@ describe('Runner', () => {
     await until(() => runner.store.read(first.id)?.status === 'done');
     await until(() => runner.store.read(second.id)?.status === 'done');
     expect(runner.store.read(second.id)!.startedAt! >= runner.store.read(first.id)!.endedAt!).toBe(true);
+  });
+
+  it('records the wrapper and child start times so later checks can tell a reused PID apart', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '1500']));
+    await until(() => Boolean(runner.store.read(meta.id)?.childStartedAt));
+    const running = runner.store.read(meta.id)!;
+    expect(running.wrapperStartedAt).toBe(processStartTime(running.wrapperPid!));
+    expect(running.childStartedAt).toBe(processStartTime(running.childPid!));
+    expect(running.wrapperStartedAt).toMatch(/\d{4}$/);
+    expect(processStartTime(2147483646)).toBeNull();
+  });
+
+  it('reconcile never adopts a live PID whose start time differs (PID reuse after a reboot)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const stale = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Thu Jan  1 00:00:00 1970', childPid: sleeper.pid!, childStartedAt: 'Thu Jan  1 00:00:00 1970' });
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(stale.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/start time/) });
+      expect(pidAlive(sleeper.pid!)).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('cancel never signals a process group whose recorded start time does not match', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore', detached: true });
+    try {
+      const store = new RunStore(root);
+      const stale = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Thu Jan  1 00:00:00 1970', childPid: sleeper.pid!, childStartedAt: 'Thu Jan  1 00:00:00 1970' });
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      expect(runner.cancel(stale.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/nothing was signalled/) });
+      await wait(300);
+      expect(pidAlive(sleeper.pid!)).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('reconcile marks a run that was still queued lost, and that run can never be spawned afterwards', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const holder = first.start(req(['0', '800'], { resources: ['tracker'] }));
+    const waiting = first.start(req(['0'], { resources: ['tracker'] }));
+    expect(first.queuedIds()).toEqual([waiting.id]);
+    // A second process (the restarted server) reconciles while the first still holds the run in memory.
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    expect(second.store.read(waiting.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/queued when the server restarted/) });
+    await until(() => first.store.read(holder.id)?.status === 'done');
+    await wait(400);
+    expect(first.store.read(waiting.id)).toMatchObject({ status: 'lost', wrapperPid: null });
+    expect(first.queuedIds()).toEqual([]);
+  });
+
+  it('cancel works for a queued run this process never had in its queue', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const queued = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: true, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    expect(runner.cancel(queued.id)?.status).toBe('cancelled');
+    expect(runner.store.read(queued.id)?.status).toBe('cancelled');
+  });
+
+  it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', CC_DATA_ROOT: '/x', CC_GUARD_DIR: '/g' });
+    try {
+      const dump = "process.stdout.write(Object.keys(process.env).filter((k) => k.startsWith('CC_')).sort().join(','))";
+      expect(childEnv({ CC_POLICY_FILE: '/p' })).toMatchObject({ CC_POLICY_FILE: '/p' });
+      expect(Object.keys(childEnv()).filter((k) => k.startsWith('CC_'))).toEqual([]);
+      const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', dump], cwd: PACKAGE_ROOT }, env: { CC_MODE: 'explicit' } });
+      await until(() => runner.store.read(meta.id)?.status === 'done');
+      expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toEqual(['CC_MODE']);
+      const exec = await execNoShell(process.execPath, ['-e', dump], { timeoutMs: 10_000 });
+      expect(exec.stdout).toBe('');
+      const mod = await runModule(`${dump}`, { cwd: PACKAGE_ROOT, env: {}, input: null, timeoutMs: 10_000 });
+      expect(mod.stdout).toBe('');
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
   });
 
   it('reconcile after a restart finalizes finished runs, keeps tailing live ones and marks dead ones lost', async () => {
