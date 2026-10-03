@@ -37,7 +37,7 @@ describe('core contract', () => {
 
   for (const entry of CONTRACT.exports) {
     it(`${entry.module} exports ${entry.names.join(', ')}`, async () => {
-      const mod = await importCore(DEFAULT_CODE_ROOT, entry.module as never);
+      const mod = await importCore<Record<string, unknown>>(DEFAULT_CODE_ROOT, entry.module as never);
       for (const name of entry.names) expect(mod[name], `${entry.module}#${name}`).toBeDefined();
     });
   }

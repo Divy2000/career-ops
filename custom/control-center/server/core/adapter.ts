@@ -42,7 +42,7 @@ export function cliExitCodes(id: CliId): Record<string, number> {
 const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
 
 /** Dynamic import of a pure core module listed in the contract (no writers). */
-export function importCore<T extends Record<string, unknown>>(codeRoot: string, module: CoreModule): Promise<T> {
+export function importCore<T extends object>(codeRoot: string, module: CoreModule): Promise<T> {
   if (!contract.exports.some((e) => e.module === module)) {
     return Promise.reject(new Error(`${module} is not a contracted core module`));
   }
