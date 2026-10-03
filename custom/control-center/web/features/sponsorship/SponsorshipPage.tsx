@@ -1,7 +1,5 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import { SafeMarkdown } from '../../components/Md';
 import { useImmigration } from '../../lib/queries';
 import { DataState, Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
 import { Tabs } from '../../components/ui';
@@ -123,9 +121,9 @@ export function SponsorshipPage() {
                         <h2 style={{ display: 'inline' }}>{s.date}</h2>
                       </summary>
                       <div className="prose">
-                        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                        <SafeMarkdown>
                           {s.body}
-                        </Markdown>
+                        </SafeMarkdown>
                       </div>
                     </details>
                   ))

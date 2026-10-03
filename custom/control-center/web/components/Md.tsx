@@ -1,4 +1,4 @@
-import Markdown, { type Components } from 'react-markdown';
+import Markdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 
@@ -9,13 +9,19 @@ const components: Components = {
   h3: ({ children }) => <h4>{children}</h4>,
 };
 
+/**
+ * The one markdown renderer for untrusted text (reports, digests, plugin docs, Claude output): sanitized, and with no images,
+ * because a remote image in text copied from a feed would be fetched from this local app every time the page loads.
+ */
+export function SafeMarkdown(props: Omit<Options, 'remarkPlugins' | 'rehypePlugins' | 'disallowedElements'>) {
+  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} disallowedElements={['img']} {...props} />;
+}
+
 /** Sanitized markdown for untrusted text (reports, digests, plugin docs). */
 export function Md({ text }: { text: string }) {
   return (
     <div className="prose">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={components}>
-        {text}
-      </Markdown>
+      <SafeMarkdown components={components}>{text}</SafeMarkdown>
     </div>
   );
 }
@@ -26,9 +32,7 @@ const inlineComponents: Components = { p: ({ children }) => <>{children}</> };
 export function MdInline({ text }: { text: string }) {
   return (
     <span className="md-inline">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={inlineComponents}>
-        {text}
-      </Markdown>
+      <SafeMarkdown components={inlineComponents}>{text}</SafeMarkdown>
     </span>
   );
 }

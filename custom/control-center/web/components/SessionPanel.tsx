@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { Link } from '@tanstack/react-router';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import { SafeMarkdown } from './Md';
 import { Empty, Pill } from './ui';
 import { describeError } from '../lib/actions';
 import { cancelSession, forkSession, isTerminal, sendTurn, startSession, useSessionStream, type Target, type Transcript } from '../lib/sessions';
@@ -48,9 +46,9 @@ export function TranscriptView({ transcript, label }: { transcript: Transcript; 
           ))}
           {turn.text && (
             <div className="prose">
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+              <SafeMarkdown>
                 {turn.text}
-              </Markdown>
+              </SafeMarkdown>
             </div>
           )}
           {turn.stderr.length > 0 && (
