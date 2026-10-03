@@ -1,0 +1,7 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.tmp/
+# Upstream .gitignore ignores every package-lock.json; this package needs its lock for `npm ci`.
+!package-lock.json

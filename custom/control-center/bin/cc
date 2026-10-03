@@ -1,0 +1,9 @@
+#!/bin/sh
+# Launch the career-ops Control Center from any cwd.
+set -eu
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+if [ ! -d "$HERE/node_modules" ]; then
+  echo "Dependencies missing. Run: npm --prefix \"$HERE\" ci" >&2
+  exit 1
+fi
+exec npm --prefix "$HERE" start -- "$@"
