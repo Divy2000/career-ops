@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { apiGet, apiSend, type ApiError } from './api';
 import type { ActionMeta } from '@shared/api';
 
@@ -13,7 +14,7 @@ export function describeError(err: unknown): string {
   return `${body?.error ?? e?.message ?? 'unknown error'}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
 }
 
-/** Runs a registry action; sync actions resolve with the result, async ones with a run id. */
+/** Runs a registry action; sync actions resolve with the result, async ones with a run id. Feedback goes to a toast and to the page message. */
 export function useRunAction() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
@@ -23,11 +24,15 @@ export function useRunAction() {
     setMessage(null);
     try {
       const out = await apiSend<ActionOutcome>('POST', `/api/actions/${id}`, { params });
-      setMessage({ tone: 'ok', text: okText ?? ('runId' in out ? `Started run ${out.runId}` : 'Done') });
+      const text = okText ?? ('runId' in out ? `Started run ${out.runId}` : 'Done');
+      setMessage({ tone: 'ok', text });
+      toast.success(text);
       await qc.invalidateQueries({ queryKey: ['runs'] });
       return out;
     } catch (err) {
-      setMessage({ tone: 'danger', text: `Could not run ${id}: ${describeError(err)}` });
+      const text = `Could not run ${id}: ${describeError(err)}`;
+      setMessage({ tone: 'danger', text });
+      toast.error(text);
       return null;
     } finally {
       setBusy(null);

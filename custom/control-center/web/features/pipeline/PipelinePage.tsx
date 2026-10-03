@@ -6,6 +6,7 @@ import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone } from '../../components/ui';
+import { InboxAi } from './InboxAi';
 
 const route = getRouteApi('/pipeline');
 export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
@@ -107,8 +108,6 @@ function AddUrls({ onDone }: { onDone: (added: number) => void }) {
     </div>
   );
 }
-
-import { InboxAi } from './InboxAi';
 
 function Inbox() {
   const q = usePipeline();

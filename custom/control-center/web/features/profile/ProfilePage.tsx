@@ -87,7 +87,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
       {conflict && (
         <details open>
           <summary>Current version on disk</summary>
-          <pre className="log mono small">{conflict.text}</pre>
+          <pre tabIndex={0} className="log mono small">{conflict.text}</pre>
         </details>
       )}
     </div>

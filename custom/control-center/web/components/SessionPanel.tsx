@@ -56,7 +56,7 @@ export function TranscriptView({ transcript, label }: { transcript: Transcript; 
           {turn.stderr.length > 0 && (
             <details>
               <summary className="faint small">stderr ({turn.stderr.length})</summary>
-              <pre className="log mono small">{turn.stderr.join('\n')}</pre>
+              <pre tabIndex={0} className="log mono small">{turn.stderr.join('\n')}</pre>
             </details>
           )}
         </div>

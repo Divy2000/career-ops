@@ -6,15 +6,15 @@ import { ApplicationPage } from './features/tracker/ApplicationPage';
 import { PipelinePage, type PipelineTab } from './features/pipeline/PipelinePage';
 import { SponsorshipPage, type SponsorshipTab } from './features/sponsorship/SponsorshipPage';
 import { InsightsPage, type InsightsTab } from './features/insights/InsightsPage';
-import { FollowupsPage } from './features/followups/FollowupsPage';
+import { FollowupsPage, type FollowupsTab } from './features/followups/FollowupsPage';
 import { RunsPage } from './features/runs/RunsPage';
 import { DiscoverPage, type DiscoverTab } from './features/discover/DiscoverPage';
-import { PlaceholderPage } from './components/PlaceholderPage';
 import { SessionsPage, SessionDetailPage } from './features/sessions/SessionsPage';
 import { ApplyPage, ApplyRowPage } from './features/apply/ApplyPage';
 import { ProfilePage } from './features/profile/ProfilePage';
 import { DevChatPage } from './features/dev/DevChatPage';
-import { SettingsPage, type SettingsTab } from './features/settings/SettingsPage';
+import { InterviewsPage } from './features/interviews/InterviewsPage';
+import { SettingsPage, SETTINGS_TABS, type SettingsTab } from './features/settings/SettingsPage';
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -24,10 +24,6 @@ function oneOf<T extends string>(allowed: readonly T[], value: unknown, fallback
 
 /** Search params are optional on links and always normalized on read. */
 type Loose = Record<string, unknown> & SearchSchemaInput;
-
-function placeholder<const P extends string>(path: P, title: string) {
-  return createRoute({ getParentRoute: () => rootRoute, path, component: () => <PlaceholderPage title={title} /> });
-}
 
 const TRACKER_TABS: TrackerTab[] = ['all', 'evaluated', 'interview', 'responded', 'applied', 'top', 'skip', 'rejected', 'discarded'];
 const SORT_KEYS: SortKey[] = ['num', 'company', 'role', 'score', 'status', 'date', 'location', 'pay', 'lastContact', 'posted'];
@@ -74,13 +70,25 @@ const insightsRoute = createRoute({
   }),
 });
 
-const followupsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/followups', component: FollowupsPage });
+const followupsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/followups',
+  component: FollowupsPage,
+  validateSearch: (s: Loose): { tab: FollowupsTab } => ({ tab: oneOf(['cadence', 'replies', 'contacts'] as const, s.tab, 'cadence') }),
+});
 
 const discoverRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/discover',
   component: DiscoverPage,
   validateSearch: (s: Loose): { tab: DiscoverTab } => ({ tab: oneOf(['network', 'portal', 'ai', 'fresh', 'funded', 'reposts'] as const, s.tab, 'network') }),
+});
+
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  component: SettingsPage,
+  validateSearch: (s: Loose): { tab: SettingsTab; add?: string } => ({ tab: oneOf(SETTINGS_TABS, s.tab, 'portals'), ...(typeof s.add === 'string' && s.add ? { add: s.add.slice(0, 200) } : {}) }),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -93,18 +101,13 @@ const routeTree = rootRoute.addChildren([
   followupsRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: ApplyPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/apply/$n', component: ApplyRowPage }),
-  placeholder('/interviews', 'Interviews'),
+  createRoute({ getParentRoute: () => rootRoute, path: '/interviews', component: InterviewsPage }),
   discoverRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/sessions', component: SessionsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: SessionDetailPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/profile', component: ProfilePage }),
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/settings',
-    component: SettingsPage,
-    validateSearch: (s: Loose): { tab: SettingsTab } => ({ tab: oneOf(['portals', 'profile', 'rules', 'engine', 'health', 'updates'] as const, s.tab, 'portals') }),
-  }),
+  settingsRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/dev', component: DevChatPage }),
 ]);
 

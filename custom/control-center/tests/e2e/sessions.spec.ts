@@ -71,8 +71,8 @@ test.describe('AI sessions through the fake Claude', () => {
     await page.getByRole('button', { name: 'Ask the advisor' }).click();
     await expect(page.getByText('You have one overdue follow-up at Globex Payments.')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('Set row #1 to Responded')).toBeVisible();
-    page.once('dialog', (d) => void d.accept());
     await page.getByRole('button', { name: 'Review and run' }).click();
+    await page.getByRole('dialog', { name: 'The advisor proposes a write' }).getByRole('button', { name: 'Do it' }).click();
     await expect(page.locator('li.proposal[data-proposal-state="done"]')).toHaveCount(1);
     const detail = await (await page.request.get('/api/tracker/1')).json();
     expect(detail.row.status).toBe('Responded');

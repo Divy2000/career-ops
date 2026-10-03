@@ -1,11 +1,16 @@
 import { useState } from 'react';
-import { Link } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFollowups } from '../../lib/queries';
-import { apiSend } from '../../lib/api';
-import { describeError } from '../../lib/actions';
-import { DataState, Empty, Pill, StatusPill } from '../../components/ui';
-import type { FollowupCadenceEntry } from '@shared/api';
+import { apiGet, apiSend } from '../../lib/api';
+import { describeError, useActions, useRunAction } from '../../lib/actions';
+import { ActionButton, Message } from '../../components/ActionBar';
+import { DataState, Empty, Pill, StatusPill, Tabs } from '../../components/ui';
+import { ModeLauncher } from '../../components/ModeLauncher';
+import type { ContactsRead, FollowupCadenceEntry } from '@shared/api';
+
+const route = getRouteApi('/followups');
+export type FollowupsTab = 'cadence' | 'replies' | 'contacts';
 
 function urgencyTone(u: string): 'danger' | 'warn' | 'neutral' | 'info' {
   if (u === 'overdue') return 'danger';
@@ -67,9 +72,7 @@ function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg:
   );
 }
 
-import { ModeLauncher } from '../../components/ModeLauncher';
-
-export function FollowupsPage() {
+function CadenceTab() {
   const q = useFollowups();
   const qc = useQueryClient();
   const [logging, setLogging] = useState<number | null>(null);
@@ -96,15 +99,7 @@ export function FollowupsPage() {
     }
   };
   return (
-    <section aria-labelledby="page-title">
-      <div className="page-header">
-        <h1 id="page-title">Follow-ups</h1>
-        {q.data && (
-          <span className="faint">
-            {q.data.metadata.actionable} actionable of {q.data.metadata.totalTracked} tracked
-          </span>
-        )}
-      </div>
+    <>
       <ModeLauncher
         heading="AI drafts"
         modes={[
@@ -139,12 +134,164 @@ export function FollowupsPage() {
               </thead>
               <tbody>
                 {q.data.entries.map((e) => (
-                  <RowGroup key={e.num} e={e} open={open === e.num} onToggle={() => setOpen(open === e.num ? null : e.num)} logging={logging === e.num} onLog={() => setLogging(e.num)} onLogged={(m) => { setLogging(null); if (m) { setMessage(m); void refresh(); } }} onPin={pin} onDelete={remove} />
+                  <RowGroup
+                    key={e.num}
+                    e={e}
+                    open={open === e.num}
+                    onToggle={() => setOpen(open === e.num ? null : e.num)}
+                    logging={logging === e.num}
+                    onLog={() => setLogging(e.num)}
+                    onLogged={(m) => {
+                      setLogging(null);
+                      if (m) {
+                        setMessage(m);
+                        void refresh();
+                      }
+                    }}
+                    onPin={pin}
+                    onDelete={remove}
+                  />
                 ))}
               </tbody>
             </table>
           ))}
       </DataState>
+    </>
+  );
+}
+
+function RepliesTab() {
+  const actions = useActions();
+  const { run, message, busy } = useRunAction();
+  const [subject, setSubject] = useState('');
+  const [from, setFrom] = useState('');
+  const [body, setBody] = useState('');
+  const [invite, setInvite] = useState('');
+  const [result, setResult] = useState<unknown>(null);
+  return (
+    <div className="stack">
+      <div className="card" aria-labelledby="paste-heading">
+        <h2 id="paste-heading">Paste a reply</h2>
+        <p className="muted small">Feeds paste-reply.mjs through a temp file (no Gmail needed); reply-watch then classifies it.</p>
+        <div className="row gap">
+          <input aria-label="Reply subject" placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+          <input aria-label="Reply sender" placeholder="From (optional)" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </div>
+        <textarea aria-label="Reply body" rows={6} placeholder="Paste the email body" value={body} onChange={(e) => setBody(e.target.value)} />
+        <div className="row gap">
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyPaste')} disabled={busy !== null || !subject.trim() || !body.trim()} params={{ subject, from, body }} onRun={(p) => void run('followups.replyPaste', p)} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyWatch')} disabled={busy !== null} onRun={() => void run('followups.replyWatch', {})} />
+        </div>
+      </div>
+      <div className="card" aria-labelledby="invite-heading">
+        <h2 id="invite-heading">Match an interview invite</h2>
+        <textarea aria-label="Invite text" rows={4} placeholder="Paste the invite text to match it to a tracker row" value={invite} onChange={(e) => setInvite(e.target.value)} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'followups.inviteMatch')} disabled={busy !== null || !invite.trim()} params={{ text: invite }} onRun={(p) => void run('followups.inviteMatch', p).then((out) => out && 'result' in out && setResult(out.result))} />
+        {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
+      </div>
+      <Message message={message} />
+      <ModeLauncher heading="Reply watch session" modes={[{ id: 'reply-watch', label: 'Reply watch', prompt: 'Review the reply candidates and suggest status changes (ask before any change).' }]} />
+    </div>
+  );
+}
+
+function ContactsTab() {
+  const q = useQuery({ queryKey: ['followups', 'contacts'], queryFn: () => apiGet<ContactsRead>('/api/contacts') });
+  const actions = useActions();
+  const { run, message, busy } = useRunAction();
+  const [callerId, setCallerId] = useState('career-ops');
+  const exportVcf = async () => {
+    const out = await run('followups.contactsVcf', { callerId }, 'vCard export ready');
+    if (out && 'result' in out) {
+      const text = typeof out.result === 'string' ? out.result : JSON.stringify(out.result);
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/vcard' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'career-ops-contacts.vcf';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+  return (
+    <div className="card" aria-labelledby="contacts-heading">
+      <div className="row gap" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <h2 id="contacts-heading" style={{ margin: 0 }}>
+          Contacts (data/contacts.tsv)
+        </h2>
+        <div className="row gap">
+          <input aria-label="vCard caller id" value={callerId} onChange={(e) => setCallerId(e.target.value)} style={{ width: 140 }} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.contactsVcf')} disabled={busy !== null} onRun={() => void exportVcf()}>
+            Export vCard
+          </ActionButton>
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.linkedinJoin')} disabled={busy !== null} onRun={() => void run('followups.linkedinJoin', {})} />
+        </div>
+      </div>
+      <Message message={message} />
+      <DataState query={q}>
+        {q.data?.kind === 'ok' &&
+          (q.data.rows.length === 0 ? (
+            <Empty>No contacts yet. The contacto and email modes add them as you reach out.</Empty>
+          ) : (
+            <table className="table" aria-label="Contacts">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Company</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Channels</th>
+                  <th scope="col">App</th>
+                  <th scope="col">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {q.data.rows.map((c) => (
+                  <tr key={c.line}>
+                    <td>{c.name}</td>
+                    <td>{c.company}</td>
+                    <td>
+                      <Pill>{c.type || 'contact'}</Pill>
+                    </td>
+                    <td className="muted">{c.title}</td>
+                    <td className="small">{[c.email, c.phone, c.linkedin].filter(Boolean).join(' / ') || <span className="faint">none</span>}</td>
+                    <td>
+                      {c.tracker !== null ? (
+                        <Link to="/tracker/$n" params={{ n: String(c.tracker) }}>
+                          #{c.tracker}
+                        </Link>
+                      ) : (
+                        <span className="faint">-</span>
+                      )}
+                    </td>
+                    <td className="faint small">{c.notes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ))}
+      </DataState>
+    </div>
+  );
+}
+
+export function FollowupsPage() {
+  const { tab } = route.useSearch();
+  const navigate = useNavigate({ from: '/followups' });
+  const q = useFollowups();
+  return (
+    <section aria-labelledby="page-title">
+      <div className="page-header">
+        <h1 id="page-title">Follow-ups</h1>
+        {q.data && (
+          <span className="faint">
+            {q.data.metadata.actionable} actionable of {q.data.metadata.totalTracked} tracked
+          </span>
+        )}
+      </div>
+      <Tabs label="Follow-ups sections" tabs={[{ id: 'cadence', label: 'Cadence' }, { id: 'replies', label: 'Replies' }, { id: 'contacts', label: 'Contacts' }]} value={tab} onChange={(t: FollowupsTab) => void navigate({ search: { tab: t } })} />
+      {tab === 'cadence' && <CadenceTab />}
+      {tab === 'replies' && <RepliesTab />}
+      {tab === 'contacts' && <ContactsTab />}
     </section>
   );
 }

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
 import { DataState, Empty, Pill } from '../../components/ui';
 import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
+import { LogBrowser, ScheduleCards } from './ScheduleCards';
 
 const ANSI = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*[A-Za-z]`, 'g');
 export const stripAnsi = (s: string) => s.replace(ANSI, '');
@@ -143,10 +144,8 @@ export function RunsPage() {
         </DataState>
         <div className="stack">
           {current ? <LogViewer key={current.id} run={current} /> : <div className="card"><Empty>Select a run to see its log.</Empty></div>}
-          <div className="card">
-            <h2>Daily job</h2>
-            <Empty>Schedule editing (launchctl) lands in the settings phase. The daily log is summarized on Today and Sponsorship.</Empty>
-          </div>
+          <ScheduleCards />
+          <LogBrowser />
         </div>
       </div>
     </section>

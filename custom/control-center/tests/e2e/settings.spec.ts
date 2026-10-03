@@ -7,6 +7,7 @@ test.describe('Settings', () => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Raw YAML' }).click();
     const editor = page.getByLabel('portals.yml YAML');
     await expect(editor).toContainText('title_filter');
     const original = await editor.inputValue();

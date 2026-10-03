@@ -1,3 +1,4 @@
+import { useConfirm } from './ConfirmDialog';
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -50,6 +51,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const qc = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const confirm = useConfirm();
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind !== 'act') return;
     const p = payload as { action: string; params: Record<string, unknown> };
@@ -61,7 +63,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const run = async (p: Proposal) => {
     const def = ASK_ACTIONS[p.action];
     if (!def) return;
-    if (def.confirm && !window.confirm(`${def.label(p.params)}. Continue?`)) {
+    if (def.confirm && !(await confirm({ title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true }))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
     }

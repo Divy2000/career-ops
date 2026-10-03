@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { fanOut } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
 
@@ -10,11 +11,12 @@ export const FANOUT_CONFIRM_ABOVE = 3;
 /** Pipeline AI entry points: Process inbox (pipeline mode) and Evaluate the visible pending rows as a fan-out (spec 4.2). */
 export function InboxAi({ urls }: { urls: string[] }) {
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const evaluateAll = async () => {
     if (urls.length === 0) return;
-    if (urls.length > FANOUT_CONFIRM_ABOVE && !window.confirm(`Start ${urls.length} evaluation sessions in parallel (Claude slot cap applies)? Each one uses tokens.`)) return;
+    if (urls.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${urls.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them' }))) return;
     try {
       const r = await fanOut('oferta', urls);
       setNote(`Started ${r.sessions.length} evaluations with report numbers ${r.reserved.join(', ')}.`);

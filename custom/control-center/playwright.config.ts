@@ -12,6 +12,12 @@ export const E2E_PORT = 4399;
 export const E2E_TOKEN = 'e2e-fixed-token-only-honored-under-NODE_ENV-test';
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-root-'));
 fs.cpSync(path.join(here, 'tests/fixtures/root'), dataRoot, { recursive: true });
+// A synthetic Claude Code usage log so the token meter has something to read (never the real ~/.claude).
+fs.mkdirSync(path.join(dataRoot, '.claude-projects', 'synthetic'), { recursive: true });
+fs.writeFileSync(
+  path.join(dataRoot, '.claude-projects', 'synthetic', 'session.jsonl'),
+  JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), requestId: 'e2e-1', message: { usage: { input_tokens: 1200, output_tokens: 300, cache_creation_input_tokens: 400 } } }) + '\n',
+);
 
 export default defineConfig({
   testDir: path.join(here, 'tests/e2e'),

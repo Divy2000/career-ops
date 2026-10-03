@@ -2,17 +2,17 @@
 
 A local, dark-mode web app that sits next to the career-ops checkout and lets you see and drive every capability (web alpha, TUI, modes, scripts, the fork's add-ons, settings, schedule and AI sessions) from the browser. It lives entirely under `custom/control-center/` so the weekly upstream merge never conflicts with it.
 
-## Safety guarantees
+## 1. What it is, and the safety guarantees
 
-- Listens on `127.0.0.1` only. Every request must carry a `Host` of `127.0.0.1:PORT` or `localhost:PORT`; anything else gets 403 (DNS-rebinding defense).
-- A one-time token is generated per start and printed as `http://127.0.0.1:4317/auth?t=...`. Redeeming it sets an HttpOnly, SameSite=Strict cookie; every `/api/*` and SSE route requires that cookie.
-- Mutating requests additionally need a same-origin `Origin` header and `X-CC: 1`.
-- Responses carry `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'` (the dev client relaxes script/style for Vite HMR only).
-- No shell: every child process is `spawn(cmd, args[], { shell: false })` from a static action registry. The client never sends a command string.
-- AI sessions never submit or send anything. Writes are scoped per mode by permission rules plus a PreToolUse guard hook; `data/blacklist.md` and direct edits to `data/applications.md` are denied for every session.
-- User data (CV, profile, portals, tracker, reports, immigration files) stays in the data root and is never committed. Test fixtures are synthetic.
+- **Localhost only.** The supervisor listens on `127.0.0.1` (default port 4317). Every request must carry a `Host` of `127.0.0.1:PORT` or `localhost:PORT`; anything else gets 403 (DNS-rebinding defense).
+- **One-time token.** Each start prints `http://127.0.0.1:4317/auth?t=...` and opens it. Redeeming the token sets an HttpOnly, SameSite=Strict cookie; every `/api/*` and SSE route requires it. Mutating requests also need a same-origin `Origin` header and `X-CC: 1`.
+- **Never submits.** The Apply page drafts answers and (once Playwright MCP is probed) fills forms, but you press Submit. AI sessions never send mail or messages.
+- **Blacklist rule.** `data/blacklist.md` is written only from the Settings > Blacklist editor after an explicit confirm dialog; the request must carry `{confirm:true}` and `X-CC-Explicit: blacklist` or the server answers 403. Every AI session is denied that file by the guard hook.
+- **Data never committed.** CV, profile, portals, tracker, reports, immigration files and app state stay in the data root (`CAREER_OPS_ROOT`). Test fixtures are synthetic.
+- **No shell.** Every child process is `spawn(cmd, args[], { shell: false })` from a static action registry; the client never sends a command string.
+- Responses carry `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`; untrusted markdown (reports, digests, plugin docs) is rendered through rehype-sanitize.
 
-## Install and launch
+## 2. Install and launch
 
 ```bash
 # from the career-ops root, first run only
@@ -26,71 +26,86 @@ custom/control-center/bin/cc
 
 Preflight fails with an actionable message when Node is below 22.6, the `claude` binary is missing, or the Keychain item `career-ops-claude-token` is absent (it prints the `claude setup-token` / `security add-generic-password` steps from `custom/immigration/run-daily.sh`). It warns when `ANTHROPIC_API_KEY` is set, because sessions force it empty.
 
-Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-ops data root from `path-resolver.mjs`), `CC_CLAUDE_BIN`, `CC_NO_OPEN=1`.
+Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-ops data root from `path-resolver.mjs`), `CC_CLAUDE_BIN`, `CC_NO_OPEN=1`, `CC_LAUNCH_AGENTS_DIR` (default `~/Library/LaunchAgents`), `CC_CLAUDE_PROJECTS_DIR` (default `~/.claude/projects`, read-only usage meter).
 
-## Pages
+## 3. Pages tour
 
-Work: Today, Pipeline, Tracker, Apply, Follow-ups, Interviews. Intel: Discover, Sponsorship, Insights. System: Sessions, Runs & Schedule, Profile & CV, Settings, Dev Chat.
+Sidebar groups: Work (Today, Pipeline, Tracker, Apply, Follow-ups, Interviews), Intel (Discover, Sponsorship, Insights), System (Sessions, Runs & Schedule, Profile & CV, Settings, Dev Chat). The top bar has the command palette (Cmd+K), the daily-job chip, the Activity chip, the setup-health chip and the Ask drawer (Cmd+J). The sidebar footer shows the 5h/7d token meter.
 
-Implemented so far (read models, phase P1):
+- **Today**: shortlist top 15 with sponsor tiers, excluded-by-alert list, daily job result from the latest log, digest staleness, policy bullets, follow-ups due, decisions, fresh matches, quick evaluate (and the CV import hero when `cv.md` is missing).
+- **Pipeline**: inbox with facets, skip/undo, add URLs, Evaluate visible (fan-out), Process inbox; shortlist with the excluded list; batch runner.
+- **Tracker**: status tabs, Top 4+, search across company, role and notes, sorting on every column, grouped or flat view, column picker, keyboard navigation (`?` lists the keys), side preview, status control with discard reasons and the hired flow, multi-select with **Compare selected (ofertas)**, "Ask about tracker".
+- **Application**: verdict callout, report sections, documents (PDFs, HTML twins, re-render), sponsorship panel, outreach, interview, offer and outcome modes, timeline, sessions, delete with dry-run preview.
+- **Apply**: drafts answers from the `apply` mode as an editable form; "Fill real form" stays disabled until Playwright MCP is probed.
+- **Follow-ups**: Cadence (log, pin, history, AI drafts), Replies (paste a reply, reply-watch digest, invite match, reply-watch session), Contacts (`data/contacts.tsv`, vCard export, LinkedIn join lookup).
+- **Interviews**: active interviews, story bank with provenance counts, prep documents, weekly digest, process quality, rejection latency with explicit "Add to blacklist" buttons (they only open the Blacklist editor prefilled).
+- **Discover**: network scan, portal scan, AI search, fresh matches, funded companies, reposts.
+- **Sponsorship**: digest, policy changes, official feed, company alerts, company checks, H-1B lookup, tier cache, AI policy pass.
+- **Insights**: Overview, Progress and Breakdown computed server-side; Funnel velocity, Patterns, Salary, Skills and Reposts & legitimacy run the core scripts (JSON, cached by input mtimes, with a run timestamp and Recompute); AI analyses launch patterns, calibrate, upskill and titles.
+- **Sessions**: list, transcript, reply, fork, cancel, delete (dialog confirm); New session with any mode.
+- **Runs & Schedule**: every run with its live log, cancel; both launchd jobs (daily `com.career-ops.immigration-watch`, weekly `com.career-ops.upstream-sync`) with loaded state, next fire, last exit, time editing, enable/disable and Run now; a log browser over `data/immigration/logs` and `data/upstream-sync`.
+- **Profile & CV**: editors for the user markdown files, CV import, AI flows and exports.
+- **Settings**: Portals (structured editor for every top-level key, raw YAML, health), Profile (form for every `profile.example.yml` section, follow-up cadence form, raw YAML), House rules, Blacklist, Plugins, AI engine (status, concurrency, model default, usage budgets, usage meter), Health, Updates (read-only, link to the sync PR), App (logos opt-in, run retention).
+- **Dev Chat**: scoped edits with per-turn diffs and reverts.
 
-- Today: shortlist top 15 with sponsor tiers, excluded-by-alert list, daily job result parsed from the latest `data/immigration/logs/<date>.log`, digest staleness, policy bullets and company alerts, follow-ups due, decisions (Evaluated rows), fresh matches (scan-history rows not yet evaluated, keyed on company and role through the core `normalizeTextKey`).
-- Tracker: status tabs with counts, Top 4+ filter, search across company, role and notes, sorting on every column, grouped or flat view, column picker (per browser), keyboard navigation (j/k, g/G, Enter, o, /, v, ?), side preview with archetype, TL;DR, remote and comp from the report.
-- Application: verdict callout (score, 4.0 apply line, recommendation, legitimacy, discard reasons), report sections with progressive disclosure and sanitized markdown, machine summary, timeline (status-log, follow-ups, pinned next date, company history), sponsorship panel. Missing, reserved and malformed reports are shown as distinct states.
-- Pipeline: inbox with source, seniority and text facets plus skipped rows; shortlist table with the excluded list.
-- Sponsorship: digest sections, policy changes, official feed, company alerts, company checks, tier cache.
-- Insights: overview tiles, status and transition bars, funnel, rates, score distribution, weekly activity, archetype and work-mode breakdowns.
-- Follow-ups: cadence table from `followup-cadence.mjs --json`.
+Structured editors send `{ops}` (set, delete, insert) that the server applies with the `yaml` Document API, so comments, key order and unknown keys survive. Saves are ETag-gated: a 409 keeps your pending edits on top of the current file so "save again" is the merge. Portals go through `validate-portals.mjs`, the profile through `validate-profile.mjs`; a failing validator returns 422 and nothing is written.
 
-Every page re-fetches when the data root changes: a chokidar watcher maps files to domains and pushes `data.changed` over `GET /api/events` (SSE).
-
-Runner and actions (phase P2, partial):
-
-- `server/actions/registry.ts` is the only way to run scripts. Each action builds an argv array for `spawn(..., { shell: false })`; the client never sends a command string. Registered so far: `tracker.setStatus` (sync, exit codes map to 400/404/409/503), `system.doctor`, `insights.stats`, `tracker.verify`, `pipeline.prioritize`, `pipeline.shortlist`, `daily.runNow` (confirm).
-- Async actions run through `server/runner/wrapper.mjs`, started detached so server reloads never kill them. The wrapper writes `raw.ndjson` (NDJSON lines) and `exit.json` under `{DATA_ROOT}/data/control-center/runs/<id>/`. The runner orders runs that share a resource (FIFO), caps Claude runs, cancels by SIGTERM on the process group (SIGKILL after 5 s), reconciles running runs after a restart, and keeps the last 500 finished runs.
-- `GET /api/runs/:id/events` replays the log from `Last-Event-ID` and then tails it; the Runs page shows it live. The Tracker preview changes a status through `tracker.setStatus`, with a discard-reason picker for Discarded and SKIP.
-
-AI sessions and Dev Chat (phases P4 and P5):
-
-- Every mode in `modes/**` has a prompt panel on its host page (Application tabs for documents, outreach, interview and offer; Pipeline "Process inbox" and "Evaluate visible"; Tracker "Ask about tracker"; Follow-ups drafts; Insights "AI analyses"; Discover "AI search" plus scan modes; Sponsorship "Run AI policy pass"; the Application Sponsorship tab "Refresh check"; Profile & CV flows and exports; Today "Quick evaluate"). The Sessions page lists every session, shows the transcript live, and offers reply, Fork and Cancel; "New session" launches any mode.
-- Apply (`/apply`, `/apply/$n`) renders the `<<cc:answers>>` envelope as an editable form. Playwright MCP has not been probed on this machine (`contract.json` `playwrightMcp.probed`), so the page drafts answers only and says so; "Fill real form" stays disabled until a launch probe passes.
-- The Ask drawer (Cmd+J) runs the read-only advisor and renders `<<cc:act>>` proposals; anything that writes asks first. `remember` appends to the managed block in `modes/_profile.md`.
-- Dev Chat (`/dev`) edits the user layer and `custom/**` (never `supervisor/**`, `node_modules`, `applications.md`, or the blacklist unless the checkbox is ticked for that turn). The Changes panel shows per-turn unified diffs with Revert file / Revert turn; `/__recovery` (served by the supervisor, token or cookie gated) offers the same reverts even when the server child is broken. Server edits trigger a blue/green restart; a failed restart keeps the old server and shows a banner.
-- Settings has raw YAML editors for `portals.yml` and `config/profile.yml` gated by `validate-portals.mjs` / `validate-profile.mjs` (422 on failure, nothing written), the house rules editor, AI engine status, health scripts and read-only update status with a link to the latest upstream-sync PR.
-
-## AI sessions and permissions
+## 4. AI sessions and permissions
 
 Sessions run `claude -p` headless with `--permission-mode dontAsk`, path-scoped `Edit(...)` rules (which also cover Write and MultiEdit), a `--settings` PreToolUse/PostToolUse guard hook and `--strict-mcp-config`. Policy classes live in `server/claude/modes.ts`; the mode list is derived from `modes/**/*.md` by `scripts/derive-mode-policies.ts` and frozen in `modes.generated.json`. A test fails when the modes tree drifts.
 
-`server/claude/manager.ts` runs each turn through the detached runner (Claude slot cap, default 2), reads the OAuth token from the Keychain at spawn (never written to disk; the wrapper redacts it from stored logs), normalizes stream-json into `events.ndjson`, and applies the honesty gate: an evaluation is "done" only after a clean exit, output and a new report under `reports/` (score read from the header). A turn that ends with a question, or an envelope mode without its envelope, becomes `awaiting_user`. Fan-out reserves report numbers with `reserve-report-num.mjs --count N` first and releases each sentinel when its session ends. The guard hook resolves writes against both the code root and the data root, snapshots first touches per turn, and denies git, network tools and shell operators in Bash.
+| Policy class | Writes allowed | Examples |
+|---|---|---|
+| read-only | none | advisor (Ask drawer), tracker, discover AI search, cv-ingest |
+| evaluate | `reports/`, tracker via core CLIs | oferta, auto-pipeline, ofertas, pipeline, batch |
+| documents | `output/`, `jds/` | pdf, text, latex, cover |
+| outreach and interview | `interview-prep/`, follow-up drafts | followup, interview-prep, interview/plan, interview/practice |
+| profile | user markdown files | interview (onboarding), master-profile, add, expand, intake |
+| immigration | `data/immigration/**` | immigration-policy, sponsorship-check |
+| devchat | user layer and `custom/**` (never `supervisor/**`) | Dev Chat |
 
-## Daily job and schedule
+Every class is denied `data/blacklist.md`, direct edits to `data/applications.md`, git, network tools and shell operators in Bash. `server/claude/manager.ts` runs each turn through the detached runner (Claude slot cap from Settings > AI engine, default 2), reads the OAuth token from the Keychain at spawn (never written to disk; the wrapper redacts it from stored logs), normalizes stream-json into `events.ndjson` and applies the honesty gate. The model default from app settings is used when a session does not pick one.
 
-The launchd job `com.career-ops.immigration-watch` runs `custom/immigration/run-daily.sh`. The app reads its dated logs (`---` step, `!!!` failure and `===` start/done markers) and will expose Run now / schedule edits through `launchctl` in a later phase.
+## 5. Dev Chat scope, diffs and recovery
 
-## Development
+Dev Chat (`/dev`) edits the user layer and `custom/**` (never `supervisor/**`, `node_modules`, `applications.md`, or the blacklist unless the checkbox is ticked for that turn). The Changes panel shows per-turn unified diffs with Revert file / Revert turn (dialog confirm). Server edits trigger a blue/green restart; a failed restart keeps the old server and shows a banner. `/__recovery` (served by the supervisor, token or cookie gated) offers the same reverts even when the server child is broken.
+
+## 6. Daily job and schedule
+
+The launchd jobs `com.career-ops.immigration-watch` (daily, `custom/immigration/run-daily.sh`) and `com.career-ops.upstream-sync` (weekly, `custom/upstream-sync/sync.sh`) are read with `plutil -convert json` and `launchctl print`, and written by rendering the plist, `plutil -lint`, `launchctl bootout` and `launchctl bootstrap` (bootout only when disabling). `ProgramArguments` always points at the fork script. The app reads the dated logs (`---` step, `!!!` failure and `===` start/done markers) and shows a banner while `run-daily.sh` is running. Tests and the e2e server use an in-memory fake (`CC_FAKE_LAUNCHD=1`, honored only under `NODE_ENV=test`), so no test touches the real launchd.
+
+## 7. Migration from `local/`
+
+Already applied on the fork: `local/immigration` and `local/pipeline` moved to `custom/immigration` and `custom/pipeline`, the launchd job points at `custom/immigration/run-daily.sh`, and `custom/launchd/install.sh` (re)installs both jobs. The live cutover of launchd and `modes/_custom.md` on a machine still on `local/` is a user-run step after merge.
+
+## 8. Development
 
 ```bash
 npm --prefix custom/control-center run typecheck
 npm --prefix custom/control-center run lint        # eslint plus the no-em-dash check
-npm --prefix custom/control-center test            # vitest: unit and API (fastify.inject)
+npm --prefix custom/control-center test            # vitest: unit, API (fastify.inject) and web (jsdom)
 npm --prefix custom/control-center run test:e2e    # Playwright against npm start with a tmp fixture root
 npm --prefix custom/control-center run derive:modes
 npm --prefix custom/control-center run probe:claude   # two real haiku calls; records CLI semantics
 ```
 
-- `tests/fixtures/root/` is a synthetic career-ops data root (no real names or companies). Every test copies it to a temp dir; nothing touches the real data root.
-- `tests/fakes/claude.mjs` replays stream-json scenario files, honors `--session-id` / `--resume`, performs scripted writes and Bash steps and runs the real guard hook from `--settings`. Scenarios live in `tests/fixtures/scenarios/<mode>.json` and are picked by `CC_MODE` (set by the session manager) under `CC_FAKE_SCENARIO_DIR`; `CC_FAKE_SCENARIO` forces one file. `{{DATA_ROOT}}` and `{{REPORT_NUM}}` are substituted. Tests set `CC_FAKE_TOKEN` so no test reads the Keychain.
+- `tests/fixtures/root/` is a synthetic career-ops data root (no real names or companies). Every test copies it to a temp dir; nothing touches the real data root, `~/Library/LaunchAgents` or `~/.claude/projects`.
+- `tests/fakes/claude.mjs` replays stream-json scenario files, honors `--session-id` / `--resume`, performs scripted writes and Bash steps and runs the real guard hook from `--settings`. Scenarios live in `tests/fixtures/scenarios/<mode>.json`.
+- `tests/unit/inventory.test.ts` is the table-driven inventory: every capability id from spec section 1 names its API route, action, mode, component or e2e step, and the test proves it exists and is exercised.
+- `tests/unit/no-native-dialogs.test.ts` fails if `window.confirm`, `alert` or `prompt` appears under `web/`; confirms use the Radix dialog, feedback uses sonner toasts.
 - `server/core/contract.json` records the core CLI flags, pure exports and the Claude CLI probe results; `tests/unit/contract.test.ts` re-verifies them against the installed checkout and CLI on every run.
 
-## How the weekly upstream merge is protected
+## 9. How the upstream weekly merge is protected
 
-Only `server/core/adapter.ts` knows core script names and export names, and it is driven by `contract.json`. When upstream renames a flag or an export, the contract test fails loudly and the adapter is the one place to update.
+Only `server/core/adapter.ts` knows core script names and export names, and it is driven by `contract.json`. When upstream renames a flag or an export, the contract test fails loudly and the adapter is the one place to update. Everything under `custom/control-center` is self-contained; `config/local-paths.txt` lists `custom/` so upstream tooling leaves it alone.
 
 Note: `custom/` is public. `custom/immigration/daily-prompt.md` describes the user's visa situation in general terms by the user's own choice.
 
-## Troubleshooting
+## 10. Troubleshooting
 
 - "Port 4317 is already in use": stop the other process or set `CC_PORT`.
 - Locked page in the browser: open the `/auth?t=` link printed by `npm start` (the token changes on every start).
 - `dist/index.html missing`: run `npm --prefix custom/control-center run build` before `start:built`.
+- "launchctl bootstrap failed": the plist is written and linted first; check that `/bin/bash` has Full Disk Access when the checkout lives under `~/Desktop` or `~/Documents`.
+- A structured save returns 409: the file changed on disk (another editor, Dev Chat or the daily job). Your pending edits stay in the form on top of the current version; review and save again, or discard.
+- The usage meter says "No Claude Code logs": set `CC_CLAUDE_PROJECTS_DIR` if your Claude Code config lives elsewhere.

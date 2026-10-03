@@ -5,6 +5,8 @@ import { apiGet, apiSend } from '../../lib/api';
 import { useSessions } from '../../lib/sessions';
 import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
 import { DataState, Empty } from '../../components/ui';
+import { useConfirm } from '../../components/ConfirmDialog';
+import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
 
 const detailRoute = getRouteApi('/sessions/$id');
@@ -129,6 +131,13 @@ export function SessionDetailPage() {
   const { id } = detailRoute.useParams();
   const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`) });
   const [deleted, setDeleted] = useState(false);
+  const confirm = useConfirm();
+  const remove = async () => {
+    if (!(await confirm({ title: 'Delete this session?', body: 'The transcript and its events are removed. Runs it started are kept.', confirmLabel: 'Delete', danger: true }))) return;
+    await apiSend('DELETE', `/api/sessions/${id}`, {});
+    toast.success('Session deleted');
+    setDeleted(true);
+  };
   return (
     <section aria-labelledby="page-title">
       <p>
@@ -149,10 +158,7 @@ export function SessionDetailPage() {
               <button
                 type="button"
                 disabled={q.data.meta.status === 'running' || q.data.meta.status === 'queued'}
-                onClick={() => {
-                  if (!window.confirm('Delete this session and its transcript?')) return;
-                  void apiSend('DELETE', `/api/sessions/${id}`, {}).then(() => setDeleted(true));
-                }}
+                onClick={() => void remove()}
               >
                 Delete
               </button>

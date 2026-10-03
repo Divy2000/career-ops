@@ -1,3 +1,4 @@
+import { useConfirm } from '../../components/ConfirmDialog';
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
@@ -55,9 +56,10 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
   useEffect(() => {
     if (sessionId && !live) void qc.invalidateQueries({ queryKey: ['dev', 'changes', sessionId] });
   }, [live, sessionId, qc]);
+  const confirm = useConfirm();
   const revert = async (turn: number, abs?: string) => {
     if (!sessionId) return;
-    if (!window.confirm(abs ? `Revert ${abs} to its bytes before turn ${turn}?` : `Revert every file turn ${turn} changed?`)) return;
+    if (!(await confirm({ title: abs ? 'Revert this file?' : `Revert turn ${turn}?`, body: abs ? `${abs} goes back to its bytes before turn ${turn}.` : `Every file turn ${turn} changed goes back to its earlier bytes.`, confirmLabel: 'Revert', danger: true }))) return;
     try {
       const r = await apiSend<{ reverted: Array<{ abs: string; result: string }> }>('POST', '/api/dev/revert', { sessionId, turn, abs });
       setNote(`Reverted: ${r.reverted.map((x) => `${x.abs.split('/').pop()} (${x.result})`).join(', ') || 'nothing to revert'}`);
@@ -99,7 +101,7 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
                     -{f.deletions}
                   </span>
                 </summary>
-                {f.patch ? <pre className="log mono small">{f.patch}</pre> : <p className="muted small">No textual difference.</p>}
+                {f.patch ? <pre tabIndex={0} className="log mono small">{f.patch}</pre> : <p className="muted small">No textual difference.</p>}
                 <button type="button" disabled={live || !f.canRevert} onClick={() => void revert(t.n, f.abs)}>
                   Revert file
                 </button>
@@ -118,7 +120,7 @@ function GitDiff() {
     <details className="card">
       <summary>git diff for custom/ {q.data?.stat ? <span className="faint small">({q.data.stat.trim().split('\n').at(-1)})</span> : null}</summary>
       {q.data?.error && <p className="danger-text small">{q.data.error}</p>}
-      <pre className="log mono small">{q.data?.diff || 'clean'}</pre>
+      <pre tabIndex={0} className="log mono small">{q.data?.diff || 'clean'}</pre>
     </details>
   );
 }
@@ -134,7 +136,7 @@ export function ReloadStatusCard() {
       ) : s.state === 'failed' ? (
         <div role="alert">
           <Pill tone="danger">reload failed</Pill> <span className="muted small">{s.error}</span>
-          {s.stderrTail && <pre className="log mono small">{s.stderrTail}</pre>}
+          {s.stderrTail && <pre tabIndex={0} className="log mono small">{s.stderrTail}</pre>}
           <p className="small">
             The previous server is still serving. Revert the change below or from <a href="/__recovery">/__recovery</a>.
           </p>

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Pill } from './ui';
+import { useConfirm } from './ConfirmDialog';
 import type { ActionMeta } from '@shared/api';
 
 export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
@@ -7,8 +8,9 @@ export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
   return <Pill tone={cost === 'tokens' ? 'warn' : cost === 'network' ? 'info' : 'neutral'}>{label}</Pill>;
 }
 
-/** Button for a registry action: shows the cost badge and asks for confirmation when the action declares one. */
+/** Button for a registry action: shows the cost badge and asks (Radix dialog) when the action declares a confirm text. */
 export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>) => void; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
+  const confirm = useConfirm();
   if (!meta) return null;
   return (
     <button
@@ -16,8 +18,10 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
       disabled={disabled}
       title={meta.confirm ?? undefined}
       onClick={() => {
-        if (meta.confirm && !window.confirm(meta.confirm)) return;
-        onRun(params ?? {});
+        void (async () => {
+          if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
+          onRun(params ?? {});
+        })();
       }}
     >
       {children ?? meta.label} <CostPill cost={meta.cost} />

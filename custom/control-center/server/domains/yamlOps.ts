@@ -6,9 +6,9 @@ import { z } from 'zod';
 export const yamlPathSchema = z.array(z.union([z.string().min(1).max(100), z.number().int().nonnegative()])).min(1).max(12);
 
 export const yamlOpSchema = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('set'), path: yamlPathSchema, value: z.unknown().refine((v) => v !== undefined, 'value is required') }),
+  z.object({ op: z.literal('set'), path: yamlPathSchema, value: z.unknown().refine((v): boolean => v !== undefined, 'value is required') }),
   z.object({ op: z.literal('delete'), path: yamlPathSchema }),
-  z.object({ op: z.literal('insert'), path: yamlPathSchema, index: z.number().int().nonnegative().optional(), value: z.unknown().refine((v) => v !== undefined, 'value is required') }),
+  z.object({ op: z.literal('insert'), path: yamlPathSchema, index: z.number().int().nonnegative().optional(), value: z.unknown().refine((v): boolean => v !== undefined, 'value is required') }),
 ]);
 
 export type YamlOp = z.infer<typeof yamlOpSchema>;

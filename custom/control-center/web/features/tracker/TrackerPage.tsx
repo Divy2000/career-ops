@@ -3,6 +3,8 @@ import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useTracker } from '../../lib/queries';
 import { DataState, Empty, ScorePill, StatusPill, Tabs } from '../../components/ui';
 import { StatusControl } from './StatusControl';
+import { AskTrackerPanel } from './AskTrackerPanel';
+import { CompareSelected } from './CompareSelected';
 import type { TrackerRow } from '@shared/api';
 
 export type TrackerTab = 'all' | 'evaluated' | 'interview' | 'responded' | 'applied' | 'top' | 'skip' | 'rejected' | 'discarded';
@@ -98,13 +100,12 @@ function loadCols(): Set<SortKey> {
   return new Set<SortKey>(['date', 'location']);
 }
 
-import { AskTrackerPanel } from './AskTrackerPanel';
-
 export function TrackerPage() {
   const search = route.useSearch();
   const navigate = useNavigate({ from: '/tracker' });
   const q = useTracker();
   const [selected, setSelected] = useState<number | null>(null);
+  const [checked, setChecked] = useState<Set<number>>(new Set());
   const [cols, setCols] = useState<Set<SortKey>>(loadCols);
   const [help, setHelp] = useState(false);
   const go = useNavigate();
@@ -122,9 +123,17 @@ export function TrackerPage() {
   const visible = useMemo(() => sortRows(filterRows(rows, search.tab, search.q), search.sort, search.dir), [rows, search]);
   const current = visible.find((r) => r.num === selected) ?? null;
   const visibleCols = COLUMNS.filter((c) => !c.optional || cols.has(c.key));
+  const checkedRows = rows.filter((r) => checked.has(r.num));
 
   const update = (patch: Partial<TrackerSearch>) => void navigate({ to: '/tracker', search: (prev: TrackerSearch) => ({ ...prev, ...patch }) });
   const toggleSort = (key: SortKey) => update({ sort: key, dir: search.sort === key && search.dir === 'asc' ? 'desc' : 'asc' });
+  const toggleChecked = (num: number) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(num)) next.delete(num);
+      else next.add(num);
+      return next;
+    });
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).tagName === 'INPUT') return;
@@ -151,6 +160,9 @@ export function TrackerPage() {
       case 'o':
         if (current?.url) window.open(current.url, '_blank', 'noopener');
         break;
+      case 'x':
+        if (current) toggleChecked(current.num);
+        break;
       case '/':
         e.preventDefault();
         document.getElementById('tracker-search')?.focus();
@@ -168,6 +180,7 @@ export function TrackerPage() {
   };
 
   const groups = search.view === 'grouped' ? STATUS_ORDER.map((s) => ({ status: s, rows: visible.filter((r) => r.status === s) })).filter((g) => g.rows.length) : [{ status: null, rows: visible }];
+  const allVisibleChecked = visible.length > 0 && visible.every((r) => checked.has(r.num));
 
   return (
     <section aria-labelledby="page-title">
@@ -206,14 +219,23 @@ export function TrackerPage() {
             </div>
           </details>
         </div>
+        <CompareSelected rows={checkedRows} onClear={() => setChecked(new Set())} />
         <div className="split">
-          <div className="table-wrap" tabIndex={0} onKeyDown={onKey} aria-label="Tracker rows, use j and k to move">
+          <div className="table-wrap" tabIndex={0} onKeyDown={onKey} aria-label="Tracker rows, use j and k to move, x to select">
             {visible.length === 0 ? (
               <Empty>No rows match. Clear the search or pick another tab.</Empty>
             ) : (
               <table className="table table--interactive">
                 <thead>
                   <tr>
+                    <th scope="col">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible rows"
+                        checked={allVisibleChecked}
+                        onChange={(e) => setChecked(e.target.checked ? new Set([...checked, ...visible.map((r) => r.num)]) : new Set([...checked].filter((n) => !visible.some((r) => r.num === n))))}
+                      />
+                    </th>
                     {visibleCols.map((c) => (
                       <th key={c.key} scope="col" aria-sort={search.sort === c.key ? (search.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                         <button type="button" className="th-button" onClick={() => toggleSort(c.key)}>
@@ -229,7 +251,7 @@ export function TrackerPage() {
                 </thead>
                 <tbody>
                   {groups.map((g) => (
-                    <GroupRows key={g.status ?? 'all'} status={g.status} rows={g.rows} cols={visibleCols} selected={selected} onSelect={setSelected} />
+                    <GroupRows key={g.status ?? 'all'} status={g.status} rows={g.rows} cols={visibleCols} selected={selected} onSelect={setSelected} checked={checked} onCheck={toggleChecked} />
                   ))}
                 </tbody>
               </table>
@@ -287,10 +309,14 @@ export function TrackerPage() {
               <dd>Open application</dd>
               <dt>o</dt>
               <dd>Open posting</dd>
+              <dt>x</dt>
+              <dd>Check the row for Compare</dd>
               <dt>/</dt>
               <dd>Search</dd>
               <dt>v</dt>
               <dd>Toggle grouped view</dd>
+              <dt>Cmd+K</dt>
+              <dd>Command palette</dd>
               <dt>?</dt>
               <dd>Toggle this help</dd>
             </dl>
@@ -304,18 +330,21 @@ export function TrackerPage() {
   );
 }
 
-function GroupRows({ status, rows, cols, selected, onSelect }: { status: string | null; rows: TrackerRow[]; cols: typeof COLUMNS; selected: number | null; onSelect: (n: number) => void }) {
+function GroupRows({ status, rows, cols, selected, onSelect, checked, onCheck }: { status: string | null; rows: TrackerRow[]; cols: typeof COLUMNS; selected: number | null; onSelect: (n: number) => void; checked: Set<number>; onCheck: (n: number) => void }) {
   return (
     <>
       {status && (
         <tr className="group-row">
-          <th scope="rowgroup" colSpan={cols.length + 1}>
+          <th scope="rowgroup" colSpan={cols.length + 2}>
             <StatusPill status={status} /> <span className="faint">{rows.length}</span>
           </th>
         </tr>
       )}
       {rows.map((r) => (
         <tr key={r.num} className={r.num === selected ? 'is-selected' : ''} onClick={() => onSelect(r.num)} aria-selected={r.num === selected}>
+          <td onClick={(e) => e.stopPropagation()}>
+            <input type="checkbox" aria-label={`Select ${r.company}`} checked={checked.has(r.num)} onChange={() => onCheck(r.num)} />
+          </td>
           {cols.map((c) => (
             <td key={c.key} className={c.key === 'num' || c.key === 'date' || c.key === 'posted' || c.key === 'lastContact' ? 'mono' : ''}>
               {c.key === 'score' ? <ScorePill score={r.score} /> : c.key === 'status' ? <StatusPill status={r.status} /> : String(cell(r, c.key) ?? '')}

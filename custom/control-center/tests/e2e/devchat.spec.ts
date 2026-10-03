@@ -19,9 +19,9 @@ test.describe('Dev Chat', () => {
     expect(custom.text).toContain('Added by Dev Chat');
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
-    page.once('dialog', (d) => void d.accept());
     await page.getByRole('button', { name: 'Revert turn' }).click();
-    await expect(page.getByText(/Reverted: /)).toBeVisible();
+    await page.getByRole('dialog', { name: 'Revert turn 1?' }).getByRole('button', { name: 'Revert' }).click();
+    await expect(page.getByText(/^Reverted: /)).toBeVisible();
     const restored = await (await page.request.get('/api/files/user/customMd')).json();
     expect(restored.text).not.toContain('Added by Dev Chat');
   });
