@@ -42,9 +42,17 @@ fail() {
   exit 1
 }
 
-# Upstream suite failures, one stable line per failing test.
+# Upstream suite failures, one stable line per failing test, written to $1.
+# A run that never prints its final "Results:" summary crashed; that is
+# recorded as a failure line of its own so it can never read as "no failures".
 suite_failures() {
-  node test-all.mjs --quick 2>&1 | grep -E '^\s*❌' | sed -E 's/^[[:space:]]+//' | sort -u
+  local out="$1.raw"
+  node test-all.mjs --quick > "$out" 2>&1
+  local code=$?
+  {
+    grep -E '^\s*❌' "$out" | sed -E 's/^[[:space:]]+//'
+    grep -q 'Results:' "$out" || echo "SUITE CRASHED (exit $code, no Results summary; see $out)"
+  } | sort -u > "$1"
 }
 
 cd "$LIVE" || fail "live checkout missing"
@@ -71,7 +79,8 @@ cd "$WT" || fail "worktree missing"
 npm ci --ignore-scripts --silent >/dev/null 2>&1 || fail "npm ci failed on origin/main"
 
 echo "--- baseline suite on origin/main"
-suite_failures > "$STATE_DIR/$TODAY.baseline-failures.txt"
+suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"
+grep -q '^SUITE CRASHED' "$STATE_DIR/$TODAY.baseline-failures.txt" && fail "upstream suite crashed on origin/main before the merge; cannot compare"
 echo "baseline failures: $(wc -l < "$STATE_DIR/$TODAY.baseline-failures.txt" | tr -d ' ')"
 
 echo "--- merging upstream/main"
@@ -112,9 +121,10 @@ fi
 
 CUSTOM_OK=1
 node --test custom/*/tests/*.spec.mjs > "$STATE_DIR/$TODAY.custom-tests.txt" 2>&1 || CUSTOM_OK=0
+grep -qE "^ℹ pass [1-9]" "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0   # zero tests ran is not a pass
 echo "custom tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
 
-suite_failures > "$STATE_DIR/$TODAY.after-failures.txt"
+suite_failures "$STATE_DIR/$TODAY.after-failures.txt"
 NEW_FAILURES="$(comm -13 "$STATE_DIR/$TODAY.baseline-failures.txt" "$STATE_DIR/$TODAY.after-failures.txt")"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
 

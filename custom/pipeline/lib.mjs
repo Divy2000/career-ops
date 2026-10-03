@@ -29,24 +29,26 @@ export function parseRow(line) {
     raw: line,
     pending: m[1] === ' ',
     url: parts[0].trim(),
-    company: (parts[1] ?? '').trim(),
-    title: (parts[2] ?? '').trim(),
+    company: '',
+    title: '',
     location: '',
     posted: null,
     rank: null,
     rankReason: '',
   };
-  const loose = [];
-  for (const seg of parts.slice(3)) {
+  // Labeled segments can appear anywhere (a bare-URL row may carry only a
+  // rank), so pull them out before assigning positional fields.
+  const positional = [];
+  for (const seg of parts.slice(1)) {
     const posted = seg.match(/^posted: (\d{4}-\d{2}-\d{2})$/);
-    const rank = seg.match(/^rank: ([\d.]+)\/5 — (.*)$/);
+    const rank = seg.match(/^rank: ([\d.]+)\/5 \u2014 (.*)$/);
     if (posted) row.posted = posted[1];
     else if (rank) {
       row.rank = Number(rank[1]);
       row.rankReason = rank[2].trim();
-    } else loose.push(seg.trim());
+    } else positional.push(seg.trim());
   }
-  row.location = loose[0] ?? '';
+  [row.company = '', row.title = '', row.location = ''] = positional;
   return row;
 }
 

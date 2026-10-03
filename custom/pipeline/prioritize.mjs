@@ -14,7 +14,10 @@ import { PIPELINE_PATH as PIPELINE, SCAN_HISTORY_PATH as HISTORY } from '../../s
 
 async function readFirstSeen() {
   const firstSeen = new Map();
-  for (const line of (await readFile(HISTORY, 'utf8')).split('\n').slice(1)) {
+  const lines = (await readFile(HISTORY, 'utf8')).split('\n');
+  // scan.mjs also accepts a headerless history; skip only a real header row.
+  if (lines[0]?.startsWith('url\t')) lines.shift();
+  for (const line of lines) {
     const [url, seen] = line.split('\t');
     if (url && seen && !firstSeen.has(url)) firstSeen.set(url, seen);
   }

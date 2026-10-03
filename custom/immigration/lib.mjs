@@ -149,6 +149,19 @@ export function readSeenChangeCount(markdown) {
   return m ? Number(m[1]) : null;
 }
 
+// Items stay pending until the AI pass that records them succeeds, so a failed
+// run cannot drop a policy change that the dedupe set has already seen.
+export function mergePending(pending, fresh) {
+  const out = [...pending];
+  const ids = new Set(pending.map((i) => i.id));
+  for (const item of fresh) {
+    if (ids.has(item.id)) continue;
+    ids.add(item.id);
+    out.push(item);
+  }
+  return out;
+}
+
 export function sourceCursor(seen, source) {
   return seen?.last_success?.[source] ?? seen?.last_run ?? null;
 }

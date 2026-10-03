@@ -108,7 +108,10 @@ async function main() {
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];
   const { tiers, looked } = await loadTiers(companies, today);
   const alerts = await loadAlerts(companies);
-  const titleOk = buildTitleFilter(yaml.load(await readFile(PORTALS, 'utf8')).title_filter);
+  // Re-apply only the CURRENT negatives: rows the scanner admitted (including
+  // via per-company title_filter_overrides) stay, titles blocked since then go.
+  const titleCfg = yaml.load(await readFile(PORTALS, 'utf8')).title_filter ?? {};
+  const titleOk = buildTitleFilter({ positive: [], negative: titleCfg.negative ?? [] });
   const { shortlist, excluded } = buildShortlist(rows, { tiers, alerts, minRank, keep: (r) => titleOk(r.title) });
 
   const md = [

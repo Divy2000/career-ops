@@ -8,12 +8,13 @@
 import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor } from './lib.mjs';
+import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 
 const DIR = path.join(getCareerOpsRoot(), 'data/immigration');
 const SEEN = path.join(DIR, 'seen.json');
 const FEED = path.join(DIR, 'official-feed.tsv');
+const PENDING = path.join(DIR, 'pending.json');
 const FEED_HEADER = 'first_seen\tpublished\tsource\ttitle\turl\n';
 // Readers also accept headerless files; creating the headers keeps them self-describing.
 const HEADERS = {
@@ -66,6 +67,11 @@ async function uscis(since) {
 }
 
 function parseArgs(argv) {
+  const a = argv.indexOf('--ack');
+  if (a !== -1) {
+    if (!argv[a + 1]) throw new Error('--ack needs the path of the watch JSON that was processed');
+    return { ack: argv[a + 1] };
+  }
   const i = argv.indexOf('--since');
   if (i === -1) return { since: null };
   const since = argv[i + 1];
@@ -73,8 +79,19 @@ function parseArgs(argv) {
   return { since };
 }
 
+// Called after the AI pass succeeded: drop the items it was given from the queue.
+async function ack(file) {
+  const done = new Set(JSON.parse(await readFile(file, 'utf8')).new_items.map((i) => i.id));
+  const pending = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
+  const left = pending.filter((i) => !done.has(i.id));
+  await writeFile(PENDING, JSON.stringify(left, null, 2) + '\n');
+  process.stdout.write(`acknowledged ${pending.length - left.length} item(s); ${left.length} still pending\n`);
+}
+
 async function main() {
-  const { since: sinceArg } = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
+  if (args.ack) return ack(args.ack);
+  const sinceArg = args.since;
   await mkdir(DIR, { recursive: true });
   for (const [name, header] of Object.entries(HEADERS)) {
     const file = path.join(DIR, name);
@@ -111,9 +128,12 @@ async function main() {
     await appendFile(FEED, fresh.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
   }
   await writeFile(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
+  const pending = mergePending(existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [], fresh);
+  await writeFile(PENDING, JSON.stringify(pending, null, 2) + '\n');
 
   const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
-  process.stdout.write(JSON.stringify({ date: today, since, new_items: fresh, source_errors: errors }, null, 2) + '\n');
+  // new_items is everything not yet acknowledged, including leftovers from failed runs.
+  process.stdout.write(JSON.stringify({ date: today, since, new_items: pending, source_errors: errors }, null, 2) + '\n');
 }
 
 main().catch((err) => {

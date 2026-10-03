@@ -217,3 +217,17 @@ test('decideRefresh: a legacy file without a count still refreshes after a chang
   const d = decideRefresh({ today: '2026-10-03', checkedAt: '2026-10-03', seenChangeCount: null, changes: rows });
   assert.equal(d.refresh, true);
 });
+
+// --- fork review: pending queue (gpt-5.6-terra) ---
+import { mergePending } from '../lib.mjs';
+
+test('mergePending keeps unacknowledged items and adds new ones once', () => {
+  const pending = [{ id: 'a', title: 'A' }];
+  const out = mergePending(pending, [{ id: 'a', title: 'A again' }, { id: 'b', title: 'B' }]);
+  assert.deepEqual(out.map((i) => i.id), ['a', 'b']);
+  assert.equal(out[0].title, 'A', 'the original pending entry wins');
+});
+
+test('mergePending with nothing pending returns the fresh items', () => {
+  assert.deepEqual(mergePending([], [{ id: 'x' }]).map((i) => i.id), ['x']);
+});

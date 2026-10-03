@@ -134,3 +134,21 @@ test('buildShortlist treats a company missing from the tier map as unknown', () 
   const { shortlist } = buildShortlist(rows, { tiers: new Map(), alerts: new Map(), minRank: 3 });
   assert.equal(shortlist[0].tier, 'unknown');
 });
+
+// --- fork review (gpt-5.6-terra) ---
+test('parseRow reads labeled segments on a bare-URL row instead of treating them as company/title', () => {
+  const r = parseRow('- [ ] https://jobs.example.test/42 | rank: 4.2/5 — strong fit');
+  assert.equal(r.url, 'https://jobs.example.test/42');
+  assert.equal(r.company, '');
+  assert.equal(r.title, '');
+  assert.equal(r.rank, 4.2);
+  assert.equal(r.rankReason, 'strong fit');
+});
+
+test('parseRow keeps positional fields when labeled segments come last', () => {
+  const r = parseRow('- [ ] https://x/1 | Acme | Backend Engineer | posted: 2026-10-01 | rank: 3.5/5 — ok');
+  assert.equal(r.company, 'Acme');
+  assert.equal(r.title, 'Backend Engineer');
+  assert.equal(r.location, '');
+  assert.equal(r.posted, '2026-10-01');
+});

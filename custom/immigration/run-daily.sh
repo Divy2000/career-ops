@@ -9,14 +9,16 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-LOG_DIR="$ROOT/data/immigration/logs"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# User data follows career-ops' data-root contract (CAREER_OPS_ROOT / .career-ops-data).
+DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+IMM="$DATA/data/immigration"
+LOG_DIR="$IMM/logs"
 TODAY="$(date +%Y-%m-%d)"
 RANK_LIMIT="${RANK_LIMIT:-100}"
 mkdir -p "$LOG_DIR"
 exec >>"$LOG_DIR/$TODAY.log" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
-
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 cd "$ROOT"
 
 if ! CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
@@ -37,19 +39,26 @@ step() {
 }
 
 policy_watch() {
-  local watch_json prompt
+  local watch_json prompt batch
   watch_json="$(node custom/immigration/watch.mjs)" || return 1
   echo "$watch_json"
-  prompt="$(WATCH_JSON="$watch_json" TODAY="$TODAY" node -e '
+  batch="$IMM/pending-batch.json"
+  printf '%s' "$watch_json" > "$batch"
+  prompt="$(WATCH_JSON="$watch_json" TODAY="$TODAY" IMM="$IMM" node -e '
 const fs = require("fs");
 const t = fs.readFileSync("custom/immigration/daily-prompt.md", "utf8");
-process.stdout.write(t.replaceAll("{{TODAY}}", process.env.TODAY).replace("{{WATCH_JSON}}", process.env.WATCH_JSON));
+process.stdout.write(t.replaceAll("{{TODAY}}", process.env.TODAY).replaceAll("{{IMM}}", process.env.IMM).replace("{{WATCH_JSON}}", process.env.WATCH_JSON));
 ')" || return 1
+  # Absolute path rule (leading //) so the AI writes where watch.mjs reads,
+  # even when the data root is outside the checkout.
   claude -p "$prompt" \
     --permission-mode dontAsk \
-    --allowedTools "WebSearch" "WebFetch" "Read" "Edit(./data/immigration/**)" \
+    --add-dir "$IMM" \
+    --allowedTools "WebSearch" "WebFetch" "Read" "Edit(/$IMM/**)" \
     --max-turns 40 \
-    --output-format text
+    --output-format text || return 1
+  # Only a successful pass acknowledges the batch; failures retry tomorrow.
+  node custom/immigration/watch.mjs --ack "$batch"
 }
 
 step "policy watch" policy_watch
