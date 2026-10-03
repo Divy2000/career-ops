@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
 import { isTerminal } from '../../lib/sessions';
-import { useActions, useRunAction } from '../../lib/actions';
+import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { Empty, Pill } from '../../components/ui';
@@ -66,7 +66,7 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
       await qc.invalidateQueries({ queryKey: ['dev', 'changes', sessionId] });
       await qc.invalidateQueries({ queryKey: ['config'] });
     } catch (err) {
-      setNote(`Revert failed: ${(err as Error).message}`);
+      setNote(`Revert failed: ${describeError(err)}`);
     }
   };
   if (!sessionId) return <Empty>Changes appear here per turn once a Dev Chat session runs.</Empty>;

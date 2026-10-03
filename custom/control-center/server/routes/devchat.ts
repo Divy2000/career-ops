@@ -7,7 +7,7 @@ import type { ServerConfig } from '../config.js';
 import type { SessionManager } from '../claude/manager.js';
 import type { Exec } from './system.js';
 import { execNoShell } from './system.js';
-import { listChanges, revertFile, revertTurn } from '../../supervisor/recovery.js';
+import { listChanges, revertFile, revertTurn, RevertRefused } from '../../supervisor/recovery.js';
 
 export async function devchatRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; exec?: Exec }): Promise<void> {
   const { cfg, manager } = opts;
@@ -24,14 +24,20 @@ export async function devchatRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     const meta = manager.read(parsed.data.sessionId);
     if (!meta) return reply.code(404).send({ error: 'no such session' });
-    if (manager.isActive(meta.id)) return reply.code(409).send({ error: 'the session is still running; cancel it first' });
+    if (manager.isActive(meta.id) || meta.status === 'running' || meta.status === 'queued') return reply.code(409).send({ error: 'the session is still running; cancel it first' });
     const sessionDir = manager.store.guardDirOf(meta.id);
-    if (parsed.data.abs) {
-      const known = listChanges(sessionDir, meta).find((t) => t.n === parsed.data.turn)?.files.some((f) => f.abs === parsed.data.abs);
-      if (!known) return reply.code(404).send({ error: 'that file was not changed in that turn' });
-      return { reverted: [{ abs: parsed.data.abs, result: revertFile(path.join(sessionDir, 'turns', String(parsed.data.turn)), parsed.data.abs) }] };
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot };
+    try {
+      if (parsed.data.abs) {
+        const known = listChanges(sessionDir, meta).find((t) => t.n === parsed.data.turn)?.files.some((f) => f.abs === parsed.data.abs);
+        if (!known) return reply.code(404).send({ error: 'that file was not changed in that turn' });
+        return { reverted: [{ abs: parsed.data.abs, result: revertFile(path.join(sessionDir, 'turns', String(parsed.data.turn)), parsed.data.abs, ctx) }] };
+      }
+      return { reverted: revertTurn(sessionDir, meta, parsed.data.turn, ctx) };
+    } catch (err) {
+      if (err instanceof RevertRefused) return reply.code(err.status).send({ error: err.message, conflicts: err.conflicts });
+      throw err;
     }
-    return { reverted: revertTurn(sessionDir, meta, parsed.data.turn) };
   });
 
   app.get('/api/dev/git-diff', async () => {

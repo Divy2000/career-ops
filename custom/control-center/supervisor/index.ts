@@ -13,7 +13,7 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
 import { preflight, formatPreflight } from './preflight.js';
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
-import { guardSessionDir, listChanges, listDevSessions, revertFile, revertTurn } from './recovery.js';
+import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -118,6 +118,28 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 }
 
+/**
+ * The recovery page's only script: it submits the revert forms with fetch so the
+ * POST carries X-CC (a plain form cannot), and shows a refusal instead of
+ * navigating. The CSP allows exactly this script by its hash.
+ */
+const RECOVERY_SCRIPT = `document.addEventListener('submit', async (e) => {
+  const form = e.target;
+  if (!(form instanceof HTMLFormElement) || form.dataset.cc !== 'revert') return;
+  e.preventDefault();
+  const out = document.getElementById('revert-status');
+  out.textContent = 'Reverting...';
+  try {
+    const res = await fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { 'X-CC': '1', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(form)).toString() });
+    const text = await res.text();
+    if (res.ok) location.reload();
+    else out.textContent = 'Revert refused: ' + text;
+  } catch (err) {
+    out.textContent = 'Revert failed: ' + err.message;
+  }
+});`;
+const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
+
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
 export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown): string {
   const sessions = listDevSessions(sessionsDir);
@@ -129,12 +151,12 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: u
           .map(
             (f) =>
               `<li><code>${escapeHtml(f.path)}</code> <span class="s">${f.status} +${f.additions} -${f.deletions}</span>` +
-              (f.canRevert ? `<form method="post" action="/__recovery/revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><input type="hidden" name="abs" value="${escapeHtml(f.abs)}"><button>Revert file</button></form>` : '') +
+              (f.canRevert ? `<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><input type="hidden" name="abs" value="${escapeHtml(f.abs)}"><button>Revert file</button></form>` : '') +
               (f.patch ? `<details><summary>diff</summary><pre>${escapeHtml(f.patch)}</pre></details>` : '') +
               `</li>`,
           )
           .join('');
-        return `<section><h3>Turn ${t.n}</h3>${files ? `<ul>${files}</ul>` : '<p class="s">No files changed.</p>'}<form method="post" action="/__recovery/revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><button>Revert whole turn</button></form></section>`;
+        return `<section><h3>Turn ${t.n}</h3>${files ? `<ul>${files}</ul>` : '<p class="s">No files changed.</p>'}<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><button>Revert whole turn</button></form></section>`;
       })
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;
@@ -146,9 +168,11 @@ pre{background:#11141A;border:1px solid #262C38;border-radius:6px;padding:8px;ov
 .s{color:#A9B1C0}button{background:#171B23;color:#E7EAF0;border:1px solid #343B4A;border-radius:6px;padding:4px 10px;min-height:32px;cursor:pointer}
 form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:#11141A;border:1px solid #262C38;border-radius:10px;padding:12px}
 </style></head><body><h1>Control Center recovery</h1>
-<p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created). <a href="/">Back to the app</a></p>
+<p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
+<p id="revert-status" role="alert"></p>
 <div class="status"><strong>Server reload status</strong><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre></div>
 ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
+<script>${RECOVERY_SCRIPT}</script>
 </body></html>`;
 }
 
@@ -225,7 +249,7 @@ async function main(): Promise<void> {
       res.writeHead(401, { 'content-type': 'text/plain' }).end('open the token URL printed at startup first');
       return true;
     }
-    const headers = { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", 'x-content-type-options': 'nosniff' };
+    const headers = { 'content-security-policy': RECOVERY_CSP, 'x-content-type-options': 'nosniff' };
     if (url.pathname === '/__supervisor/status') {
       res.writeHead(200, { ...headers, 'content-type': 'application/json' }).end(JSON.stringify({ ...bg.status, activePid: bg.active.pid, activePort: bg.active.port }));
       return true;
@@ -239,25 +263,14 @@ async function main(): Promise<void> {
       return true;
     }
     if (url.pathname === '/__recovery/revert' && req.method === 'POST') {
-      const form = new URLSearchParams(await readBody(req));
-      const sessionId = form.get('sessionId') ?? '';
-      const turn = Number(form.get('turn'));
-      const abs = form.get('abs');
-      const meta = listDevSessions(sessionsDir).find((m) => m.id === sessionId);
-      if (!meta || !Number.isInteger(turn)) {
-        res.writeHead(404, { 'content-type': 'text/plain' }).end('unknown session or turn');
+      // A SameSite=Strict cookie still rides along from any other 127.0.0.1 port, so require the app origin and X-CC too.
+      if (!recoveryRequestAllowed(req.headers, PORT)) {
+        res.writeHead(403, { 'content-type': 'text/plain' }).end('cross-origin request refused');
         return true;
       }
-      const sessionDir = guardSessionDir(guardRoot, sessionId);
-      if (abs) {
-        const known = listChanges(sessionDir, meta).find((t) => t.n === turn)?.files.some((f) => f.abs === abs);
-        if (!known) {
-          res.writeHead(404, { 'content-type': 'text/plain' }).end('that file was not changed in that turn');
-          return true;
-        }
-        revertFile(path.join(sessionDir, 'turns', String(turn)), abs);
-      } else revertTurn(sessionDir, meta, turn);
-      res.writeHead(303, { location: '/__recovery' }).end();
+      const form = new URLSearchParams(await readBody(req));
+      const r = recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: CODE_ROOT, dataRoot }, sessionId: form.get('sessionId') ?? '', turn: Number(form.get('turn')), abs: form.get('abs') });
+      res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(r.text);
       return true;
     }
     res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');

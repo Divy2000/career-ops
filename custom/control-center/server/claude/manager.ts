@@ -16,6 +16,7 @@ import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { buildArgv, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy, type ModePolicy } from './modes.js';
 import { decideTurnOutcome, detectNewReports, snapshotReports, type NewReport } from './honesty.js';
+import { recordTurnAfter } from '../../supervisor/recovery.js';
 
 export type TokenReader = () => Promise<string>;
 
@@ -329,6 +330,8 @@ export class SessionManager {
   private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string }): Promise<void> {
     const meta = this.store.read(id);
     if (!meta) return;
+    // The bytes this turn left behind; a revert refuses to overwrite anything that changed since.
+    recordTurnAfter(this.store.guardDirOf(id), n, state.filesOffset);
     const changed = this.changedFiles(id, state.filesOffset);
     if (changed.length) {
       this.emit(id, { type: 'files.changed', paths: changed });

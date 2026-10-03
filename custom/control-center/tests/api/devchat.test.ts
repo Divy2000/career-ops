@@ -109,6 +109,37 @@ describe('Dev Chat', () => {
     expect(run.meta.cmd.args[run.meta.cmd.args.indexOf('--settings') + 1]).toBe(path.join(guardDir, 'settings.json'));
   });
 
+  it('records the post-turn hashes, refuses (409) a revert over a later edit and while the session runs, and reverts once the bytes match again', async () => {
+    const custom = path.join(t.cfg.dataRoot, 'modes', '_custom.md');
+    const note = path.join(t.cfg.dataRoot, 'data', 'notes', 'devchat.md');
+    fs.rmSync(note, { force: true });
+    const preSession = fs.readFileSync(custom, 'utf8');
+    const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'Add a rule to the house rules and leave a note' })).json();
+    await settle(id);
+    const after = JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', id, 'turns', '1', 'after.json'), 'utf8')).files;
+    expect(Object.keys(after).sort()).toEqual([note, custom].sort());
+    const postTurn = fs.readFileSync(custom, 'utf8');
+    // The user edits the house rules after the turn (Settings or an editor).
+    fs.writeFileSync(custom, `${postTurn}- A rule the user added later.\n`);
+    const refused = await post('/api/dev/revert', { sessionId: id, turn: 1 });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toMatch(/modes\/_custom\.md changed after turn 1/);
+    expect(refused.json().conflicts).toEqual(['modes/_custom.md']);
+    expect(fs.readFileSync(custom, 'utf8')).toContain('A rule the user added later.');
+    expect(fs.existsSync(note)).toBe(true);
+    expect((await post('/api/dev/revert', { sessionId: id, turn: 1, abs: custom })).statusCode).toBe(409);
+    // While the session is running nothing is reverted, whatever the bytes are.
+    fs.writeFileSync(custom, postTurn);
+    t.sessions.store.setStatus(id, 'running');
+    expect((await post('/api/dev/revert', { sessionId: id, turn: 1 })).statusCode).toBe(409);
+    expect(fs.readFileSync(custom, 'utf8')).toBe(postTurn);
+    t.sessions.store.setStatus(id, 'done');
+    const ok = await post('/api/dev/revert', { sessionId: id, turn: 1 });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(fs.readFileSync(custom, 'utf8')).toBe(preSession);
+    expect(fs.existsSync(note)).toBe(false);
+  });
+
   it('serves the read-only git diff of custom/', async () => {
     const r = await get('/api/dev/git-diff');
     expect(r.statusCode).toBe(200);

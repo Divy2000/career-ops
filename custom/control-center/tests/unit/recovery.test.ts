@@ -2,13 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { changesByTurn, diffFile, listChanges, revertFile, revertTurn, snapshotKey } from '../../supervisor/recovery.js';
+import crypto from 'node:crypto';
+import { changesByTurn, diffFile, listChanges, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 
+const sha = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
+
+/**
+ * A finished two-turn Dev Chat change set as the app records it: per-turn
+ * policy and post-turn hashes under the guard dir, which sits outside the root.
+ */
 function fakeSession() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-'));
-  const sessionDir = path.join(root, 'session');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-')));
+  const sessionDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-guard-')));
   const file = path.join(root, 'custom', 'notes.md');
   const created = path.join(root, 'custom', 'new.md');
   fs.mkdirSync(path.join(root, 'custom'), { recursive: true });
@@ -16,20 +23,36 @@ function fakeSession() {
   // Turn 1: edit notes.md and create new.md; turn 2: edit notes.md again.
   const t1 = path.join(sessionDir, 'turns', '1');
   const t2 = path.join(sessionDir, 'turns', '2');
-  fs.mkdirSync(path.join(t1, 'before'), { recursive: true });
-  fs.mkdirSync(path.join(t2, 'before'), { recursive: true });
+  const policy = { codeRoot: root, dataRoot: root, sessionDir, allow: ['custom/**'], deny: ['data/blacklist.md', 'data/applications.md'], bash: [], playwright: false };
+  for (const t of [t1, t2]) {
+    fs.mkdirSync(path.join(t, 'before'), { recursive: true });
+    fs.writeFileSync(path.join(t, 'policy.json'), JSON.stringify(policy));
+  }
   fs.writeFileSync(path.join(t1, 'turn.json'), JSON.stringify({ filesOffset: 0 }));
   fs.copyFileSync(file, snapshotKey(t1, file));
   fs.writeFileSync(`${snapshotKey(t1, created)}.absent`, '');
   fs.writeFileSync(file, 'line one\nline TWO\n');
   fs.writeFileSync(created, 'brand new\n');
+  fs.writeFileSync(path.join(t1, 'after.json'), JSON.stringify({ files: { [file]: sha('line one\nline TWO\n'), [created]: sha('brand new\n') } }));
   fs.writeFileSync(path.join(t2, 'turn.json'), JSON.stringify({ filesOffset: 2 }));
   fs.copyFileSync(file, snapshotKey(t2, file));
   fs.writeFileSync(file, 'line one\nline TWO\nline three\n');
+  fs.writeFileSync(path.join(t2, 'after.json'), JSON.stringify({ files: { [file]: sha('line one\nline TWO\nline three\n') } }));
   const rec = (p: string) => JSON.stringify({ path: path.relative(root, p), abs: p, root: 'code', tool: 'Write', ts: 't' });
   fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), [rec(file), rec(created), rec(file)].join('\n') + '\n');
   const meta = { id: 's1', mode: 'devchat', turns: [{ n: 1 }, { n: 2 }] };
-  return { root, sessionDir, file, created, meta };
+  const ctx = { codeRoot: root, dataRoot: root };
+  return { root, sessionDir, t1, t2, file, created, meta, ctx, rec };
+}
+
+function refusal(fn: () => unknown): RevertRefused {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof RevertRefused) return err;
+    throw err;
+  }
+  throw new Error('expected the revert to be refused');
 }
 
 describe('Dev Chat change sets', () => {
@@ -48,18 +71,128 @@ describe('Dev Chat change sets', () => {
   });
 
   it('reverts one file or a whole turn, deleting files the turn created', () => {
-    const { sessionDir, file, created, meta } = fakeSession();
-    expect(revertFile(path.join(sessionDir, 'turns', '2'), file)).toBe('restored');
+    const { root, sessionDir, t1, t2, file, created, meta, ctx } = fakeSession();
+    expect(revertFile(t2, file, ctx)).toBe('restored');
     expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\n');
-    const results = revertTurn(sessionDir, meta, 1);
+    const results = revertTurn(sessionDir, meta, 1, ctx);
     expect(results).toEqual([
       { abs: file, result: 'restored' },
       { abs: created, result: 'deleted' },
     ]);
     expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline two\n');
     expect(fs.existsSync(created)).toBe(false);
-    expect(revertFile(path.join(sessionDir, 'turns', '1'), '/nowhere/x')).toBe('no-snapshot');
-    expect(revertTurn(sessionDir, meta, 9)).toEqual([]);
+    expect(revertFile(t1, path.join(root, 'custom', 'never-touched.md'), ctx)).toBe('no-snapshot');
+    expect(revertTurn(sessionDir, meta, 9, ctx)).toEqual([]);
+  });
+
+  it('refuses (409) a file that changed after the turn, and a turn revert then writes nothing at all', () => {
+    const { sessionDir, t1, t2, file, created, meta, ctx } = fakeSession();
+    expect(revertFile(t2, file, ctx)).toBe('restored');
+    fs.writeFileSync(created, 'brand new\nplus an edit the user made later\n');
+    const one = refusal(() => revertFile(t1, created, ctx));
+    expect(one.status).toBe(409);
+    expect(one.message).toMatch(/custom\/new\.md changed after turn 1/);
+    const whole = refusal(() => revertTurn(sessionDir, meta, 1, ctx));
+    expect(whole.status).toBe(409);
+    expect(whole.conflicts).toEqual(['custom/new.md']);
+    // All or nothing: notes.md was revertible but stays at its post-turn bytes, and the user's edit survives.
+    expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\n');
+    expect(fs.readFileSync(created, 'utf8')).toContain('an edit the user made later');
+    // Turn 1 cannot be reverted under turn 2 either: notes.md now holds turn 2's bytes.
+    const fresh = fakeSession();
+    expect(refusal(() => revertTurn(fresh.sessionDir, fresh.meta, 1, fresh.ctx)).conflicts).toEqual(['custom/notes.md']);
+    expect(fs.readFileSync(fresh.file, 'utf8')).toBe('line one\nline TWO\nline three\n');
+  });
+
+  it('treats a file already back at its pre-turn bytes as unchanged instead of a conflict', () => {
+    const { sessionDir, t1, t2, file, created, meta, ctx } = fakeSession();
+    expect(revertFile(t2, file, ctx)).toBe('restored');
+    expect(revertFile(t1, file, ctx)).toBe('restored');
+    expect(revertTurn(sessionDir, meta, 1, ctx)).toEqual([
+      { abs: file, result: 'unchanged' },
+      { abs: created, result: 'deleted' },
+    ]);
+  });
+
+  it('refuses (403) forged records outside the roots or outside the turn policy, and touches nothing', () => {
+    const { root, sessionDir, t1, meta, ctx, rec } = fakeSession();
+    const outsideDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-victim-')));
+    const victim = path.join(outsideDir, '.zshrc');
+    fs.writeFileSync(victim, 'precious\n');
+    fs.writeFileSync(snapshotKey(t1, victim), 'attacker bytes\n');
+    fs.mkdirSync(path.join(root, 'data'));
+    const blacklist = path.join(root, 'data', 'blacklist.md');
+    fs.writeFileSync(blacklist, '# real blacklist\n');
+    fs.writeFileSync(`${snapshotKey(t1, blacklist)}.absent`, '');
+    fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), `${rec(victim)}\n${rec(blacklist)}\n`);
+    const forged = { ...meta, turns: [{ n: 1 }] };
+    const outside = refusal(() => revertFile(t1, victim, ctx));
+    expect(outside.status).toBe(403);
+    expect(outside.message).toMatch(/outside the code and data roots/);
+    const scope = refusal(() => revertFile(t1, blacklist, ctx));
+    expect(scope.status).toBe(403);
+    expect(scope.message).toMatch(/turn 1's write scope/);
+    expect(refusal(() => revertTurn(sessionDir, forged, 1, ctx)).status).toBe(403);
+    expect(fs.readFileSync(victim, 'utf8')).toBe('precious\n');
+    expect(fs.readFileSync(blacklist, 'utf8')).toBe('# real blacklist\n');
+  });
+
+  it('refuses (409) a turn without a post-turn record, since a later edit cannot be ruled out', () => {
+    const { t1, file, created, ctx } = fakeSession();
+    fs.rmSync(path.join(t1, 'after.json'));
+    const r = refusal(() => revertFile(t1, created, ctx));
+    expect(r.status).toBe(409);
+    expect(r.message).toMatch(/no post-turn record/);
+    expect(fs.existsSync(created)).toBe(true);
+    expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\nline three\n');
+  });
+
+  it('records the post-turn sha256 of every file a turn changed (null when it left the file absent)', () => {
+    const { root, sessionDir, rec } = fakeSession();
+    const t3 = path.join(sessionDir, 'turns', '3');
+    fs.mkdirSync(t3, { recursive: true });
+    const kept = path.join(root, 'custom', 'kept.md');
+    const gone = path.join(root, 'custom', 'gone.md');
+    fs.writeFileSync(kept, 'kept\n');
+    fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), `${rec(kept)}\n${rec(gone)}\n${rec(kept)}\n`);
+    recordTurnAfter(sessionDir, 3, 3);
+    expect(JSON.parse(fs.readFileSync(path.join(t3, 'after.json'), 'utf8')).files).toEqual({ [kept]: sha('kept\n'), [gone]: null });
+  });
+});
+
+describe('/__recovery revert requests', () => {
+  it('require the app origin and the X-CC header, like the server', () => {
+    expect(recoveryRequestAllowed({ origin: 'http://127.0.0.1:4317', 'x-cc': '1' }, 4317)).toBe(true);
+    expect(recoveryRequestAllowed({ origin: 'http://localhost:4317', 'x-cc': '1' }, 4317)).toBe(true);
+    expect(recoveryRequestAllowed({ origin: 'http://127.0.0.1:4387', 'x-cc': '1' }, 4317)).toBe(false);
+    expect(recoveryRequestAllowed({ origin: 'http://127.0.0.1:4317' }, 4317)).toBe(false);
+    expect(recoveryRequestAllowed({ 'x-cc': '1' }, 4317)).toBe(false);
+    expect(recoveryRequestAllowed({ origin: 'null', 'x-cc': '1' }, 4317)).toBe(false);
+  });
+
+  it('refuse while the session is running, refuse unknown files, and report conflicts as 409', () => {
+    const { sessionDir: guardSession, file, created, ctx } = fakeSession();
+    const guardRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-root-')));
+    const sessionsDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-sessions-')));
+    fs.mkdirSync(path.join(guardRoot, 'sessions'));
+    fs.renameSync(guardSession, path.join(guardRoot, 'sessions', 's1'));
+    const writeMeta = (status: string) => {
+      fs.mkdirSync(path.join(sessionsDir, 's1'), { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status, createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
+    };
+    const call = (turn: number, abs?: string) => recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn, abs });
+    writeMeta('running');
+    expect(call(2)).toMatchObject({ status: 409, text: expect.stringMatching(/running/) });
+    writeMeta('queued');
+    expect(call(2).status).toBe(409);
+    writeMeta('done');
+    expect(call(2, '/etc/hosts').status).toBe(404);
+    expect(recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 'nope', turn: 1 }).status).toBe(404);
+    expect(call(1)).toMatchObject({ status: 409, text: expect.stringMatching(/custom\/notes\.md changed after turn 1/) });
+    expect(call(2, file)).toMatchObject({ status: 200 });
+    expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\n');
+    expect(call(1)).toMatchObject({ status: 200 });
+    expect(fs.existsSync(created)).toBe(false);
   });
 });
 

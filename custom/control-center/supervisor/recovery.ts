@@ -2,9 +2,16 @@
 // are turned into unified diffs and can be reverted per file or per turn. This
 // lives under supervisor/ so /__recovery keeps working even when Dev Chat broke
 // the server; Dev Chat cannot edit supervisor/**.
+//
+// Reverts write and delete files, so every target is re-checked: it must
+// resolve inside the code or data root, match the allow list (and miss the deny
+// list) of the policy that turn ran under, and still hold the bytes the turn
+// left (the post-turn sha256 recorded at finalize). Anything else is refused.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
+import { locate, matches, resolveReal } from '../server/claude/guard-policy.mjs';
 
 export interface ChangeRecord {
   path: string;
@@ -139,28 +146,148 @@ export function listChanges(sessionDir: string, meta: MetaLike): TurnChanges[] {
   }));
 }
 
-export type RevertResult = 'restored' | 'deleted' | 'no-snapshot';
+/** 'unchanged': the file already holds its pre-turn bytes, so there is nothing to do. */
+export type RevertResult = 'restored' | 'deleted' | 'unchanged' | 'no-snapshot';
 
-/** Restores the pre-turn bytes (or deletes a file the turn created). */
-export function revertFile(turnDir: string, abs: string): RevertResult {
-  const key = snapshotKey(turnDir, abs);
-  if (fs.existsSync(key)) {
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.copyFileSync(key, abs);
-    return 'restored';
-  }
-  if (fs.existsSync(`${key}.absent`)) {
-    fs.rmSync(abs, { force: true });
-    return 'deleted';
-  }
-  return 'no-snapshot';
+/** The roots the caller itself is configured with (never the ones a record or policy claims). */
+export interface RevertContext {
+  codeRoot: string;
+  dataRoot: string;
 }
 
-export function revertTurn(sessionDir: string, meta: MetaLike, n: number): Array<{ abs: string; result: RevertResult }> {
+/** A revert that was not performed: 403 out of scope, 404 unknown, 409 conflict or unverifiable. */
+export class RevertRefused extends Error {
+  constructor(
+    readonly status: 403 | 404 | 409,
+    message: string,
+    readonly conflicts: string[] = [],
+  ) {
+    super(message);
+  }
+}
+
+const sha256 = (buf: Buffer) => crypto.createHash('sha256').update(buf).digest('hex');
+
+function fileHash(abs: string): string | null {
+  try {
+    return sha256(fs.readFileSync(abs));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/** Writes turns/<n>/after.json: the sha256 (or null for absent) of every file the turn changed, as the turn left it. */
+export function recordTurnAfter(sessionDir: string, n: number, fromLine: number): void {
+  const files: Record<string, string | null> = {};
+  for (const r of readFilesLog(sessionDir).slice(fromLine)) files[r.abs] = fileHash(r.abs);
+  const turnDir = path.join(sessionDir, 'turns', String(n));
+  fs.mkdirSync(turnDir, { recursive: true });
+  const file = path.join(turnDir, 'after.json');
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({ files, at: new Date().toISOString() }, null, 2));
+  fs.renameSync(`${file}.tmp`, file);
+}
+
+function readJson<T>(file: string): T | null {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+type RevertPlan = { abs: string; action: 'restore' | 'delete' | 'unchanged' | 'no-snapshot'; key: string };
+
+function planRevert(turnDir: string, abs: string, ctx: RevertContext): RevertPlan {
+  const n = path.basename(turnDir);
+  const found = locate({ codeRoot: ctx.codeRoot, dataRoot: ctx.dataRoot }, abs);
+  if (!found || !path.isAbsolute(abs)) throw new RevertRefused(403, `${abs} is outside the code and data roots; refusing to revert it`);
+  const policy = readJson<{ allow?: string[]; deny?: string[] }>(path.join(turnDir, 'policy.json'));
+  if (!policy || !Array.isArray(policy.allow) || !Array.isArray(policy.deny)) throw new RevertRefused(409, `turn ${n} has no recorded policy, so ${found.rel} cannot be checked against its write scope`);
+  if (!matches(found.rel, policy.allow) || matches(found.rel, policy.deny)) throw new RevertRefused(403, `${found.rel} is outside turn ${n}'s write scope; refusing to revert it`);
+  const key = snapshotKey(turnDir, abs);
+  const hadSnapshot = fs.existsSync(key);
+  const wasAbsent = !hadSnapshot && fs.existsSync(`${key}.absent`);
+  if (!hadSnapshot && !wasAbsent) return { abs, action: 'no-snapshot', key };
+  const after = readJson<{ files?: Record<string, string | null> }>(path.join(turnDir, 'after.json'))?.files;
+  if (!after || !(abs in after)) throw new RevertRefused(409, `turn ${n} has no post-turn record for ${found.rel} (it did not finish), so a later edit cannot be ruled out; nothing was reverted`, [found.rel]);
+  const current = fileHash(abs);
+  if (current === after[abs]) return { abs, action: wasAbsent ? 'delete' : 'restore', key };
+  const before = wasAbsent ? null : sha256(fs.readFileSync(key));
+  if (current === before) return { abs, action: 'unchanged', key };
+  throw new RevertRefused(409, `${found.rel} changed after turn ${n} (a later turn or another edit); revert that change first or edit the file by hand. Nothing was reverted.`, [found.rel]);
+}
+
+function applyRevert(plan: RevertPlan): RevertResult {
+  if (plan.action === 'restore') {
+    // Write next to the real file and rename over it, so a crash never leaves a half-written file.
+    const real = resolveReal(plan.abs);
+    fs.mkdirSync(path.dirname(real), { recursive: true });
+    const tmp = `${real}.cc-revert-${process.pid}`;
+    fs.copyFileSync(plan.key, tmp);
+    fs.renameSync(tmp, real);
+    return 'restored';
+  }
+  if (plan.action === 'delete') {
+    fs.rmSync(plan.abs, { force: true });
+    return 'deleted';
+  }
+  return plan.action;
+}
+
+/** Restores the pre-turn bytes (or deletes a file the turn created) after the checks above; throws RevertRefused otherwise. */
+export function revertFile(turnDir: string, abs: string, ctx: RevertContext): RevertResult {
+  return applyRevert(planRevert(turnDir, abs, ctx));
+}
+
+/** All or nothing: every file of the turn is checked before any is written. */
+export function revertTurn(sessionDir: string, meta: MetaLike, n: number, ctx: RevertContext): Array<{ abs: string; result: RevertResult }> {
   const turn = changesByTurn(sessionDir, meta).find((t) => t.n === n);
   if (!turn) return [];
   const turnDir = path.join(sessionDir, 'turns', String(n));
-  return turn.records.map((r) => ({ abs: r.abs, result: revertFile(turnDir, r.abs) }));
+  const plans: RevertPlan[] = [];
+  const conflicts: string[] = [];
+  let first: RevertRefused | null = null;
+  for (const r of turn.records) {
+    try {
+      plans.push(planRevert(turnDir, r.abs, ctx));
+    } catch (err) {
+      if (!(err instanceof RevertRefused)) throw err;
+      if (err.status === 403) throw err;
+      first ??= err;
+      conflicts.push(...err.conflicts);
+    }
+  }
+  if (first) throw new RevertRefused(409, conflicts.length > 1 ? `${conflicts.join(', ')} changed after turn ${n} or cannot be verified; nothing was reverted` : first.message, conflicts);
+  return plans.map((p) => ({ abs: p.abs, result: applyRevert(p) }));
+}
+
+/** The recovery page's POSTs carry the app origin and X-CC: 1 (sent by its inline script), like every mutating API call. */
+export function recoveryRequestAllowed(headers: Record<string, string | string[] | undefined>, port: number): boolean {
+  const origin = headers.origin;
+  return (origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`) && headers['x-cc'] === '1';
+}
+
+/** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
+export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null }): { status: number; text: string } {
+  const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
+  if (!meta || !Number.isInteger(opts.turn)) return { status: 404, text: 'unknown session or turn' };
+  if (meta.status === 'running' || meta.status === 'queued') return { status: 409, text: 'the session is still running; cancel it before reverting' };
+  const sessionDir = guardSessionDir(opts.guardRoot, meta.id);
+  try {
+    if (opts.abs) {
+      const known = changesByTurn(sessionDir, meta).find((t) => t.n === opts.turn)?.records.some((r) => r.abs === opts.abs);
+      if (!known) return { status: 404, text: 'that file was not changed in that turn' };
+      const result = revertFile(path.join(sessionDir, 'turns', String(opts.turn)), opts.abs, opts.ctx);
+      return { status: 200, text: `${path.basename(opts.abs)}: ${result}` };
+    }
+    const results = revertTurn(sessionDir, meta, opts.turn, opts.ctx);
+    return { status: 200, text: results.map((r) => `${path.basename(r.abs)}: ${r.result}`).join('\n') || 'nothing to revert' };
+  } catch (err) {
+    if (err instanceof RevertRefused) return { status: err.status, text: err.message };
+    throw err;
+  }
 }
 
 /** Dev Chat sessions on disk, newest first, for the recovery page. */
