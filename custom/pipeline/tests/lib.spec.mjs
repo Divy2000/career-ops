@@ -152,3 +152,13 @@ test('parseRow keeps positional fields when labeled segments come last', () => {
   assert.equal(r.location, '');
   assert.equal(r.posted, '2026-10-01');
 });
+
+test('parseRow keeps trust: and note: labels out of the positional fields', () => {
+  const r = parseRow('- [ ] https://x | Acme | Backend Engineer | trust: 60 missing_apply_url | note: reposted | rank: 4.0/5 — fit');
+  assert.equal(r.company, 'Acme');
+  assert.equal(r.title, 'Backend Engineer');
+  assert.equal(r.location, '');
+  assert.equal(r.labels.trust, '60 missing_apply_url');
+  assert.equal(r.labels.note, 'reposted');
+  assert.equal(r.rank, 4.0);
+});

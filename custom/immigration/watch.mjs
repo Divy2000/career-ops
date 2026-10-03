@@ -5,7 +5,7 @@
 //
 //   node custom/immigration/watch.mjs [--since YYYY-MM-DD]
 
-import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending } from './lib.mjs';
@@ -15,6 +15,12 @@ const DIR = path.join(getCareerOpsRoot(), 'data/immigration');
 const SEEN = path.join(DIR, 'seen.json');
 const FEED = path.join(DIR, 'official-feed.tsv');
 const PENDING = path.join(DIR, 'pending.json');
+
+async function writeAtomic(file, text) {
+  const tmp = `${file}.tmp-${process.pid}`;
+  await writeFile(tmp, text);
+  await rename(tmp, file);
+}
 const FEED_HEADER = 'first_seen\tpublished\tsource\ttitle\turl\n';
 // Readers also accept headerless files; creating the headers keeps them self-describing.
 const HEADERS = {
@@ -84,7 +90,7 @@ async function ack(file) {
   const done = new Set(JSON.parse(await readFile(file, 'utf8')).new_items.map((i) => i.id));
   const pending = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
   const left = pending.filter((i) => !done.has(i.id));
-  await writeFile(PENDING, JSON.stringify(left, null, 2) + '\n');
+  await writeAtomic(PENDING, JSON.stringify(left, null, 2) + '\n');
   process.stdout.write(`acknowledged ${pending.length - left.length} item(s); ${left.length} still pending\n`);
 }
 
@@ -127,9 +133,11 @@ async function main() {
   if (fresh.length) {
     await appendFile(FEED, fresh.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
   }
-  await writeFile(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
+  // Queue first, then mark seen: a crash in between re-queues on the next run
+  // (mergePending dedupes) instead of losing the item.
   const pending = mergePending(existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [], fresh);
-  await writeFile(PENDING, JSON.stringify(pending, null, 2) + '\n');
+  await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
+  await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
 
   const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
   // new_items is everything not yet acknowledged, including leftovers from failed runs.

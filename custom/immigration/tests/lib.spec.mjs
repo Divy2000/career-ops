@@ -231,3 +231,12 @@ test('mergePending keeps unacknowledged items and adds new ones once', () => {
 test('mergePending with nothing pending returns the fresh items', () => {
   assert.deepEqual(mergePending([], [{ id: 'x' }]).map((i) => i.id), ['x']);
 });
+
+// --- fork review round 2: run lock ---
+import { lockIsStale } from '../lib.mjs';
+
+test('lockIsStale: a lock held by a live pid is not stale; a dead pid or unreadable owner is', () => {
+  assert.equal(lockIsStale({ pid: 123 }, (pid) => pid === 123), false);
+  assert.equal(lockIsStale({ pid: 456 }, () => false), true);
+  assert.equal(lockIsStale(null, () => true), true);
+});

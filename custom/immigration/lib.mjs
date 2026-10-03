@@ -162,6 +162,12 @@ export function mergePending(pending, fresh) {
   return out;
 }
 
+// A run lock is stale when its owner record is unreadable or its pid is gone.
+export function lockIsStale(owner, isAlive) {
+  if (!owner || !Number.isInteger(owner.pid)) return true;
+  return !isAlive(owner.pid);
+}
+
 export function sourceCursor(seen, source) {
   return seen?.last_success?.[source] ?? seen?.last_run ?? null;
 }

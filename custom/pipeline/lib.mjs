@@ -2,6 +2,8 @@
 
 const PRIORITY_TITLE = /backend|back-end|back end|python|django|\bapi\b|\bai\b|\bml\b|machine learning|llm|applied ai|agentic/i;
 const FRESH_DAYS = 30;
+// Labeled segments scan.mjs and rank-pipeline.mjs append to pipeline rows.
+const ROW_LABEL = /^(trust|note|posted|rank): (.*)$/;
 const STALE_DAYS = 60;
 
 // Added to the relevance rank (0-5). DOL history is backward-looking, so even
@@ -35,6 +37,7 @@ export function parseRow(line) {
     posted: null,
     rank: null,
     rankReason: '',
+    labels: {},
   };
   // Labeled segments can appear anywhere (a bare-URL row may carry only a
   // rank), so pull them out before assigning positional fields.
@@ -42,11 +45,13 @@ export function parseRow(line) {
   for (const seg of parts.slice(1)) {
     const posted = seg.match(/^posted: (\d{4}-\d{2}-\d{2})$/);
     const rank = seg.match(/^rank: ([\d.]+)\/5 \u2014 (.*)$/);
+    const other = seg.match(ROW_LABEL);
     if (posted) row.posted = posted[1];
     else if (rank) {
       row.rank = Number(rank[1]);
       row.rankReason = rank[2].trim();
-    } else positional.push(seg.trim());
+    } else if (other) row.labels[other[1]] = other[2].trim();
+    else positional.push(seg.trim());
   }
   [row.company = '', row.title = '', row.location = ''] = positional;
   return row;
