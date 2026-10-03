@@ -67,6 +67,20 @@ describe('summarizeDigest', () => {
     ]);
   });
 
+  it('uses the first definition when a label is defined twice, as CommonMark does', () => {
+    const body = '- Per [the rule][1].\n\n[1]: https://www.uscis.gov/rule\n[1]: https://other.example/x';
+    expect(summarizeDigest(body)).toEqual([
+      [{ text: 'Per ' }, { text: 'the rule', href: 'https://www.uscis.gov/rule' }, { text: '.' }],
+    ]);
+  });
+
+  it('resolves a definition nested under a bullet', () => {
+    const body = '- Fee rises per [the rule][1].\n\n  [1]: https://www.uscis.gov/rule';
+    expect(summarizeDigest(body)).toEqual([
+      [{ text: 'Fee rises per ' }, { text: 'the rule', href: 'https://www.uscis.gov/rule' }, { text: '.' }],
+    ]);
+  });
+
   it('shows a reference without a definition as the literal text markdown renders for it', () => {
     expect(lines('- Per [the rule][missing] today.')).toEqual(['Per [the rule][missing] today.']);
   });

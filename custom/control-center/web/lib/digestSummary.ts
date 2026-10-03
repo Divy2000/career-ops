@@ -112,13 +112,23 @@ function clip(spans: DigestSpan[]): DigestSpan[] {
   return out;
 }
 
+// Definitions are valid anywhere in the document (including nested under a
+// bullet), and when a label is defined twice the first one wins, as in CommonMark.
+function collectDefinitions(node: { type: string; identifier?: string; url?: string; children?: unknown[] }, defs: Definitions = new Map()): Definitions {
+  if (node.type === 'definition' && node.identifier && node.url !== undefined && !defs.has(node.identifier)) {
+    defs.set(node.identifier, node.url);
+  }
+  for (const child of (node.children ?? []) as (typeof node)[]) collectDefinitions(child, defs);
+  return defs;
+}
+
 /**
  * Compact highlights from a policy digest section: for each top-level bullet its bold lead, or else its first sentence,
  * clipped on rendered text. The full digest lives on Sponsorship.
  */
 export function summarizeDigest(body: string, max = 4): DigestSpan[][] {
   const tree = parser.parse(body);
-  const defs: Definitions = new Map(tree.children.flatMap((n) => (n.type === 'definition' ? [[n.identifier, n.url] as const] : [])));
+  const defs: Definitions = collectDefinitions(tree);
   const list = tree.children.filter((n): n is List => n.type === 'list');
   const out: DigestSpan[][] = [];
   for (const item of list.flatMap((l) => l.children)) {
