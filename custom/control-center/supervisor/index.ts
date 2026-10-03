@@ -5,6 +5,7 @@
 // change sets can be reverted even when the server child is broken.
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,7 +13,8 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
 import { preflight, formatPreflight } from './preflight.js';
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
-import { listChanges, listDevSessions, revertFile, revertTurn } from './recovery.js';
+import { guardSessionDir, listChanges, listDevSessions, revertFile, revertTurn } from './recovery.js';
+import { resolveGuardRoot } from './guard-root.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -117,10 +119,10 @@ function escapeHtml(s: string): string {
 }
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
-export function renderRecovery(sessionsDir: string, status: unknown): string {
+export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown): string {
   const sessions = listDevSessions(sessionsDir);
   const blocks = sessions.map((meta) => {
-    const turns = listChanges(path.join(sessionsDir, meta.id), meta);
+    const turns = listChanges(guardSessionDir(guardRoot, meta.id), meta);
     const turnHtml = turns
       .map((t) => {
         const files = t.files
@@ -153,6 +155,7 @@ ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 async function main(): Promise<void> {
   const dataRoot = await resolveDataRoot();
   const sessionsDir = path.join(dataRoot, 'data', 'control-center', 'sessions');
+  const guardRoot = resolveGuardRoot({ env: process.env, codeRoot: CODE_ROOT, dataRoot, home: os.homedir(), platform: process.platform });
   const claudeBin = process.env.CC_CLAUDE_BIN ?? 'claude';
   const pf = await preflight({ claudeBin, nodeVersion: process.version, env: process.env });
   const report = formatPreflight(pf);
@@ -165,6 +168,7 @@ async function main(): Promise<void> {
     ...process.env,
     CC_CODE_ROOT: CODE_ROOT,
     CC_DATA_ROOT: dataRoot,
+    CC_GUARD_DIR: guardRoot,
     CC_PUBLIC_PORT: String(PORT),
     CC_TOKEN: token,
     CC_SESSION_SECRET: sessionSecret,
@@ -231,7 +235,7 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`, location: '/__recovery' }).end();
         return true;
       }
-      res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(renderRecovery(sessionsDir, bg.status));
+      res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(renderRecovery(sessionsDir, guardRoot, bg.status));
       return true;
     }
     if (url.pathname === '/__recovery/revert' && req.method === 'POST') {
@@ -244,7 +248,7 @@ async function main(): Promise<void> {
         res.writeHead(404, { 'content-type': 'text/plain' }).end('unknown session or turn');
         return true;
       }
-      const sessionDir = path.join(sessionsDir, sessionId);
+      const sessionDir = guardSessionDir(guardRoot, sessionId);
       if (abs) {
         const known = listChanges(sessionDir, meta).find((t) => t.n === turn)?.files.some((f) => f.abs === abs);
         if (!known) {

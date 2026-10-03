@@ -43,11 +43,12 @@ describe('invocation builder', () => {
     expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).not.toContain('WebFetch');
   });
   it('builds the env with the Keychain token, an empty API key and the policy pointers, and never puts the token in argv', () => {
-    const env = buildEnv({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'leak' }, { token: 'tok-secret', dataRoot: '/data/root', policyFile: base.policyFile, sessionDir: base.sessionDir });
+    const env = buildEnv({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'leak' }, { token: 'tok-secret', dataRoot: '/data/root', policyFile: base.policyFile, policySha256: 'ab'.repeat(32), sessionDir: base.sessionDir });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-secret');
     expect(env.ANTHROPIC_API_KEY).toBe('');
     expect(env.CAREER_OPS_ROOT).toBe('/data/root');
     expect(env.CC_POLICY_FILE).toBe(base.policyFile);
+    expect(env.CC_POLICY_SHA256).toBe('ab'.repeat(32));
     expect(buildArgv({ ...base, policy: getModePolicy('oferta')! }).join(' ')).not.toContain('tok-secret');
     expect(redact('stderr says tok-secret twice tok-secret', 'tok-secret')).toBe('stderr says [redacted] twice [redacted]');
   });
@@ -64,8 +65,8 @@ describe('invocation builder', () => {
   });
 });
 
-function hookRun(sessionDir: string, policyFile: string, payload: Record<string, unknown>) {
-  const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, CC_POLICY_FILE: policyFile, CC_SESSION_DIR: sessionDir } });
+function hookRun(sessionDir: string, policy: { file: string; sha256: string }, payload: Record<string, unknown>) {
+  const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir } });
   return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
 
@@ -78,8 +79,8 @@ describe('guard hook', () => {
   fs.writeFileSync(path.join(realRoot, 'reports', '001-existing.md'), 'old\n');
   const sessionDir = path.join(realRoot, 'session');
   fs.mkdirSync(sessionDir);
-  const policyFile = writePolicyFile(sessionDir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, extraAllow: ['data/**'] });
-  const pre = (tool: string, input: Record<string, unknown>) => hookRun(sessionDir, policyFile, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: realRoot, session_id: 's' });
+  const policy = writePolicyFile(sessionDir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, extraAllow: ['data/**'] });
+  const pre = (tool: string, input: Record<string, unknown>) => hookRun(sessionDir, policy, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: realRoot, session_id: 's' });
 
   it('allows an in-scope write and snapshots the original (absent marker for new files)', () => {
     expect(pre('Write', { file_path: path.join(realRoot, 'reports', '002-new.md'), content: 'x' }).status).toBe(0);
@@ -162,7 +163,7 @@ describe('guard hook', () => {
     expect(settings.hooks.PostToolUse[0]!.hooks[0]!.command).toBe(command);
     // Claude Code runs command hooks through a shell; only exit 2 blocks the tool call.
     const sh = (cmd: string, input: string, env: NodeJS.ProcessEnv) => spawnSync('/bin/sh', ['-c', cmd], { input, encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
-    const env = { CC_POLICY_FILE: policyFile, CC_SESSION_DIR: sessionDir };
+    const env = { CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
     const write = (file: string) => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: realRoot });
     expect(sh(command, write(path.join(realRoot, 'reports', '003-spaced.md')), env).status).toBe(0);
     expect(sh(command, write(path.join(realRoot, 'data', 'blacklist.md')), env).status).toBe(2);
@@ -174,8 +175,60 @@ describe('guard hook', () => {
     expect(sh(command, write(path.join(realRoot, 'reports', '003-spaced.md')), env).status).toBe(2);
   });
 
+  it('Dev Chat cannot write session state, the guard, the supervisor, dependency manifests, build and test configs, tests or scripts', () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-devchat-')));
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-devchat-guard-')));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' });
+    const protectedPaths = [
+      'data/control-center/sessions/s1/policy.json',
+      'data/control-center/sessions/s1/settings.json',
+      'data/control-center/sessions/s1/files.ndjson',
+      'data/control-center/sessions/s1/turns/1/before/x',
+      'data/control-center/sessions/s1/meta.json',
+      'data/control-center/settings.json',
+      'custom/control-center/server/claude/guard-hook.mjs',
+      'custom/control-center/server/claude/guard-policy.mjs',
+      'custom/control-center/server/claude/modes.ts',
+      'custom/control-center/supervisor/recovery.ts',
+      'custom/control-center/package.json',
+      'custom/control-center/package-lock.json',
+      'custom/control-center/vite.config.ts',
+      'custom/control-center/vitest.config.ts',
+      'custom/control-center/playwright.config.ts',
+      'custom/control-center/eslint.config.js',
+      'custom/control-center/tsconfig.json',
+      'custom/control-center/tsconfig.server.json',
+      'custom/control-center/tsconfig.web.json',
+      'custom/control-center/tests/unit/x.test.ts',
+      'custom/control-center/tests/fakes/claude.mjs',
+      'custom/control-center/scripts/no-em-dash.mjs',
+      'custom/control-center/node_modules/vitest/index.js',
+    ];
+    for (const rel of protectedPaths) expect(write(rel).status, rel).toBe(2);
+    for (const rel of ['custom/control-center/server/routes/read.ts', 'custom/control-center/web/features/today/TodayPage.tsx', 'custom/immigration/run-daily.sh', 'data/notes/devchat.md', 'modes/_custom.md']) expect(write(rel).status, rel).toBe(0);
+  });
+
+  it('a tampered or unverifiable policy fails closed for every tool call', () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-tamper-')));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
+    expect(pf.sha256).toMatch(/^[0-9a-f]{64}$/);
+    const inScope = { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '004-tamper.md'), content: 'x' }, cwd: realRoot };
+    expect(hookRun(dir, pf, inScope).status).toBe(0);
+    // The review's trigger: rewrite the policy to allow everything and deny nothing.
+    const widened = { ...JSON.parse(fs.readFileSync(pf.file, 'utf8')), allow: ['**'], deny: [] };
+    fs.writeFileSync(pf.file, JSON.stringify(widened));
+    const tampered = hookRun(dir, pf, { ...inScope, tool_input: { file_path: path.join(realRoot, 'data', 'blacklist.md'), content: 'x' } });
+    expect(tampered.status).toBe(2);
+    expect(tampered.stderr).toMatch(/policy/i);
+    expect(hookRun(dir, pf, inScope).status).toBe(2);
+    expect(hookRun(dir, pf, { ...inScope, tool_name: 'Bash', tool_input: { command: 'node merge-tracker.mjs' } }).status).toBe(2);
+    // No hash in the environment: nothing to verify against, so nothing runs.
+    expect(hookRun(dir, { file: pf.file, sha256: '' }, inScope).status).toBe(2);
+  });
+
   it('records changed paths after a write', () => {
-    const r = hookRun(sessionDir, policyFile, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '002-new.md') }, tool_response: {}, cwd: realRoot });
+    const r = hookRun(sessionDir, policy, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '002-new.md') }, tool_response: {}, cwd: realRoot });
     expect(r.status).toBe(0);
     const lines = fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { path: string });
     expect(lines.at(-1)!.path).toBe('reports/002-new.md');

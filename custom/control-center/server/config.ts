@@ -9,6 +9,8 @@ export interface ServerConfig {
   codeRoot: string;
   /** User data root (CAREER_OPS_ROOT contract). */
   dataRoot: string;
+  /** Session policies, hook settings and revert bookkeeping; outside both roots (CC_GUARD_DIR, set by the supervisor). */
+  guardRoot: string;
   /** Port the supervisor listens on; Host headers must name it. */
   publicPort: number;
   /** One-time URL token printed by the supervisor. */
@@ -43,6 +45,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
   return {
     codeRoot: env.CC_CODE_ROOT ?? DEFAULT_CODE_ROOT,
     dataRoot: requireEnv('CC_DATA_ROOT'),
+    guardRoot: requireEnv('CC_GUARD_DIR'),
     publicPort,
     token: requireEnv('CC_TOKEN'),
     sessionSecret: requireEnv('CC_SESSION_SECRET'),

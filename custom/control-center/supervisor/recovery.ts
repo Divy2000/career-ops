@@ -36,6 +36,15 @@ interface MetaLike {
   turns: Array<{ n: number }>;
 }
 
+/**
+ * Per-session bookkeeping (turn policies, hook settings, files.ndjson, per-turn
+ * snapshots) under the guard root, which is outside every session's write scope.
+ */
+export function guardSessionDir(guardRoot: string, sessionId: string): string {
+  if (!/^[\w-]+$/.test(sessionId)) throw new Error('bad session id');
+  return path.join(guardRoot, 'sessions', sessionId);
+}
+
 export function snapshotKey(turnDir: string, abs: string): string {
   return path.join(turnDir, 'before', encodeURIComponent(abs));
 }

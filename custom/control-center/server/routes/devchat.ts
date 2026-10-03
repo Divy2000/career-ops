@@ -16,7 +16,7 @@ export async function devchatRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.get<{ Params: { id: string } }>('/api/dev/changes/:id', async (req, reply) => {
     const meta = manager.read(req.params.id);
     if (!meta) return reply.code(404).send({ error: 'no such session' });
-    return { sessionId: meta.id, turns: listChanges(manager.store.dirOf(meta.id), meta) };
+    return { sessionId: meta.id, turns: listChanges(manager.store.guardDirOf(meta.id), meta) };
   });
 
   app.post<{ Body: unknown }>('/api/dev/revert', async (req, reply) => {
@@ -25,7 +25,7 @@ export async function devchatRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const meta = manager.read(parsed.data.sessionId);
     if (!meta) return reply.code(404).send({ error: 'no such session' });
     if (manager.isActive(meta.id)) return reply.code(409).send({ error: 'the session is still running; cancel it first' });
-    const sessionDir = manager.store.dirOf(meta.id);
+    const sessionDir = manager.store.guardDirOf(meta.id);
     if (parsed.data.abs) {
       const known = listChanges(sessionDir, meta).find((t) => t.n === parsed.data.turn)?.files.some((f) => f.abs === parsed.data.abs);
       if (!known) return reply.code(404).send({ error: 'that file was not changed in that turn' });

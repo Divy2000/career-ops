@@ -26,7 +26,7 @@ custom/control-center/bin/cc
 
 Preflight fails with an actionable message when Node is below 22.6, the `claude` binary is missing, or the Keychain item `career-ops-claude-token` is absent (it prints the `claude setup-token` / `security add-generic-password` steps from `custom/immigration/run-daily.sh`). It warns when `ANTHROPIC_API_KEY` is set, because sessions force it empty.
 
-Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-ops data root from `path-resolver.mjs`), `CC_CLAUDE_BIN`, `CC_NO_OPEN=1`, `CC_LAUNCH_AGENTS_DIR` (default `~/Library/LaunchAgents`), `CC_CLAUDE_PROJECTS_DIR` (default `~/.claude/projects`, read-only usage meter).
+Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-ops data root from `path-resolver.mjs`), `CC_GUARD_DIR` (session policies, hook settings and Dev Chat revert bookkeeping; default `~/Library/Application Support/career-ops-control-center`, and the supervisor refuses to start when it is inside the code or data root), `CC_CLAUDE_BIN`, `CC_NO_OPEN=1`, `CC_LAUNCH_AGENTS_DIR` (default `~/Library/LaunchAgents`), `CC_CLAUDE_PROJECTS_DIR` (default `~/.claude/projects`, read-only usage meter).
 
 ## 3. Pages tour
 
@@ -62,13 +62,15 @@ Sessions run `claude -p` headless with `--permission-mode dontAsk`, path-scoped 
 | outreach and interview | `interview-prep/`, follow-up drafts | followup, interview-prep, interview/plan, interview/practice |
 | profile | user markdown files | interview (onboarding), master-profile, add, expand, intake |
 | immigration | `data/immigration/**` | immigration-policy, sponsorship-check |
-| devchat | user layer and `custom/**` (never `supervisor/**`) | Dev Chat |
+| devchat | user layer and `custom/**` (see section 5 for what stays protected) | Dev Chat |
 
-Every class is denied `data/blacklist.md`, direct edits to `data/applications.md`, git, network tools and shell operators in Bash. `server/claude/manager.ts` runs each turn through the detached runner (Claude slot cap from Settings > AI engine, default 2), reads the OAuth token from the Keychain at spawn (never written to disk; the wrapper redacts it from stored logs), normalizes stream-json into `events.ndjson` and applies the honesty gate. The model default from app settings is used when a session does not pick one.
+Every class is denied `data/blacklist.md`, direct edits to `data/applications.md`, the app's own state under `data/control-center/`, git, network tools and shell operators in Bash. Each turn's policy is written outside both roots (`CC_GUARD_DIR`) and the hook verifies its sha256 (passed in the session env) on every call, so a changed policy refuses every tool call. The hook command is shell-quoted and ends in `|| exit 2`, so a hook that cannot start blocks instead of failing open. `server/claude/manager.ts` runs each turn through the detached runner (Claude slot cap from Settings > AI engine, default 2), reads the OAuth token from the Keychain at spawn (never written to disk; the wrapper redacts it from stored logs), normalizes stream-json into `events.ndjson` and applies the honesty gate. The model default from app settings is used when a session does not pick one.
 
 ## 5. Dev Chat scope, diffs and recovery
 
-Dev Chat (`/dev`) edits the user layer and `custom/**` (never `supervisor/**`, `node_modules`, `applications.md`, or the blacklist unless the checkbox is ticked for that turn). The Changes panel shows per-turn unified diffs with Revert file / Revert turn (dialog confirm). Server edits trigger a blue/green restart; a failed restart keeps the old server and shows a banner. `/__recovery` (served by the supervisor, token or cookie gated) offers the same reverts even when the server child is broken.
+Dev Chat (`/dev`) edits the user layer and `custom/**`. It is denied `data/control-center/**` (session and app state), `custom/control-center/server/claude/**` (the guard and the policy code), `supervisor/**`, `package.json`, `package-lock.json`, the vite, vitest, playwright, eslint and tsconfig configs, `tests/**`, `scripts/**`, every `node_modules`, `applications.md`, and the blacklist unless the checkbox is ticked for that turn.
+
+**Dev Chat is a trusted code-editing agent, not a sandboxed one.** Its guard prevents accidents (a wrong path, a stray write to the tracker or the blacklist, a command outside its allowlist); it does not contain a hostile session. Dev Chat may edit `server/**`, `web/**`, `shared/**` and `custom/immigration/**`, and the commands it may run (`npm run test|build|lint|typecheck`, `npx vitest run`, `node --test custom/...`) load and execute that code with your user's full permissions, as does the blue/green restart after a server edit. Review its diffs before you keep them, and only give it prompts and pages you trust. The Changes panel shows per-turn unified diffs with Revert file / Revert turn (dialog confirm). Server edits trigger a blue/green restart; a failed restart keeps the old server and shows a banner. `/__recovery` (served by the supervisor, token or cookie gated) offers the same reverts even when the server child is broken.
 
 ## 6. Daily job and schedule
 

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { changesByTurn, diffFile, listChanges, revertFile, revertTurn, snapshotKey } from '../../supervisor/recovery.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
+import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 
 function fakeSession() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-'));
@@ -59,6 +60,37 @@ describe('Dev Chat change sets', () => {
     expect(fs.existsSync(created)).toBe(false);
     expect(revertFile(path.join(sessionDir, 'turns', '1'), '/nowhere/x')).toBe('no-snapshot');
     expect(revertTurn(sessionDir, meta, 9)).toEqual([]);
+  });
+});
+
+describe('guard root (policy and revert bookkeeping outside every session write scope)', () => {
+  it('defaults to a per-user state directory and honors CC_GUARD_DIR', () => {
+    expect(defaultGuardRoot('/Users/x', 'darwin', {})).toBe('/Users/x/Library/Application Support/career-ops-control-center');
+    expect(defaultGuardRoot('/home/x', 'linux', {})).toBe('/home/x/.local/state/career-ops-control-center');
+    expect(defaultGuardRoot('/home/x', 'linux', { XDG_STATE_HOME: '/state' })).toBe('/state/career-ops-control-center');
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-guard-root-')));
+    const codeRoot = path.join(base, 'code');
+    const dataRoot = path.join(base, 'data');
+    fs.mkdirSync(codeRoot);
+    fs.mkdirSync(dataRoot);
+    const chosen = resolveGuardRoot({ env: { CC_GUARD_DIR: path.join(base, 'state', 'guard') }, codeRoot, dataRoot, home: base, platform: 'darwin' });
+    expect(chosen).toBe(path.join(base, 'state', 'guard'));
+    expect(fs.statSync(chosen).isDirectory()).toBe(true);
+    expect(resolveGuardRoot({ env: {}, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'Library', 'Application Support', 'career-ops-control-center'));
+  });
+
+  it('refuses a guard root inside the code or data root (any case) and creates nothing there', () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-guard-root-')));
+    const codeRoot = path.join(base, 'code');
+    const dataRoot = path.join(base, 'data');
+    fs.mkdirSync(codeRoot);
+    fs.mkdirSync(dataRoot);
+    const resolve = (dir: string) => resolveGuardRoot({ env: { CC_GUARD_DIR: dir }, codeRoot, dataRoot, home: base, platform: 'darwin' });
+    expect(() => resolve(path.join(dataRoot, 'data', 'control-center', 'guard'))).toThrow(/inside the data root/);
+    expect(fs.existsSync(path.join(dataRoot, 'data'))).toBe(false);
+    expect(() => resolve(path.join(codeRoot, 'custom', 'guard'))).toThrow(/inside the code root/);
+    expect(() => resolve(path.join(base, 'DATA', 'guard'))).toThrow(/inside the data root/);
+    expect(() => resolve(dataRoot)).toThrow(/inside the data root/);
   });
 });
 

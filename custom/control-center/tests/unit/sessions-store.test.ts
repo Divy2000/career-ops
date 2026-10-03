@@ -5,9 +5,10 @@ import path from 'node:path';
 import { SessionStore, sessionsDir } from '../../server/claude/sessions.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sessions-'));
+const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sessions-guard-'));
 
 describe('session store', () => {
-  const store = new SessionStore(root);
+  const store = new SessionStore(root, guardRoot);
   it('creates a session with meta.json under data/control-center/sessions and lists newest first', () => {
     const a = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://x.example/1' }, model: null });
     expect(fs.existsSync(path.join(sessionsDir(root), a.id, 'meta.json'))).toBe(true);

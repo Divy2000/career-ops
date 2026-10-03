@@ -11,6 +11,8 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 export const E2E_PORT = 4399;
 export const E2E_TOKEN = 'e2e-fixed-token-only-honored-under-NODE_ENV-test';
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-root-'));
+// Session policies and revert bookkeeping: outside the data root, never the real ~/Library.
+const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-guard-'));
 fs.cpSync(path.join(here, 'tests/fixtures/root'), dataRoot, { recursive: true });
 // A synthetic Claude Code usage log so the token meter has something to read (never the real ~/.claude).
 fs.mkdirSync(path.join(dataRoot, '.claude-projects', 'synthetic'), { recursive: true });
@@ -42,6 +44,7 @@ export default defineConfig({
       CC_PORT: String(E2E_PORT),
       CC_TOKEN: E2E_TOKEN,
       CC_DATA_ROOT: dataRoot,
+      CC_GUARD_DIR: guardRoot,
       CC_CLAUDE_BIN: path.join(here, 'tests/fakes/claude.mjs'),
       // Sessions in e2e use the fake CLI's per-mode scenarios and never touch the Keychain.
       CC_FAKE_SCENARIO_DIR: path.join(here, 'tests/fixtures/scenarios'),

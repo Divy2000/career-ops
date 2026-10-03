@@ -82,7 +82,7 @@ export class SessionManager {
     private bus: EventBus,
     private deps: ManagerDeps,
   ) {
-    this.store = new SessionStore(cfg.dataRoot);
+    this.store = new SessionStore(cfg.dataRoot, cfg.guardRoot);
     this.playwrightAvailable = deps.playwrightAvailable ?? CONTRACT.playwrightMcp.probed === true;
   }
 
@@ -209,7 +209,7 @@ export class SessionManager {
   }
 
   private turnStatePath(id: string, n: number): string {
-    return path.join(this.store.dirOf(id), 'turns', String(n), 'turn.json');
+    return path.join(this.store.guardDirOf(id), 'turns', String(n), 'turn.json');
   }
 
   private readTurnState(id: string, n: number): TurnState {
@@ -222,17 +222,20 @@ export class SessionManager {
 
   private filesLineCount(id: string): number {
     try {
-      return fs.readFileSync(path.join(this.store.dirOf(id), 'files.ndjson'), 'utf8').split('\n').filter(Boolean).length;
+      return fs.readFileSync(path.join(this.store.guardDirOf(id), 'files.ndjson'), 'utf8').split('\n').filter(Boolean).length;
     } catch {
       return 0;
     }
   }
 
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean }): Promise<SessionMeta> {
-    const sessionDir = this.store.dirOf(meta.id);
+    // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
+    const sessionDir = this.store.guardDirOf(meta.id);
+    const n = meta.turns.length + 1;
+    const turnDir = path.join(sessionDir, 'turns', String(n));
     const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
     const deny = opts.blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
-    const policyFile = writePolicyFile(sessionDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, policy, extraAllow: opts.blacklistAllowed ? ['data/blacklist.md'] : [], deny });
+    const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: opts.blacklistAllowed ? ['data/blacklist.md'] : [], deny });
     const settingsFile = writeSettingsFile(sessionDir);
     const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed: opts.blacklistAllowed });
     let token: string;
@@ -245,18 +248,16 @@ export class SessionManager {
       this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
       return this.store.read(meta.id)!;
     }
-    const n = meta.turns.length + 1;
-    const env = buildEnv({}, { token, dataRoot: this.cfg.dataRoot, policyFile, sessionDir });
+    const env = buildEnv({}, { token, dataRoot: this.cfg.dataRoot, policyFile: policyFile.file, policySha256: policyFile.sha256, sessionDir });
     env.CC_MODE = meta.mode;
-    env.CC_TURN_DIR = path.join(sessionDir, 'turns', String(n));
+    env.CC_TURN_DIR = turnDir;
     env.NO_COLOR = '1';
-    fs.mkdirSync(env.CC_TURN_DIR, { recursive: true });
     const argv = buildArgv({
       claudeBin: this.cfg.claudeBin,
       codeRoot: this.cfg.codeRoot,
       dataRoot: this.cfg.dataRoot,
       sessionDir,
-      policyFile,
+      policyFile: policyFile.file,
       settingsFile,
       policy,
       userMessage: prompt,
@@ -366,7 +367,7 @@ export class SessionManager {
   private changedFiles(id: string, fromLine: number): string[] {
     let text: string;
     try {
-      text = fs.readFileSync(path.join(this.store.dirOf(id), 'files.ndjson'), 'utf8');
+      text = fs.readFileSync(path.join(this.store.guardDirOf(id), 'files.ndjson'), 'utf8');
     } catch {
       return [];
     }

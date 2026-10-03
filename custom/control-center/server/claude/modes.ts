@@ -177,9 +177,31 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
 };
 
 /** Denied for every non Dev Chat session, regardless of class (enforced by the hook). */
-export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md'];
-/** Dev Chat keeps the tracker and blacklist rules and additionally protects recovery and dependencies. */
-export const DEVCHAT_DENIED_WRITES = [...ALWAYS_DENIED_WRITES, 'custom/control-center/supervisor/**', '**/node_modules/**', 'writing-samples/README.md'];
+export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
+/**
+ * Dev Chat keeps the tracker and blacklist rules and additionally protects the
+ * app's own state, the guard and its policy code, recovery, dependencies, and
+ * everything its allowed npm/npx commands execute besides the app sources
+ * (manifests, build and test configs, tests, scripts). Dev Chat can still edit
+ * server/**, which those commands load: it is a trusted code-editing agent and
+ * this list prevents accidents, it is not a sandbox (README section 5).
+ */
+export const DEVCHAT_DENIED_WRITES = [
+  ...ALWAYS_DENIED_WRITES,
+  'custom/control-center/server/claude/**',
+  'custom/control-center/supervisor/**',
+  'custom/control-center/package.json',
+  'custom/control-center/package-lock.json',
+  'custom/control-center/vite.config.*',
+  'custom/control-center/vitest.config.*',
+  'custom/control-center/playwright.config.*',
+  'custom/control-center/eslint.config.*',
+  'custom/control-center/tsconfig*.json',
+  'custom/control-center/tests/**',
+  'custom/control-center/scripts/**',
+  '**/node_modules/**',
+  'writing-samples/README.md',
+];
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {

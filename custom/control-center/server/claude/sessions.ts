@@ -1,11 +1,14 @@
 // Session storage (spec 4.3): {DATA_ROOT}/data/control-center/sessions/<id>/
-// {meta.json, events.ndjson, turns/<n>/, before/}. Sessions are never pruned.
+// {meta.json, events.ndjson}; the turn policies, hook settings and revert
+// bookkeeping live under {GUARD_ROOT}/sessions/<id>/ (outside every session's
+// write scope). Sessions are never pruned.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { PolicyClass } from './modes.js';
 import { monotonicIso } from '../runner/store.js';
 import type { SessionEvent } from './stream-parse.js';
+import { guardSessionDir } from '../../supervisor/recovery.js';
 
 export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'error' | 'cancelled';
 export type TargetType = 'app' | 'url' | 'company' | 'text' | 'none';
@@ -58,13 +61,21 @@ function newId(): string {
 }
 
 export class SessionStore {
-  constructor(private dataRoot: string) {
+  constructor(
+    private dataRoot: string,
+    private guardRoot: string,
+  ) {
     fs.mkdirSync(sessionsDir(dataRoot), { recursive: true });
   }
 
   dirOf(id: string): string {
     if (!/^[\w-]+$/.test(id)) throw new Error('bad session id');
     return path.join(sessionsDir(this.dataRoot), id);
+  }
+
+  /** Turn policies, hook settings and revert bookkeeping for the session, outside both roots. */
+  guardDirOf(id: string): string {
+    return guardSessionDir(this.guardRoot, id);
   }
 
   create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null }): SessionMeta {
@@ -87,7 +98,7 @@ export class SessionStore {
       reportNum: input.reportNum ?? null,
       lastReason: null,
     };
-    fs.mkdirSync(path.join(this.dirOf(meta.id), 'before'), { recursive: true });
+    fs.mkdirSync(this.dirOf(meta.id), { recursive: true });
     this.write(meta);
     return meta;
   }
@@ -134,7 +145,6 @@ export class SessionStore {
     meta.turns.push({ n, runId: input.runId, userText: input.userText, startedAt: new Date().toISOString(), endedAt: null, costUsd: 0, tokens: 0, permissionDenials: 0 });
     meta.status = 'running';
     meta.error = null;
-    fs.mkdirSync(path.join(this.dirOf(id), 'turns', String(n)), { recursive: true });
     this.write(meta);
     return meta;
   }
@@ -155,11 +165,12 @@ export class SessionStore {
     return meta;
   }
 
-  /** Removes the session directory (sessions are kept until the user deletes them). */
+  /** Removes the session directory and its bookkeeping (sessions are kept until the user deletes them). */
   delete(id: string): boolean {
     const dir = this.dirOf(id);
     if (!fs.existsSync(dir)) return false;
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(this.guardDirOf(id), { recursive: true, force: true });
     return true;
   }
 

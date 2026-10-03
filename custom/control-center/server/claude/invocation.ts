@@ -2,6 +2,7 @@
 // values, policy and settings files per session, env with the Keychain token.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ALWAYS_DENIED_WRITES, type ModePolicy } from './modes.js';
 
@@ -81,8 +82,9 @@ export function buildArgv(input: InvocationInput): string[] {
   ];
 }
 
-export function buildEnv(base: NodeJS.ProcessEnv, opts: { token: string; dataRoot: string; policyFile: string; sessionDir: string }): NodeJS.ProcessEnv {
-  return { ...base, CLAUDE_CODE_OAUTH_TOKEN: opts.token, ANTHROPIC_API_KEY: '', CAREER_OPS_ROOT: opts.dataRoot, CC_POLICY_FILE: opts.policyFile, CC_SESSION_DIR: opts.sessionDir };
+/** The hook re-hashes the policy file on every call and refuses everything when it no longer matches CC_POLICY_SHA256. */
+export function buildEnv(base: NodeJS.ProcessEnv, opts: { token: string; dataRoot: string; policyFile: string; policySha256: string; sessionDir: string }): NodeJS.ProcessEnv {
+  return { ...base, CLAUDE_CODE_OAUTH_TOKEN: opts.token, ANTHROPIC_API_KEY: '', CAREER_OPS_ROOT: opts.dataRoot, CC_POLICY_FILE: opts.policyFile, CC_POLICY_SHA256: opts.policySha256, CC_SESSION_DIR: opts.sessionDir };
 }
 
 /** Removes the token from anything we store (stderr, logs). */
@@ -134,21 +136,27 @@ export interface PolicyFile {
   playwright: boolean;
 }
 
-/** Policy JSON the guard hook reads; `extraAllow` carries per-turn unlocks (Dev Chat blacklist checkbox). */
-export function writePolicyFile(sessionDir: string, opts: { codeRoot: string; dataRoot?: string; policy: ModePolicy; extraAllow?: string[]; deny?: string[] }): string {
+/**
+ * Policy JSON the guard hook reads, written into `dir` (the turn's directory
+ * under the guard root, outside every write scope); `extraAllow` carries
+ * per-turn unlocks (Dev Chat blacklist checkbox). The sha256 of the exact bytes
+ * goes to the hook through CC_POLICY_SHA256.
+ */
+export function writePolicyFile(dir: string, opts: { codeRoot: string; dataRoot?: string; sessionDir?: string; policy: ModePolicy; extraAllow?: string[]; deny?: string[] }): { file: string; sha256: string } {
   const policy: PolicyFile = {
     codeRoot: opts.codeRoot,
     dataRoot: opts.dataRoot ?? opts.codeRoot,
-    sessionDir,
+    sessionDir: opts.sessionDir ?? dir,
     allow: [...opts.policy.writeGlobs, ...(opts.extraAllow ?? [])],
     deny: opts.deny ?? [...ALWAYS_DENIED_WRITES],
     bash: opts.policy.bashPrefixes,
     playwright: opts.policy.mcp === 'playwright',
   };
-  fs.mkdirSync(sessionDir, { recursive: true });
-  const file = path.join(sessionDir, 'policy.json');
-  fs.writeFileSync(file, JSON.stringify(policy, null, 2));
-  return file;
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'policy.json');
+  const bytes = JSON.stringify(policy, null, 2);
+  fs.writeFileSync(file, bytes);
+  return { file, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
 /** POSIX single-quoting: the hook command runs through a shell, and checkouts can live under paths with spaces. */

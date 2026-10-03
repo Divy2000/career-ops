@@ -7,6 +7,7 @@
 // turn the guard into a silent no-op. Importable helpers live in guard-policy.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { checkBash, locate, matches, snapshotKey } from './guard-policy.mjs';
 
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
@@ -29,7 +30,11 @@ function main() {
   const payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const policyFile = process.env.CC_POLICY_FILE;
   if (!policyFile) deny('guard hook: CC_POLICY_FILE is not set');
-  const policy = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
+  const expected = process.env.CC_POLICY_SHA256;
+  if (!expected) deny('guard hook: CC_POLICY_SHA256 is not set, so the session policy cannot be verified');
+  const bytes = fs.readFileSync(policyFile);
+  if (crypto.createHash('sha256').update(bytes).digest('hex') !== expected) deny('guard hook: the session policy file changed after the turn started; every tool call is refused');
+  const policy = JSON.parse(bytes.toString('utf8'));
   const sessionDir = process.env.CC_SESSION_DIR || policy.sessionDir;
   // Snapshots are per turn (CC_TURN_DIR) so a turn can be reverted on its own; files.ndjson stays per session.
   const snapDir = process.env.CC_TURN_DIR || sessionDir;

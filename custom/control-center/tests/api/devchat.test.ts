@@ -81,12 +81,32 @@ describe('Dev Chat', () => {
     const denied = first.events.filter((e: { event: { type: string } }) => e.event.type === 'permission.denied');
     expect(denied).toHaveLength(2);
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'data', 'blacklist.md'), 'utf8')).toContain('Added by Dev Chat');
-    const policy = JSON.parse(fs.readFileSync(path.join(t.sessions.store.dirOf(id), 'policy.json'), 'utf8'));
-    expect(policy.allow).toContain('data/blacklist.md');
-    expect(policy.deny).toContain('custom/control-center/supervisor/**');
+    const turnPolicy = (n: number) => JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', id, 'turns', String(n), 'policy.json'), 'utf8'));
+    expect(turnPolicy(1).allow).toContain('data/blacklist.md');
+    expect(turnPolicy(1).deny).toContain('custom/control-center/supervisor/**');
+    expect(turnPolicy(1).deny).not.toContain('data/blacklist.md');
     await post(`/api/sessions/${id}/turns`, { prompt: 'next turn without the checkbox' });
     await settle(id);
-    expect(JSON.parse(fs.readFileSync(path.join(t.sessions.store.dirOf(id), 'policy.json'), 'utf8')).deny).toContain('data/blacklist.md');
+    expect(turnPolicy(2).deny).toContain('data/blacklist.md');
+    expect(turnPolicy(2).allow).not.toContain('data/blacklist.md');
+    expect(turnPolicy(1).allow).toContain('data/blacklist.md');
+  });
+
+  it('keeps each turn policy, the settings and the revert bookkeeping outside both roots', async () => {
+    const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'Add a rule to the house rules' })).json();
+    const { meta } = await settle(id);
+    expect(meta.status).toBe('done');
+    const guardDir = path.join(t.cfg.guardRoot, 'sessions', id);
+    for (const rel of ['settings.json', 'files.ndjson', 'turns/1/policy.json', 'turns/1/turn.json']) expect(fs.existsSync(path.join(guardDir, rel)), rel).toBe(true);
+    expect(fs.readdirSync(path.join(guardDir, 'turns', '1', 'before')).length).toBeGreaterThan(0);
+    const dataDir = t.sessions.store.dirOf(id);
+    for (const name of ['policy.json', 'settings.json', 'files.ndjson', 'before', 'turns']) expect(fs.existsSync(path.join(dataDir, name)), name).toBe(false);
+    for (const root of [t.cfg.codeRoot, t.cfg.dataRoot]) {
+      const rel = path.relative(fs.realpathSync.native(root), fs.realpathSync.native(guardDir));
+      expect(rel.startsWith('..') || path.isAbsolute(rel), root).toBe(true);
+    }
+    const run = (await get(`/api/runs/${meta.turns[0].runId}`)).json();
+    expect(run.meta.cmd.args[run.meta.cmd.args.indexOf('--settings') + 1]).toBe(path.join(guardDir, 'settings.json'));
   });
 
   it('serves the read-only git diff of custom/', async () => {
