@@ -94,7 +94,9 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
       reportState,
     });
   }
-  if (rows.length === 0) return { kind: 'malformed', path: trackerPath, error: 'table has a header but no parseable rows' };
+  // A header and separator with no rows is a new user's valid empty tracker; only unparseable data lines are malformed.
+  const dataRowLines = dataLines.filter((l) => l.split('|')[1]?.trim() !== '#');
+  if (rows.length === 0 && dataRowLines.length > 0) return { kind: 'malformed', path: trackerPath, error: 'table has a header but no parseable rows' };
   return { kind: 'ok', path: trackerPath, rows, etag: read.etag };
 }
 

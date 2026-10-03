@@ -124,6 +124,16 @@ describe('GET /api/followups on an empty tracker', () => {
     await t2.close();
   });
 
+  it('reports a header-only tracker and its dashboard as ok and empty', async () => {
+    const t2 = await makeTestApp();
+    fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), HEADER_ONLY);
+    const tracker = (await t2.app.inject({ method: 'GET', url: '/api/tracker', headers: t2.authed })).json();
+    expect(tracker).toMatchObject({ kind: 'ok', rows: [] });
+    const dash = (await t2.app.inject({ method: 'GET', url: '/api/insights/dashboard', headers: t2.authed })).json();
+    expect(dash).toMatchObject({ kind: 'ok', dashboard: { totals: { applications: 0 } } });
+    await t2.close();
+  });
+
   const failing: Array<[string, { code: number; stdout: string; stderr: string }]> = [
     ['non-JSON output with exit 0', { code: 0, stdout: 'not json at all', stderr: '' }],
     ['an unrelated JSON error with exit 1', { code: 1, stdout: JSON.stringify({ error: 'templates/states.yml is unreadable' }), stderr: '' }],
