@@ -460,6 +460,23 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(writers('build-cv-html.mjs'), 'node build-cv-html.mjs --preview output/cv.json');
   });
 
+  it('generate-latex: the files it compiles next to its input must be writable too, with or without an output path', () => {
+    const latex = { ...pdf, bash: [['node', 'generate-latex.mjs']] };
+    // The review trigger: with no output it writes templates/cv-template.pdf, outside the documents scope.
+    no(latex, 'node generate-latex.mjs templates/cv-template.tex --compile-only');
+    // With an output it still compiles (and deletes) <base>.pdf, .aux and .log next to the input.
+    no(latex, 'node generate-latex.mjs templates/cv-template.tex output/cv.pdf --compile-only');
+    no(latex, 'node generate-latex.mjs cv.tex');
+    ok(latex, 'node generate-latex.mjs output/cv.tex');
+    ok(latex, 'node generate-latex.mjs output/cv.tex output/final/cv.pdf --compile-only');
+    const reason = checkBash('node generate-latex.mjs templates/cv-template.tex --compile-only', latex, root);
+    expect(reason).toMatch(/templates\/cv-template\.pdf/);
+    // A protected sibling (here a .log the deny list names) blocks the compile as well.
+    const data = { codeRoot: root, dataRoot: root, allow: ['data/**'], deny: ['data/x.log'], bash: [['node', 'generate-latex.mjs']] };
+    no(data, 'node generate-latex.mjs data/x.tex data/out.pdf');
+    ok(data, 'node generate-latex.mjs data/y.tex data/out.pdf');
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();

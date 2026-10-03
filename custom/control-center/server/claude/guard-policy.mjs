@@ -117,7 +117,8 @@ const WRITER_SCRIPTS = {
   },
   'generate-cover-letter.mjs': { switches: ['--help', '-h'], next: COVER_FLAGS, eq: COVER_FLAGS, positionals: [] },
   'build-cv-latex.mjs': { switches: ['--help', '--test'], eq: { '--template': 'value' }, positionals: ['input', 'output'], indexed: true },
-  'generate-latex.mjs': { switches: ['--compile-only', '--help', '-h'], positionals: ['input', 'output'] },
+  // Compiles in the input's directory: see latexCompileSiblings.
+  'generate-latex.mjs': { switches: ['--compile-only', '--help', '-h'], positionals: ['input', 'output'], compilesNextToInput: true },
   'build-cv-html.mjs': { switches: ['--help', '--test'], positionals: ['input', 'output', 'input'], indexed: true, modes: { '--preview': ['input', 'input'] } },
   'patch-latex-content.mjs': { switches: ['--help'], positionals: ['input', 'input', 'output'] },
   'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
@@ -236,6 +237,19 @@ function checkGit(policy, sub, args, label) {
   return null;
 }
 
+/**
+ * generate-latex.mjs compiles in the input's directory whether or not an output
+ * path is given: <base>.pdf (the default output, and pdflatex's intermediate),
+ * the aux and log files, and tectonic's <base>._tectonic.* copies are written
+ * there and then deleted. All of them must be inside the write scope.
+ */
+function latexCompileSiblings(input) {
+  const dir = path.dirname(input);
+  const base = path.basename(input, '.tex');
+  const exts = ['.pdf', '.aux', '.log', '.out', '.fls', '.fdb_latexmk', '.synctex.gz'];
+  return [...exts.map((e) => `${base}${e}`), `${base}._tectonic.tex`, ...exts.map((e) => `${base}._tectonic${e}`)].map((name) => path.join(dir, name));
+}
+
 function checkWriterScript(policy, script, spec, args, label) {
   const check = (role, value) => (role === 'output' ? writable(policy, value, label) : role === 'input' ? readable(policy, value, label) : null);
   let roles = spec.positionals;
@@ -245,6 +259,7 @@ function checkWriterScript(policy, script, spec, args, label) {
     rest = args.slice(1);
   }
   let positionals = 0;
+  const given = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (spec.indexed && i < roles.length && a.startsWith('-')) return `${label}: ${script} reads argument ${i + 1} as the ${roles[i]} path, so a flag cannot go there (${a}); give all ${roles.length} paths first`;
@@ -278,8 +293,15 @@ function checkWriterScript(policy, script, spec, args, label) {
     const role = roles[positionals];
     positionals += 1;
     if (!role) return `${label}: ${script} takes at most ${roles.length} path argument${roles.length === 1 ? '' : 's'} (${a})`;
+    given.push(a);
     const why = check(role, a);
     if (why) return why;
+  }
+  if (spec.compilesNextToInput && given[0] !== undefined) {
+    for (const sibling of latexCompileSiblings(given[0])) {
+      const why = writable(policy, sibling, label);
+      if (why) return `${why} (${script} compiles next to its input)`;
+    }
   }
   return null;
 }
