@@ -40,6 +40,8 @@ export interface ScheduleState {
   disabled: boolean;
   state: string | null;
   lastExit: number | null;
+  lastSignal: string | null;
+  runs: number | null;
   nextFire: string | null;
   error: string | null;
 }
@@ -92,11 +94,14 @@ export function computeNextFire(now: Date, hour: number, minute: number, weekday
   return candidate;
 }
 
-export function parseLaunchctlPrint(out: string): { state: string | null; lastExit: number | null } {
+export function parseLaunchctlPrint(out: string): { state: string | null; lastExit: number | null; lastSignal: string | null; runs: number | null } {
   // The state is the rest of the line: "not running" means loaded and idle, which is the normal state between calendar fires.
   const state = /^\s*state = (.+?)\s*$/m.exec(out)?.[1] ?? null;
   const exit = /last exit code = (-?\d+)/.exec(out);
-  return { state, lastExit: exit ? Number(exit[1]) : null };
+  // A job that launchd killed reports a signal and no exit code.
+  const lastSignal = /^\s*last terminating signal = (.+?)\s*$/m.exec(out)?.[1] ?? null;
+  const runs = /^\s*runs = (\d+)/m.exec(out)?.[1];
+  return { state, lastExit: exit ? Number(exit[1]) : null, lastSignal, runs: runs === undefined ? null : Number(runs) };
 }
 
 /** True when `launchctl print-disabled gui/<uid>` lists the label as disabled ("=> disabled", or "=> true" on older macOS). */
@@ -133,7 +138,7 @@ export class ScheduleService {
 
   async readOne(job: ScheduleJob): Promise<ScheduleState> {
     const plistPath = this.plistPath(job);
-    const base: ScheduleState = { label: job.label, kind: job.kind, title: job.title, script: job.script, logDir: job.logDir, plistPath, plist: 'missing', hour: null, minute: null, weekday: null, programArgumentsOk: false, loaded: false, disabled: false, state: null, lastExit: null, nextFire: null, error: null };
+    const base: ScheduleState = { label: job.label, kind: job.kind, title: job.title, script: job.script, logDir: job.logDir, plistPath, plist: 'missing', hour: null, minute: null, weekday: null, programArgumentsOk: false, loaded: false, disabled: false, state: null, lastExit: null, lastSignal: null, runs: null, nextFire: null, error: null };
     if (fs.existsSync(plistPath)) {
       const r = await this.deps.exec('plutil', ['-convert', 'json', '-o', '-', plistPath], { timeoutMs: 10_000 });
       if (r.code !== 0) {
@@ -161,6 +166,8 @@ export class ScheduleService {
       const parsed = parseLaunchctlPrint(print.stdout);
       base.state = parsed.state;
       base.lastExit = parsed.lastExit;
+      base.lastSignal = parsed.lastSignal;
+      base.runs = parsed.runs;
     }
     const disabled = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
     base.disabled = disabled.code === 0 && parsePrintDisabled(disabled.stdout, job.label);

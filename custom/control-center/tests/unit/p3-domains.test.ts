@@ -177,8 +177,8 @@ describe('launchd schedule helpers', () => {
     expect(sameDayLater.getDate()).toBe(3);
   });
   it('parses launchctl print output', () => {
-    expect(parseLaunchctlPrint('gui/501/com.x = {\n\tstate = waiting\n\tlast exit code = 0\n}')).toEqual({ state: 'waiting', lastExit: 0 });
-    expect(parseLaunchctlPrint('\tstate = running\n\tlast exit code = (never exited)\n')).toEqual({ state: 'running', lastExit: null });
+    expect(parseLaunchctlPrint('gui/501/com.x = {\n\tstate = waiting\n\tlast exit code = 0\n}')).toEqual({ state: 'waiting', lastExit: 0, lastSignal: null, runs: null });
+    expect(parseLaunchctlPrint('\tstate = running\n\tlast exit code = (never exited)\n')).toEqual({ state: 'running', lastExit: null, lastSignal: null, runs: null });
   });
 });
 

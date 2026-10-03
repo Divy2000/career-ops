@@ -5,7 +5,7 @@ import { apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill } from '../../components/ui';
-import { formatLocalMinute } from '../../lib/time';
+import { describeLastExit, formatLocalMinute } from '../../lib/time';
 import type { ScheduleLogs, ScheduleState } from '@shared/api';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -54,7 +54,7 @@ function JobCard({ job }: { job: ScheduleState }) {
         <dt>Next fire</dt>
         <dd className="mono">{job.nextFire ? formatLocalMinute(job.nextFire) : 'n/a'}</dd>
         <dt>Last exit</dt>
-        <dd className="mono">{job.lastExit === null ? 'never ran' : job.lastExit}</dd>
+        <dd className="mono">{describeLastExit(job)}</dd>
       </dl>
       {job.error && (
         <p role="alert" className="danger-text small">
