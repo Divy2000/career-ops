@@ -1,0 +1,9 @@
+{
+  "updated_at": "2026-10-01",
+  "companies": {
+    "acme robotics": { "tier": "strong", "approvals": 120, "fiscal_year": 2025 },
+    "globex payments": { "tier": "strong", "approvals": 300, "fiscal_year": 2025 },
+    "northwind analytics": { "tier": "unknown", "approvals": 0, "fiscal_year": 2025 },
+    "initech cloud": { "tier": "moderate", "approvals": 12, "fiscal_year": 2025 }
+  }
+}

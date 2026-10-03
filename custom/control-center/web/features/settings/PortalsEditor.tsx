@@ -1,0 +1,158 @@
+import { useState } from 'react';
+import { DataState, Empty, Pill, Tabs } from '../../components/ui';
+import { ActionButton, Message } from '../../components/ActionBar';
+import { useActions, useRunAction } from '../../lib/actions';
+import { isPlainObject } from '../../lib/yamlOpsClient';
+import { KeyEditor, type FieldRules } from './StructuredEditor';
+import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
+import { ConfigEditor } from './RawConfigEditor';
+
+interface SectionDef {
+  key: string;
+  help: string;
+  empty: unknown;
+  columns?: string[];
+}
+
+export const PORTAL_SECTIONS: SectionDef[] = [
+  { key: 'title_filter', help: 'Role title keywords: include and exclude lists.', empty: { include: [], exclude: [] } },
+  { key: 'location_filter', help: 'Location tiers (allow, always_allow, block, block_hard) and the strict switch.', empty: { strict: false, allow: [] } },
+  { key: 'tracked_companies', help: 'Companies scanned on every run. Toggle enabled to pause one without losing it.', empty: [], columns: ['name', 'ats', 'slug', 'enabled'] },
+  { key: 'job_boards', help: 'Job boards and aggregators.', empty: [] },
+  { key: 'search_queries', help: 'Free-text queries for boards that support search.', empty: [] },
+  { key: 'visa_filter', help: 'Sponsorship signals used to rank or drop postings.', empty: {} },
+  { key: 'max_posting_age_days', help: 'Postings older than this are skipped.', empty: 30 },
+  { key: 'scan_history', help: 'Scan history options.', empty: {} },
+  { key: 'interamt_searches', help: 'Interamt (German public sector) searches.', empty: [] },
+];
+
+const LOCATION_TIERS = ['allow', 'always_allow', 'block', 'block_hard'];
+
+export const PORTAL_RULES: FieldRules = {
+  'tracked_companies.*.slug': (v) => (/^[a-z0-9][a-z0-9._-]*$/.test(v) ? null : 'slug: lowercase letters, digits, dots, underscores and dashes'),
+  'tracked_companies.*.name': (v) => (v.trim() ? null : 'name is required'),
+  'tracked_companies.*.ats': (v) => (/^[a-z0-9_-]+$/i.test(v) ? null : 'ats: one word such as greenhouse or lever'),
+  max_posting_age_days: (v) => (Number(v) > 0 && Number.isInteger(Number(v)) ? null : 'whole number of days'),
+};
+
+function StructuredPortals() {
+  const s = useStructuredConfig('portals');
+  const doc = isPlainObject(s.doc) ? s.doc : {};
+  const known = new Set(PORTAL_SECTIONS.map((x) => x.key));
+  const unknown = Object.keys(doc).filter((k) => !known.has(k));
+  return (
+    <div className="stack">
+      <div className="toolbar" aria-label="Portals editor actions">
+        <span className="muted small">
+          {s.pending.length} pending change{s.pending.length === 1 ? '' : 's'}
+          {s.server?.kind === 'missing' && (
+            <>
+              {' '}
+              <Pill tone="warn">portals.yml not created yet</Pill>
+            </>
+          )}
+        </span>
+        <span style={{ flex: 1 }} />
+        <button type="button" className="button--ghost" onClick={s.discard} disabled={s.pending.length === 0 && !s.conflict}>
+          Discard changes
+        </button>
+        <button type="button" className="button--primary" onClick={() => void s.save()} disabled={s.pending.length === 0 || s.saving}>
+          Validate and save
+        </button>
+      </div>
+      <EditorNoteView note={s.note} />
+      {s.conflict && (
+        <details className="card card--warn" open>
+          <summary>Current version on disk (your pending edits are applied on top in the form)</summary>
+          <pre tabIndex={0} className="log mono small">{s.conflict.raw}</pre>
+        </details>
+      )}
+      {s.q.isPending || s.q.isError ? (
+        <DataState query={s.q} />
+      ) : (
+        <>
+        {s.server?.parseError && !s.conflict && (
+          <div className="card card--warn" role="alert">
+            <strong>File malformed.</strong> <span className="muted">{s.server.parseError}</span> Fix it in the Raw YAML tab.
+          </div>
+        )}
+        {PORTAL_SECTIONS.map((sec) => (
+          <section key={sec.key} className="card" aria-labelledby={`portals-${sec.key}`}>
+            <h3 id={`portals-${sec.key}`} className="mono">
+              {sec.key}
+            </h3>
+            <p className="muted small">{sec.help}</p>
+            {doc[sec.key] === undefined ? (
+              <button type="button" onClick={() => s.addOp({ op: 'set', path: [sec.key], value: sec.empty })}>
+                Add {sec.key}
+              </button>
+            ) : (
+              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PORTAL_RULES} columnsHint={sec.columns} />
+            )}
+            {sec.key === 'location_filter' && isPlainObject(doc.location_filter) && (
+              <div className="row gap" style={{ marginTop: 8 }}>
+                {LOCATION_TIERS.filter((t) => (doc.location_filter as Record<string, unknown>)[t] === undefined).map((t) => (
+                  <button key={t} type="button" className="button--ghost" onClick={() => s.addOp({ op: 'set', path: ['location_filter', t], value: [] })}>
+                    Add {t} tier
+                  </button>
+                ))}
+                {(doc.location_filter as Record<string, unknown>).strict === undefined && (
+                  <button type="button" className="button--ghost" onClick={() => s.addOp({ op: 'set', path: ['location_filter', 'strict'], value: false })}>
+                    Add strict switch
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        ))}
+        <section className="card" aria-labelledby="portals-unknown">
+          <h3 id="portals-unknown">Other keys</h3>
+          {unknown.length === 0 ? <Empty>No keys outside the known set. Anything you add in the Raw YAML tab is kept as is.</Empty> : (
+            <>
+              <p className="muted small">These keys are kept verbatim; edit them in the Raw YAML tab.</p>
+              <pre tabIndex={0} className="log mono small">{JSON.stringify(Object.fromEntries(unknown.map((k) => [k, doc[k]])), null, 2)}</pre>
+            </>
+          )}
+        </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PortalsHealth() {
+  const actions = useActions();
+  const { run, message, busy } = useRunAction();
+  const [result, setResult] = useState<unknown>(null);
+  return (
+    <div className="card">
+      <h2>Portal health</h2>
+      <p className="muted small">Validate is free and instant. Verify and audit hit the ATS endpoints. Fix slugs runs as a dry run first; apply it from the second button.</p>
+      <div className="row gap" style={{ flexWrap: 'wrap' }}>
+        {['portals.validate', 'portals.verify', 'portals.audit'].map((id) => (
+          <ActionButton key={id} meta={actions.data?.find((a) => a.id === id)} disabled={busy !== null} params={id === 'portals.audit' ? { smallThreshold: 3 } : {}} onRun={(p) => void run(id, p).then((out) => out && 'result' in out && setResult(out.result))} />
+        ))}
+        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: false }} onRun={(p) => void run('portals.fixSlugs', p)}>
+          Fix slugs (dry run)
+        </ActionButton>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: true }} onRun={(p) => void run('portals.fixSlugs', p)}>
+          Fix slugs (apply)
+        </ActionButton>
+      </div>
+      <Message message={message} />
+      {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
+    </div>
+  );
+}
+
+export function PortalsTab() {
+  const [sub, setSub] = useState<'structured' | 'raw' | 'health'>('structured');
+  return (
+    <div className="stack">
+      <Tabs label="Portals views" tabs={[{ id: 'structured', label: 'Structured' }, { id: 'raw', label: 'Raw YAML' }, { id: 'health', label: 'Health' }]} value={sub} onChange={setSub} />
+      {sub === 'structured' && <StructuredPortals />}
+      {sub === 'raw' && <ConfigEditor fileKey="portals" label="portals.yml" validator="validate-portals.mjs" />}
+      {sub === 'health' && <PortalsHealth />}
+    </div>
+  );
+}

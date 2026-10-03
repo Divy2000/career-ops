@@ -1,0 +1,113 @@
+import { test, expect, type Page } from '@playwright/test';
+import { AxeBuilder } from '@axe-core/playwright';
+import { E2E_TOKEN } from '../../playwright.config.js';
+
+async function login(page: Page) {
+  await page.goto(`/auth?t=${E2E_TOKEN}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
+}
+
+async function axeClean(page: Page) {
+  const axe = await new AxeBuilder({ page }).analyze();
+  const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+  expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+}
+
+test.describe('AI sessions through the fake Claude', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('Quick evaluate streams the session, the scripted report lands, the tracker merges and the honesty gate marks done', async ({ page }) => {
+    await page.getByLabel('Posting URL to evaluate').fill('https://jobs.example.com/synthetic/8');
+    await page.getByRole('button', { name: 'Evaluate URL' }).click();
+    await expect(page).toHaveURL(/\/sessions\/s/);
+    await expect(page.getByText('Evaluation complete: Synthetic Corp scored 4.1/5')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('done', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('008-synthetic-corp.md').first()).toBeVisible();
+    await expect(page.getByText('4.1/5').first()).toBeVisible();
+    await axeClean(page);
+    const tracker = await (await page.request.get('/api/tracker')).json();
+    expect(tracker.rows.some((r: { company: string }) => r.company === 'Synthetic Corp')).toBe(true);
+    await page.getByRole('link', { name: 'Sessions', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'done' }).first()).toBeVisible();
+  });
+
+  test('Interview practice waits for the reply and resumes the same Claude session', async ({ page }) => {
+    await page.goto('/tracker/3');
+    await page.getByRole('tab', { name: 'Interview' }).click();
+    await page.getByLabel('Interview mode').selectOption('interview/practice');
+    await page.getByRole('button', { name: 'Open prompt' }).click();
+    await page.getByRole('button', { name: 'Start session' }).click();
+    await expect(page.getByText('Which company is this interview for?')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('needs your reply')).toBeVisible();
+    const sessionId = await page.locator('[data-session-id]').first().getAttribute('data-session-id');
+    const before = await (await page.request.get(`/api/sessions/${sessionId}`)).json();
+    await page.getByLabel('Reply to the session').fill('Globex Payments');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByText('First question delivered in the practice file.')).toBeVisible({ timeout: 20_000 });
+    const after = await (await page.request.get(`/api/sessions/${sessionId}`)).json();
+    expect(after.meta.turns).toHaveLength(2);
+    expect(after.meta.claudeSessionId).toBe(before.meta.claudeSessionId);
+    await page.getByRole('tab', { name: 'Sessions' }).click();
+    await expect(page.getByRole('link', { name: 'interview/practice' })).toBeVisible();
+  });
+
+  test('Apply drafts answers into an editable form and says the headed fill is unavailable', async ({ page }) => {
+    await page.goto('/apply/1');
+    await expect(page.getByText('Never submits. You press Submit.')).toBeVisible();
+    await expect(page.getByText('drafts answers only')).toBeVisible();
+    await page.getByRole('button', { name: 'Draft answers' }).click();
+    const why = page.getByLabel(/Why do you want to work here/);
+    await expect(why).toBeVisible({ timeout: 20_000 });
+    await expect(why).toHaveValue('Because the platform work matches my background.');
+    await why.fill('Edited answer');
+    await expect(page.getByText('needs your confirmation').first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Fill real form' })).toBeDisabled();
+    await axeClean(page);
+  });
+
+  test('Ask drawer proposes actions; navigate runs directly and setStatus asks first', async ({ page }) => {
+    await page.getByRole('button', { name: 'Open Ask drawer' }).click();
+    await page.getByLabel('Prompt for advisor').fill('What should I do next?');
+    await page.getByRole('button', { name: 'Ask the advisor' }).click();
+    await expect(page.getByText('You have one overdue follow-up at Globex Payments.')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('Set row #1 to Responded')).toBeVisible();
+    await page.getByRole('button', { name: 'Review and run' }).click();
+    await page.getByRole('dialog', { name: 'The advisor proposes a write' }).getByRole('button', { name: 'Do it' }).click();
+    await expect(page.locator('li.proposal[data-proposal-state="done"]')).toHaveCount(1);
+    const detail = await (await page.request.get('/api/tracker/1')).json();
+    expect(detail.row.status).toBe('Responded');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect(page).toHaveURL(/\/tracker(\?|$)/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Tracker' })).toBeVisible();
+  });
+
+  test('AI search lists offers, marks known URLs and adds a new one to the pipeline', async ({ page }) => {
+    await page.goto('/discover?tab=ai');
+    await page.getByLabel('Prompt for ai-search').fill('Senior platform engineer, remote, sponsors visas');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await expect(page.getByRole('cell', { name: 'Synthetic Corp' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('already known')).toBeVisible();
+    await page.getByRole('row', { name: /Synthetic Corp/ }).getByRole('button', { name: 'Add' }).click();
+    await expect(page.getByText('Added 1 to the pipeline')).toBeVisible();
+    const pipeline = await (await page.request.get('/api/pipeline')).json();
+    expect(pipeline.rows.some((r: { url: string }) => r.url === 'https://jobs.example.com/synthetic/900')).toBe(true);
+  });
+
+  test('Sponsorship AI policy pass writes inside its scope and the digest refreshes', async ({ page }) => {
+    await page.goto('/sponsorship');
+    await page.getByRole('button', { name: /Run AI policy pass/ }).click();
+    await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '2026-10-03' })).toBeVisible();
+  });
+
+  test('Profile imports a pasted CV and saves it as cv.md', async ({ page }) => {
+    await page.goto('/profile');
+    await page.getByLabel('CV markdown').fill('# Jane Candidate\n\nPlatform engineer.');
+    await page.getByRole('button', { name: 'Save as cv.md' }).click();
+    await expect(page.getByText('cv.md saved.')).toBeVisible();
+    const cv = await (await page.request.get('/api/files/user/cv')).json();
+    expect(cv.text).toContain('Jane Candidate');
+    await axeClean(page);
+  });
+});

@@ -1,0 +1,10 @@
+1	2026-09-20	-	Evaluated	set-status
+1	2026-09-21	Evaluated	Applied	set-status
+3	2026-09-25	-	Evaluated	set-status
+3	2026-09-27	Evaluated	Applied	web
+3	2026-09-29	Applied	Interview	set-status	recruiter screen
+4	2026-09-26	Evaluated	SKIP	set-status	DISCARD: comp below floor
+5	2026-09-28	-	Rejected	set-status
+6	2026-09-30	-	Evaluated	set-status
+6	2026-10-01	Evaluated	Applied	web
+6	2026-10-02	Applied	Responded	set-status

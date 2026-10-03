@@ -1,0 +1,12 @@
+=== 2026-10-03 08:00:01 start
+--- 08:00:01 policy watch
+{"items":[],"since":"2026-09-19"}
+--- 08:03:40 portal scan
+scanned 3 portals, 2 new rows
+--- 08:04:02 prioritize pipeline
+reordered 5 pending rows
+--- 08:04:03 rank top 100
+!!! step failed: rank top 100
+--- 08:09:11 sponsorship shortlist
+wrote data/shortlist.md (3 rows)
+=== 2026-10-03 08:09:12 done (failed=1)

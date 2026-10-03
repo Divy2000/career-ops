@@ -1,0 +1,278 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { RunStore, runsDir } from '../../server/runner/store.js';
+import { Runner, WRAPPER_PATH, pidAlive, processStartTime } from '../../server/runner/runner.js';
+import { childEnv } from '../../server/system/child-env.js';
+import { execNoShell } from '../../server/routes/system.js';
+import { runModule } from '../../server/core/child.js';
+import { EventBus } from '../../server/watch/bus.js';
+import { PACKAGE_ROOT } from '../helpers/app.js';
+
+const NOISY = path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs');
+const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cc-runner-'));
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(pred: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await wait(50);
+  }
+}
+
+const runners: Runner[] = [];
+afterEach(() => {
+  for (const r of runners.splice(0)) r.close();
+});
+
+function req(cmdArgs: string[], extra: Partial<Parameters<Runner['start']>[0]> = {}) {
+  return { actionId: 'test.noisy', label: 'noisy', cost: 'free' as const, resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [NOISY, ...cmdArgs], cwd: PACKAGE_ROOT }, ...extra };
+}
+
+describe('wrapper.mjs', () => {
+  it('records stdout and stderr lines as NDJSON and writes exit.json', () => {
+    const dir = path.join(tmpRoot(), 'run1');
+    fs.mkdirSync(dir);
+    const r = spawnSync(process.execPath, [WRAPPER_PATH, dir, PACKAGE_ROOT, process.execPath, NOISY, '3'], { encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    const lines = fs.readFileSync(path.join(dir, 'raw.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { seq: number; stream: string; line: string });
+    // stdout and stderr are read independently, so only per-stream order is deterministic.
+    expect(lines.filter((l) => l.stream === 'stdout').map((l) => l.line)).toEqual(['line one', 'line two', 'line three']);
+    expect(lines.filter((l) => l.stream === 'stderr').map((l) => l.line)).toEqual(['warning line']);
+    expect(lines).toHaveLength(4);
+    expect(lines.map((l) => l.seq)).toEqual([1, 2, 3, 4]);
+    for (let i = 1; i < lines.length; i++) expect(lines[i]!.seq).toBeGreaterThan(lines[i - 1]!.seq);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'exit.json'), 'utf8'))).toMatchObject({ code: 3, signal: null });
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'wrapper.json'), 'utf8')).childPid).toBeGreaterThan(0);
+  });
+
+  it('redacts the Claude OAuth token from stored lines', () => {
+    const dir = path.join(tmpRoot(), 'run3');
+    fs.mkdirSync(dir);
+    const r = spawnSync(process.execPath, [WRAPPER_PATH, dir, PACKAGE_ROOT, process.execPath, '-e', 'console.log("token=" + process.env.CLAUDE_CODE_OAUTH_TOKEN); console.error(process.env.CLAUDE_CODE_OAUTH_TOKEN)'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-secret-value' } });
+    expect(r.status).toBe(0);
+    const raw = fs.readFileSync(path.join(dir, 'raw.ndjson'), 'utf8');
+    expect(raw).not.toContain('sk-ant-oat-secret-value');
+    expect(raw).toContain('token=[redacted]');
+  });
+
+  it('records a spawn failure instead of hanging', () => {
+    const dir = path.join(tmpRoot(), 'run2');
+    fs.mkdirSync(dir);
+    const r = spawnSync(process.execPath, [WRAPPER_PATH, dir, PACKAGE_ROOT, '/no/such/binary'], { encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'exit.json'), 'utf8')).code).toBe(127);
+  });
+});
+
+describe('RunStore', () => {
+  it('creates, lists newest first and prunes finished runs beyond the retention', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root, 2);
+    const base = { actionId: 'a', label: 'a', cost: 'free' as const, resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+    const a = store.create(base);
+    store.write({ ...a, status: 'done' });
+    const b = store.create(base);
+    store.write({ ...b, status: 'done' });
+    const c = store.create(base);
+    store.write({ ...c, status: 'running' });
+    const d = store.create(base);
+    store.write({ ...d, status: 'done' });
+    store.prune();
+    const ids = store.list().map((r) => r.id);
+    // Four runs created within one millisecond still list newest first, deterministically.
+    expect(ids).toEqual([d.id, c.id, b.id]);
+    expect(ids).toContain(c.id);
+    expect(ids).toContain(d.id);
+    expect(ids).toContain(b.id);
+    expect(ids).not.toContain(a.id);
+    expect(fs.existsSync(path.join(runsDir(root), a.id))).toBe(false);
+    expect(() => store.dirOf('../x')).toThrow(/bad run id/);
+  });
+
+  it('reads raw lines incrementally and skips torn lines', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const meta = store.create({ actionId: 'a', label: 'a', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    const raw = path.join(store.dirOf(meta.id), 'raw.ndjson');
+    fs.writeFileSync(raw, '{"seq":1,"ts":"t","stream":"stdout","line":"a"}\n{"seq":2,"ts":"t","stream":"stdout","line":"b"}\n{"seq":3,"ts":"t","str');
+    const first = store.readRaw(meta.id);
+    expect(first.lines.map((l) => l.line)).toEqual(['a', 'b']);
+    fs.appendFileSync(raw, 'eam":"stdout","line":"c"}\n');
+    const second = store.readRaw(meta.id, 2, first.offset);
+    expect(second.lines.map((l) => l.line)).toEqual(['c']);
+  });
+});
+
+describe('Runner', () => {
+  it('runs a command detached, streams its lines and finalizes with the exit code', async () => {
+    const root = tmpRoot();
+    const bus = new EventBus();
+    const events: string[] = [];
+    bus.onEvent((e) => events.push(`${e.type}:${(e.payload as { status: string }).status}`));
+    const runner = new Runner(root, bus, { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0']));
+    await until(() => runner.store.read(meta.id)?.status === 'done');
+    const final = runner.store.read(meta.id)!;
+    expect(final).toMatchObject({ status: 'done', exitCode: 0 });
+    expect(final.wrapperPid).toBeGreaterThan(0);
+    expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('line three');
+    expect(events).toEqual(['run.status:queued', 'run.status:running', 'run.status:done']);
+  });
+
+  it('marks a non-zero exit as failed', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['2']));
+    await until(() => runner.store.read(meta.id)?.status === 'failed');
+    expect(runner.store.read(meta.id)?.exitCode).toBe(2);
+  });
+
+  it('cancel kills the process group and the run ends cancelled', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '20000']));
+    // Wait until the command is really running (it printed its first lines) so the SIGTERM handler is installed.
+    await until(() => Boolean(runner.store.read(meta.id)?.childPid) && runner.store.readRaw(meta.id).lines.length >= 3);
+    const childPid = runner.store.read(meta.id)!.childPid!;
+    expect(pidAlive(childPid)).toBe(true);
+    runner.cancel(meta.id);
+    await until(() => runner.store.read(meta.id)?.status === 'cancelled' && Boolean(runner.store.readExit(meta.id)));
+    await until(() => !pidAlive(childPid));
+    expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('got SIGTERM');
+  });
+
+  it('orders runs that share a resource and drops a queued run on cancel', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const first = runner.start(req(['0', '1500'], { resources: ['tracker'] }));
+    const second = runner.start(req(['0'], { resources: ['tracker'] }));
+    const third = runner.start(req(['0'], { resources: ['tracker'] }));
+    expect(runner.queuedIds()).toEqual([second.id, third.id]);
+    expect(runner.cancel(third.id)?.status).toBe('cancelled');
+    expect(runner.store.read(second.id)?.status).toBe('queued');
+    await until(() => runner.store.read(first.id)?.status === 'done');
+    await until(() => runner.store.read(second.id)?.status === 'done');
+    expect(runner.store.read(second.id)!.startedAt! >= runner.store.read(first.id)!.endedAt!).toBe(true);
+  });
+
+  it('records the wrapper and child start times so later checks can tell a reused PID apart', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '1500']));
+    await until(() => Boolean(runner.store.read(meta.id)?.childStartedAt));
+    const running = runner.store.read(meta.id)!;
+    expect(running.wrapperStartedAt).toBe(processStartTime(running.wrapperPid!));
+    expect(running.childStartedAt).toBe(processStartTime(running.childPid!));
+    expect(running.wrapperStartedAt).toMatch(/\d{4}$/);
+    expect(processStartTime(2147483646)).toBeNull();
+  });
+
+  it('reconcile never adopts a live PID whose start time differs (PID reuse after a reboot)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const stale = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Thu Jan  1 00:00:00 1970', childPid: sleeper.pid!, childStartedAt: 'Thu Jan  1 00:00:00 1970' });
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(stale.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/start time/) });
+      expect(pidAlive(sleeper.pid!)).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('cancel never signals a process group whose recorded start time does not match', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore', detached: true });
+    try {
+      const store = new RunStore(root);
+      const stale = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Thu Jan  1 00:00:00 1970', childPid: sleeper.pid!, childStartedAt: 'Thu Jan  1 00:00:00 1970' });
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      expect(runner.cancel(stale.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/nothing was signalled/) });
+      await wait(300);
+      expect(pidAlive(sleeper.pid!)).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('reconcile marks a run that was still queued lost, and that run can never be spawned afterwards', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const holder = first.start(req(['0', '800'], { resources: ['tracker'] }));
+    const waiting = first.start(req(['0'], { resources: ['tracker'] }));
+    expect(first.queuedIds()).toEqual([waiting.id]);
+    // A second process (the restarted server) reconciles while the first still holds the run in memory.
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    expect(second.store.read(waiting.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/queued when the server restarted/) });
+    await until(() => first.store.read(holder.id)?.status === 'done');
+    await wait(400);
+    expect(first.store.read(waiting.id)).toMatchObject({ status: 'lost', wrapperPid: null });
+    expect(first.queuedIds()).toEqual([]);
+  });
+
+  it('cancel works for a queued run this process never had in its queue', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const queued = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: true, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    expect(runner.cancel(queued.id)?.status).toBe('cancelled');
+    expect(runner.store.read(queued.id)?.status).toBe('cancelled');
+  });
+
+  it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', CC_DATA_ROOT: '/x', CC_GUARD_DIR: '/g' });
+    try {
+      const dump = "process.stdout.write(Object.keys(process.env).filter((k) => k.startsWith('CC_')).sort().join(','))";
+      expect(childEnv({ CC_POLICY_FILE: '/p' })).toMatchObject({ CC_POLICY_FILE: '/p' });
+      expect(Object.keys(childEnv()).filter((k) => k.startsWith('CC_'))).toEqual([]);
+      const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', dump], cwd: PACKAGE_ROOT }, env: { CC_MODE: 'explicit' } });
+      await until(() => runner.store.read(meta.id)?.status === 'done');
+      expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toEqual(['CC_MODE']);
+      const exec = await execNoShell(process.execPath, ['-e', dump], { timeoutMs: 10_000 });
+      expect(exec.stdout).toBe('');
+      const mod = await runModule(`${dump}`, { cwd: PACKAGE_ROOT, env: {}, input: null, timeoutMs: 10_000 });
+      expect(mod.stdout).toBe('');
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  });
+
+  it('reconcile after a restart finalizes finished runs, keeps tailing live ones and marks dead ones lost', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    const live = first.start(req(['0', '3000']));
+    const dead = first.start(req(['0']));
+    await until(() => Boolean(first.store.read(live.id)?.childPid));
+    await until(() => first.store.read(dead.id)?.status === 'done');
+    first.close();
+    // Simulate a crash: pretend the finished run was still marked running, and fake a vanished wrapper.
+    const store = new RunStore(root);
+    store.write({ ...store.read(dead.id)!, status: 'running' });
+    const ghost = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...ghost, status: 'running', wrapperPid: 2147483646 });
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    expect(second.store.read(dead.id)?.status).toBe('done');
+    expect(second.store.read(ghost.id)?.status).toBe('lost');
+    await until(() => second.store.read(live.id)?.status === 'done', 15_000);
+  });
+});

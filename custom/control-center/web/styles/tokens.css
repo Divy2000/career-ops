@@ -1,0 +1,71 @@
+/* Design tokens (dark only). Contrast figures in the spec are against --bg. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0d12;
+  --surface-1: #11141a;
+  --surface-2: #171b23;
+  --surface-3: #1f2430;
+  --border: #262c38;
+  --border-strong: #343b4a;
+
+  --text: #e7eaf0;
+  --text-muted: #a9b1c0;
+  --text-faint: #8a93a3;
+
+  --accent: #8b9dff;
+  --accent-fg: #0b0d12;
+  --accent-soft: rgba(139, 157, 255, 0.14);
+
+  --success: #3ecf8e;
+  --warning: #f5b94a;
+  --danger: #ff6b6b;
+  --info: #5ab8f0;
+  --success-soft: rgba(62, 207, 142, 0.14);
+  --warning-soft: rgba(245, 185, 74, 0.14);
+  --danger-soft: rgba(255, 107, 107, 0.14);
+  --info-soft: rgba(90, 184, 240, 0.14);
+
+  --status-evaluated: #94a3b8;
+  --status-applied: #5ab8f0;
+  --status-responded: #2dd4bf;
+  --status-interview: #b794f6;
+  --status-offer: #f5b94a;
+  --status-hired: #3ecf8e;
+  --status-rejected: #f08a8a;
+  --status-discarded: #8a93a3;
+  --status-skip: #6b7280;
+
+  --sponsor-strong: var(--success);
+  --sponsor-moderate: #2dd4bf;
+  --sponsor-unknown: var(--text-faint);
+  --sponsor-weak: var(--warning);
+  --sponsor-none: var(--danger);
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-22: 22px;
+  --fs-28: 28px;
+  --lh-body: 1.5;
+  --lh-heading: 1.25;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 2px;
+  --target-min: 32px;
+}

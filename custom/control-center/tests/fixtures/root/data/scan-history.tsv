@@ -1,0 +1,7 @@
+url	first_seen	portal	title	company	status	location	fingerprint	posted_at	trust_score	trust_flags	normalized_company
+https://jobs.example.com/acme/123	2026-09-15	greenhouse	Senior Backend Engineer	Acme Robotics	added	Austin, TX	f1	2026-09-15	0.9		acme robotics
+https://boards.example.com/northwind/88	2026-10-01	lever	ML Platform Engineer	Northwind Analytics	added	Remote, US	f2	2026-09-30	0.8		northwind analytics
+https://careers.example.com/soylent/42	2026-10-02	ashby	Junior Data Analyst	Soylent Foods	added	Chicago, IL	f3	2026-10-02	0.7		soylent foods
+https://careers.example.com/hooli/5	2026-10-02	workday	Backend Engineer	Hooli	skipped	Palo Alto, CA	f4	2026-10-01	0.7		hooli
+https://careers.example.com/piedpiper/8	2026-10-03	ashby-full	Platform Engineer	Pied Piper	added	Remote	f5		0.6		pied piper
+not-a-url	2026-10-03	manual	Broken row	Nowhere	added					nowhere

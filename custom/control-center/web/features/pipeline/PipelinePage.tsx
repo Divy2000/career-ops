@@ -1,0 +1,291 @@
+import { useMemo, useState } from 'react';
+import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { usePipeline, useShortlist } from '../../lib/queries';
+import { apiSend } from '../../lib/api';
+import { describeError, useActions, useRunAction } from '../../lib/actions';
+import { ActionButton, Message } from '../../components/ActionBar';
+import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone } from '../../components/ui';
+import { InboxAi } from './InboxAi';
+
+const route = getRouteApi('/pipeline');
+export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
+
+export function PipelinePage() {
+  const { tab } = route.useSearch();
+  const navigate = useNavigate({ from: '/pipeline' });
+  const setTab = (t: PipelineTab) => void navigate({ search: { tab: t } });
+  return (
+    <section aria-labelledby="page-title">
+      <div className="page-header">
+        <h1 id="page-title">Pipeline</h1>
+      </div>
+      <Tabs
+        label="Pipeline sections"
+        tabs={[
+          { id: 'inbox', label: 'Inbox' },
+          { id: 'shortlist', label: 'Shortlist' },
+          { id: 'batch', label: 'Batch' },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {tab === 'inbox' && <Inbox />}
+      {tab === 'shortlist' && <Shortlist />}
+      {tab === 'batch' && <BatchTab />}
+    </section>
+  );
+}
+
+function BatchTab() {
+  const actions = useActions();
+  const { run, message } = useRunAction();
+  const [urls, setUrls] = useState('');
+  const [parallel, setParallel] = useState(1);
+  const list = urls.split(/\s+/).filter(Boolean);
+  return (
+    <div className="card stack">
+      <h2>Batch evaluate</h2>
+      <p className="muted">Each URL becomes one evaluation through batch/batch-runner.sh. Paste one URL per line.</p>
+      <textarea aria-label="Batch URLs" rows={6} value={urls} onChange={(e) => setUrls(e.target.value)} />
+      <label className="row gap">
+        <span className="muted">Parallel</span>
+        <input type="number" aria-label="Parallelism" min={1} max={4} value={parallel} onChange={(e) => setParallel(Number(e.target.value) || 1)} />
+      </label>
+      <div className="row gap">
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.batchRun')} disabled={list.length === 0} params={{ urls: list, parallel }} onRun={(p) => void run('pipeline.batchRun', p)} />
+        <span className="faint">{list.length} URLs</span>
+      </div>
+      <Message message={message} />
+    </div>
+  );
+}
+
+function AddUrls({ onDone }: { onDone: (added: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const urls = text.split(/\s+/).filter(Boolean);
+    if (urls.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await apiSend<{ added: number }>('POST', '/api/pipeline/urls', { urls });
+      setText('');
+      setOpen(false);
+      onDone(r.added);
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}>
+        Add URLs
+      </button>
+    );
+  }
+  return (
+    <div className="card stack" role="dialog" aria-label="Add URLs to the pipeline">
+      <textarea aria-label="Posting URLs" rows={4} placeholder="One posting URL per line" value={text} onChange={(e) => setText(e.target.value)} />
+      {error && (
+        <p role="alert" className="danger-text">
+          {error}
+        </p>
+      )}
+      <div className="row gap">
+        <button type="button" disabled={busy || !text.trim()} onClick={() => void submit()}>
+          Add to pipeline
+        </button>
+        <button type="button" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Inbox() {
+  const q = usePipeline();
+  const qc = useQueryClient();
+  const actions = useActions();
+  const { run, message, setMessage } = useRunAction();
+  const [skipError, setSkipError] = useState<string | null>(null);
+  const skip = async (url: string, done: boolean) => {
+    setSkipError(null);
+    try {
+      await apiSend('POST', '/api/pipeline/skip', { url, done });
+      await qc.invalidateQueries({ queryKey: ['pipeline'] });
+    } catch (err) {
+      setSkipError(`Could not ${done ? 'skip' : 'restore'}: ${describeError(err)}`);
+    }
+  };
+  const [text, setText] = useState('');
+  const [source, setSource] = useState('');
+  const [seniority, setSeniority] = useState('');
+  const [showDone, setShowDone] = useState(false);
+  const data = q.data;
+  const rows = useMemo(() => (data?.kind === 'ok' ? data.rows : []), [data]);
+  const sources = useMemo(() => [...new Set(rows.map((r) => r.source))].sort(), [rows]);
+  const seniorities = useMemo(() => [...new Set(rows.map((r) => r.seniority ?? 'unknown'))].sort(), [rows]);
+  const visible = rows.filter(
+    (r) =>
+      (showDone || !r.done) &&
+      (!source || r.source === source) &&
+      (!seniority || (r.seniority ?? 'unknown') === seniority) &&
+      (!text || `${r.company} ${r.role} ${r.location ?? ''}`.toLowerCase().includes(text.toLowerCase())),
+  );
+  return (
+    <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
+      <div className="toolbar" aria-label="Inbox actions">
+        <AddUrls onDone={(n) => { setMessage({ tone: 'ok', text: `Added ${n} URL${n === 1 ? '' : 's'} to the pipeline` }); void qc.invalidateQueries({ queryKey: ['pipeline'] }); }} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
+          Rank (50)
+        </ActionButton>
+      </div>
+      <InboxAi urls={visible.filter((r) => !r.done).map((r) => r.url)} />
+      <Message message={message} />
+      {skipError && (
+        <p role="alert" className="danger-text">
+          {skipError}
+        </p>
+      )}
+      <div className="toolbar">
+        <input type="search" aria-label="Filter inbox" placeholder="Filter company, role, location" value={text} onChange={(e) => setText(e.target.value)} />
+        <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)}>
+          <option value="">All sources</option>
+          {sources.map((s) => (
+            <option key={s}>{s}</option>
+          ))}
+        </select>
+        <select aria-label="Seniority" value={seniority} onChange={(e) => setSeniority(e.target.value)}>
+          <option value="">All levels</option>
+          {seniorities.map((s) => (
+            <option key={s}>{s}</option>
+          ))}
+        </select>
+        <label className="row gap">
+          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show skipped
+        </label>
+        <span className="faint">{visible.length} rows</span>
+      </div>
+      {visible.length === 0 ? (
+        <Empty>Nothing matches. Clear a filter or add URLs.</Empty>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th scope="col">Rank</th>
+              <th scope="col">Company</th>
+              <th scope="col">Role</th>
+              <th scope="col">Location</th>
+              <th scope="col">Source</th>
+              <th scope="col">Level</th>
+              <th scope="col">First seen</th>
+              <th scope="col">Posted</th>
+              <th scope="col">
+                <span className="sr-only">Row actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((r) => (
+              <tr key={r.url} className={r.done ? 'is-done' : ''}>
+                <td>
+                  <ScorePill score={r.rank} />
+                  {r.rankReason && <div className="faint small">{r.rankReason}</div>}
+                </td>
+                <td>{r.company || <span className="faint">unknown company</span>}</td>
+                <td>
+                  <a href={r.url} target="_blank" rel="noreferrer noopener">
+                    {r.role || r.url}
+                  </a>
+                  {r.done && <Pill>skipped</Pill>}
+                </td>
+                <td className="muted">{r.location ?? ''}</td>
+                <td>
+                  <Pill>{r.source}</Pill>
+                </td>
+                <td className="muted">{r.seniority ?? ''}</td>
+                <td className="mono muted">{r.firstSeen ?? ''}</td>
+                <td className="mono muted">{r.postedAt ?? ''}</td>
+                <td>
+                  <button type="button" aria-label={`${r.done ? 'Restore' : 'Skip'} ${r.company || r.url}`} onClick={() => void skip(r.url, !r.done)}>
+                    {r.done ? 'Undo skip' : 'Skip'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </DataState>
+  );
+}
+
+function Shortlist() {
+  const q = useShortlist();
+  return (
+    <DataState query={q} missing={<span>No shortlist yet. The daily job or a Rebuild shortlist run creates it.</span>}>
+      {q.data?.kind === 'ok' && (
+        <div className="stack">
+          <p className="muted">{q.data.summary}</p>
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">Score</th>
+                <th scope="col">Rank</th>
+                <th scope="col">Sponsor</th>
+                <th scope="col">Company</th>
+                <th scope="col">Role</th>
+                <th scope="col">Location</th>
+                <th scope="col">Posted</th>
+                <th scope="col">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.rows.map((r) => (
+                <tr key={r.rank}>
+                  <td className="mono">{r.rank}</td>
+                  <td>
+                    <ScorePill score={r.score} />
+                  </td>
+                  <td className="mono">{r.relevance ?? ''}</td>
+                  <td>
+                    <SponsorPill tier={r.sponsor} />
+                  </td>
+                  <td>{r.company}</td>
+                  <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
+                  <td className="muted">{r.location ?? ''}</td>
+                  <td className="mono muted">{r.posted ?? ''}</td>
+                  <td className="muted">{r.why ?? ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="card">
+            <h2>Excluded by company alerts</h2>
+            {q.data.excluded.length === 0 ? (
+              <Empty>No companies excluded.</Empty>
+            ) : (
+              <ul className="bullets">
+                {q.data.excluded.map((e) => (
+                  <li key={e.company}>
+                    <strong>{e.company}</strong> <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </DataState>
+  );
+}

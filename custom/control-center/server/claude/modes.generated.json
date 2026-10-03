@@ -1,0 +1,2144 @@
+[
+  {
+    "id": "add",
+    "file": "modes/add.md",
+    "title": "Mode: add - Add a project, paper, or role to your CV",
+    "scripts": [
+      "add-entry.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "agent-inbox",
+    "file": "modes/agent-inbox.md",
+    "title": "Mode: agent-inbox - Queue requests for the next session",
+    "scripts": [
+      "agent-inbox.mjs"
+    ],
+    "paths": [
+      "data/agent-inbox.md"
+    ]
+  },
+  {
+    "id": "apply",
+    "file": "modes/apply.md",
+    "title": "Mode: apply - Live Application Assistant",
+    "scripts": [
+      "application-answers.mjs",
+      "application-artifacts.mjs",
+      "check-liveness.mjs",
+      "find.mjs",
+      "followup-seed.mjs",
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/applications.md",
+      "data/blacklist.md",
+      "data/pdf-index.tsv",
+      "data/pipeline.md",
+      "modes/heuristics/recruiter-side.md",
+      "modes/pdf.md",
+      "output/cv-",
+      "reports/NNN-company-role-date.md",
+      "templates/immigration-status-requirements.yml",
+      "templates/jurisdiction-prohibited-content.yml",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "ar/fursah",
+    "file": "modes/ar/fursah.md",
+    "title": "النمط: fursah - تقييم شامل وعميق لفرصة العمل (الكتل A-G)",
+    "scripts": [
+      "merge-tracker.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "ar/pipeline",
+    "file": "modes/ar/pipeline.md",
+    "title": "النمط: pipeline - معالجة روابط الوظائف المنتظرة (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "merge-tracker.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/applications.md",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "ar/takdeem",
+    "file": "modes/ar/takdeem.md",
+    "title": "النمط: takdeem - المساعد التفاعلي الفوري لتقديم طلبات التوظيف",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "ats",
+    "file": "modes/ats.md",
+    "title": "Mode: ats -- ATS-Friendliness Check",
+    "scripts": [
+      "verify-ats.mjs"
+    ],
+    "paths": [
+      "modes/pdf.md",
+      "output/cv-",
+      "output/cv-jane-smith-acme.html"
+    ]
+  },
+  {
+    "id": "auto-pipeline",
+    "file": "modes/auto-pipeline.md",
+    "title": "Mode: auto-pipeline - Full Automatic Pipeline",
+    "scripts": [
+      "browser-extract.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/applications.md",
+      "data/blacklist.md",
+      "data/pipeline.md",
+      "modes/_custom.md",
+      "modes/_shared.md",
+      "modes/latex.md",
+      "modes/oferta.md",
+      "modes/pdf.md",
+      "modes/text.md",
+      "modes/tracker.md"
+    ]
+  },
+  {
+    "id": "batch",
+    "file": "modes/batch.md",
+    "title": "Mode: batch - Mass Processing of Jobs",
+    "scripts": [
+      "batch/batch-runner.sh",
+      "reconcile-pipeline.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "batch/batch-prompt.md",
+      "batch/batch-runner.sh",
+      "batch/batch-state.tsv",
+      "batch/logs/",
+      "batch/logs/discard.log",
+      "batch/pipeline",
+      "batch/tracker-additions/",
+      "config/profile.yml",
+      "modes/_profile.md",
+      "modes/_shared.md"
+    ]
+  },
+  {
+    "id": "calibrate",
+    "file": "modes/calibrate.md",
+    "title": "Mode: calibrate - Does the scoring predict YOUR outcomes?",
+    "scripts": [
+      "calibrate.mjs"
+    ],
+    "paths": [
+      "modes/_shared.md"
+    ]
+  },
+  {
+    "id": "contacto",
+    "file": "modes/contacto.md",
+    "title": "Mode: contacto -- Outreach messages",
+    "scripts": [
+      "contact-extract.mjs",
+      "contacts.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "data/contacts.tsv",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "cover",
+    "file": "modes/cover.md",
+    "title": "Mode: cover - Cover Letter Generator",
+    "scripts": [
+      "cv-templates.mjs",
+      "generate-cover-letter.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/cv-facts.json",
+      "config/profile.yml",
+      "cv.md",
+      "modes/_profile.md",
+      "modes/_writing.md",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "da/apply",
+    "file": "modes/da/apply.md",
+    "title": "Mode: apply -- Live-assistent til ansøgningsformularer",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "da/oferta",
+    "file": "modes/da/oferta.md",
+    "title": "Mode: oferta -- Fuld evaluering A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "da/pipeline",
+    "file": "modes/da/pipeline.md",
+    "title": "Mode: pipeline -- URL-indbakke (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "de/angebot",
+    "file": "modes/de/angebot.md",
+    "title": "Modus: angebot - Vollständige Bewertung A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "de/bewerben",
+    "file": "modes/de/bewerben.md",
+    "title": "Modus: bewerben - Live-Assistent fürs Bewerbungsformular",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "de/interview/debrief",
+    "file": "modes/de/interview/debrief.md",
+    "title": "Mode: interview/debrief - Nachbereitung nach dem Interview",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "de/interview/plan",
+    "file": "modes/de/interview/plan.md",
+    "title": "Mode: interview/plan - Interview-Vorbereitungsplaner",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "de/interview/practice",
+    "file": "modes/de/interview/practice.md",
+    "title": "Mode: interview/practice - Übungs-Interviewer",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "de/pipeline",
+    "file": "modes/de/pipeline.md",
+    "title": "Modus: pipeline - URL-Inbox (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "deep",
+    "file": "modes/deep.md",
+    "title": "Mode: deep - Deep Research Prompt",
+    "scripts": [],
+    "paths": [
+      "cv.md"
+    ]
+  },
+  {
+    "id": "discover",
+    "file": "modes/discover.md",
+    "title": "Mode: discover -- Resolve companies to scannable ATS boards",
+    "scripts": [
+      "discover-ats.mjs",
+      "discover-new-companies.mjs"
+    ],
+    "paths": [
+      "data/pipeline.md",
+      "data/scan-history.tsv",
+      "portals.yml"
+    ]
+  },
+  {
+    "id": "email",
+    "file": "modes/email.md",
+    "title": "Mode: email - Application Email Drafts",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/pdf-index.tsv",
+      "modes/_custom.md",
+      "modes/_profile.md",
+      "modes/_writing.md",
+      "modes/followup.md",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "es/aplicar",
+    "file": "modes/es/aplicar.md",
+    "title": "Modo: aplicar -- Asistente en vivo para formularios de candidatura",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "es/interview/debrief",
+    "file": "modes/es/interview/debrief.md",
+    "title": "Mode: interview/debrief - Análisis Posterior a la Entrevista (Debrief)",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "es/interview/plan",
+    "file": "modes/es/interview/plan.md",
+    "title": "Mode: interview/plan - Planificador de Preparación para Entrevistas",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "es/interview/practice",
+    "file": "modes/es/interview/practice.md",
+    "title": "Mode: interview/practice - Entrevistador de Práctica",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "es/oferta",
+    "file": "modes/es/oferta.md",
+    "title": "Modo: oferta - Evaluación completa A-G",
+    "scripts": [
+      "browser-extract.mjs",
+      "company-history.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "batch/batch-prompt.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/applications.md",
+      "data/blacklist.md",
+      "data/pipeline.md",
+      "data/salary-observations.tsv",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "reports/001-company-2026-01-01.md",
+      "templates/agency-licensing.yml",
+      "templates/immigration-status-requirements.yml",
+      "templates/jurisdiction-ai-screening-disclosure.yml",
+      "templates/jurisdiction-prohibited-content.yml"
+    ]
+  },
+  {
+    "id": "es/pipeline",
+    "file": "modes/es/pipeline.md",
+    "title": "Modo: pipeline -- Bandeja de URLs (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "expand",
+    "file": "modes/expand.md",
+    "title": "Mode: expand - Auto-discover and add missing competencies",
+    "scripts": [
+      "add-entry.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "followup",
+    "file": "modes/followup.md",
+    "title": "Mode: followup -- Follow-up Cadence Tracker",
+    "scripts": [
+      "company-history.mjs",
+      "followup-cadence.mjs",
+      "followup-seed.mjs",
+      "funnel-velocity.mjs",
+      "rejection-latency.mjs",
+      "set-status.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "data/active-interviews.md",
+      "data/applications.md",
+      "data/blacklist.md",
+      "data/follow-ups.md",
+      "modes/email.md",
+      "modes/interview-redflag.md",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "fr/interview/debrief",
+    "file": "modes/fr/interview/debrief.md",
+    "title": "Mode: interview/debrief - Débriefing post-entretien",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "fr/interview/plan",
+    "file": "modes/fr/interview/plan.md",
+    "title": "Mode: interview/plan - Planificateur de préparation d'entretien",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "fr/interview/practice",
+    "file": "modes/fr/interview/practice.md",
+    "title": "Mode: interview/practice - Interviewer d'entraînement",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "fr/offre",
+    "file": "modes/fr/offre.md",
+    "title": "Mode : offre -- Evaluation complete A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "fr/pipeline",
+    "file": "modes/fr/pipeline.md",
+    "title": "Mode : pipeline -- Inbox d'URLs (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "fr/postuler",
+    "file": "modes/fr/postuler.md",
+    "title": "Mode : postuler -- Assistant live pour les formulaires de candidature",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "heuristics/recruiter-side",
+    "file": "modes/heuristics/recruiter-side.md",
+    "title": "Recruiter-Side Application Heuristics",
+    "scripts": [],
+    "paths": []
+  },
+  {
+    "id": "hi/aavedan",
+    "file": "modes/hi/aavedan.md",
+    "title": "Mode: aavedan -- Application Form के लिए Live Assistant",
+    "scripts": [],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "hi/naukri",
+    "file": "modes/hi/naukri.md",
+    "title": "Mode: naukri -- पूर्ण मूल्यांकन A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "hi/pipeline",
+    "file": "modes/hi/pipeline.md",
+    "title": "Mode: pipeline -- URL Inbox (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/naukri-pm-ai.md"
+    ]
+  },
+  {
+    "id": "id/interview/debrief",
+    "file": "modes/id/interview/debrief.md",
+    "title": "Mode: interview/debrief - Post-Interview Debrief",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "id/interview/plan",
+    "file": "modes/id/interview/plan.md",
+    "title": "Mode: interview/plan - Interview Prep Planner",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "id/interview/practice",
+    "file": "modes/id/interview/practice.md",
+    "title": "Mode: interview/practice - Practice Interviewer",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "id/lowongan",
+    "file": "modes/id/lowongan.md",
+    "title": "Mode: lowongan -- Evaluasi lengkap A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "id/melamar",
+    "file": "modes/id/melamar.md",
+    "title": "Mode: melamar -- Asisten live untuk formulir lamaran",
+    "scripts": [],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "id/pipeline",
+    "file": "modes/id/pipeline.md",
+    "title": "Mode: pipeline -- Inbox URL (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "intake",
+    "file": "modes/intake.md",
+    "title": "Mode: intake - Multi-Source Profile Intake",
+    "scripts": [
+      "doctor.mjs",
+      "intake.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "data/intake-state.json",
+      "documents/diplomas/msc-transcript.pdf",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "interview",
+    "file": "modes/interview.md",
+    "title": "Mode: interview - Interactive Profile & CV Onboarding",
+    "scripts": [
+      "doctor.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "interview-prep",
+    "file": "modes/interview-prep.md",
+    "title": "Mode: interview-prep - Company-Specific Interview Intelligence",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/sessions/",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/heuristics/recruiter-side.md",
+      "modes/interview/debrief.md",
+      "modes/oferta.md",
+      "modes/pdf/hm-audit.md"
+    ]
+  },
+  {
+    "id": "interview-redflag",
+    "file": "modes/interview-redflag.md",
+    "title": "Mode: interview-redflag - Company Red-Flag Detector",
+    "scripts": [],
+    "paths": [
+      "config/profile.yml",
+      "data/applications.md",
+      "data/blacklist.md",
+      "interview-prep/sessions/",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/debrief.md",
+      "modes/interview/practice.md",
+      "modes/ja",
+      "modes/oferta.md",
+      "portals.yml",
+      "templates/blacklist.example.md",
+      "templates/protected-grounds.yml"
+    ]
+  },
+  {
+    "id": "interview/debrief",
+    "file": "modes/interview/debrief.md",
+    "title": "Mode: interview/debrief - Post-Interview Debrief",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "interview/plan",
+    "file": "modes/interview/plan.md",
+    "title": "Mode: interview/plan - Interview Prep Planner",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "interview/practice",
+    "file": "modes/interview/practice.md",
+    "title": "Mode: interview/practice - Practice Interviewer",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "it/annuncio",
+    "file": "modes/it/annuncio.md",
+    "title": "Modalità: annuncio -- Valutazione completa A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-azienda-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "it/candidarsi",
+    "file": "modes/it/candidarsi.md",
+    "title": "Modalità: candidarsi -- Assistente live per i moduli di candidatura",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "it/interview/debrief",
+    "file": "modes/it/interview/debrief.md",
+    "title": "Modalità: interview/debrief - Debriefing Post-Colloquio",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "it/interview/plan",
+    "file": "modes/it/interview/plan.md",
+    "title": "Modalità: interview/plan - Pianificatore di Preparazione al Colloquio",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/ora",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "it/interview/practice",
+    "file": "modes/it/interview/practice.md",
+    "title": "Modalità: interview/practice - Intervistatore per Pratica",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "it/pipeline",
+    "file": "modes/it/pipeline.md",
+    "title": "Modalità: pipeline -- Inbox degli URL (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "ja/interview/debrief",
+    "file": "modes/ja/interview/debrief.md",
+    "title": "Mode: interview/debrief - 面接後デブリーフ",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "ja/interview/plan",
+    "file": "modes/ja/interview/plan.md",
+    "title": "Mode: interview/plan - 面接準備プランナー",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "ja/interview/practice",
+    "file": "modes/ja/interview/practice.md",
+    "title": "Mode: interview/practice - 模擬面接官",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "ja/kyujin",
+    "file": "modes/ja/kyujin.md",
+    "title": "モード: kyujin -- 完全評価 A-G",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "data/applications.md",
+      "data/pipeline.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "ja/oubo",
+    "file": "modes/ja/oubo.md",
+    "title": "モード: oubo -- 応募ライブアシスタント",
+    "scripts": [
+      "check-liveness.mjs",
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/pipeline.md",
+      "modes/heuristics/recruiter-side.md",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "ja/pipeline",
+    "file": "modes/ja/pipeline.md",
+    "title": "モード: pipeline -- URL Inbox (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "check-liveness.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "batch/batch-runner.sh",
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "ko/gonggo",
+    "file": "modes/ko/gonggo.md",
+    "title": "모드: gonggo -- 전체 평가 A-F",
+    "scripts": [
+      "merge-tracker.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "ko/interview/debrief",
+    "file": "modes/ko/interview/debrief.md",
+    "title": "Mode: interview/debrief - 면접 후 디브리프",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "ko/interview/plan",
+    "file": "modes/ko/interview/plan.md",
+    "title": "Mode: interview/plan - 면접 준비 플래너",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "ko/interview/practice",
+    "file": "modes/ko/interview/practice.md",
+    "title": "Mode: interview/practice - 모의 면접관",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "ko/jiwon",
+    "file": "modes/ko/jiwon.md",
+    "title": "모드: jiwon -- 지원서 작성 live assistant",
+    "scripts": [
+      "merge-tracker.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "article-digest.md",
+      "batch/tracker-additions/",
+      "cv.md",
+      "data/applications.md"
+    ]
+  },
+  {
+    "id": "ko/pipeline",
+    "file": "modes/ko/pipeline.md",
+    "title": "모드: pipeline -- URL Inbox (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "latex",
+    "file": "modes/latex.md",
+    "title": "Mode: latex - LaTeX/Overleaf CV Export",
+    "scripts": [
+      "build-cv-latex.mjs",
+      "generate-latex.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "modes/pdf.md",
+      "output/cv-",
+      "templates/cv-template.cjk.tex"
+    ]
+  },
+  {
+    "id": "latex-tex",
+    "file": "modes/latex-tex.md",
+    "title": "Mode: latex-tex - Tailor a user-owned LaTeX CV in place",
+    "scripts": [
+      "extract-latex-content.mjs",
+      "generate-latex.mjs",
+      "patch-latex-content.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "modes/latex.md",
+      "modes/pdf.md",
+      "output/cv-",
+      "templates/cv-template.tex"
+    ]
+  },
+  {
+    "id": "master-profile",
+    "file": "modes/master-profile.md",
+    "title": "Mode: master-profile - Build and maintain a source-backed career profile",
+    "scripts": [
+      "career-profile.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/career-profile.yml"
+    ]
+  },
+  {
+    "id": "nl/pipeline",
+    "file": "modes/nl/pipeline.md",
+    "title": "Modus: pipeline - URL-inbox (tweede brein)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "dedup-tracker.mjs",
+      "merge-tracker.mjs",
+      "normalize-statuses.mjs",
+      "reserve-report-num.mjs",
+      "verify-pipeline.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "nl/solliciteren",
+    "file": "modes/nl/solliciteren.md",
+    "title": "Modus: solliciteren - Live assistent voor sollicitatieformulieren",
+    "scripts": [
+      "dedup-tracker.mjs",
+      "merge-tracker.mjs",
+      "normalize-statuses.mjs",
+      "set-status.mjs",
+      "verify-pipeline.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "batch/tracker-additions/",
+      "config/profile.yml",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "nl/vacature",
+    "file": "modes/nl/vacature.md",
+    "title": "Modus: vacature -- Volledige evaluatie A-F",
+    "scripts": [
+      "dedup-tracker.mjs",
+      "merge-tracker.mjs",
+      "normalize-statuses.mjs",
+      "reserve-report-num.mjs",
+      "verify-pipeline.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "oferta",
+    "file": "modes/oferta.md",
+    "title": "Mode: job - Full A-H Evaluation",
+    "scripts": [
+      "browser-extract.mjs",
+      "company-history.mjs",
+      "keyword-match.mjs",
+      "reserve-report-num.mjs",
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "batch/batch-prompt.md",
+      "config/profile.yml",
+      "custom/uncommon",
+      "cv.md",
+      "data/applications.md",
+      "data/blacklist.md",
+      "data/pipeline.md",
+      "data/salary-observations.tsv",
+      "interview-prep/story-bank.md",
+      "modes/_custom.md",
+      "modes/_profile.md",
+      "modes/_shared.md",
+      "modes/apply.md",
+      "modes/offer-prep.md",
+      "modes/pipeline.md",
+      "reports/*.md",
+      "reports/001-company-2026-01-01.md",
+      "templates/agency-licensing.yml",
+      "templates/immigration-status-requirements.yml",
+      "templates/jurisdiction-ai-screening-disclosure.yml",
+      "templates/jurisdiction-prohibited-content.yml"
+    ]
+  },
+  {
+    "id": "ofertas",
+    "file": "modes/ofertas.md",
+    "title": "Mode: jobs - Multi-Job Comparison",
+    "scripts": [],
+    "paths": []
+  },
+  {
+    "id": "offer-prep",
+    "file": "modes/offer-prep.md",
+    "title": "Mode: offer-prep - Contract Reading Companion (Offer Stage)",
+    "scripts": [],
+    "paths": [
+      "batch/headless",
+      "config/profile.yml",
+      "data/applications.md",
+      "data/offers/",
+      "data/salary-observations.tsv",
+      "modes/_profile.md",
+      "templates/restrictive-covenants.yml",
+      "templates/states.yml",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "outcome",
+    "file": "modes/outcome.md",
+    "title": "Mode: outcome - Record Application Outcome & Archive Artifacts",
+    "scripts": [
+      "outcome.mjs",
+      "set-status.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "data/outcomes/",
+      "data/pdf-index.tsv",
+      "output/*",
+      "templates/states.yml"
+    ]
+  },
+  {
+    "id": "patterns",
+    "file": "modes/patterns.md",
+    "title": "Mode: patterns -- Rejection Pattern Detector",
+    "scripts": [
+      "analyze-patterns.mjs",
+      "company-history.mjs",
+      "funnel-velocity.mjs",
+      "salary-gap.mjs",
+      "set-status.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/applications.md",
+      "data/salary-observations.tsv",
+      "data/status-log.tsv",
+      "interview-prep/sessions/*.md",
+      "interview-prep/sessions/README.md",
+      "modes/_profile.md",
+      "portals.yml",
+      "reports/pattern-analysis-",
+      "reports/pattern-analysis-2026-04-08.md"
+    ]
+  },
+  {
+    "id": "pdf",
+    "file": "modes/pdf.md",
+    "title": "Mode: pdf - ATS-Optimized PDF Generation",
+    "scripts": [
+      "build-cv-html.mjs",
+      "cv-templates.mjs",
+      "cv-title-check.mjs",
+      "find.mjs",
+      "generate-cover-letter.mjs",
+      "generate-pdf.mjs",
+      "jd-skill-gap.mjs",
+      "keyword-match.mjs",
+      "verify-ats.mjs",
+      "verify-cv-facts.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/cv-facts.json",
+      "config/profile.yml",
+      "cv.md",
+      "data/pdf-index.tsv",
+      "modes/_custom.md",
+      "modes/ats.md",
+      "modes/cover.md",
+      "modes/heuristics/recruiter-side.md",
+      "modes/latex.md",
+      "modes/pdf/hm-audit.md",
+      "output/cv-",
+      "output/cv-preview.html",
+      "reports/008-acme-",
+      "reports/008-acme-2026-09-28.md",
+      "templates/ats-rules.yml",
+      "voice-dna.md"
+    ]
+  },
+  {
+    "id": "pdf/hm-audit",
+    "file": "modes/pdf/hm-audit.md",
+    "title": "Hiring-Manager Audit of a Tailored CV",
+    "scripts": [
+      "jd-skill-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/pdf-index.tsv",
+      "modes/README.md",
+      "modes/_custom.md",
+      "modes/_profile.md",
+      "modes/oferta.md",
+      "modes/pdf.md",
+      "output/cv-",
+      "output/cv-*-"
+    ]
+  },
+  {
+    "id": "pipeline",
+    "file": "modes/pipeline.md",
+    "title": "Mode: pipeline - URL Inbox (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "check-liveness.mjs",
+      "cv-sync-check.mjs",
+      "rank-pipeline.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "batch/batch-runner.sh",
+      "batch/logs/discard.log",
+      "config/profile.yml",
+      "data/discard.log",
+      "data/pipeline.md",
+      "data/scan-history.tsv",
+      "jds/linkedin-pm-ai.md",
+      "modes/_custom.md",
+      "modes/_profile.md",
+      "modes/_shared.md",
+      "modes/auto-pipeline.md",
+      "modes/latex.md",
+      "modes/pdf.md",
+      "modes/text.md"
+    ]
+  },
+  {
+    "id": "pl/aplikuj",
+    "file": "modes/pl/aplikuj.md",
+    "title": "Tryb: aplikuj -- Asystent na żywo do formularzy aplikacyjnych",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "pl/oferta",
+    "file": "modes/pl/oferta.md",
+    "title": "Tryb: oferta -- Pełna ocena A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "pl/pipeline",
+    "file": "modes/pl/pipeline.md",
+    "title": "Tryb: pipeline -- Inbox URL-i (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "project",
+    "file": "modes/project.md",
+    "title": "Mode: project - Portfolio Project Evaluation",
+    "scripts": [],
+    "paths": []
+  },
+  {
+    "id": "pt/aplicar",
+    "file": "modes/pt/aplicar.md",
+    "title": "Modo: aplicar -- Assistente de Candidatura ao Vivo",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "pt/interview/debrief",
+    "file": "modes/pt/interview/debrief.md",
+    "title": "Mode: interview/debrief - Debrief pós-entrevista",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "pt/interview/plan",
+    "file": "modes/pt/interview/plan.md",
+    "title": "Mode: interview/plan - Planejador de preparação para entrevista",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/hora",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "pt/interview/practice",
+    "file": "modes/pt/interview/practice.md",
+    "title": "Mode: interview/practice - Entrevistador de simulação",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "pt/oferta",
+    "file": "modes/pt/oferta.md",
+    "title": "Modo: oferta -- Avaliação Completa A-F",
+    "scripts": [
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "reports/001-company-2026-01-01.md"
+    ]
+  },
+  {
+    "id": "pt/pipeline",
+    "file": "modes/pt/pipeline.md",
+    "title": "Modo: pipeline -- Inbox de URLs (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "regional/eu-swe",
+    "file": "modes/regional/eu-swe.md",
+    "title": "Mode: eu-swe - European SWE Application Calibration",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "reply-watch",
+    "file": "modes/reply-watch.md",
+    "title": "Mode: reply-watch - Classify Replies & Reconcile Tracker",
+    "scripts": [
+      "paste-reply.mjs",
+      "reply-watch.mjs"
+    ],
+    "paths": [
+      "data/applications.md",
+      "data/follow-ups.md",
+      "data/reply-candidates.json"
+    ]
+  },
+  {
+    "id": "ru/apply",
+    "file": "modes/ru/apply.md",
+    "title": "Режим: apply - Ассистент отклика в реальном времени",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "data/applications.md"
+    ]
+  },
+  {
+    "id": "ru/interview-prep",
+    "file": "modes/ru/interview-prep.md",
+    "title": "Режим: interview-prep - Подготовка к собеседованию",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "ru/interview/debrief",
+    "file": "modes/ru/interview/debrief.md",
+    "title": "Режим: interview/debrief - Разбор после интервью",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "ru/interview/plan",
+    "file": "modes/ru/interview/plan.md",
+    "title": "Режим: interview/plan - План подготовки к собеседованию",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "ru/interview/practice",
+    "file": "modes/ru/interview/practice.md",
+    "title": "Режим: interview/practice - Практический интервьюер",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "ru/oferta",
+    "file": "modes/ru/oferta.md",
+    "title": "Режим: job - Полная оценка A-G",
+    "scripts": [
+      "browser-extract.mjs",
+      "company-history.mjs",
+      "reserve-report-num.mjs",
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "batch/batch-prompt.md",
+      "config/profile.yml",
+      "cv.md",
+      "data/applications.md",
+      "data/blacklist.md",
+      "data/pipeline.md",
+      "data/salary-observations.tsv",
+      "interview-prep/story-bank.md",
+      "modes/_custom.md",
+      "modes/_profile.md",
+      "modes/_shared.md",
+      "modes/offer-prep.md",
+      "modes/pipeline.md",
+      "reports/001-company-2026-01-01.md",
+      "templates/agency-licensing.yml",
+      "templates/immigration-status-requirements.yml",
+      "templates/jurisdiction-ai-screening-disclosure.yml",
+      "templates/jurisdiction-prohibited-content.yml"
+    ]
+  },
+  {
+    "id": "ru/pipeline",
+    "file": "modes/ru/pipeline.md",
+    "title": "Режим: pipeline - Очередь URL (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/company-role.md"
+    ]
+  },
+  {
+    "id": "scan",
+    "file": "modes/scan.md",
+    "title": "Mode: scan - Portal Scanner (Job Discovery)",
+    "scripts": [
+      "audit-portals.mjs",
+      "browser-extract.mjs",
+      "check-liveness.mjs",
+      "scan.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "config/profile.yml",
+      "data/applications.md",
+      "data/parser-output/",
+      "data/pipeline.md",
+      "data/scan-history.tsv",
+      "modes/_shared.md",
+      "portals.yml"
+    ]
+  },
+  {
+    "id": "text",
+    "file": "modes/text.md",
+    "title": "Mode: text - Tailored Markdown CV",
+    "scripts": [],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "data/pdf-index.tsv",
+      "modes/pdf.md",
+      "output/cv-"
+    ]
+  },
+  {
+    "id": "titles",
+    "file": "modes/titles.md",
+    "title": "Mode: titles - Adjacent Job-Title Suggestions",
+    "scripts": [
+      "doctor.mjs"
+    ],
+    "paths": [
+      "config/profile.example.yml",
+      "config/profile.yml",
+      "cv.md",
+      "data/applications.md",
+      "modes/_profile.md",
+      "portals.yml",
+      "templates/portals.example.yml"
+    ]
+  },
+  {
+    "id": "tr/basvuru",
+    "file": "modes/tr/basvuru.md",
+    "title": "Mod: basvuru - Canlı Başvuru Asistanı",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md"
+    ]
+  },
+  {
+    "id": "tr/is-ilani",
+    "file": "modes/tr/is-ilani.md",
+    "title": "Mod: is-ilani - Tam Değerlendirme A-G",
+    "scripts": [
+      "merge-tracker.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "tr/pipeline",
+    "file": "modes/tr/pipeline.md",
+    "title": "Mod: pipeline - İlan Gelen Kutusu",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/kariyer-backend.md"
+    ]
+  },
+  {
+    "id": "tracker",
+    "file": "modes/tracker.md",
+    "title": "Mode: tracker - Applications Tracker",
+    "scripts": [
+      "company-history.mjs",
+      "funnel-velocity.mjs",
+      "merge-tracker.mjs",
+      "salary-gap.mjs",
+      "set-status.mjs",
+      "stats.mjs",
+      "verify-pipeline.mjs"
+    ],
+    "paths": [
+      "data/salary-observations.tsv",
+      "data/status-log.tsv",
+      "modes/pipeline.md"
+    ]
+  },
+  {
+    "id": "training",
+    "file": "modes/training.md",
+    "title": "Mode: training - Training & Course Evaluation",
+    "scripts": [],
+    "paths": []
+  },
+  {
+    "id": "triage",
+    "file": "modes/triage.md",
+    "title": "Mode: triage - First-Pass Quick Score",
+    "scripts": [
+      "doctor.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "config/profile.yml",
+      "cv.md",
+      "jds/role.md",
+      "modes/_brief.md",
+      "modes/_brief.template.md",
+      "modes/_profile.md",
+      "modes/_shared.md",
+      "modes/oferta.md"
+    ]
+  },
+  {
+    "id": "ua/apply",
+    "file": "modes/ua/apply.md",
+    "title": "Режим: apply - Асистент відгуку в реальному часі",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "data/applications.md"
+    ]
+  },
+  {
+    "id": "ua/interview-prep",
+    "file": "modes/ua/interview-prep.md",
+    "title": "Режим: interview-prep - Підготовка до співбесіди",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "ua/interview/debrief",
+    "file": "modes/ua/interview/debrief.md",
+    "title": "Mode: interview/debrief - Post-Interview Debrief",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "ua/interview/plan",
+    "file": "modes/ua/interview/plan.md",
+    "title": "Mode: interview/plan - Планувальник підготовки до співбесіди",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md",
+      "modes/interview/practice.md"
+    ]
+  },
+  {
+    "id": "ua/interview/practice",
+    "file": "modes/ua/interview/practice.md",
+    "title": "Mode: interview/practice - Інтерв'юер для практики",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "ua/oferta",
+    "file": "modes/ua/oferta.md",
+    "title": "Режим: oferta - Повна оцінка A-F",
+    "scripts": [
+      "merge-tracker.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "batch/tracker-additions/",
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "ua/pipeline",
+    "file": "modes/ua/pipeline.md",
+    "title": "Режим: pipeline - Черга URL (Second Brain)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/company-role.md"
+    ]
+  },
+  {
+    "id": "update",
+    "file": "modes/update.md",
+    "title": "Mode: update - Interactive System Update",
+    "scripts": [
+      "doctor.mjs",
+      "hired-share.mjs",
+      "update-system.mjs",
+      "verify-pipeline.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "modes/_profile.md",
+      "modes/_shared.md",
+      "portals.yml"
+    ]
+  },
+  {
+    "id": "upskill",
+    "file": "modes/upskill.md",
+    "title": "Mode: upskill -- Aggregate Skill-Gap Analysis",
+    "scripts": [
+      "upskill.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "cv.md",
+      "data/applications.md",
+      "data/upskill/",
+      "data/upskill/report-",
+      "data/upskill/report-*.md"
+    ]
+  },
+  {
+    "id": "zh-TW/apply",
+    "file": "modes/zh-TW/apply.md",
+    "title": "模式: apply - 即時表單填寫助理",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md",
+      "data/applications.md"
+    ]
+  },
+  {
+    "id": "zh-TW/oferta",
+    "file": "modes/zh-TW/oferta.md",
+    "title": "模式: job - 完整的 A-G 維度評估",
+    "scripts": [],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "zh-TW/pipeline",
+    "file": "modes/zh-TW/pipeline.md",
+    "title": "模式: pipeline - 待處理 URL 收件匣（第二大腦）",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  },
+  {
+    "id": "zh/apply",
+    "file": "modes/zh/apply.md",
+    "title": "模式: apply - 实时表单填写助手",
+    "scripts": [
+      "set-status.mjs"
+    ],
+    "paths": [
+      "applications.md",
+      "cv.md",
+      "data/applications.md"
+    ]
+  },
+  {
+    "id": "zh/interview/debrief",
+    "file": "modes/zh/interview/debrief.md",
+    "title": "Mode: interview/debrief - 面试后复盘",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "cv.md",
+      "data/salary-observations.tsv",
+      "interview-prep/interview-prep-guide.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "zh/interview/plan",
+    "file": "modes/zh/interview/plan.md",
+    "title": "Mode: interview/plan - 面试准备计划器",
+    "scripts": [
+      "salary-gap.mjs"
+    ],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md",
+      "modes/interview-prep.md"
+    ]
+  },
+  {
+    "id": "zh/interview/practice",
+    "file": "modes/zh/interview/practice.md",
+    "title": "Mode: interview/practice - 模拟面试官",
+    "scripts": [],
+    "paths": [
+      "article-digest.md",
+      "config/profile.yml",
+      "cv.md",
+      "interview-prep/question-bank.md",
+      "interview-prep/retracted-claims.md",
+      "interview-prep/sessions/",
+      "interview-prep/sessions/README.md",
+      "interview-prep/story-bank.md",
+      "modes/_profile.md"
+    ]
+  },
+  {
+    "id": "zh/oferta",
+    "file": "modes/zh/oferta.md",
+    "title": "模式: job - 完整的 A-G 维度评估",
+    "scripts": [],
+    "paths": [
+      "cv.md",
+      "data/applications.md",
+      "interview-prep/story-bank.md"
+    ]
+  },
+  {
+    "id": "zh/pipeline",
+    "file": "modes/zh/pipeline.md",
+    "title": "模式: pipeline - 待处理 URL 收件箱 (第二大脑)",
+    "scripts": [
+      "browser-extract.mjs",
+      "cv-sync-check.mjs",
+      "reserve-report-num.mjs"
+    ],
+    "paths": [
+      "config/profile.yml",
+      "data/pipeline.md",
+      "jds/linkedin-pm-ai.md"
+    ]
+  }
+]

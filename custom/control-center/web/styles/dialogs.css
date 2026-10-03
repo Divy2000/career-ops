@@ -1,0 +1,226 @@
+/* Radix dialogs, the cmdk palette, sonner toasts, structured-editor forms and meters. */
+
+.dialog__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 40;
+}
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-14, 14px);
+  padding: var(--space-5, 20px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 12px);
+}
+.dialog__title {
+  font-size: var(--fs-16);
+  font-weight: 600;
+  margin: 0;
+}
+.dialog__body p {
+  margin: 0 0 var(--space-2);
+}
+.dialog__actions {
+  justify-content: flex-end;
+}
+.dialog textarea,
+.dialog input {
+  width: 100%;
+}
+
+button.button--primary,
+button.button--primary:hover,
+button.button--primary:active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+button.button--primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+button.button--danger,
+button.button--danger:hover,
+button.button--danger:active {
+  background: var(--danger);
+  color: var(--accent-fg);
+  border-color: var(--danger);
+}
+.button--ghost {
+  background: transparent;
+}
+
+.palette {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(640px, calc(100vw - 32px));
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-14, 14px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  z-index: 41;
+  overflow: hidden;
+}
+.palette__input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 14px 16px;
+  font-size: var(--fs-16);
+  background: transparent;
+}
+.palette__input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.palette__list {
+  max-height: 55vh;
+  overflow: auto;
+  padding: 8px;
+}
+.palette__empty {
+  padding: 16px;
+  color: var(--text-muted);
+}
+.palette [cmdk-group-heading] {
+  padding: 8px 10px 4px;
+  font-size: var(--fs-12);
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.palette [cmdk-item] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-6, 6px);
+  cursor: pointer;
+  min-height: 32px;
+}
+.palette [cmdk-item][data-selected='true'] {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.palette-trigger {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-muted);
+}
+.palette-trigger kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+}
+.fields__row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: var(--space-3, 12px);
+  align-items: start;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.fields__row:last-child {
+  border-bottom: 0;
+}
+.fields__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fields__label .button--ghost {
+  align-self: flex-start;
+  padding: 0 6px;
+  min-height: 24px;
+}
+.fields__value {
+  min-width: 0;
+}
+.field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.list-editor__items {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.table--compact td,
+.table--compact th {
+  padding: 4px 8px;
+}
+.table--compact input {
+  width: 100%;
+  min-width: 90px;
+}
+.table__add-row td {
+  background: var(--surface-2);
+}
+.selection-bar {
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+}
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.meter__track {
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.meter__fill {
+  height: 100%;
+  background: var(--accent);
+}
+.meter__fill--warn {
+  background: var(--warning);
+}
+.meter__fill--danger {
+  background: var(--danger);
+}
+.usage--compact {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.nav-group--bottom {
+  margin-top: auto;
+}
+.kv__pair {
+  display: contents;
+}
+
+[data-sonner-toaster] {
+  font-family: var(--font-sans);
+}
