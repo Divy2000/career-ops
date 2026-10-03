@@ -22,6 +22,10 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 # Logs and reports follow career-ops' data-root contract (CAREER_OPS_ROOT /
 # .career-ops-data), the same root the control center reads them from.
 DATA="$(cd "$LIVE" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+if [ -z "$DATA" ] || [ ! -d "$DATA" ]; then
+  echo "upstream-sync: cannot resolve the career-ops data root" >&2
+  exit 1
+fi
 STATE_DIR="$DATA/data/upstream-sync"
 TODAY="$(date +%Y-%m-%d)"
 BRANCH="sync/upstream-$TODAY"
