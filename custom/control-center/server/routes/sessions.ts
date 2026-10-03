@@ -4,6 +4,7 @@ import type { ServerConfig } from '../config.js';
 import { BusyError, NotFoundError, type SessionManager } from '../claude/manager.js';
 import { listModeIds } from '../claude/modes.js';
 import { rememberFact } from '../domains/memory.js';
+import { readSettings } from '../domains/settings.js';
 
 const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
 const prompt = z.string().min(1).max(20_000);
@@ -20,7 +21,9 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, reportNum: z.number().int().positive().nullable().optional(), blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
-    const meta = await manager.start({ ...parsed.data, model: parsed.data.model ?? null, reportNum: parsed.data.reportNum ?? null });
+    // App settings supply the default model when the client sends none (empty means the CLI default).
+    const chosenModel = parsed.data.model ?? (readSettings(opts.cfg.dataRoot).settings.modelDefault || null);
+    const meta = await manager.start({ ...parsed.data, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
     return reply.code(202).send(meta);
   });
 

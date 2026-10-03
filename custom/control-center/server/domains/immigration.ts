@@ -110,8 +110,8 @@ export function parseDailyLog(text: string, date: string): DailyLog {
   return { date, startedAt, finishedAt, status, steps, failedSteps, failedCount };
 }
 
-export function listLogDates(dataRoot: string): string[] {
-  const dir = path.join(dataRoot, 'data', 'immigration', 'logs');
+export function listLogDates(dataRoot: string, logDir = path.join('data', 'immigration', 'logs')): string[] {
+  const dir = path.join(dataRoot, logDir);
   try {
     return fs
       .readdirSync(dir)

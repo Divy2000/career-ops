@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,6 +20,10 @@ export interface ServerConfig {
   nodeEnv: string;
   /** Start the data-root file watcher (off in API tests). */
   watch: boolean;
+  /** Where the launchd plists live (tests point this at a temp dir). */
+  launchAgentsDir: string;
+  /** Claude Code local logs read by the usage meter (read-only). */
+  claudeProjectsDir: string;
 }
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,5 +50,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     claudeBin: env.CC_CLAUDE_BIN ?? 'claude',
     nodeEnv: env.NODE_ENV ?? 'development',
     watch: env.CC_WATCH !== '0',
+    launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
+    claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects'),
   };
 }

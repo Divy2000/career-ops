@@ -40,6 +40,10 @@ export default defineConfig({
       // Sessions in e2e use the fake CLI's per-mode scenarios and never touch the Keychain.
       CC_FAKE_SCENARIO_DIR: path.join(here, 'tests/fixtures/scenarios'),
       CC_FAKE_TOKEN: 'e2e-fake-oauth-token',
+      // launchctl and plutil are faked (NODE_ENV=test only); plists land in the temp root, never ~/Library.
+      CC_FAKE_LAUNCHD: '1',
+      CC_LAUNCH_AGENTS_DIR: path.join(dataRoot, '.launch-agents'),
+      CC_CLAUDE_PROJECTS_DIR: path.join(dataRoot, '.claude-projects'),
       CC_NO_OPEN: '1',
     },
   },

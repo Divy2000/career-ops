@@ -7,7 +7,7 @@ import { readTracker } from '../domains/tracker.js';
 import { readReport } from '../domains/reports.js';
 import { readPipeline, readScanHistory } from '../domains/pipeline.js';
 import { readShortlist } from '../domains/shortlist.js';
-import { readImmigrationOverview, readDailyLog, listLogDates } from '../domains/immigration.js';
+import { readImmigrationOverview } from '../domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, type NormalizeTextKey } from '../domains/whatsNew.js';
 import { computeDashboard, readStatusLog } from '../domains/insights.js';
 import { parseFollowupsTable, parseNextOverrides } from '../domains/followups.js';
@@ -125,14 +125,6 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     if (tracker.kind !== 'ok') return { kind: tracker.kind, path: tracker.path };
     return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(cfg.dataRoot)) };
-  });
-
-  app.get('/api/schedule/logs', async () => ({ dates: listLogDates(cfg.dataRoot), latest: listLogDates(cfg.dataRoot)[0] ? readDailyLog(cfg.dataRoot, listLogDates(cfg.dataRoot)[0]!) : null }));
-  app.get<{ Params: { date: string } }>('/api/schedule/logs/:date', async (req, reply) => {
-    const log = readDailyLog(cfg.dataRoot, req.params.date);
-    if (!log) return reply.code(404).send({ error: 'no log for that date' });
-    const raw = readText(path.join(cfg.dataRoot, 'data', 'immigration', 'logs', `${req.params.date}.log`));
-    return { ...log, raw: raw.kind === 'ok' ? raw.text : '' };
   });
 
   app.get('/api/modes', async () => listModeIds().map((id) => getModePolicy(id)));

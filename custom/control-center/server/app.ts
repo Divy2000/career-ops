@@ -17,9 +17,13 @@ import { sessionRoutes } from './routes/sessions.js';
 import { fileRoutes } from './routes/files.js';
 import { devchatRoutes } from './routes/devchat.js';
 import { configRoutes } from './routes/config.js';
+import { settingsRoutes } from './routes/settings.js';
+import { ScheduleService } from './system/schedule.js';
+import { maybeFakeLaunchd } from './system/fake-launchd.js';
+import { readSettings, type AppSettings } from './domains/settings.js';
 
 export interface AppDeps {
-  /** Injectable process runner (tests fake pgrep and launchctl). */
+  /** Injectable process runner (tests fake pgrep, launchctl and plutil). */
   exec?: Exec;
   dailyPollMs?: number;
   /** Keychain token reader for Claude sessions (tests inject a constant). */
@@ -40,7 +44,14 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const app = Fastify({ logger: cfg.nodeEnv === 'test' ? false : { level: 'info' }, trustProxy: false });
   const closers: Array<() => Promise<void>> = [];
   const bus = new EventBus();
-  const runner = new Runner(cfg.dataRoot, bus);
+  // The runner reads this object live, so a settings save changes the slot cap without a restart.
+  const initial = readSettings(cfg.dataRoot).settings;
+  const runnerOpts = { claudeSlots: initial.claudeConcurrency, retention: initial.retention };
+  const runner = new Runner(cfg.dataRoot, bus, runnerOpts);
+  const applySettings = (s: AppSettings) => {
+    runnerOpts.claudeSlots = s.claudeConcurrency;
+    runner.store.setRetention(s.retention);
+  };
   runner.reconcile();
   closers.push(async () => runner.close());
 
@@ -62,6 +73,8 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(fileRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });
   await app.register(configRoutes, { cfg, bus, exec });
+  const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot });
+  await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings });
 
   if (cfg.watch) {
     const watcher = startWatcher(cfg.dataRoot, bus);

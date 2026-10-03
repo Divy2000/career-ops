@@ -15,6 +15,16 @@ export type { DailyStatus } from '../server/system/daily.js';
 export type { SessionEvent } from '../server/claude/stream-parse.js';
 export type { SessionMeta, SessionTurn, SessionStatus, StoredEvent } from '../server/claude/sessions.js';
 export type { Envelope, EnvelopeKind } from '../server/claude/envelopes.js';
+export type { ConfigRead } from '../server/routes/config.js';
+export type { YamlOp } from '../server/domains/yamlOps.js';
+export type { BlacklistRow, BlacklistRead } from '../server/domains/blacklist.js';
+export type { PluginInfo, PluginsRead } from '../server/domains/plugins.js';
+export type { ScheduleState, ScheduleInput } from '../server/system/schedule.js';
+export type { AppSettings } from '../server/domains/settings.js';
+export type { UsageRead, UsageWindow } from '../server/domains/usage.js';
+export type { InsightRead } from '../server/domains/insightsCache.js';
+export type { ContactsRead, ContactRow, InterviewsRead, PrepDoc } from '../server/domains/contacts.js';
+export type { TextRead } from '../server/domains/files.js';
 
 export interface ActionMeta {
   id: string;
@@ -33,6 +43,8 @@ import type { Dashboard, StatusLogRow } from '../server/domains/insights.js';
 import type { FollowupEntry, NextOverride } from '../server/domains/followups.js';
 import type { CompanyFile, DailyLog } from '../server/domains/immigration.js';
 import type { FreshOffer } from '../server/domains/whatsNew.js';
+import type { AppSettings } from '../server/domains/settings.js';
+import type { UsageRead } from '../server/domains/usage.js';
 
 export interface ApplicationDetail {
   row: TrackerRow;
@@ -73,6 +85,18 @@ export interface WhatsNewResponse {
 }
 
 export interface ScheduleLogs {
+  job: string;
   dates: string[];
-  latest: DailyLog | null;
+  latest: (DailyLog & { raw: string }) | null;
 }
+
+export interface CadenceRead {
+  kind: 'ok' | 'missing';
+  etag: string | null;
+  cadence: Record<string, number>;
+  keys: string[];
+  parseError: string | null;
+}
+
+export type AppSettingsRead = AppSettings & { problem: string | null };
+export type UsageResponse = UsageRead & { budgets: AppSettings['usageBudgets'] };

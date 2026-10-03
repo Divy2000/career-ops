@@ -23,9 +23,10 @@ export const TEST_TOKEN = 'test-token-value';
 export const TEST_SECRET = 'test-session-secret';
 
 export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
+  const dataRoot = overrides.dataRoot ?? copyFixtureRoot();
   return {
     codeRoot: DEFAULT_CODE_ROOT,
-    dataRoot: copyFixtureRoot(),
+    dataRoot,
     publicPort: TEST_PORT,
     token: TEST_TOKEN,
     sessionSecret: TEST_SECRET,
@@ -33,6 +34,9 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     claudeBin: FAKE_CLAUDE,
     nodeEnv: 'test',
     watch: false,
+    // Never the real ~/Library/LaunchAgents or ~/.claude/projects.
+    launchAgentsDir: path.join(dataRoot, '.launch-agents'),
+    claudeProjectsDir: path.join(dataRoot, '.claude-projects'),
     ...overrides,
   };
 }

@@ -58,6 +58,11 @@ export class RunStore {
     fs.mkdirSync(runsDir(dataRoot), { recursive: true });
   }
 
+  /** App settings change the cap live; the next prune applies it. */
+  setRetention(n: number): void {
+    this.retention = n;
+  }
+
   dirOf(id: string): string {
     if (!/^[\w-]+$/.test(id)) throw new Error('bad run id');
     return path.join(runsDir(this.dataRoot), id);
