@@ -5,12 +5,15 @@ import { authPlugin, hasSession } from './auth/plugin.js';
 import { PACKAGE_ROOT, type ServerConfig } from './config.js';
 import { systemRoutes } from './routes/system.js';
 import { readRoutes } from './routes/read.js';
+import { actionRoutes } from './routes/actions.js';
 import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
+import { Runner } from './runner/runner.js';
 
 export interface BuiltApp {
   app: FastifyInstance;
   bus: EventBus;
+  runner: Runner;
   close: () => Promise<void>;
 }
 
@@ -18,6 +21,9 @@ export async function buildApp(cfg: ServerConfig): Promise<BuiltApp> {
   const app = Fastify({ logger: cfg.nodeEnv === 'test' ? false : { level: 'info' }, trustProxy: false });
   const closers: Array<() => Promise<void>> = [];
   const bus = new EventBus();
+  const runner = new Runner(cfg.dataRoot, bus);
+  runner.reconcile();
+  closers.push(async () => runner.close());
 
   app.get('/healthz', async () => ({ ok: true, pid: process.pid }));
   // Called directly, not registered: its hooks must live on the root context so
@@ -25,6 +31,7 @@ export async function buildApp(cfg: ServerConfig): Promise<BuiltApp> {
   await authPlugin(app, cfg);
   await app.register(systemRoutes, { cfg });
   await app.register(readRoutes, { cfg, bus });
+  await app.register(actionRoutes, { cfg, runner });
 
   if (cfg.watch) {
     const watcher = startWatcher(cfg.dataRoot, bus);
@@ -67,6 +74,7 @@ export async function buildApp(cfg: ServerConfig): Promise<BuiltApp> {
   return {
     app,
     bus,
+    runner,
     close: async () => {
       bus.drain('server closing');
       for (const c of closers) await c();

@@ -9,6 +9,18 @@ export type { Dashboard, StatusLogRow } from '../server/domains/insights.js';
 export type { FollowupEntry, NextOverride } from '../server/domains/followups.js';
 export type { ModePolicy } from '../server/claude/modes.js';
 export type { SystemStatus } from './types.js';
+export type { RunMeta, RawLine, RunStatus } from '../server/runner/store.js';
+
+export interface ActionMeta {
+  id: string;
+  label: string;
+  cost: 'free' | 'network' | 'tokens';
+  confirm: string | null;
+  resources: string[];
+  claude: boolean;
+  sync: boolean;
+  params: Record<string, unknown>;
+}
 
 import type { TrackerRow } from '../server/domains/tracker.js';
 import type { ReportRead } from '../server/domains/reports.js';
