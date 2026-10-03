@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile } from '../../server/claude/invocation.js';
 import { getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
+import { snapshotKey } from '../../server/claude/guard-hook.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 
@@ -82,9 +83,25 @@ describe('guard hook', () => {
 
   it('allows an in-scope write and snapshots the original (absent marker for new files)', () => {
     expect(pre('Write', { file_path: path.join(realRoot, 'reports', '002-new.md'), content: 'x' }).status).toBe(0);
-    expect(fs.existsSync(path.join(sessionDir, 'before', encodeURIComponent('reports/002-new.md') + '.absent'))).toBe(true);
+    expect(fs.existsSync(snapshotKey(sessionDir, path.join(realRoot, 'reports', '002-new.md')) + '.absent')).toBe(true);
     expect(pre('Edit', { file_path: path.join(realRoot, 'reports', '001-existing.md'), old_string: 'old', new_string: 'new' }).status).toBe(0);
-    expect(fs.readFileSync(path.join(sessionDir, 'before', encodeURIComponent('reports/001-existing.md')), 'utf8')).toBe('old\n');
+    expect(fs.readFileSync(snapshotKey(sessionDir, path.join(realRoot, 'reports', '001-existing.md')), 'utf8')).toBe('old\n');
+  });
+  it('resolves writes against a separate data root and records which root a changed file belongs to', () => {
+    const dataRoot = fs.mkdtempSync(path.join(realRoot, 'data-root-'));
+    fs.mkdirSync(path.join(dataRoot, 'reports'));
+    const dir = path.join(realRoot, 'session-data');
+    fs.mkdirSync(dir);
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, dataRoot, policy: getModePolicy('oferta')! });
+    const run = (event: string, tool: string, input: Record<string, unknown>) => hookRun(dir, pf, { hook_event_name: event, tool_name: tool, tool_input: input, cwd: realRoot, session_id: 's' });
+    expect(run('PreToolUse', 'Write', { file_path: path.join(dataRoot, 'reports', '009-x.md'), content: 'x' }).status).toBe(0);
+    expect(run('PreToolUse', 'Write', { file_path: path.join(dataRoot, 'cv.md'), content: 'x' }).status).toBe(2);
+    expect(run('PreToolUse', 'Write', { file_path: path.join(realRoot, 'reports', '009-x.md'), content: 'x' }).status).toBe(0);
+    expect(run('PostToolUse', 'Write', { file_path: path.join(dataRoot, 'reports', '009-x.md') }).status).toBe(0);
+    const rec = JSON.parse(fs.readFileSync(path.join(dir, 'files.ndjson'), 'utf8').trim()) as { path: string; abs: string; root: string };
+    expect(rec).toMatchObject({ path: 'reports/009-x.md', abs: path.join(dataRoot, 'reports', '009-x.md'), root: 'data' });
+    expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/data')).toEqual(expect.arrayContaining(['Edit(//code/reports/**)', 'Edit(//data/reports/**)']));
+    expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/code').filter((t) => t.includes('reports/**'))).toHaveLength(1);
   });
   it('denies writes outside the scope, outside the code root, and always the blacklist and the tracker', () => {
     const out = pre('Write', { file_path: path.join(realRoot, 'cv.md'), content: 'x' });

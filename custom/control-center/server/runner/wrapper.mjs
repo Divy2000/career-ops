@@ -17,9 +17,12 @@ if (!runDir || !cwd || !cmd) {
 const rawPath = path.join(runDir, 'raw.ndjson');
 const out = fs.createWriteStream(rawPath, { flags: 'a' });
 let seq = 0;
+// The Claude OAuth token travels in env only; it never reaches the stored log.
+const secret = process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
 const write = (stream, line) => {
   seq += 1;
-  out.write(JSON.stringify({ seq, ts: new Date().toISOString(), stream, line }) + '\n');
+  const text = secret ? line.split(secret).join('[redacted]') : line;
+  out.write(JSON.stringify({ seq, ts: new Date().toISOString(), stream, line: text }) + '\n');
 };
 
 const child = spawn(cmd, args, { cwd, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });

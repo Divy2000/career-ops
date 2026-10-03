@@ -35,9 +35,10 @@ export function editRule(codeRoot: string, glob: string): string {
   return `Edit(//${path.join(codeRoot, glob).replace(/^\/+/, '')})`;
 }
 
-export function buildAllowedTools(policy: ModePolicy, codeRoot: string): string[] {
+/** Write rules cover the code root and, when the user data lives elsewhere, the data root too. */
+export function buildAllowedTools(policy: ModePolicy, codeRoot: string, dataRoot: string = codeRoot): string[] {
   const tools = [...READ_TOOLS, ...policy.network];
-  for (const g of policy.writeGlobs) tools.push(editRule(codeRoot, g));
+  for (const root of [...new Set([codeRoot, dataRoot])]) for (const g of policy.writeGlobs) tools.push(editRule(root, g));
   tools.push(...policy.bashRules);
   if (policy.allowsTask) tools.push('Task');
   if (policy.mcp === 'playwright') tools.push('mcp__playwright');
@@ -55,7 +56,7 @@ export function buildDisallowedTools(policy: ModePolicy): string[] {
 }
 
 export function buildArgv(input: InvocationInput): string[] {
-  const allowed = buildAllowedTools(input.policy, input.codeRoot);
+  const allowed = buildAllowedTools(input.policy, input.codeRoot, input.dataRoot);
   const disallowed = buildDisallowedTools(input.policy);
   return [
     '-p',
@@ -124,6 +125,8 @@ export function buildPreamble(input: PreambleInput): string {
 
 export interface PolicyFile {
   codeRoot: string;
+  /** User data root; equals codeRoot unless CAREER_OPS_ROOT redirects it. */
+  dataRoot: string;
   sessionDir: string;
   allow: string[];
   deny: string[];
@@ -132,9 +135,10 @@ export interface PolicyFile {
 }
 
 /** Policy JSON the guard hook reads; `extraAllow` carries per-turn unlocks (Dev Chat blacklist checkbox). */
-export function writePolicyFile(sessionDir: string, opts: { codeRoot: string; policy: ModePolicy; extraAllow?: string[]; deny?: string[] }): string {
+export function writePolicyFile(sessionDir: string, opts: { codeRoot: string; dataRoot?: string; policy: ModePolicy; extraAllow?: string[]; deny?: string[] }): string {
   const policy: PolicyFile = {
     codeRoot: opts.codeRoot,
+    dataRoot: opts.dataRoot ?? opts.codeRoot,
     sessionDir,
     allow: [...opts.policy.writeGlobs, ...(opts.extraAllow ?? [])],
     deny: opts.deny ?? [...ALWAYS_DENIED_WRITES],

@@ -60,6 +60,16 @@ export function relativeToRoot(codeRoot, target) {
   return rel.split(path.sep).join('/');
 }
 
+/** The data root wins when it differs from the code root (relative paths resolve against the code root, the session cwd). */
+export function locate(policy, target) {
+  const roots = [...new Set([policy.dataRoot || policy.codeRoot, policy.codeRoot])];
+  for (const root of roots) {
+    const rel = relativeToRoot(root, path.isAbsolute(target) ? target : path.resolve(policy.codeRoot, target));
+    if (rel) return { rel, abs: path.resolve(root, rel), root: root === policy.codeRoot ? 'code' : 'data' };
+  }
+  return null;
+}
+
 export function checkBash(command, allowed) {
   if (/[`]|\$\(/.test(command)) return 'Bash: command substitution is not allowed';
   const tokens = shellParse(command);
@@ -72,10 +82,14 @@ export function checkBash(command, allowed) {
   return ok ? null : `Bash: only these commands are allowed: ${allowed.map((p) => p.join(' ')).join(', ')}`;
 }
 
-function snapshot(sessionDir, rel, abs) {
-  const dir = path.join(sessionDir, 'before');
-  fs.mkdirSync(dir, { recursive: true });
-  const key = path.join(dir, encodeURIComponent(rel));
+/** First-touch snapshot keyed by the absolute path, so code-root and data-root files never collide. */
+export function snapshotKey(sessionDir, abs) {
+  return path.join(sessionDir, 'before', encodeURIComponent(abs));
+}
+
+function snapshot(sessionDir, abs) {
+  fs.mkdirSync(path.join(sessionDir, 'before'), { recursive: true });
+  const key = snapshotKey(sessionDir, abs);
   if (fs.existsSync(key) || fs.existsSync(`${key}.absent`)) return;
   if (fs.existsSync(abs)) fs.copyFileSync(abs, key);
   else fs.writeFileSync(`${key}.absent`, '');
@@ -94,8 +108,8 @@ function main() {
   if (event === 'PostToolUse') {
     if (WRITE_TOOLS.has(tool)) {
       const target = input.file_path ?? input.notebook_path;
-      const rel = typeof target === 'string' ? relativeToRoot(policy.codeRoot, target) : null;
-      if (rel) fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), JSON.stringify({ path: rel, tool, ts: new Date().toISOString() }) + '\n');
+      const found = typeof target === 'string' ? locate(policy, target) : null;
+      if (found) fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), JSON.stringify({ path: found.rel, abs: found.abs, root: found.root, tool, ts: new Date().toISOString() }) + '\n');
     }
     process.exit(0);
   }
@@ -103,11 +117,12 @@ function main() {
   if (WRITE_TOOLS.has(tool)) {
     const target = input.file_path ?? input.notebook_path;
     if (typeof target !== 'string' || !target) deny(`${tool}: no file path`);
-    const rel = relativeToRoot(policy.codeRoot, target);
-    if (!rel) deny(`${tool}: ${target} is outside the repo root; sessions may only write inside it`);
+    const found = locate(policy, target);
+    if (!found) deny(`${tool}: ${target} is outside the repo and data roots; sessions may only write inside them`);
+    const { rel, abs } = found;
     if (matches(rel, policy.deny)) deny(`${tool}: ${rel} is always protected (blacklist and tracker are edited only through the app or core CLIs)`);
     if (!matches(rel, policy.allow)) deny(`${tool}: ${rel} is not in the write scope (${policy.allow.join(', ') || 'none'})`);
-    snapshot(sessionDir, rel, path.resolve(policy.codeRoot, rel));
+    snapshot(sessionDir, abs);
     process.exit(0);
   }
 

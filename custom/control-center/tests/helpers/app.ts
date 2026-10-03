@@ -45,9 +45,14 @@ export interface TestApp extends BuiltApp {
   authedWrite: Record<string, string>;
 }
 
+export const SCENARIO_DIR = path.join(PACKAGE_ROOT, 'tests', 'fixtures', 'scenarios');
+export const FAKE_TOKEN = 'fake-oauth-token-for-tests';
+
 export async function makeTestApp(overrides: Partial<ServerConfig> = {}, deps: AppDeps = {}): Promise<TestApp> {
   const cfg = testConfig(overrides);
-  const built = await buildApp(cfg, deps);
+  // The fake Claude picks its scenario by mode; the token never comes from the Keychain in tests.
+  process.env.CC_FAKE_SCENARIO_DIR = SCENARIO_DIR;
+  const built = await buildApp(cfg, { readToken: async () => FAKE_TOKEN, sessionPollMs: 50, ...deps });
   const authed = { host: TEST_HOST, cookie: `${SESSION_COOKIE}=${TEST_SECRET}` };
   return {
     ...built,

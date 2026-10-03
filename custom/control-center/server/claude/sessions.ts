@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { PolicyClass } from './modes.js';
+import { monotonicIso } from '../runner/store.js';
 import type { SessionEvent } from './stream-parse.js';
 
 export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'error' | 'cancelled';
@@ -35,6 +36,10 @@ export interface SessionMeta {
   filesChanged: string[];
   forkedFrom: string | null;
   error: string | null;
+  /** Report number reserved for this evaluation (fan-out), released when unused. */
+  reportNum: number | null;
+  /** Why the last turn ended in its status (honesty gate reason). */
+  lastReason: string | null;
 }
 
 export interface StoredEvent {
@@ -62,8 +67,8 @@ export class SessionStore {
     return path.join(sessionsDir(this.dataRoot), id);
   }
 
-  create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string }): SessionMeta {
-    const now = new Date().toISOString();
+  create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null }): SessionMeta {
+    const now = monotonicIso();
     const meta: SessionMeta = {
       id: newId(),
       claudeSessionId: input.claudeSessionId ?? crypto.randomUUID(),
@@ -79,6 +84,8 @@ export class SessionStore {
       filesChanged: [],
       forkedFrom: input.forkedFrom ?? null,
       error: null,
+      reportNum: input.reportNum ?? null,
+      lastReason: null,
     };
     fs.mkdirSync(path.join(this.dirOf(meta.id), 'before'), { recursive: true });
     this.write(meta);
@@ -132,7 +139,7 @@ export class SessionStore {
     return meta;
   }
 
-  endTurn(id: string, n: number, result: { costUsd: number; tokens: number; permissionDenials: number; status: Extract<SessionStatus, 'awaiting_user' | 'done' | 'error' | 'cancelled'>; error?: string }): SessionMeta {
+  endTurn(id: string, n: number, result: { costUsd: number; tokens: number; permissionDenials: number; status: Extract<SessionStatus, 'awaiting_user' | 'done' | 'error' | 'cancelled'>; error?: string; reason?: string }): SessionMeta {
     const meta = this.mustRead(id);
     const turn = meta.turns.find((t) => t.n === n);
     if (!turn) throw new Error(`no turn ${n} in session ${id}`);
@@ -143,8 +150,17 @@ export class SessionStore {
     meta.totals = { costUsd: round(meta.totals.costUsd + result.costUsd), tokens: meta.totals.tokens + result.tokens };
     meta.status = result.status;
     meta.error = result.error ?? null;
+    meta.lastReason = result.reason ?? null;
     this.write(meta);
     return meta;
+  }
+
+  /** Removes the session directory (sessions are kept until the user deletes them). */
+  delete(id: string): boolean {
+    const dir = this.dirOf(id);
+    if (!fs.existsSync(dir)) return false;
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
   }
 
   setStatus(id: string, status: SessionStatus, error?: string): SessionMeta {

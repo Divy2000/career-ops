@@ -43,6 +43,13 @@ export function newRunId(): string {
   return `${ts}-${crypto.randomBytes(3).toString('hex')}`;
 }
 
+let lastStamp = 0;
+/** Strictly increasing within the process, so lists and pruning order runs created in the same millisecond deterministically. */
+export function monotonicIso(): string {
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return new Date(lastStamp).toISOString();
+}
+
 export class RunStore {
   constructor(
     private dataRoot: string,
@@ -61,7 +68,7 @@ export class RunStore {
       ...meta,
       id: newRunId(),
       status: 'queued',
-      createdAt: new Date().toISOString(),
+      createdAt: monotonicIso(),
       startedAt: null,
       endedAt: null,
       exitCode: null,

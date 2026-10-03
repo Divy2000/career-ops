@@ -12,17 +12,23 @@ import { Runner } from './runner/runner.js';
 import { writeRoutes } from './routes/writes.js';
 import { DailyJobWatch } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
+import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
+import { sessionRoutes } from './routes/sessions.js';
 
 export interface AppDeps {
   /** Injectable process runner (tests fake pgrep and launchctl). */
   exec?: Exec;
   dailyPollMs?: number;
+  /** Keychain token reader for Claude sessions (tests inject a constant). */
+  readToken?: TokenReader;
+  sessionPollMs?: number;
 }
 
 export interface BuiltApp {
   app: FastifyInstance;
   bus: EventBus;
   runner: Runner;
+  sessions: SessionManager;
   close: () => Promise<void>;
 }
 
@@ -46,6 +52,10 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(readRoutes, { cfg, bus, exec });
   await app.register(actionRoutes, { cfg, runner, exec });
   await app.register(writeRoutes, { cfg, daily });
+  const sessions = new SessionManager(cfg, runner, bus, { readToken: deps.readToken ?? keychainTokenReader(exec), exec, pollMs: deps.sessionPollMs });
+  sessions.reconcile();
+  closers.push(async () => sessions.close());
+  await app.register(sessionRoutes, { cfg, manager: sessions });
 
   if (cfg.watch) {
     const watcher = startWatcher(cfg.dataRoot, bus);
@@ -89,6 +99,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
     app,
     bus,
     runner,
+    sessions,
     close: async () => {
       bus.drain('server closing');
       for (const c of closers) await c();

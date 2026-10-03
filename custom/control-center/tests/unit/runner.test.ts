@@ -45,6 +45,16 @@ describe('wrapper.mjs', () => {
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'wrapper.json'), 'utf8')).childPid).toBeGreaterThan(0);
   });
 
+  it('redacts the Claude OAuth token from stored lines', () => {
+    const dir = path.join(tmpRoot(), 'run3');
+    fs.mkdirSync(dir);
+    const r = spawnSync(process.execPath, [WRAPPER_PATH, dir, PACKAGE_ROOT, process.execPath, '-e', 'console.log("token=" + process.env.CLAUDE_CODE_OAUTH_TOKEN); console.error(process.env.CLAUDE_CODE_OAUTH_TOKEN)'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-secret-value' } });
+    expect(r.status).toBe(0);
+    const raw = fs.readFileSync(path.join(dir, 'raw.ndjson'), 'utf8');
+    expect(raw).not.toContain('sk-ant-oat-secret-value');
+    expect(raw).toContain('token=[redacted]');
+  });
+
   it('records a spawn failure instead of hanging', () => {
     const dir = path.join(tmpRoot(), 'run2');
     fs.mkdirSync(dir);
@@ -69,6 +79,8 @@ describe('RunStore', () => {
     store.write({ ...d, status: 'done' });
     store.prune();
     const ids = store.list().map((r) => r.id);
+    // Four runs created within one millisecond still list newest first, deterministically.
+    expect(ids).toEqual([d.id, c.id, b.id]);
     expect(ids).toContain(c.id);
     expect(ids).toContain(d.id);
     expect(ids).toContain(b.id);

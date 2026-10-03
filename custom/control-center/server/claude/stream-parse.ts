@@ -13,8 +13,9 @@ export type SessionEvent =
   | { type: 'envelope'; kind: string; payload: unknown }
   | { type: 'envelope.invalid'; kind: string; error: string; raw: string }
   | { type: 'turn.done'; costUsd: number; tokens: number; numTurns: number; isError: boolean }
+  | { type: 'evaluation'; reports: Array<{ num: number; file: string; score: number | null }> }
   | { type: 'stderr'; text: string }
-  | { type: 'status'; status: string }
+  | { type: 'status'; status: string; reason?: string; turn?: number }
   | { type: 'error'; message: string };
 
 type Json = Record<string, unknown>;
