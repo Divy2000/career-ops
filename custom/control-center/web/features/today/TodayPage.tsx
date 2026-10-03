@@ -1,6 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone } from '../../components/ui';
+import { MdInline } from '../../components/Md';
+import { summarizeDigest } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
 
 function DailyJobChip() {
@@ -29,7 +31,7 @@ export function TodayPage() {
   const followups = useFollowups();
   const fresh = useWhatsNew(7, 6);
   const today = new Date().toISOString().slice(0, 10);
-  const trackerMissing = tracker.data?.kind === 'missing';
+  const trackerEmpty = tracker.data?.kind === 'missing' || (tracker.data?.kind === 'ok' && tracker.data.rows.length === 0);
 
   return (
     <section aria-labelledby="page-title">
@@ -44,17 +46,17 @@ export function TodayPage() {
 
       <QuickEvaluate />
 
-      {trackerMissing && (
+      {trackerEmpty && (
         <div className="card hero">
           <h2>Start with your CV</h2>
-          <p className="muted">No tracker yet. Import your CV on the Profile & CV page, then run a free scan to seed matches.</p>
+          <p className="muted">No applications yet. Import your CV on the Profile & CV page, then run a free scan to seed matches.</p>
           <Link to="/profile" className="button-link">
             Go to Profile & CV
           </Link>
         </div>
       )}
 
-      <div className="grid-2">
+      <div className="grid-2 grid-2--today">
         <div className="stack">
           <div className="card">
             <h2>Shortlist top 15</h2>
@@ -68,14 +70,12 @@ export function TodayPage() {
                   {shortlist.data.rows.length === 0 ? (
                     <Empty>No ranked rows yet. Rank the pipeline to fill this list.</Empty>
                   ) : (
-                    <table className="table">
+                    <table className="table table--compact-cells">
                       <thead>
                         <tr>
                           <th scope="col">Score</th>
-                          <th scope="col">Sponsor</th>
                           <th scope="col">Company</th>
                           <th scope="col">Role</th>
-                          <th scope="col">Location</th>
                           <th scope="col">Posted</th>
                           <th scope="col">
                             <span className="sr-only">Actions</span>
@@ -86,14 +86,26 @@ export function TodayPage() {
                         {shortlist.data.rows.slice(0, 15).map((r) => (
                           <tr key={r.rank}>
                             <td>
-                              <ScorePill score={r.score} />
+                              <div className="stack-tight">
+                                <ScorePill score={r.score} />
+                                <SponsorPill tier={r.sponsor} />
+                              </div>
                             </td>
                             <td>
-                              <SponsorPill tier={r.sponsor} />
+                              <div className="clip clip--company" title={r.company}>
+                                {r.company}
+                              </div>
+                              {r.location && (
+                                <div className="clip clip--company muted small" title={r.location}>
+                                  {r.location}
+                                </div>
+                              )}
                             </td>
-                            <td>{r.company}</td>
-                            <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
-                            <td className="muted">{r.location ?? ''}</td>
+                            <td>
+                              <div className="clamp-2" title={r.role}>
+                                {r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}
+                              </div>
+                            </td>
                             <td className="mono muted">{r.posted ?? ''}</td>
                             <td>
                               <button type="button" disabled title="Evaluate sessions arrive with the Claude engine phase">
@@ -130,15 +142,16 @@ export function TodayPage() {
               {immigration.data && immigration.data.digest.kind === 'ok' && immigration.data.digest.sections[0] ? (
                 <>
                   <p className="faint">{immigration.data.digest.sections[0].date}</p>
-                  <ul className="bullets">
-                    {immigration.data.digest.sections[0].body
-                      .split('\n')
-                      .filter((l) => /^\s*[-*]\s+/.test(l))
-                      .slice(0, 4)
-                      .map((l, i) => (
-                        <li key={i}>{l.replace(/^\s*[-*]\s+/, '')}</li>
-                      ))}
+                  <ul className="bullets" aria-label="Policy highlights">
+                    {summarizeDigest(immigration.data.digest.sections[0].body).map((line, i) => (
+                      <li key={i}>
+                        <MdInline text={line} />
+                      </li>
+                    ))}
                   </ul>
+                  <Link to="/sponsorship" search={{ tab: 'overview' }}>
+                    Read full digest
+                  </Link>
                 </>
               ) : (
                 <Empty>No digest yet. Run the AI policy pass from Sponsorship.</Empty>

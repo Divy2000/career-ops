@@ -1,6 +1,7 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useDashboard } from '../../lib/queries';
 import { Bar, DataState, Empty, Tabs } from '../../components/ui';
+import { EmptyTracker } from '../../components/EmptyTracker';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { ScriptTab } from './ScriptTab';
 
@@ -62,7 +63,11 @@ export function InsightsPage() {
         </div>
       )}
       {DASHBOARD_TABS.includes(tab) && (
-        <DataState query={q} missing={<span>No tracker yet, so nothing to measure.</span>}>
+        <DataState query={q} emptyState={<EmptyTracker nothingTo="measure" />}>
+          {d && d.totals.applications === 0 ? (
+            <EmptyTracker nothingTo="measure" />
+          ) : (
+            <>
           {d && tab === 'overview' && (
             <div className="stack">
               <div className="tiles">
@@ -161,6 +166,8 @@ export function InsightsPage() {
                 ))}
               </div>
             </div>
+          )}
+            </>
           )}
         </DataState>
       )}

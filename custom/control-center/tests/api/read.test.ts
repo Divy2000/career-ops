@@ -150,6 +150,30 @@ describe('GET /api/followups on an empty tracker', () => {
   });
 });
 
+describe('insight scripts on an empty tracker', () => {
+  const HEADER_ONLY = '# Applications Tracker\n\n| # | Date | Company | Via | Role | Score | Status | PDF | Report | Notes |\n|---|------|---------|-----|------|-------|--------|-----|--------|-------|\n';
+  const arrange: Array<[string, (root: string) => void]> = [
+    ['no tracker file', (root) => fs.rmSync(path.join(root, 'data', 'applications.md'))],
+    ['a header-only tracker', (root) => fs.writeFileSync(path.join(root, 'data', 'applications.md'), HEADER_ONLY)],
+  ];
+
+  it.each(arrange)('every cached insight script reads as ok, not failed, for %s', async (_name, prepare) => {
+    const t2 = await makeTestApp();
+    prepare(t2.cfg.dataRoot);
+    fs.rmSync(path.join(t2.cfg.dataRoot, 'data', 'follow-ups.md'));
+    fs.rmSync(path.join(t2.cfg.dataRoot, 'data', 'status-log.tsv'));
+    const ids = ((await t2.app.inject({ method: 'GET', url: '/api/insights/scripts', headers: t2.authed })).json() as Array<{ id: string }>).map((s) => s.id);
+    expect(ids.length).toBeGreaterThan(5);
+    for (const id of ids) {
+      const res = await t2.app.inject({ method: 'GET', url: `/api/insights/${id}?recompute=1`, headers: t2.authed });
+      expect(res.statusCode, id).toBe(200);
+      const body = res.json();
+      expect({ id, kind: body.kind, exit: body.exit, text: body.text }, `${id} output`).toMatchObject({ kind: 'ok', exit: 0 });
+    }
+    await t2.close();
+  });
+});
+
 describe('file serving', () => {
   it('serves reports under the data root with the right content type', async () => {
     const res = await get('/api/files/serve?path=reports/001-acme-robotics.md');

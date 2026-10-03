@@ -19,3 +19,16 @@ export function Md({ text }: { text: string }) {
     </div>
   );
 }
+
+const inlineComponents: Components = { p: ({ children }) => <>{children}</> };
+
+/** One line of sanitized markdown (bold, links) with no block wrapper, for list items and table cells. */
+export function MdInline({ text }: { text: string }) {
+  return (
+    <span className="md-inline">
+      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={inlineComponents}>
+        {text}
+      </Markdown>
+    </span>
+  );
+}

@@ -115,7 +115,7 @@ function CadenceTab() {
       <DataState query={q}>
         {q.data &&
           (q.data.entries.length === 0 ? (
-            <Empty>No applications in follow-up cadence yet.</Empty>
+            <Empty>No applications in follow-up cadence yet. Once you apply to a job, its follow-ups are scheduled here.</Empty>
           ) : (
             <table className="table">
               <thead>

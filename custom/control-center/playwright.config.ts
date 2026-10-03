@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { writeEmptyRoot, writeStressRoot } from './tests/e2e/roots.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
@@ -14,12 +15,54 @@ const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-root-'));
 // Session policies and revert bookkeeping: outside the data root, never the real ~/Library.
 const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-guard-'));
 fs.cpSync(path.join(here, 'tests/fixtures/root'), dataRoot, { recursive: true });
+
+// Two more apps on their own ports: a first launch with an empty tracker, and a root with real-world sized rows for layout checks.
+// The roots are created once by the Playwright process; workers re-import this file and reuse them through the environment.
+export const EMPTY_PORT = 4398;
+export const STRESS_PORT = 4397;
+const FIXTURE_ROOT = path.join(here, 'tests/fixtures/root');
+function derivedRoot(envKey: string, prefix: string, write: (dir: string, fixtureRoot: string) => void): string {
+  const existing = process.env[envKey];
+  if (existing) return existing;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  write(dir, FIXTURE_ROOT);
+  process.env[envKey] = dir;
+  return dir;
+}
+export const EMPTY_ROOT = derivedRoot('CC_E2E_EMPTY_ROOT', 'cc-e2e-empty-', writeEmptyRoot);
+const stressRoot = derivedRoot('CC_E2E_STRESS_ROOT', 'cc-e2e-stress-', writeStressRoot);
 // A synthetic Claude Code usage log so the token meter has something to read (never the real ~/.claude).
 fs.mkdirSync(path.join(dataRoot, '.claude-projects', 'synthetic'), { recursive: true });
 fs.writeFileSync(
   path.join(dataRoot, '.claude-projects', 'synthetic', 'session.jsonl'),
   JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), requestId: 'e2e-1', message: { usage: { input_tokens: 1200, output_tokens: 300, cache_creation_input_tokens: 400 } } }) + '\n',
 );
+
+function serverFor(port: number, root: string, guard = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-guard-'))) {
+  return {
+    command: 'npm start',
+    cwd: here,
+    url: `http://127.0.0.1:${port}/healthz`,
+    reuseExistingServer: false,
+    timeout: 120_000,
+    env: {
+      NODE_ENV: 'test',
+      CC_PORT: String(port),
+      CC_TOKEN: E2E_TOKEN,
+      CC_DATA_ROOT: root,
+      CC_GUARD_DIR: guard,
+      CC_CLAUDE_BIN: path.join(here, 'tests/fakes/claude.mjs'),
+      // Sessions in e2e use the fake CLI's per-mode scenarios and never touch the Keychain.
+      FAKE_CLAUDE_SCENARIO_DIR: path.join(here, 'tests/fixtures/scenarios'),
+      CC_FAKE_TOKEN: 'e2e-fake-oauth-token',
+      // launchctl and plutil are faked (NODE_ENV=test only); plists land in the temp root, never ~/Library.
+      CC_FAKE_LAUNCHD: '1',
+      CC_LAUNCH_AGENTS_DIR: path.join(root, '.launch-agents'),
+      CC_CLAUDE_PROJECTS_DIR: path.join(root, '.claude-projects'),
+      CC_NO_OPEN: '1',
+    },
+  };
+}
 
 export default defineConfig({
   testDir: path.join(here, 'tests/e2e'),
@@ -33,27 +76,14 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${E2E_PORT}`,
     trace: 'retain-on-failure',
   },
-  webServer: {
-    command: 'npm start',
-    cwd: here,
-    url: `http://127.0.0.1:${E2E_PORT}/healthz`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: {
-      NODE_ENV: 'test',
-      CC_PORT: String(E2E_PORT),
-      CC_TOKEN: E2E_TOKEN,
-      CC_DATA_ROOT: dataRoot,
-      CC_GUARD_DIR: guardRoot,
-      CC_CLAUDE_BIN: path.join(here, 'tests/fakes/claude.mjs'),
-      // Sessions in e2e use the fake CLI's per-mode scenarios and never touch the Keychain.
-      FAKE_CLAUDE_SCENARIO_DIR: path.join(here, 'tests/fixtures/scenarios'),
-      CC_FAKE_TOKEN: 'e2e-fake-oauth-token',
-      // launchctl and plutil are faked (NODE_ENV=test only); plists land in the temp root, never ~/Library.
-      CC_FAKE_LAUNCHD: '1',
-      CC_LAUNCH_AGENTS_DIR: path.join(dataRoot, '.launch-agents'),
-      CC_CLAUDE_PROJECTS_DIR: path.join(dataRoot, '.claude-projects'),
-      CC_NO_OPEN: '1',
-    },
-  },
+  projects: [
+    { name: 'main', testIgnore: [/empty\.spec\.ts/, /layout\.spec\.ts/] },
+    { name: 'empty', testMatch: /empty\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${EMPTY_PORT}` } },
+    { name: 'layout', testMatch: /layout\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${STRESS_PORT}` } },
+  ],
+  webServer: [
+    serverFor(E2E_PORT, dataRoot, guardRoot),
+    serverFor(EMPTY_PORT, EMPTY_ROOT),
+    serverFor(STRESS_PORT, stressRoot),
+  ],
 });

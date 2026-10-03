@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useTracker } from '../../lib/queries';
 import { DataState, Empty, ScorePill, StatusPill, Tabs } from '../../components/ui';
+import { EmptyTracker } from '../../components/EmptyTracker';
 import { StatusControl } from './StatusControl';
 import { AskTrackerPanel } from './AskTrackerPanel';
 import { CompareSelected } from './CompareSelected';
@@ -191,7 +192,11 @@ export function TrackerPage() {
         </span>
       </div>
       <AskTrackerPanel />
-      <DataState query={q} missing={<span>No applications yet. Evaluate an offer to create the tracker.</span>}>
+      <DataState query={q} emptyState={<EmptyTracker />}>
+        {data?.kind === 'ok' && rows.length === 0 ? (
+          <EmptyTracker />
+        ) : (
+          <>
         <Tabs label="Status" tabs={TRACKER_TABS.map((t) => ({ id: t.id, label: t.label, count: rows.filter(t.match).length }))} value={search.tab} onChange={(tab) => update({ tab })} />
         <div className="toolbar">
           <input id="tracker-search" type="search" placeholder="Search company, role, notes" aria-label="Search tracker" value={search.q} onChange={(e) => update({ q: e.target.value })} />
@@ -324,6 +329,8 @@ export function TrackerPage() {
               Close
             </button>
           </div>
+        )}
+          </>
         )}
       </DataState>
     </section>
