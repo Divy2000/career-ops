@@ -1,0 +1,122 @@
+#!/usr/bin/env node
+// Zero-token check of official US sources for work-visa policy items.
+// Appends never-seen items to data/immigration/official-feed.tsv and prints
+// them as JSON on stdout, so the daily Claude run only reads what is new.
+//
+//   node custom/immigration/watch.mjs [--since YYYY-MM-DD]
+
+import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor } from './lib.mjs';
+import { getCareerOpsRoot } from '../../path-resolver.mjs';
+
+const DIR = path.join(getCareerOpsRoot(), 'data/immigration');
+const SEEN = path.join(DIR, 'seen.json');
+const FEED = path.join(DIR, 'official-feed.tsv');
+const FEED_HEADER = 'first_seen\tpublished\tsource\ttitle\turl\n';
+// Readers also accept headerless files; creating the headers keeps them self-describing.
+const HEADERS = {
+  'policy-changes.tsv': 'detected_date\tannounced_date\tsource\ttitle\turl\timpact\n',
+  'company-alerts.tsv': 'date\tcompany\tslug\tstatus\theadline\turl\n',
+};
+
+const FR_TERMS = ['H-1B', 'nonimmigrant workers', 'labor certification', 'employment-based immigrant', 'optional practical training'];
+const USCIS_RSS = 'https://www.uscis.gov/news/rss-feed/59144';
+const TIMEOUT_MS = 30000;
+
+async function fetchText(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'user-agent': 'career-ops immigration-watch' } });
+  if (!res.ok) throw new Error(`${url} returned HTTP ${res.status}`);
+  return res.text();
+}
+
+async function federalRegister(since) {
+  const items = [];
+  for (const term of FR_TERMS) {
+    const q = new URLSearchParams({
+      'conditions[term]': term,
+      'conditions[publication_date][gte]': since,
+      order: 'newest',
+      per_page: '1000', // the API maximum; one page covers any realistic gap
+    });
+    for (const f of ['title', 'publication_date', 'html_url', 'document_number', 'type', 'agencies']) q.append('fields[]', f);
+    // Follow every page before the source counts as successful, so a catch-up
+    // run after an outage cannot advance the cursor past unread results.
+    let url = `https://www.federalregister.gov/api/v1/documents.json?${q}`;
+    const visited = new Set();
+    while (url) {
+      if (visited.has(url)) throw new Error(`Federal Register returned a repeating next_page_url for "${term}"`);
+      visited.add(url);
+      const data = JSON.parse(await fetchText(url));
+      for (const d of data.results ?? []) {
+        const agencies = (d.agencies ?? []).map((a) => a.name).join(', ');
+        items.push({ id: `fr:${d.document_number}`, source: `Federal Register (${d.type}; ${agencies})`, title: d.title, url: d.html_url, published: d.publication_date });
+      }
+      url = data.next_page_url ?? null;
+    }
+  }
+  return items;
+}
+
+async function uscis(since) {
+  return parseRssItems(await fetchText(USCIS_RSS))
+    .filter((i) => i.date >= since)
+    .map((i) => ({ id: `uscis:${i.url}`, source: 'USCIS news', title: i.title, url: i.url, published: i.date }));
+}
+
+function parseArgs(argv) {
+  const i = argv.indexOf('--since');
+  if (i === -1) return { since: null };
+  const since = argv[i + 1];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since ?? '')) throw new Error('--since needs a YYYY-MM-DD date');
+  return { since };
+}
+
+async function main() {
+  const { since: sinceArg } = parseArgs(process.argv.slice(2));
+  await mkdir(DIR, { recursive: true });
+  for (const [name, header] of Object.entries(HEADERS)) {
+    const file = path.join(DIR, name);
+    if (!existsSync(file)) await writeFile(file, header);
+  }
+  const seen = existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] };
+  const lastSuccess = { ...(seen.last_success ?? {}) };
+  const today = new Date().toISOString().slice(0, 10);
+  // Each source keeps its own last-success date, so a long outage of one source
+  // is backfilled from where it stopped instead of only the default lookback.
+  const sinceFor = (source) => sinceArg ?? sinceForSource({ lastSuccess: sourceCursor(seen, source), today });
+
+  const sources = { 'federal-register': federalRegister, uscis };
+  const names = Object.keys(sources);
+  const results = await Promise.allSettled(names.map((n) => sources[n](sinceFor(n))));
+  const errors = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') lastSuccess[names[i]] = today;
+    else errors.push(`${names[i]}: ${r.reason.message}`);
+  });
+  if (errors.length === results.length) throw new Error(`every source failed: ${errors.join('; ')}`);
+
+  const known = new Set(seen.ids);
+  const fresh = [];
+  for (const item of results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))) {
+    if (known.has(item.id) || !isRelevantPolicyItem(item.title)) continue;
+    known.add(item.id);
+    fresh.push(item);
+  }
+
+  if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
+  const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
+  if (fresh.length) {
+    await appendFile(FEED, fresh.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
+  }
+  await writeFile(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
+
+  const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
+  process.stdout.write(JSON.stringify({ date: today, since, new_items: fresh, source_errors: errors }, null, 2) + '\n');
+}
+
+main().catch((err) => {
+  process.stderr.write(`immigration-watch failed: ${err.message}\n`);
+  process.exit(1);
+});

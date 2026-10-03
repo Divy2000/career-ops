@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+// Sponsorship-aware shortlist of ranked pipeline rows -> data/shortlist.md.
+// Score = relevance rank + DOL sponsorship-tier adjustment; companies with a
+// paused/stopped/restricted alert in data/immigration/company-alerts.tsv are
+// listed separately and never shortlisted. Zero LLM tokens.
+//
+//   node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
+
+import { readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseRow, buildShortlist, pickSearchMatch } from './lib.mjs';
+import * as yaml from 'js-yaml';
+import { buildTitleFilter, PIPELINE_PATH, PORTALS_PATH } from '../../scan.mjs';
+import { companySlug, parseCompanyAlerts } from '../immigration/lib.mjs';
+import { getCareerOpsRoot } from '../../path-resolver.mjs';
+
+const run = promisify(execFile);
+// Code lives in the checkout; user data follows career-ops' data-root contract.
+const CODE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const DATA = getCareerOpsRoot();
+// Same resolved paths (data root + CAREER_OPS_* overrides) the scanner uses.
+const PIPELINE = PIPELINE_PATH;
+const PORTALS = PORTALS_PATH;
+const ALERTS = path.join(DATA, 'data/immigration/company-alerts.tsv');
+const TIER_CACHE = path.join(DATA, 'data/immigration/sponsor-tiers.json');
+const OUT = path.join(DATA, 'data/shortlist.md');
+const CHECK = path.join(CODE, 'plugins/h1b-sponsor/check.mjs');
+const TIER_TTL_DAYS = 30;
+
+function arg(name, fallback) {
+  const i = process.argv.indexOf(name);
+  if (i === -1) return fallback;
+  const n = Number(process.argv[i + 1]);
+  if (!Number.isFinite(n)) throw new Error(`${name} needs a number`);
+  return n;
+}
+
+async function checkName(name) {
+  const { stdout } = await run('node', [CHECK, name, '--json'], { cwd: CODE, timeout: 60000 });
+  const res = JSON.parse(stdout);
+  return { tier: res.found ? res.friendlinessTier : 'unknown', matched: res.displayName ?? null };
+}
+
+// Feeds use brand names; DOL uses legal names. On a miss, search by the first
+// six letters and accept only a candidate whose leading words spell the name.
+async function lookupTier(company) {
+  const direct = await checkName(company);
+  if (direct.tier !== 'unknown') return direct;
+  const probe = company.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6);
+  if (probe.length < 3) return { ...direct, searched: true };
+  const { stdout } = await run('node', [CHECK, probe, '--search'], { cwd: CODE, timeout: 60000 });
+  const candidates = stdout.split('\n').map((l) => l.match(/^\s+\d+\s+(.+?)\s*$/)?.[1]).filter(Boolean);
+  const legal = pickSearchMatch(company, candidates);
+  if (!legal) return { ...direct, searched: true };
+  return { ...(await checkName(legal)), searched: true };
+}
+
+async function loadTiers(companies, today) {
+  const cache = existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {};
+  const fresh = (e) => e && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
+  let looked = 0;
+  for (const c of companies) {
+    if (fresh(cache[c])) continue;
+    if (!c.replace(/\b(inc|llc|ltd|corp)\b\.?/gi, '').trim()) {
+      cache[c] = { tier: 'unknown', matched: null, checked: today, note: 'no usable company name' };
+      continue;
+    }
+    try {
+      cache[c] = { ...(await lookupTier(c)), checked: today };
+    } catch (err) {
+      process.stderr.write(`tier lookup failed for ${c}: ${err.message.split('\n')[0]}\n`);
+      cache[c] = { tier: 'unknown', matched: null, checked: today, error: true };
+    }
+    looked++;
+  }
+  await writeFile(TIER_CACHE, JSON.stringify(cache, null, 2) + '\n');
+  return { tiers: new Map(companies.map((c) => [c, cache[c].tier])), looked };
+}
+
+async function loadAlerts(companies) {
+  if (!existsSync(ALERTS)) return new Map();
+  const bySlug = parseCompanyAlerts(await readFile(ALERTS, 'utf8'));
+  const out = new Map();
+  for (const c of companies) {
+    let slug;
+    try {
+      slug = companySlug(c);
+    } catch {
+      continue; // feed gave no usable company name (e.g. "Inc."); nothing to match
+    }
+    const hit = bySlug.get(slug) ?? [...bySlug].find(([s]) => slug.startsWith(`${s}-`))?.[1];
+    if (hit) out.set(c, hit);
+  }
+  return out;
+}
+
+const cell = (s) => String(s ?? '').replace(/\|/g, '/');
+
+async function main() {
+  const minRank = arg('--min-rank', 3);
+  const top = arg('--top', 40);
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = (await readFile(PIPELINE, 'utf8')).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
+  const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];
+  const { tiers, looked } = await loadTiers(companies, today);
+  const alerts = await loadAlerts(companies);
+  const titleOk = buildTitleFilter(yaml.load(await readFile(PORTALS, 'utf8')).title_filter);
+  const { shortlist, excluded } = buildShortlist(rows, { tiers, alerts, minRank, keep: (r) => titleOk(r.title) });
+
+  const md = [
+    `# Shortlist - ${today}`,
+    '',
+    `Ranked rows with rank >= ${minRank}: ${shortlist.length + excluded.length}. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5). Sponsorship tier is DOL filing history and lags policy; full evaluation re-checks current news.`,
+    '',
+    '| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |',
+    '|---|---|---|---|---|---|---|---|---|',
+    ...shortlist.slice(0, top).map((s, i) =>
+      `| ${i + 1} | ${s.score} | ${s.rank} | ${cell(s.sponsor)} | ${cell(s.company)} | [${cell(s.title)}](${s.url}) | ${cell(s.location)} | ${s.posted ?? '-'} | ${cell(s.rankReason)} |`),
+    '',
+    `## Excluded by sponsorship alerts (${excluded.length})`,
+    '',
+    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title)}](${s.url}) - ${cell(s.sponsor)}`) : ['- none']),
+    '',
+  ].join('\n');
+  await writeFile(OUT, md);
+  process.stdout.write(`shortlist: ${shortlist.length} kept, ${excluded.length} excluded, ${companies.length} companies (${looked} tier lookups) -> data/shortlist.md\n`);
+}
+
+main().catch((err) => {
+  process.stderr.write(`shortlist failed: ${err.message}\n`);
+  process.exit(1);
+});
