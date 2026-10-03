@@ -14,6 +14,7 @@ import { SessionsPage, SessionDetailPage } from './features/sessions/SessionsPag
 import { ApplyPage, ApplyRowPage } from './features/apply/ApplyPage';
 import { ProfilePage } from './features/profile/ProfilePage';
 import { DevChatPage } from './features/dev/DevChatPage';
+import { SettingsPage, type SettingsTab } from './features/settings/SettingsPage';
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -98,7 +99,12 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: SessionDetailPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/profile', component: ProfilePage }),
-  placeholder('/settings', 'Settings'),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/settings',
+    component: SettingsPage,
+    validateSearch: (s: Loose): { tab: SettingsTab } => ({ tab: oneOf(['portals', 'profile', 'rules', 'engine', 'health', 'updates'] as const, s.tab, 'portals') }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: '/dev', component: DevChatPage }),
 ]);
 

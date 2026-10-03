@@ -50,9 +50,19 @@ Runner and actions (phase P2, partial):
 - Async actions run through `server/runner/wrapper.mjs`, started detached so server reloads never kill them. The wrapper writes `raw.ndjson` (NDJSON lines) and `exit.json` under `{DATA_ROOT}/data/control-center/runs/<id>/`. The runner orders runs that share a resource (FIFO), caps Claude runs, cancels by SIGTERM on the process group (SIGKILL after 5 s), reconciles running runs after a restart, and keeps the last 500 finished runs.
 - `GET /api/runs/:id/events` replays the log from `Last-Event-ID` and then tails it; the Runs page shows it live. The Tracker preview changes a status through `tracker.setStatus`, with a discard-reason picker for Discarded and SKIP.
 
+AI sessions and Dev Chat (phases P4 and P5):
+
+- Every mode in `modes/**` has a prompt panel on its host page (Application tabs for documents, outreach, interview and offer; Pipeline "Process inbox" and "Evaluate visible"; Tracker "Ask about tracker"; Follow-ups drafts; Insights "AI analyses"; Discover "AI search" plus scan modes; Sponsorship "Run AI policy pass"; the Application Sponsorship tab "Refresh check"; Profile & CV flows and exports; Today "Quick evaluate"). The Sessions page lists every session, shows the transcript live, and offers reply, Fork and Cancel; "New session" launches any mode.
+- Apply (`/apply`, `/apply/$n`) renders the `<<cc:answers>>` envelope as an editable form. Playwright MCP has not been probed on this machine (`contract.json` `playwrightMcp.probed`), so the page drafts answers only and says so; "Fill real form" stays disabled until a launch probe passes.
+- The Ask drawer (Cmd+J) runs the read-only advisor and renders `<<cc:act>>` proposals; anything that writes asks first. `remember` appends to the managed block in `modes/_profile.md`.
+- Dev Chat (`/dev`) edits the user layer and `custom/**` (never `supervisor/**`, `node_modules`, `applications.md`, or the blacklist unless the checkbox is ticked for that turn). The Changes panel shows per-turn unified diffs with Revert file / Revert turn; `/__recovery` (served by the supervisor, token or cookie gated) offers the same reverts even when the server child is broken. Server edits trigger a blue/green restart; a failed restart keeps the old server and shows a banner.
+- Settings has raw YAML editors for `portals.yml` and `config/profile.yml` gated by `validate-portals.mjs` / `validate-profile.mjs` (422 on failure, nothing written), the house rules editor, AI engine status, health scripts and read-only update status with a link to the latest upstream-sync PR.
+
 ## AI sessions and permissions
 
 Sessions run `claude -p` headless with `--permission-mode dontAsk`, path-scoped `Edit(...)` rules (which also cover Write and MultiEdit), a `--settings` PreToolUse/PostToolUse guard hook and `--strict-mcp-config`. Policy classes live in `server/claude/modes.ts`; the mode list is derived from `modes/**/*.md` by `scripts/derive-mode-policies.ts` and frozen in `modes.generated.json`. A test fails when the modes tree drifts.
+
+`server/claude/manager.ts` runs each turn through the detached runner (Claude slot cap, default 2), reads the OAuth token from the Keychain at spawn (never written to disk; the wrapper redacts it from stored logs), normalizes stream-json into `events.ndjson`, and applies the honesty gate: an evaluation is "done" only after a clean exit, output and a new report under `reports/` (score read from the header). A turn that ends with a question, or an envelope mode without its envelope, becomes `awaiting_user`. Fan-out reserves report numbers with `reserve-report-num.mjs --count N` first and releases each sentinel when its session ends. The guard hook resolves writes against both the code root and the data root, snapshots first touches per turn, and denies git, network tools and shell operators in Bash.
 
 ## Daily job and schedule
 
@@ -70,7 +80,7 @@ npm --prefix custom/control-center run probe:claude   # two real haiku calls; re
 ```
 
 - `tests/fixtures/root/` is a synthetic career-ops data root (no real names or companies). Every test copies it to a temp dir; nothing touches the real data root.
-- `tests/fakes/claude.mjs` replays stream-json scenario files (`CC_FAKE_SCENARIO`), honors `--session-id` / `--resume`, performs scripted writes and runs the real guard hook from `--settings`.
+- `tests/fakes/claude.mjs` replays stream-json scenario files, honors `--session-id` / `--resume`, performs scripted writes and Bash steps and runs the real guard hook from `--settings`. Scenarios live in `tests/fixtures/scenarios/<mode>.json` and are picked by `CC_MODE` (set by the session manager) under `CC_FAKE_SCENARIO_DIR`; `CC_FAKE_SCENARIO` forces one file. `{{DATA_ROOT}}` and `{{REPORT_NUM}}` are substituted. Tests set `CC_FAKE_TOKEN` so no test reads the Keychain.
 - `server/core/contract.json` records the core CLI flags, pure exports and the Claude CLI probe results; `tests/unit/contract.test.ts` re-verifies them against the installed checkout and CLI on every run.
 
 ## How the weekly upstream merge is protected

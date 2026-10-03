@@ -50,5 +50,6 @@ test('navigation reaches every sidebar page', async ({ page }) => {
   await page.goto(`/auth?t=${E2E_TOKEN}`);
   await page.getByRole('link', { name: 'Settings' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
-  await expect(page).toHaveURL(/\/settings$/);
+  // Settings keeps its tab in the URL (URL is the state for tabs), defaulting to Portals.
+  await expect(page).toHaveURL(/\/settings\?tab=portals$/);
 });
