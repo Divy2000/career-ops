@@ -1,8 +1,12 @@
 // Static action registry: the only way the client runs anything. Every entry
 // builds an argv array; the client never sends a command string.
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { z } from 'zod';
+import YAML from 'yaml';
 import type { Cost } from '../runner/store.js';
-import { cliScriptPath } from '../core/adapter.js';
+import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
 
@@ -15,6 +19,8 @@ export interface Command {
   bin: string;
   args: string[];
   cwd: string;
+  /** Extra environment for this run only (paths, never secrets). */
+  env?: Record<string, string>;
 }
 
 export interface ActionDef<S extends z.ZodType = z.ZodType> {
@@ -35,17 +41,41 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
 
 export const TRACKER_STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
 
-const node = (ctx: ActionContext, id: Parameters<typeof cliScriptPath>[1], args: string[]): Command => ({
+type CliId = Parameters<typeof cliScriptPath>[1];
+const node = (ctx: ActionContext, id: CliId, args: string[], env?: Record<string, string>): Command => ({
   bin: process.execPath,
   args: [cliScriptPath(ctx.codeRoot, id), ...args],
   cwd: ctx.codeRoot,
+  ...(env ? { env } : {}),
 });
 
 function define<S extends z.ZodType>(def: ActionDef<S>): ActionDef<S> {
   return def;
 }
 
+const flag = (on: boolean | undefined, name: string): string[] => (on ? [name] : []);
+const opt = (value: string | number | undefined, name: string): string[] => (value === undefined || value === '' ? [] : [name, String(value)]);
+const none = z.object({});
+const dryRun = z.object({ dryRun: z.boolean().default(false) });
+const positive = z.number().int().positive();
+const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
+const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
+const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) only').max(2048);
+const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
+
+/** Ephemeral input files live under the data root, never in the repo. */
+function tmpFile(ctx: ActionContext, ext: string, content: string): string {
+  const dir = path.join(ctx.dataRoot, 'data', 'control-center', 'tmp');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`);
+  fs.writeFileSync(file, content);
+  return file;
+}
+
+const RUN_DAILY = 'custom/immigration/run-daily.sh';
+
 export const ACTIONS: ActionDef[] = [
+  // ---- tracker ----
   define({
     id: 'tracker.setStatus',
     label: 'Set application status',
@@ -53,54 +83,67 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: true,
-    params: z.object({
-      row: z.number().int().positive(),
-      state: z.enum(TRACKER_STATES),
-      note: z.string().max(500).optional(),
-      on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    }),
-    build: (p, ctx) => node(ctx, 'setStatus', ['--row', String(p.row), p.state, '--source', 'web', '--json', ...(p.note ? ['--note', p.note] : []), ...(p.on ? ['--on', p.on] : [])]),
+    params: z.object({ row: positive, state: z.enum(TRACKER_STATES), note: z.string().max(500).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
+    build: (p, ctx) => node(ctx, 'setStatus', ['--row', String(p.row), p.state, '--source', 'web', '--json', ...opt(p.note, '--note'), ...opt(p.on, '--on')]),
     exitMap: { 1: 400, 2: 404, 3: 409, 4: 503 },
   }),
   define({
-    id: 'tracker.verify',
-    label: 'Verify tracker and pipeline',
+    id: 'tracker.delete',
+    label: 'Delete tracker row',
     cost: 'free',
-    resources: [],
+    confirm: 'Removes the row from applications.md and reindexes. The report file stays on disk as an orphan. Continue?',
+    resources: ['tracker'],
+    claude: false,
+    sync: true,
+    params: z.object({ n: positive, dryRun: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),
+  }),
+  define({ id: 'tracker.verify', label: 'Verify tracker and pipeline', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'verifyPipeline', []) }),
+  define({ id: 'tracker.normalize', label: 'Normalize statuses', cost: 'free', resources: ['tracker'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'normalizeStatuses', flag(p.dryRun, '--dry-run')) }),
+  define({ id: 'tracker.dedup', label: 'Deduplicate tracker', cost: 'free', resources: ['tracker'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'dedupTracker', flag(p.dryRun, '--dry-run')) }),
+  define({
+    id: 'tracker.merge',
+    label: 'Merge tracker additions',
+    cost: 'free',
+    resources: ['tracker'],
     claude: false,
     sync: false,
-    params: z.object({}),
-    build: (_p, ctx) => node(ctx, 'verifyPipeline', []),
+    params: z.object({ dryRun: z.boolean().default(false), verify: z.boolean().default(false), backfillUrls: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'mergeTracker', [...flag(p.dryRun, '--dry-run'), ...flag(p.verify, '--verify'), ...flag(p.backfillUrls, '--backfill-urls')]),
   }),
+  define({ id: 'tracker.reconcile', label: 'Reconcile pipeline with tracker', cost: 'free', resources: ['tracker', 'pipeline'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'reconcilePipeline', flag(p.dryRun, '--dry-run')) }),
+  define({ id: 'tracker.syncCheck', label: 'Tracker sync check', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']) }),
   define({
-    id: 'system.doctor',
-    label: 'Doctor',
+    id: 'tracker.hiredShare',
+    label: 'Draft Hired Wall story',
     cost: 'free',
     resources: [],
     claude: false,
     sync: true,
-    params: z.object({}),
-    build: (_p, ctx) => node(ctx, 'doctor', ['--json']),
+    params: z.object({ report: positive, anonymity: z.enum(['handle', 'role', 'count']), story: z.string().max(2000).optional() }),
+    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--anonymity', p.anonymity, ...opt(p.story, '--story')]),
   }),
   define({
-    id: 'insights.stats',
-    label: 'Stats',
+    id: 'tracker.hiredMark',
+    label: 'Record the Hired Wall answer',
     cost: 'free',
     resources: [],
     claude: false,
     sync: true,
-    params: z.object({}),
-    build: (_p, ctx) => node(ctx, 'stats', []),
+    params: z.object({ report: positive, mark: z.enum(['shared', 'later', 'never']) }),
+    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--mark', p.mark]),
   }),
+  // ---- pipeline ----
+  define({ id: 'pipeline.prioritize', label: 'Prioritize pipeline', cost: 'free', resources: ['pipeline'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'prioritize', []) }),
   define({
-    id: 'pipeline.prioritize',
-    label: 'Prioritize pipeline',
-    cost: 'free',
+    id: 'pipeline.rank',
+    label: 'Rank pipeline',
+    cost: 'tokens',
     resources: ['pipeline'],
-    claude: false,
+    claude: true,
     sync: false,
-    params: z.object({}),
-    build: (_p, ctx) => node(ctx, 'prioritize', []),
+    params: z.object({ limit: positive.max(200).default(50), model: safeToken.optional(), dryRun: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'rankPipeline', ['--limit', String(p.limit), ...opt(p.model, '--model'), ...flag(p.dryRun, '--dry-run')]),
   }),
   define({
     id: 'pipeline.shortlist',
@@ -109,9 +152,191 @@ export const ACTIONS: ActionDef[] = [
     resources: ['pipeline'],
     claude: false,
     sync: false,
-    params: z.object({ minRank: z.number().min(0).max(5).optional(), top: z.number().int().positive().max(500).optional() }),
-    build: (p, ctx) => node(ctx, 'shortlist', [...(p.minRank !== undefined ? ['--min-rank', String(p.minRank)] : []), ...(p.top !== undefined ? ['--top', String(p.top)] : [])]),
+    params: z.object({ minRank: z.number().min(0).max(5).optional(), top: positive.max(500).optional() }),
+    build: (p, ctx) => node(ctx, 'shortlist', [...opt(p.minRank, '--min-rank'), ...opt(p.top, '--top')]),
   }),
+  define({ id: 'pipeline.reserveReportNums', label: 'Reserve report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ count: positive.max(50) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--count', String(p.count)]) }),
+  define({ id: 'pipeline.releaseReportNums', label: 'Release report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ range: z.string().regex(/^\d+(-\d+)?(,\d+(-\d+)?)*$/) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]) }),
+  define({
+    id: 'pipeline.batchRun',
+    label: 'Batch evaluate',
+    cost: 'tokens',
+    confirm: 'Runs one Claude evaluation per URL through batch/batch-runner.sh. Continue?',
+    resources: ['tracker', 'pipeline'],
+    claude: true,
+    sync: false,
+    params: z.object({ urls: z.array(httpUrl).min(1).max(100), parallel: positive.max(4).default(1) }),
+    build: (p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, CONTRACT.batchRunner.script), tmpFile(ctx, 'tsv', p.urls.join('\n') + '\n'), '--cli', 'claude', '--parallel', String(p.parallel)], cwd: ctx.codeRoot }),
+  }),
+  // ---- scan ----
+  define({
+    id: 'scan.portals',
+    label: 'Scan portals',
+    cost: 'network',
+    resources: ['pipeline'],
+    claude: false,
+    sync: false,
+    params: z.object({ verify: z.boolean().default(false), includeBlacklisted: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'scan', [...flag(p.verify, '--verify'), ...flag(p.includeBlacklisted, '--include-blacklisted')]),
+  }),
+  define({
+    id: 'scan.network',
+    label: 'Network scan (dry run)',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({
+      roles: z.array(z.string().max(100)).max(30).default([]),
+      exclude: z.array(z.string().max(100)).max(30).default([]),
+      locationAllow: z.array(z.string().max(100)).max(30).default([]),
+      block: z.array(z.string().max(100)).max(30).default([]),
+      sinceDays: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(14), z.literal(30)]).default(7),
+      ats: z.array(safeToken).min(1).max(10),
+      limit: positive.min(50).max(500).default(100),
+      seeds: safeToken.optional(),
+      includeUndated: z.boolean().default(false),
+    }),
+    build: (p, ctx) => {
+      const portals = YAML.stringify({
+        title_filter: { include: p.roles, exclude: p.exclude },
+        location_filter: { strict: false, allow: p.locationAllow, block: p.block },
+        tracked_companies: [],
+        job_boards: [],
+        search_queries: [],
+      });
+      const file = tmpFile(ctx, 'yml', `# Ephemeral filters for one network scan\n${portals}`);
+      return node(ctx, 'scanAtsFull', ['--dry-run', '--json', '--since', String(p.sinceDays), '--ats', p.ats.join(','), '--limit', String(p.limit), ...opt(p.seeds, '--seeds'), ...flag(p.includeUndated, '--include-undated')], { CAREER_OPS_PORTALS: file });
+    },
+  }),
+  define({
+    id: 'scan.full',
+    label: 'Full ATS scan',
+    cost: 'network',
+    resources: ['pipeline'],
+    claude: false,
+    sync: false,
+    params: z.object({ since: positive.max(90).optional(), ats: z.array(safeToken).max(10).default([]), limit: positive.max(500).optional(), dryRun: z.boolean().default(false), liveness: z.boolean().default(false), includeUndated: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'scanAtsFull', [...opt(p.since, '--since'), ...(p.ats.length ? ['--ats', p.ats.join(',')] : []), ...opt(p.limit, '--limit'), ...flag(p.dryRun, '--dry-run'), ...flag(p.liveness, '--liveness'), ...flag(p.includeUndated, '--include-undated')]),
+  }),
+  define({ id: 'scan.seeds', label: 'Scan VC portfolio seeds', cost: 'network', resources: ['pipeline'], claude: false, sync: false, params: z.object({ list: safeToken }), build: (p, ctx) => node(ctx, 'scanAtsFull', ['--seeds', p.list]) }),
+  define({ id: 'scan.hn', label: 'Scan Hacker News hiring', cost: 'network', resources: ['pipeline'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'scanHn', []) }),
+  define({ id: 'scan.interamt', label: 'Scan Interamt', cost: 'network', resources: ['pipeline'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'scanInteramt', []) }),
+  define({
+    id: 'scan.funded',
+    label: 'Recently funded companies',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ months: positive.max(36).default(6), sort: z.enum(['date', 'amount', 'name']).optional(), sources: safeToken.optional() }),
+    build: (p, ctx) => node(ctx, 'companyFunded', ['--dry-run', '--json', '--months', String(p.months), ...opt(p.sort, '--sort'), ...opt(p.sources, '--sources')]),
+  }),
+  define({ id: 'scan.reposts', label: 'Detect reposts', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'detectReposts', ['--summary']) }),
+  // ---- portals ----
+  define({ id: 'portals.validate', label: 'Validate portals.yml', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'validatePortals', []) }),
+  define({ id: 'portals.verify', label: 'Verify portal slugs', cost: 'network', resources: ['portals'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'verifyPortals', []) }),
+  define({
+    id: 'portals.audit',
+    label: 'Audit portals',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ company: company.optional(), smallThreshold: positive.max(1000).optional(), baselineRunId: z.string().regex(/^[\w-]+$/).optional() }),
+    build: (p, ctx) => node(ctx, 'auditPortals', ['--json', ...opt(p.company, '--company'), ...opt(p.smallThreshold, '--small-threshold'), ...(p.baselineRunId ? ['--baseline', path.join(ctx.dataRoot, 'data', 'control-center', 'runs', p.baselineRunId, 'raw.ndjson')] : [])]),
+  }),
+  define({
+    id: 'portals.fixSlugs',
+    label: 'Fix portal slugs',
+    cost: 'network',
+    confirm: 'Rewrites broken slugs in portals.yml. Run the dry run first. Continue?',
+    resources: ['portals'],
+    claude: false,
+    sync: false,
+    params: z.object({ apply: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'fixSlugs', p.apply ? ['--apply'] : ['--dry-run']),
+  }),
+  // ---- immigration ----
+  define({ id: 'immigration.watch', label: 'Check official feeds', cost: 'network', resources: ['immigration:policy'], claude: false, sync: false, params: z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }), build: (p, ctx) => node(ctx, 'immigrationWatch', opt(p.since, '--since')) }),
+  define({ id: 'immigration.freshness', label: 'Company check freshness', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ company }), build: (p, ctx) => node(ctx, 'freshness', [p.company]) }),
+  define({
+    id: 'immigration.h1b',
+    label: 'H-1B sponsor lookup',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: true,
+    params: z.object({ company, mode: z.enum(['summary', 'json', 'search']).default('summary') }),
+    build: (p, ctx) => node(ctx, 'h1bCheck', p.mode === 'search' ? ['--search', p.company] : [p.company, `--${p.mode}`]),
+  }),
+  // ---- documents ----
+  define({
+    id: 'docs.renderPdf',
+    label: 'Re-render PDF from HTML',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ n: positive, html: relOutput, pdf: relOutput, format: z.enum(['letter', 'a4']).default('letter') }),
+    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), `--format=${p.format}`, `--report=${p.n}`]),
+  }),
+  define({ id: 'docs.coverPdf', label: 'Render cover letter PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ payloadPath: relOutput }), build: (p, ctx) => node(ctx, 'generateCoverLetter', ['--payload', path.join(ctx.dataRoot, p.payloadPath)]) }),
+  define({ id: 'docs.archivePosting', label: 'Archive posting', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ n: positive, url: httpUrl }), build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.n)]) }),
+  define({ id: 'docs.liveness', label: 'Check posting liveness', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ urls: z.array(httpUrl).min(1).max(200) }), build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]) }),
+  define({ id: 'docs.fetchJd', label: 'Fetch job description', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'fetchJd', [p.url]) }),
+  define({ id: 'docs.prepareApplication', label: 'Prepare application (zero-token prefill)', cost: 'network', resources: [], claude: false, sync: true, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'prepareApplication', ['--url', p.url]) }),
+  define({ id: 'docs.appArtifactsInit', label: 'Initialize application artifacts', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive }), build: (p, ctx) => node(ctx, 'applicationArtifacts', ['--init', '--report', String(p.n)]) }),
+  define({ id: 'docs.imgToPdf', label: 'Image to PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ file: relOutput }), build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file)]) }),
+  // ---- insights ----
+  define({ id: 'insights.stats', label: 'Stats', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'stats', []) }),
+  ...(
+    [
+      ['insights.funnelVelocity', 'Funnel velocity', 'funnelVelocity'],
+      ['insights.analyzePatterns', 'Analyze patterns', 'analyzePatterns'],
+      ['insights.salaryGap', 'Salary gap', 'salaryGap'],
+      ['insights.upskill', 'Upskill suggestions', 'upskill'],
+      ['insights.rejectionLatency', 'Rejection latency', 'rejectionLatency'],
+      ['insights.processQuality', 'Process quality', 'processQuality'],
+      ['insights.weeklyDigest', 'Weekly digest', 'weeklyDigest'],
+      ['insights.assessmentLog', 'Assessment log', 'assessmentLog'],
+      ['insights.jdSkillGap', 'JD skill gap', 'jdSkillGap'],
+      ['insights.storyProvenance', 'Story provenance check', 'storyProvenanceCheck'],
+      ['insights.contacts', 'Contacts summary', 'contacts'],
+    ] as Array<[string, string, CliId]>
+  ).map(([id, label, cli]) => define({ id, label, cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, cli, ['--summary']) })),
+  define({ id: 'insights.companyHistory', label: 'Company history', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company')]) }),
+  define({ id: 'insights.keywordMatch', label: 'Keyword match', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive.optional() }), build: (p, ctx) => node(ctx, 'keywordMatch', ['--json', ...(p.n ? [String(p.n)] : [])]) }),
+  define({ id: 'insights.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text), '--json']) }),
+  define({ id: 'insights.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
+  // ---- follow-ups ----
+  define({ id: 'followups.seed', label: 'Seed follow-up cadence', cost: 'free', resources: ['followups'], claude: false, sync: false, params: z.object({ backfill: z.boolean().default(false) }), build: (p, ctx) => node(ctx, 'followupSeed', [...flag(p.backfill, '--backfill'), '--json']) }),
+  define({
+    id: 'followups.replyPaste',
+    label: 'Paste a reply',
+    cost: 'free',
+    resources: ['tracker'],
+    claude: false,
+    sync: true,
+    params: z.object({ subject: z.string().max(500), from: z.string().max(300), body: z.string().min(1).max(50_000) }),
+    build: (p, ctx) => node(ctx, 'pasteReply', ['--file', tmpFile(ctx, 'eml', `From: ${p.from.replace(/[\r\n]+/g, ' ')}\nSubject: ${p.subject.replace(/[\r\n]+/g, ' ')}\n\n${p.body}\n`)]),
+  }),
+  define({ id: 'followups.replyWatch', label: 'Reply watch digest', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'replyWatch', []) }),
+  define({ id: 'followups.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text), '--json']) }),
+  define({ id: 'followups.contactsVcf', label: 'Export contacts (vCard)', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ callerId: safeToken }), build: (p, ctx) => node(ctx, 'contacts', ['--vcf', '--caller-id', p.callerId]) }),
+  define({ id: 'followups.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
+  // ---- plugins ----
+  define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),
+  define({ id: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }), build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]) }),
+  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'pluginAudit', []) }),
+  // ---- system ----
+  define({ id: 'system.doctor', label: 'Doctor', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'doctor', ['--json']) }),
+  define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),
+  define({ id: 'system.updateCheck', label: 'Check for updates', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ force: z.boolean().default(false) }), build: (p, ctx) => node(ctx, 'updateSystem', ['check', ...flag(p.force, '--force')]) }),
+  define({ id: 'system.updateApply', label: 'Apply update', cost: 'network', confirm: 'This fork takes updates through the weekly sync PR. Applying directly can conflict with it. Continue anyway?', resources: ['tracker', 'pipeline', 'portals', 'profile'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['apply', '--confirm']) }),
+  define({ id: 'system.updateDismiss', label: 'Dismiss update', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ version: z.string().regex(/^[\w.+-]+$/) }), build: (p, ctx) => node(ctx, 'updateSystem', ['dismiss', '--version', p.version]) }),
+  define({ id: 'system.rollback', label: 'Roll back update', cost: 'free', confirm: 'Rolls back the last applied update. Continue?', resources: ['tracker', 'pipeline', 'portals', 'profile'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['rollback']) }),
+  // ---- daily job, dev chat ----
   define({
     id: 'daily.runNow',
     label: 'Run the daily job now',
@@ -120,9 +345,10 @@ export const ACTIONS: ActionDef[] = [
     resources: ['pipeline', 'tracker', 'immigration:policy'],
     claude: true,
     sync: false,
-    params: z.object({}),
-    build: (_p, ctx) => ({ bin: '/bin/bash', args: [`${ctx.codeRoot}/custom/immigration/run-daily.sh`], cwd: ctx.codeRoot }),
+    params: none,
+    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot }),
   }),
+  define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
 ];
 
 export function findAction(id: string): ActionDef | undefined {

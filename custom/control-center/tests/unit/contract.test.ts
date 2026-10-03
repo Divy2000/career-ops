@@ -27,6 +27,7 @@ describe('core contract', () => {
   for (const cli of CONTRACT.clis as CliContract[]) {
     it(`${cli.script} answers ${cli.helpArgs.join(' ')} with the contracted flags`, () => {
       expect(fs.existsSync(cliScriptPath(DEFAULT_CODE_ROOT, cli.id as never)), `${cli.script} exists`).toBe(true);
+      if (cli.probe === false) return;
       const { status, out } = runHelp(cli);
       if (cli.expectExit !== null) expect(status, out.slice(0, 500)).toBe(cli.expectExit);
       expect(out.length, 'help output is not empty').toBeGreaterThan(0);
@@ -41,6 +42,13 @@ describe('core contract', () => {
       for (const name of entry.names) expect(mod[name], `${entry.module}#${name}`).toBeDefined();
     });
   }
+
+  it('contracted writer modules exist and are never in the pure export list', () => {
+    for (const w of CONTRACT.writers) {
+      expect(fs.existsSync(path.join(DEFAULT_CODE_ROOT, w)), w).toBe(true);
+      expect(CONTRACT.exports.some((e) => e.module === w), `${w} must not be importable into the server`).toBe(false);
+    }
+  });
 
   it('refuses to import a module outside the contract', async () => {
     await expect(importCore(DEFAULT_CODE_ROOT, 'scan.mjs' as never)).rejects.toThrow(/not a contracted/);

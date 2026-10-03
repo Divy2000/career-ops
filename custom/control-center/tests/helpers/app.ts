@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildApp, type BuiltApp } from '../../server/app.js';
+import { buildApp, type AppDeps, type BuiltApp } from '../../server/app.js';
 import { SESSION_COOKIE } from '../../server/auth/plugin.js';
 import { DEFAULT_CODE_ROOT, type ServerConfig } from '../../server/config.js';
 
@@ -45,9 +45,9 @@ export interface TestApp extends BuiltApp {
   authedWrite: Record<string, string>;
 }
 
-export async function makeTestApp(overrides: Partial<ServerConfig> = {}): Promise<TestApp> {
+export async function makeTestApp(overrides: Partial<ServerConfig> = {}, deps: AppDeps = {}): Promise<TestApp> {
   const cfg = testConfig(overrides);
-  const built = await buildApp(cfg);
+  const built = await buildApp(cfg, deps);
   const authed = { host: TEST_HOST, cookie: `${SESSION_COOKIE}=${TEST_SECRET}` };
   return {
     ...built,

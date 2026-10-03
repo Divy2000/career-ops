@@ -12,6 +12,8 @@ export interface CliContract {
   expectExit: number | null;
   flags: string[];
   exitCodes?: Record<string, number>;
+  /** false: existence-only in the contract test (help run is not side-effect free). */
+  probe?: boolean;
 }
 
 export interface ExportContract {

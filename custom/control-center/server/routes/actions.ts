@@ -27,12 +27,12 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
         resources: action.resources,
         claude: action.claude,
         params: parsed.data,
-        cmd,
-        env: coreEnv,
+        cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
+        env: { ...coreEnv, ...cmd.env },
       });
       return reply.code(202).send({ runId: meta.id });
     }
-    const r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: coreEnv });
+    const r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: { ...coreEnv, ...cmd.env } });
     let result: unknown = r.stdout;
     try {
       result = JSON.parse(r.stdout);

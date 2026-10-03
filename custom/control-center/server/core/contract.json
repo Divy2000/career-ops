@@ -4,40 +4,695 @@
   "notes": [
     "Every CLI below is invoked as node <script> <helpArgs> with cwd at the code root and CAREER_OPS_ROOT at a fixture copy.",
     "expectExit null means the usage text is checked but the exit code is not pinned.",
-    "flags are substrings that must appear in stdout+stderr of the help run."
+    "flags are substrings that must appear in stdout+stderr of the help run.",
+    "probe false: the script exists but its help run is not side-effect free, so the contract test only checks the file.",
+    "writers are core modules imported only inside child processes (server/core/child.ts), never into the server."
   ],
   "clis": [
-    { "id": "setStatus", "script": "set-status.mjs", "helpArgs": ["--help"], "expectExit": 0, "flags": ["--row", "--source", "--json", "--note", "--on", "--dry-run", "--report"], "exitCodes": { "ok": 0, "usage": 1, "notFound": 2, "ambiguous": 3, "lockTimeout": 4 } },
-    { "id": "tracker", "script": "tracker.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["delete"] },
-    { "id": "mergeTracker", "script": "merge-tracker.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--dry-run"] },
-    { "id": "reserveReportNum", "script": "reserve-report-num.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--count", "--release"] },
-    { "id": "hiredShare", "script": "hired-share.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--report", "--anonymity", "--story", "--mark"] },
-    { "id": "followupCadence", "script": "followup-cadence.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--json"] },
-    { "id": "doctor", "script": "doctor.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--json"] },
-    { "id": "validatePortals", "script": "validate-portals.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
-    { "id": "validateProfile", "script": "validate-profile.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
-    { "id": "stats", "script": "stats.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": ["--summary"] },
-    { "id": "verifyPipeline", "script": "verify-pipeline.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
-    { "id": "prioritize", "script": "custom/pipeline/prioritize.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
-    { "id": "shortlist", "script": "custom/pipeline/shortlist.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
-    { "id": "immigrationWatch", "script": "custom/immigration/watch.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] },
-    { "id": "freshness", "script": "custom/immigration/freshness.mjs", "helpArgs": ["--help"], "expectExit": null, "flags": [] }
+    {
+      "id": "setStatus",
+      "script": "set-status.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": 0,
+      "flags": [
+        "--row",
+        "--source",
+        "--json",
+        "--note",
+        "--on",
+        "--dry-run",
+        "--report"
+      ],
+      "exitCodes": {
+        "ok": 0,
+        "usage": 1,
+        "notFound": 2,
+        "ambiguous": 3,
+        "lockTimeout": 4
+      }
+    },
+    {
+      "id": "tracker",
+      "script": "tracker.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "delete"
+      ]
+    },
+    {
+      "id": "mergeTracker",
+      "script": "merge-tracker.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--dry-run"
+      ]
+    },
+    {
+      "id": "reserveReportNum",
+      "script": "reserve-report-num.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--count",
+        "--release"
+      ]
+    },
+    {
+      "id": "hiredShare",
+      "script": "hired-share.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--report",
+        "--anonymity",
+        "--story",
+        "--mark"
+      ]
+    },
+    {
+      "id": "followupCadence",
+      "script": "followup-cadence.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--json"
+      ]
+    },
+    {
+      "id": "doctor",
+      "script": "doctor.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--json"
+      ]
+    },
+    {
+      "id": "validatePortals",
+      "script": "validate-portals.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "validateProfile",
+      "script": "validate-profile.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "stats",
+      "script": "stats.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--summary"
+      ]
+    },
+    {
+      "id": "verifyPipeline",
+      "script": "verify-pipeline.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "prioritize",
+      "script": "custom/pipeline/prioritize.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "shortlist",
+      "script": "custom/pipeline/shortlist.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "immigrationWatch",
+      "script": "custom/immigration/watch.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "freshness",
+      "script": "custom/immigration/freshness.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "normalizeStatuses",
+      "script": "normalize-statuses.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--dry-run"
+      ]
+    },
+    {
+      "id": "dedupTracker",
+      "script": "dedup-tracker.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--dry-run"
+      ]
+    },
+    {
+      "id": "reconcilePipeline",
+      "script": "reconcile-pipeline.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--dry-run"
+      ]
+    },
+    {
+      "id": "rankPipeline",
+      "script": "rank-pipeline.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--limit",
+        "--model",
+        "--dry-run"
+      ]
+    },
+    {
+      "id": "scan",
+      "script": "scan.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--verify",
+        "--include-blacklisted"
+      ]
+    },
+    {
+      "id": "scanAtsFull",
+      "script": "scan-ats-full.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--dry-run",
+        "--ats",
+        "--since",
+        "--limit"
+      ]
+    },
+    {
+      "id": "scanHn",
+      "script": "scan-hn.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "scanInteramt",
+      "script": "scan-interamt.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "companyFunded",
+      "script": "company-funded.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--dry-run",
+        "--json"
+      ]
+    },
+    {
+      "id": "detectReposts",
+      "script": "detect-reposts.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "verifyPortals",
+      "script": "verify-portals.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "auditPortals",
+      "script": "audit-portals.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--json"
+      ]
+    },
+    {
+      "id": "fixSlugs",
+      "script": "fix-slugs.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--apply"
+      ]
+    },
+    {
+      "id": "h1bCheck",
+      "script": "plugins/h1b-sponsor/check.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--json",
+        "--summary",
+        "--search"
+      ],
+      "probe": false
+    },
+    {
+      "id": "generatePdf",
+      "script": "generate-pdf.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--format",
+        "--report"
+      ],
+      "probe": false
+    },
+    {
+      "id": "generateCoverLetter",
+      "script": "generate-cover-letter.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--payload"
+      ],
+      "probe": false
+    },
+    {
+      "id": "archivePosting",
+      "script": "archive-posting.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--report"
+      ]
+    },
+    {
+      "id": "checkLiveness",
+      "script": "check-liveness.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--file"
+      ]
+    },
+    {
+      "id": "fetchJd",
+      "script": "fetch-jd.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [],
+      "probe": false
+    },
+    {
+      "id": "prepareApplication",
+      "script": "prepare-application.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--url"
+      ],
+      "probe": false
+    },
+    {
+      "id": "applicationArtifacts",
+      "script": "application-artifacts.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--init"
+      ]
+    },
+    {
+      "id": "imgToPdf",
+      "script": "img-to-pdf.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "funnelVelocity",
+      "script": "funnel-velocity.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "analyzePatterns",
+      "script": "analyze-patterns.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "salaryGap",
+      "script": "salary-gap.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--summary"
+      ],
+      "probe": false
+    },
+    {
+      "id": "upskill",
+      "script": "upskill.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "companyHistory",
+      "script": "company-history.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--company"
+      ]
+    },
+    {
+      "id": "rejectionLatency",
+      "script": "rejection-latency.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "processQuality",
+      "script": "process-quality.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "weeklyDigest",
+      "script": "weekly-digest.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "assessmentLog",
+      "script": "assessment-log.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "keywordMatch",
+      "script": "keyword-match.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--json"
+      ],
+      "probe": false
+    },
+    {
+      "id": "jdSkillGap",
+      "script": "jd-skill-gap.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--summary"
+      ],
+      "probe": false
+    },
+    {
+      "id": "storyProvenanceCheck",
+      "script": "story-provenance-check.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--summary"
+      ],
+      "probe": false
+    },
+    {
+      "id": "inviteMatch",
+      "script": "invite-match.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--file"
+      ]
+    },
+    {
+      "id": "linkedinJoin",
+      "script": "linkedin-join.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--company"
+      ]
+    },
+    {
+      "id": "contacts",
+      "script": "contacts.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--vcf",
+        "--caller-id"
+      ]
+    },
+    {
+      "id": "followupSeed",
+      "script": "followup-seed.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--backfill",
+        "--json"
+      ],
+      "probe": false
+    },
+    {
+      "id": "pasteReply",
+      "script": "paste-reply.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": [
+        "--file"
+      ]
+    },
+    {
+      "id": "replyWatch",
+      "script": "reply-watch.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "plugins",
+      "script": "plugins.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [],
+      "probe": false
+    },
+    {
+      "id": "pluginAudit",
+      "script": "plugin-audit.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": null,
+      "flags": []
+    },
+    {
+      "id": "updateSystem",
+      "script": "update-system.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [],
+      "probe": false
+    }
   ],
   "exports": [
-    { "module": "path-resolver.mjs", "names": ["getCareerOpsRoot", "resolveTrackerPath", "rawTrackerPath"] },
-    { "module": "tracker-parse.mjs", "names": ["resolveColumns", "parseTrackerRow", "normalizeTextKey", "extractTrackerReportNumbers", "isSeparatorRow", "isHeaderRow"] },
-    { "module": "pipeline-lock.mjs", "names": ["withPipelineLock", "LockTimeoutError"] },
-    { "module": "custom/immigration/lib.mjs", "names": ["parsePolicyChanges", "parseCompanyAlerts", "readCheckedAt", "decideRefresh", "companySlug"] },
-    { "module": "custom/pipeline/lib.mjs", "names": ["parseRow"] }
+    {
+      "module": "path-resolver.mjs",
+      "names": [
+        "getCareerOpsRoot",
+        "resolveTrackerPath",
+        "rawTrackerPath"
+      ]
+    },
+    {
+      "module": "tracker-parse.mjs",
+      "names": [
+        "resolveColumns",
+        "parseTrackerRow",
+        "normalizeTextKey",
+        "extractTrackerReportNumbers",
+        "isSeparatorRow",
+        "isHeaderRow"
+      ]
+    },
+    {
+      "module": "pipeline-lock.mjs",
+      "names": [
+        "withPipelineLock",
+        "LockTimeoutError"
+      ]
+    },
+    {
+      "module": "custom/immigration/lib.mjs",
+      "names": [
+        "parsePolicyChanges",
+        "parseCompanyAlerts",
+        "readCheckedAt",
+        "decideRefresh",
+        "companySlug"
+      ]
+    },
+    {
+      "module": "custom/pipeline/lib.mjs",
+      "names": [
+        "parseRow"
+      ]
+    }
   ],
   "batchRunner": {
     "script": "batch/batch-runner.sh",
-    "flags": ["--cli", "--model", "--parallel", "--dry-run", "--limit", "--min-score"]
+    "flags": [
+      "--cli",
+      "--model",
+      "--parallel",
+      "--dry-run",
+      "--limit",
+      "--min-score"
+    ]
   },
   "claude": {
     "version": "2.1.288 (Claude Code)",
-    "flags": ["--session-id", "--append-system-prompt", "--settings", "--allowedTools", "--disallowedTools", "--permission-mode", "--include-partial-messages", "--strict-mcp-config", "--fork-session", "--resume", "--output-format", "--verbose", "--mcp-config", "--model"],
-    "acceptedButNotInHelp": ["--max-turns"],
+    "flags": [
+      "--session-id",
+      "--append-system-prompt",
+      "--settings",
+      "--allowedTools",
+      "--disallowedTools",
+      "--permission-mode",
+      "--include-partial-messages",
+      "--strict-mcp-config",
+      "--fork-session",
+      "--resume",
+      "--output-format",
+      "--verbose",
+      "--mcp-config",
+      "--model"
+    ],
+    "acceptedButNotInHelp": [
+      "--max-turns"
+    ],
     "probes": {
       "probedAt": "2026-10-03",
       "realCalls": 2,
@@ -46,8 +701,21 @@
       "editRuleCoversWrite": true,
       "editRuleSyntax": "Edit(//absolute/path) with the leading double slash for absolute paths",
       "settingsAcceptsInlineHooksJson": true,
-      "hookStdinKeys": ["cwd", "hook_event_name", "permission_mode", "prompt_id", "session_id", "tool_input", "tool_name", "tool_use_id", "transcript_path"],
-      "hookToolInputKeysForWrite": ["content", "file_path"],
+      "hookStdinKeys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "hookToolInputKeysForWrite": [
+        "content",
+        "file_path"
+      ],
       "hookExit2Blocks": true,
       "hookExit2ToolResultPrefix": "PreToolUse:Write hook error:",
       "dontAskDenialToolResultPrefix": "Permission to use Write has been denied because Claude Code is running in don't ask mode",
@@ -55,13 +723,46 @@
       "sessionIdHonored": true,
       "resumeKeepsSessionId": true,
       "streamJson": {
-        "init": { "type": "system", "subtype": "init", "keys": ["session_id", "tools", "model"] },
-        "delta": { "type": "stream_event", "eventType": "content_block_delta" },
-        "assistantToolUse": { "type": "assistant", "path": "message.content[].type == tool_use" },
-        "userToolResult": { "type": "user", "path": "message.content[].type == tool_result" },
-        "result": { "type": "result", "keys": ["total_cost_usd", "usage", "num_turns", "permission_denials", "is_error", "session_id", "result", "subtype"] }
+        "init": {
+          "type": "system",
+          "subtype": "init",
+          "keys": [
+            "session_id",
+            "tools",
+            "model"
+          ]
+        },
+        "delta": {
+          "type": "stream_event",
+          "eventType": "content_block_delta"
+        },
+        "assistantToolUse": {
+          "type": "assistant",
+          "path": "message.content[].type == tool_use"
+        },
+        "userToolResult": {
+          "type": "user",
+          "path": "message.content[].type == tool_result"
+        },
+        "result": {
+          "type": "result",
+          "keys": [
+            "total_cost_usd",
+            "usage",
+            "num_turns",
+            "permission_denials",
+            "is_error",
+            "session_id",
+            "result",
+            "subtype"
+          ]
+        }
       },
-      "permissionDenialShape": ["tool_name", "tool_use_id", "tool_input"],
+      "permissionDenialShape": [
+        "tool_name",
+        "tool_use_id",
+        "tool_input"
+      ],
       "costUsdProbeA": 0.0645934,
       "costUsdProbeB": 0.0838954
     }
@@ -69,5 +770,9 @@
   "playwrightMcp": {
     "probed": false,
     "reason": "Not launched in P0: the apply session is built in P4; until a launch probe passes, Apply degrades to prefill plus answer drafting."
-  }
+  },
+  "writers": [
+    "scan.mjs",
+    "followup-seed.mjs"
+  ]
 }

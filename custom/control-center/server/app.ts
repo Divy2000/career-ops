@@ -9,6 +9,15 @@ import { actionRoutes } from './routes/actions.js';
 import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
+import { writeRoutes } from './routes/writes.js';
+import { DailyJobWatch } from './system/daily.js';
+import { execNoShell, type Exec } from './routes/system.js';
+
+export interface AppDeps {
+  /** Injectable process runner (tests fake pgrep and launchctl). */
+  exec?: Exec;
+  dailyPollMs?: number;
+}
 
 export interface BuiltApp {
   app: FastifyInstance;
@@ -17,7 +26,8 @@ export interface BuiltApp {
   close: () => Promise<void>;
 }
 
-export async function buildApp(cfg: ServerConfig): Promise<BuiltApp> {
+export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<BuiltApp> {
+  const exec = deps.exec ?? execNoShell;
   const app = Fastify({ logger: cfg.nodeEnv === 'test' ? false : { level: 'info' }, trustProxy: false });
   const closers: Array<() => Promise<void>> = [];
   const bus = new EventBus();
@@ -29,9 +39,13 @@ export async function buildApp(cfg: ServerConfig): Promise<BuiltApp> {
   // Called directly, not registered: its hooks must live on the root context so
   // they guard every route, including the encapsulated plugins below.
   await authPlugin(app, cfg);
-  await app.register(systemRoutes, { cfg });
-  await app.register(readRoutes, { cfg, bus });
-  await app.register(actionRoutes, { cfg, runner });
+  const daily = new DailyJobWatch(exec, bus, deps.dailyPollMs);
+  daily.start();
+  closers.push(async () => daily.stop());
+  await app.register(systemRoutes, { cfg, exec });
+  await app.register(readRoutes, { cfg, bus, exec });
+  await app.register(actionRoutes, { cfg, runner, exec });
+  await app.register(writeRoutes, { cfg, daily });
 
   if (cfg.watch) {
     const watcher = startWatcher(cfg.dataRoot, bus);
