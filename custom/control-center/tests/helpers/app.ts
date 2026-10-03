@@ -32,6 +32,7 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     client: 'none',
     claudeBin: FAKE_CLAUDE,
     nodeEnv: 'test',
+    watch: false,
     ...overrides,
   };
 }

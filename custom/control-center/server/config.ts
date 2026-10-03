@@ -17,6 +17,8 @@ export interface ServerConfig {
   client: ClientMode;
   claudeBin: string;
   nodeEnv: string;
+  /** Start the data-root file watcher (off in API tests). */
+  watch: boolean;
 }
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,5 +44,6 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     client,
     claudeBin: env.CC_CLAUDE_BIN ?? 'claude',
     nodeEnv: env.NODE_ENV ?? 'development',
+    watch: env.CC_WATCH !== '0',
   };
 }

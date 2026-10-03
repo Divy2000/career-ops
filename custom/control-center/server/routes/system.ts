@@ -11,12 +11,12 @@ export interface SystemStatus {
   careerOps: { version: string | null };
 }
 
-export type Exec = (cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
+export type Exec = (cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv }) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 /** spawn() with shell:false, resolving with the exit code instead of throwing. */
-export const execNoShell: Exec = (cmd, args, { cwd, timeoutMs }) =>
+export const execNoShell: Exec = (cmd, args, { cwd, timeoutMs, env }) =>
   new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout: timeoutMs, shell: false, env: process.env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, timeout: timeoutMs, shell: false, env: { ...process.env, ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err && typeof (err as NodeJS.ErrnoException).code === 'number' ? ((err as NodeJS.ErrnoException).code as unknown as number) : err ? 1 : 0;
       const stderrText = String(stderr ?? '') + (err && (err as NodeJS.ErrnoException).code === 'ENOENT' ? `\n${cmd}: not found` : '');
       resolve({ code, stdout: String(stdout ?? ''), stderr: stderrText });

@@ -74,7 +74,8 @@ export async function authPlugin(app: FastifyInstance, cfg: ServerConfig): Promi
   });
 
   app.addHook('onSend', async (_req, reply, payload) => {
-    reply.header('Content-Security-Policy', cspFor(cfg));
+    // A route may set a stricter policy itself (served HTML files are sandboxed).
+    if (!reply.hasHeader('content-security-policy')) reply.header('Content-Security-Policy', cspFor(cfg));
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
     return payload;
