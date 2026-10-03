@@ -135,14 +135,16 @@ async function main() {
   // (mergePending dedupes) instead of losing the item.
   const pending = mergePending(queued, fresh);
   await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
-  await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
-  // The feed is an audit log, written last: a crash before this line can drop a
-  // log line but never duplicates one or loses a queued policy item.
+  // Audit log before seen, deduplicated by URL: a crash anywhere in this
+  // sequence can neither drop nor duplicate a feed line on the next run.
   if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
+  const logged = new Set((await readFile(FEED, 'utf8')).split('\n').slice(1).map((l) => l.split('\t')[4]).filter(Boolean));
   const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
-  if (fresh.length) {
-    await appendFile(FEED, fresh.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
+  const toLog = pending.filter((i) => !logged.has(clean(i.url)));
+  if (toLog.length) {
+    await appendFile(FEED, toLog.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
   }
+  await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
 
   const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
   // new_items is everything not yet acknowledged, including leftovers from failed runs.

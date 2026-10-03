@@ -16,9 +16,10 @@ IMM="$DATA/data/immigration"
 mkdir -p "$IMM/logs"
 # One run at a time: re-exec under a kernel lock (released automatically when
 # the process exits, so a crash never leaves a stale lock). lockf exits 75
-# when another run holds it.
+# when another run holds it. -k keeps the lock file so every run locks the
+# same inode. CC_RUN_DAILY_LOCKED only marks the re-exec'd child.
 if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
-  CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -t 0 "$IMM/.run-daily.lock" /bin/bash "$0" "$@"
+  CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 0 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
   rc=$?
   if [ "$rc" = 75 ]; then echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"; exit 0; fi
   exit "$rc"
