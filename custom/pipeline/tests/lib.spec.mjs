@@ -162,3 +162,10 @@ test('parseRow keeps trust: and note: labels out of the positional fields', () =
   assert.equal(r.labels.note, 'reposted');
   assert.equal(r.rank, 4.0);
 });
+
+test('parseRow only treats trailing segments as labels', () => {
+  const r = parseRow('- [ ] https://x | Acme | note: Backend Engineer | Remote');
+  assert.equal(r.title, 'note: Backend Engineer');
+  assert.equal(r.location, 'Remote');
+  assert.deepEqual(r.labels, {});
+});

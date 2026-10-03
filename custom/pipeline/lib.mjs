@@ -41,17 +41,21 @@ export function parseRow(line) {
   };
   // Labeled segments can appear anywhere (a bare-URL row may carry only a
   // rank), so pull them out before assigning positional fields.
-  const positional = [];
-  for (const seg of parts.slice(1)) {
+  // Labels are only recognized as a trailing run of segments, so a free-text
+  // field that happens to start with "note:" stays positional.
+  const rest = parts.slice(1);
+  let firstLabel = rest.length;
+  while (firstLabel > 0 && ROW_LABEL.test(rest[firstLabel - 1])) firstLabel--;
+  const positional = rest.slice(0, firstLabel).map((seg) => seg.trim());
+  for (const seg of rest.slice(firstLabel)) {
     const posted = seg.match(/^posted: (\d{4}-\d{2}-\d{2})$/);
     const rank = seg.match(/^rank: ([\d.]+)\/5 \u2014 (.*)$/);
-    const other = seg.match(ROW_LABEL);
+    const [, label, value] = seg.match(ROW_LABEL);
     if (posted) row.posted = posted[1];
     else if (rank) {
       row.rank = Number(rank[1]);
       row.rankReason = rank[2].trim();
-    } else if (other) row.labels[other[1]] = other[2].trim();
-    else positional.push(seg.trim());
+    } else row.labels[label] = value.trim();
   }
   [row.company = '', row.title = '', row.location = ''] = positional;
   return row;

@@ -21,9 +21,14 @@ exec >>"$LOG_DIR/$TODAY.log" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
 cd "$ROOT"
 LOCK="$IMM/.run-daily.lock"
-if ! node custom/immigration/runlock.mjs acquire "$LOCK" $$; then
+node custom/immigration/runlock.mjs acquire "$LOCK" $$
+LOCK_RC=$?
+if [ "$LOCK_RC" = 3 ]; then
   echo "=== another run-daily is in progress; exiting"
   exit 0
+elif [ "$LOCK_RC" != 0 ]; then
+  echo "!!! could not acquire the run lock (exit $LOCK_RC); not running"
+  exit 1
 fi
 trap 'node custom/immigration/runlock.mjs release "$LOCK" $$' EXIT
 

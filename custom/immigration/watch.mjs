@@ -120,7 +120,10 @@ async function main() {
   });
   if (errors.length === results.length) throw new Error(`every source failed: ${errors.join('; ')}`);
 
-  const known = new Set(seen.ids);
+  // Items still queued count as known: a crash after the queue write but
+  // before seen.json must not append them to the feed log a second time.
+  const queued = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
+  const known = new Set([...seen.ids, ...queued.map((i) => i.id)]);
   const fresh = [];
   for (const item of results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))) {
     if (known.has(item.id) || !isRelevantPolicyItem(item.title)) continue;
@@ -135,7 +138,7 @@ async function main() {
   }
   // Queue first, then mark seen: a crash in between re-queues on the next run
   // (mergePending dedupes) instead of losing the item.
-  const pending = mergePending(existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [], fresh);
+  const pending = mergePending(queued, fresh);
   await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
   await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
 
