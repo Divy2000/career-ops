@@ -1,0 +1,38 @@
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public body: unknown,
+  ) {
+    super(message);
+  }
+}
+
+async function parse(res: Response): Promise<unknown> {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return text;
+  }
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(path, { credentials: 'same-origin', headers: { accept: 'application/json' } });
+  const body = await parse(res);
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`, body);
+  return body as T;
+}
+
+/** Mutating requests carry the X-CC marker and a same-origin Origin header. */
+export async function apiSend<T>(method: 'POST' | 'PUT' | 'DELETE' | 'PATCH', path: string, payload?: unknown, extra: Record<string, string> = {}): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', accept: 'application/json', 'X-CC': '1', ...extra },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  });
+  const body = await parse(res);
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`, body);
+  return body as T;
+}
