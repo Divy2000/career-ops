@@ -13,6 +13,7 @@ export type { RunMeta, RawLine, RunStatus } from '../server/runner/store.js';
 export type { DocumentsRead, DocumentFile } from '../server/domains/documents.js';
 export type { DailyStatus } from '../server/system/daily.js';
 export type { SessionEvent } from '../server/claude/stream-parse.js';
+export type { SessionMeta, SessionTurn, SessionStatus, StoredEvent } from '../server/claude/sessions.js';
 export type { Envelope, EnvelopeKind } from '../server/claude/envelopes.js';
 
 export interface ActionMeta {
