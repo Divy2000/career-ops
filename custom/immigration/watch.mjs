@@ -126,7 +126,7 @@ async function main() {
   const known = new Set([...seen.ids, ...queued.map((i) => i.id)]);
   const fresh = [];
   for (const item of results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))) {
-    if (known.has(item.id) || !isRelevantPolicyItem(item.title)) continue;
+    if (!item.url || known.has(item.id) || !isRelevantPolicyItem(item.title)) continue;
     known.add(item.id);
     fresh.push(item);
   }
@@ -138,7 +138,9 @@ async function main() {
   // Audit log before seen, deduplicated by URL: a crash anywhere in this
   // sequence can neither drop nor duplicate a feed line on the next run.
   if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
-  const logged = new Set((await readFile(FEED, 'utf8')).split('\n').slice(1).map((l) => l.split('\t')[4]).filter(Boolean));
+  const feedLines = (await readFile(FEED, 'utf8')).split('\n');
+  if (feedLines[0]?.startsWith('first_seen\t')) feedLines.shift();
+  const logged = new Set(feedLines.map((l) => l.split('\t')[4]).filter(Boolean));
   const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
   const toLog = pending.filter((i) => !logged.has(clean(i.url)));
   if (toLog.length) {
