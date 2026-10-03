@@ -93,8 +93,9 @@ export function computeNextFire(now: Date, hour: number, minute: number, weekday
 }
 
 export function parseLaunchctlPrint(out: string): { state: string | null; lastExit: number | null } {
-  const state = /^\s*state = (\S+)/m.exec(out)?.[1] ?? null;
-  const exit = /last exit code = (\d+)/.exec(out);
+  // The state is the rest of the line: "not running" means loaded and idle, which is the normal state between calendar fires.
+  const state = /^\s*state = (.+?)\s*$/m.exec(out)?.[1] ?? null;
+  const exit = /last exit code = (-?\d+)/.exec(out);
   return { state, lastExit: exit ? Number(exit[1]) : null };
 }
 

@@ -5,6 +5,7 @@ import { apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill } from '../../components/ui';
+import { formatLocalMinute } from '../../lib/time';
 import type { ScheduleLogs, ScheduleState } from '@shared/api';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -39,7 +40,7 @@ function JobCard({ job }: { job: ScheduleState }) {
         </h2>
         <div className="row gap">
           <Pill tone={job.plist === 'ok' ? 'neutral' : job.plist === 'missing' ? 'warn' : 'danger'}>{job.plist === 'ok' ? 'plist ok' : job.plist === 'missing' ? 'not installed' : 'plist malformed'}</Pill>
-          <Pill tone={job.loaded ? 'ok' : 'warn'}>{job.loaded ? `loaded${job.state ? `: ${job.state}` : ''}` : 'not loaded'}</Pill>
+          <Pill tone={job.loaded ? 'ok' : 'warn'}>{job.loaded ? (job.state && job.state !== 'not running' ? `loaded: ${job.state}` : 'loaded, idle') : 'not loaded'}</Pill>
           {job.disabled && <Pill tone="neutral">disabled at login</Pill>}
         </div>
       </div>
@@ -51,7 +52,7 @@ function JobCard({ job }: { job: ScheduleState }) {
           {job.script} {job.plist === 'ok' && !job.programArgumentsOk && <Pill tone="danger">plist points elsewhere</Pill>}
         </dd>
         <dt>Next fire</dt>
-        <dd className="mono">{job.nextFire ? job.nextFire.slice(0, 16).replace('T', ' ') : 'n/a'}</dd>
+        <dd className="mono">{job.nextFire ? formatLocalMinute(job.nextFire) : 'n/a'}</dd>
         <dt>Last exit</dt>
         <dd className="mono">{job.lastExit === null ? 'never ran' : job.lastExit}</dd>
       </dl>
@@ -104,7 +105,7 @@ export function ScheduleCards() {
       {(q.data?.jobs ?? []).map((j) => (
         <JobCard key={j.label} job={j} />
       ))}
-      {q.data && <p className="faint small">Plists live in {q.data.agentsDir}. Changes go through plutil -lint, launchctl enable or disable (kept across logins), bootout and bootstrap.</p>}
+      {q.data && <p className="faint small wrap-anywhere">Plists live in {q.data.agentsDir}. Changes go through plutil -lint, launchctl enable or disable (kept across logins), bootout and bootstrap.</p>}
     </DataState>
   );
 }

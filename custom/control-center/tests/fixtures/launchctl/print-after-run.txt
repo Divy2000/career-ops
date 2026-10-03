@@ -1,0 +1,69 @@
+gui/501/com.career-ops.immigration-watch = {
+	active count = 0
+	path = /Users/test/Library/LaunchAgents/com.career-ops.immigration-watch.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /bin/bash
+	arguments = {
+		/bin/bash
+		/Users/test/career-ops/custom/immigration/run-daily.sh
+	}
+
+	working directory = /Users/test/career-ops
+
+	stdout path = /Users/test/career-ops/data/immigration/logs/launchd.out.log
+	stderr path = /Users/test/career-ops/data/immigration/logs/launchd.err.log
+	inherited environment = {
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.career-ops.immigration-watch
+	}
+
+	domain = gui/501 [100023]
+	asid = 100023
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 3
+	last exit code = 0
+
+	event triggers = {
+		com.career-ops.immigration-watch.268435472 => {
+			keepalive = 0
+			service = com.career-ops.immigration-watch
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 0
+				"Hour" => 8
+			}
+		}
+	}
+
+	event channels = {
+		"com.apple.launchd.calendarinterval" = {
+			port = 0x0
+			active = 0
+			managed = 1
+			reset = 0
+			hide = 0
+			watching = 1
+		}
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+
+	properties = inferred program
+}
