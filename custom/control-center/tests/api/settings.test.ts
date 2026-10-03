@@ -108,6 +108,34 @@ describe('blacklist (explicit confirm gate)', () => {
   });
 });
 
+describe('blacklist saves keep what the editor does not manage', () => {
+  const EXPLICIT = { 'x-cc-explicit': 'blacklist' };
+  it('a save keeps the notes after the table verbatim and tolerates legacy date cells, but new rows still need YYYY-MM-DD', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      const tail = '\n## Notes\n\nRecruiters from these firms reposted the same role.\n';
+      fs.writeFileSync(file, `# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Old Corp | reposts | Sept 2025 |\n| Undated Ltd | spam |  |\n${tail}`);
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      expect(current.rows.map((r: { since: string }) => r.since)).toEqual(['Sept 2025', '']);
+      const rows = [...current.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'ghosted twice' }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      const raw = fs.readFileSync(file, 'utf8');
+      expect(raw).toContain('| Old Corp | Sept 2025 | company | reposts |');
+      expect(raw).toContain('| Undated Ltd |  | company | spam |');
+      expect(raw).toContain('| Initech | 2026-10-03 | company | ghosted twice |');
+      expect(raw.endsWith(tail)).toBe(true);
+      const bad = await req('PUT', { confirm: true, rows: [...rows, { company: 'Globex', since: 'yesterday', scope: 'company', reason: '' }] }, { 'if-match': saved.json().etag, ...EXPLICIT });
+      expect(bad.statusCode).toBe(400);
+      expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('plugins', () => {
   it('lists bundled plugins with their enabled state from config/plugins.yml', async () => {
     const res = await get('/api/plugins');

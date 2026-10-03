@@ -96,6 +96,18 @@ Some intro text about the file.
     const parsed = parseBlacklist('# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Spam Staffing Ltd | body-shop | 2026-09-01 |\n');
     expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop' }]);
   });
+  it('keeps everything after the table verbatim and never merges a second table into the rows', () => {
+    const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme Corp | 2026-01-15 | company | x |\n';
+    const tail = '\n## Notes\n\nKeep this paragraph.\n\n| Other | Table |\n|---|---|\n| a | b |\n';
+    const md = `# Blacklist\n\nIntro.\n\n${table}${tail}`;
+    const parsed = parseBlacklist(md);
+    expect(parsed.rows).toEqual([{ company: 'Acme Corp', since: '2026-01-15', scope: 'company', reason: 'x' }]);
+    expect(parsed.postamble).toBe(tail);
+    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble)).toBe(md);
+    const added = renderBlacklist([...parsed.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'y' }], parsed.preamble, parsed.postamble);
+    expect(added).toBe(`# Blacklist\n\nIntro.\n\n${table}| Initech | 2026-10-03 | company | y |\n${tail}`);
+  });
+
   it('renders the template format and round-trips its own output', () => {
     const parsed = parseBlacklist(TEMPLATE_STYLE);
     const rendered = renderBlacklist(parsed.rows, parsed.preamble);

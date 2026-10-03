@@ -8,7 +8,7 @@ import type { EventBus } from '../watch/bus.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
 import { etagMatches } from './config.js';
-import { blacklistRowSchema, readBlacklist, writeBlacklist } from '../domains/blacklist.js';
+import { BLACKLIST_DATE, blacklistRowSchema, readBlacklist, writeBlacklist } from '../domains/blacklist.js';
 import { listPlugins } from '../domains/plugins.js';
 import { LOG_JOBS, type ScheduleService } from '../system/schedule.js';
 import { listLogDates, parseDailyLog } from '../domains/immigration.js';
@@ -51,7 +51,11 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     }
     const current = readBlacklist(cfg.dataRoot);
     if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'data/blacklist.md changed since you loaded it', current });
-    const written = writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble);
+    // New rows need YYYY-MM-DD; a legacy cell already in the file ("Sept 2025", empty) is kept as it is.
+    const legacy = new Set(current.rows.map((r) => r.since));
+    const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));
+    if (badDate) return reply.code(400).send({ error: `since must be YYYY-MM-DD for ${badDate.company} (got ${badDate.since || 'nothing'})` });
+    const written = writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble, current.postamble);
     bus.publish('data.changed', { domain: 'config' });
     return { ok: true, etag: written.etag, rows: written.rows, path: written.path };
   });
