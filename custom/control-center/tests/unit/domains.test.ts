@@ -45,6 +45,15 @@ describe('immigration overview', () => {
     expect((o.tiers as { companies: Record<string, unknown> }).companies['acme robotics']).toBeDefined();
   });
 
+  it('counts the watcher queue from pending.json and reports null when there is none', async () => {
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).pendingCount).toBeNull();
+    const withQueue = copyFixtureRoot();
+    fs.writeFileSync(path.join(withQueue, 'data/immigration/pending.json'), JSON.stringify([{ id: 'a' }, { id: 'b' }]));
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, withQueue, '2026-10-04')).pendingCount).toBe(2);
+    fs.writeFileSync(path.join(withQueue, 'data/immigration/pending.json'), '{not json');
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, withQueue, '2026-10-04')).pendingCount).toBeNull();
+  });
+
   it('reports a missing digest distinctly', async () => {
     const empty = copyFixtureRoot();
     fs.rmSync(path.join(empty, 'data/immigration'), { recursive: true });
@@ -110,6 +119,14 @@ describe('insights dashboard', () => {
     expect(d.topCompanies).toHaveLength(6);
     expect(d.weeklyActivity.reduce((a, w) => a + w.transitions, 0)).toBe(10);
     expect(d.stageTransitions[0]).toMatchObject({ from: '-', to: 'Evaluated', count: 3 });
+  });
+
+  it('computes an all-zero dashboard for an empty tracker without dividing by zero', () => {
+    const d = computeDashboard([], []);
+    expect(d.totals).toMatchObject({ applications: 0, scored: 0, averageScore: null });
+    expect(d.rates).toEqual({ evaluatedToApplied: null, appliedToInterview: null, interviewToOffer: null });
+    expect(d.funnel.every((f) => f.count === 0)).toBe(true);
+    expect(d.topCompanies).toEqual([]);
   });
 
   it('classifies work mode strings', () => {

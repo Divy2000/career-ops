@@ -42,6 +42,8 @@ export interface ImmigrationOverview {
   companies: CompanyFile[];
   tiers: unknown;
   seen: unknown;
+  /** Items the watcher queued for the AI pass (pending.json); null when absent or unreadable. */
+  pendingCount: number | null;
   dailyLog: DailyLog | null;
   logDates: string[];
 }
@@ -131,6 +133,10 @@ export function readDailyLog(dataRoot: string, date: string): DailyLog | null {
   return read.kind === 'ok' ? parseDailyLog(read.text, date) : null;
 }
 
+function pendingCountOf(v: unknown): number | null {
+  return Array.isArray(v) ? v.length : null;
+}
+
 function readJson(p: string): unknown {
   const read = readText(p);
   if (read.kind !== 'ok') return null;
@@ -177,6 +183,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     companies,
     tiers: readJson(path.join(imm, 'sponsor-tiers.json')),
     seen: readJson(path.join(imm, 'seen.json')),
+    pendingCount: pendingCountOf(readJson(path.join(imm, 'pending.json'))),
     dailyLog: logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null,
     logDates,
   };
