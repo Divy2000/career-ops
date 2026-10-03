@@ -162,19 +162,6 @@ export function mergePending(pending, fresh) {
   return out;
 }
 
-export const LOCK_OWNERLESS_GRACE_MS = 60000;
-
-// A run lock is stale when its owner is gone. A directory whose owner record
-// is not written yet is a lock being created right now, so it is only stale
-// after a grace period. A live pid whose start time differs from the recorded
-// one is a reused pid, not the owner.
-export function lockIsStale(owner, { isAlive, startTimeOf, dirAgeMs }) {
-  if (!owner) return dirAgeMs > LOCK_OWNERLESS_GRACE_MS;
-  if (!Number.isInteger(owner.pid) || owner.pid <= 1) return true;
-  if (!isAlive(owner.pid)) return true;
-  return startTimeOf(owner.pid) !== owner.start;
-}
-
 export function sourceCursor(seen, source) {
   return seen?.last_success?.[source] ?? seen?.last_run ?? null;
 }

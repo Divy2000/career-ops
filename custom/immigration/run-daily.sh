@@ -13,6 +13,16 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 # User data follows career-ops' data-root contract (CAREER_OPS_ROOT / .career-ops-data).
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 IMM="$DATA/data/immigration"
+mkdir -p "$IMM/logs"
+# One run at a time: re-exec under a kernel lock (released automatically when
+# the process exits, so a crash never leaves a stale lock). lockf exits 75
+# when another run holds it.
+if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
+  CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -t 0 "$IMM/.run-daily.lock" /bin/bash "$0" "$@"
+  rc=$?
+  if [ "$rc" = 75 ]; then echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"; exit 0; fi
+  exit "$rc"
+fi
 LOG_DIR="$IMM/logs"
 TODAY="$(date +%Y-%m-%d)"
 RANK_LIMIT="${RANK_LIMIT:-100}"
@@ -20,17 +30,6 @@ mkdir -p "$LOG_DIR"
 exec >>"$LOG_DIR/$TODAY.log" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
 cd "$ROOT"
-LOCK="$IMM/.run-daily.lock"
-node custom/immigration/runlock.mjs acquire "$LOCK" $$
-LOCK_RC=$?
-if [ "$LOCK_RC" = 3 ]; then
-  echo "=== another run-daily is in progress; exiting"
-  exit 0
-elif [ "$LOCK_RC" != 0 ]; then
-  echo "!!! could not acquire the run lock (exit $LOCK_RC); not running"
-  exit 1
-fi
-trap 'node custom/immigration/runlock.mjs release "$LOCK" $$' EXIT
 
 if ! CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
   echo "ERROR: Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"

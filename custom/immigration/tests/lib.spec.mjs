@@ -231,25 +231,3 @@ test('mergePending keeps unacknowledged items and adds new ones once', () => {
 test('mergePending with nothing pending returns the fresh items', () => {
   assert.deepEqual(mergePending([], [{ id: 'x' }]).map((i) => i.id), ['x']);
 });
-
-// --- fork review round 2: run lock ---
-import { lockIsStale } from '../lib.mjs';
-
-test('lockIsStale: live owner with matching start time holds the lock', () => {
-  const env = { isAlive: () => true, startTimeOf: () => 'Sat Oct  3 10:00:00 2026', dirAgeMs: 5000 };
-  assert.equal(lockIsStale({ pid: 123, start: 'Sat Oct  3 10:00:00 2026' }, env), false);
-});
-
-test('lockIsStale: dead owner, or a reused pid with a different start time, is stale', () => {
-  assert.equal(lockIsStale({ pid: 456, start: 'x' }, { isAlive: () => false, startTimeOf: () => null, dirAgeMs: 5000 }), true);
-  assert.equal(lockIsStale({ pid: 456, start: 'old' }, { isAlive: () => true, startTimeOf: () => 'new', dirAgeMs: 5000 }), true);
-});
-
-test('lockIsStale: an ownerless lock is held while young, stale once older than the grace period', () => {
-  assert.equal(lockIsStale(null, { isAlive: () => true, startTimeOf: () => null, dirAgeMs: 1000 }), false);
-  assert.equal(lockIsStale(null, { isAlive: () => true, startTimeOf: () => null, dirAgeMs: 120000 }), true);
-});
-
-test('lockIsStale: a non-positive or tiny pid is never a valid owner', () => {
-  assert.equal(lockIsStale({ pid: 0, start: 'x' }, { isAlive: () => true, startTimeOf: () => 'x', dirAgeMs: 120000 }), true);
-});

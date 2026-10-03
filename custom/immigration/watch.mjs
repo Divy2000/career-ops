@@ -131,16 +131,18 @@ async function main() {
     fresh.push(item);
   }
 
-  if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
-  const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
-  if (fresh.length) {
-    await appendFile(FEED, fresh.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
-  }
   // Queue first, then mark seen: a crash in between re-queues on the next run
   // (mergePending dedupes) instead of losing the item.
   const pending = mergePending(queued, fresh);
   await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
   await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
+  // The feed is an audit log, written last: a crash before this line can drop a
+  // log line but never duplicates one or loses a queued policy item.
+  if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
+  const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
+  if (fresh.length) {
+    await appendFile(FEED, fresh.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
+  }
 
   const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
   // new_items is everything not yet acknowledged, including leftovers from failed runs.
