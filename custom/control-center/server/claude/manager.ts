@@ -158,8 +158,10 @@ export class SessionManager {
     if (!policy) throw new Error(`unknown mode ${meta.mode}`);
     this.sending.add(id);
     try {
-      // A fork that never reported its own Claude id forks again rather than appending to the source.
-      return await this.runTurn(meta, policy, prompt, { resume: meta.turns.length > 0, fork: meta.forkPending === true, blacklistAllowed: opts.blacklistAllowed });
+      // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
+      // it must never start a fresh conversation under the source's id or append to it.
+      const forkPending = meta.forkPending === true;
+      return await this.runTurn(meta, policy, prompt, { resume: meta.turns.length > 0 || forkPending, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
     } finally {
       this.sending.delete(id);
     }

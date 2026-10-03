@@ -267,6 +267,28 @@ describe('Claude sessions', () => {
     expect((await get(`/api/sessions/${id}`)).json().meta.claudeSessionId).toBe(source.meta.claudeSessionId);
   });
 
+  it('a fork whose first turn failed before spawning still forks the source on the retry, never --session-id with the source id', async () => {
+    let tokenMissing = false;
+    const app = await makeTestApp({}, { readToken: async () => { if (tokenMissing) throw new Error('Keychain item career-ops-claude-token not found'); return FAKE_TOKEN; } });
+    try {
+      const { id } = (await call(app, 'POST', '/api/sessions', { mode: 'interview/practice', target: { type: 'app', value: '3' }, prompt: 'Practice' })).json();
+      const source = await settleOn(app, id);
+      tokenMissing = true;
+      const fork = (await call(app, 'POST', `/api/sessions/${id}/fork`, { prompt: 'Try a different angle' })).json();
+      expect(fork).toMatchObject({ status: 'error', turns: [], forkPending: true });
+      tokenMissing = false;
+      expect((await call(app, 'POST', `/api/sessions/${fork.id}/turns`, { prompt: 'Try a different angle' })).statusCode).toBe(202);
+      const retried = await settleOn(app, fork.id);
+      const args = (await call(app, 'GET', `/api/runs/${retried.meta.turns[0]!.runId}`)).json().meta.cmd.args as string[];
+      expect(args).toEqual(expect.arrayContaining(['--resume', source.meta.claudeSessionId, '--fork-session']));
+      expect(args).not.toContain('--session-id');
+      expect(retried.meta.claudeSessionId).not.toBe(source.meta.claudeSessionId);
+      expect(retried.meta.forkPending).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('the honesty gate never credits a session with a report another session wrote while it ran', async () => {
     const h = await makeTestApp();
     try {
