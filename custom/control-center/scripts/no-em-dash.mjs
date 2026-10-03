@@ -5,6 +5,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// Upstream conventions: main-module detection and nested-checkout guard come from core lib/.
+import { isMainModule } from '../../../lib/is-main-module.mjs';
+import { isNestedCheckout } from '../../../lib/mjs-files.mjs';
 
 export const EM_DASH = String.fromCharCode(0x2014);
 
@@ -17,7 +20,8 @@ export function findEmDashes(dir) {
   const walk = (d) => {
     for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) walk(path.join(d, entry.name));
+        const child = path.join(d, entry.name);
+        if (!SKIP_DIRS.has(entry.name) && !isNestedCheckout(child)) walk(child);
         continue;
       }
       if (!TEXT_EXT.has(path.extname(entry.name))) continue;
@@ -33,7 +37,7 @@ export function findEmDashes(dir) {
   return hits;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   const hits = findEmDashes(root);
   if (hits.length) {
     console.error(`em dash (U+2014) found in ${hits.length} place(s):\n  ${hits.join('\n  ')}`);
