@@ -34,10 +34,13 @@ describe('wrapper.mjs', () => {
     fs.mkdirSync(dir);
     const r = spawnSync(process.execPath, [WRAPPER_PATH, dir, PACKAGE_ROOT, process.execPath, NOISY, '3'], { encoding: 'utf8' });
     expect(r.status).toBe(0);
-    const lines = fs.readFileSync(path.join(dir, 'raw.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    expect(lines.map((l) => l.line)).toEqual(['line one', 'line two', 'warning line', 'line three']);
+    const lines = fs.readFileSync(path.join(dir, 'raw.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { seq: number; stream: string; line: string });
+    // stdout and stderr are read independently, so only per-stream order is deterministic.
+    expect(lines.filter((l) => l.stream === 'stdout').map((l) => l.line)).toEqual(['line one', 'line two', 'line three']);
+    expect(lines.filter((l) => l.stream === 'stderr').map((l) => l.line)).toEqual(['warning line']);
+    expect(lines).toHaveLength(4);
     expect(lines.map((l) => l.seq)).toEqual([1, 2, 3, 4]);
-    expect(lines[2].stream).toBe('stderr');
+    for (let i = 1; i < lines.length; i++) expect(lines[i]!.seq).toBeGreaterThan(lines[i - 1]!.seq);
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'exit.json'), 'utf8'))).toMatchObject({ code: 3, signal: null });
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'wrapper.json'), 'utf8')).childPid).toBeGreaterThan(0);
   });
