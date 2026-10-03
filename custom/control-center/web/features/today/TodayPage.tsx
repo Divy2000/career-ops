@@ -1,34 +1,242 @@
-import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '../../lib/api';
-import type { SystemStatus } from '@shared/types';
+import { Link } from '@tanstack/react-router';
+import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
+import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone } from '../../components/ui';
+
+function DailyJobChip() {
+  const q = useImmigration();
+  if (q.isPending) return <Pill>Daily job: checking</Pill>;
+  if (q.isError || !q.data) return <Pill tone="danger">Daily job: unknown</Pill>;
+  const log = q.data.dailyLog;
+  if (!log) return <Pill tone="warn">Daily job: no log yet</Pill>;
+  if (log.status === 'failed') return <Pill tone="danger" title={`Failed steps: ${log.failedSteps.join(', ')}`}>Daily job {log.date}: failed ({log.failedSteps.join(', ') || 'see log'})</Pill>;
+  if (log.status === 'running') return <Pill tone="info">Daily job {log.date}: running</Pill>;
+  return <Pill tone="ok">Daily job {log.date}: ok</Pill>;
+}
+
+function DigestChip() {
+  const q = useImmigration();
+  if (!q.data || q.data.digest.kind !== 'ok') return null;
+  const stale = q.data.digest.staleDays;
+  if (stale === null) return null;
+  return <Pill tone={stale > 2 ? 'warn' : 'neutral'}>Digest {stale > 2 ? `${stale} days old` : 'fresh'}</Pill>;
+}
 
 export function TodayPage() {
-  const q = useQuery({ queryKey: ['system', 'status'], queryFn: () => apiGet<SystemStatus>('/api/system/status') });
+  const shortlist = useShortlist();
+  const immigration = useImmigration();
+  const tracker = useTracker();
+  const followups = useFollowups();
+  const fresh = useWhatsNew(7, 6);
   const today = new Date().toISOString().slice(0, 10);
+  const trackerMissing = tracker.data?.kind === 'missing';
+
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
         <h1 id="page-title">Today</h1>
-        <span className="muted mono">{today}</span>
+        <div className="row gap">
+          <span className="muted mono">{today}</span>
+          <DailyJobChip />
+          <DigestChip />
+        </div>
       </div>
-      <div className="card" aria-busy={q.isPending}>
-        <h2 style={{ marginBottom: 'var(--space-3)' }}>System</h2>
-        {q.isPending && <p className="muted">Loading system status</p>}
-        {q.isError && <p style={{ color: 'var(--danger)' }}>Could not load system status: {String(q.error)}</p>}
-        {q.data && (
-          <dl className="kv">
-            <dt>Node</dt>
-            <dd className="mono">{q.data.node}</dd>
-            <dt>Claude CLI</dt>
-            <dd className="mono">{q.data.claude.version ?? q.data.claude.error ?? 'unknown'}</dd>
-            <dt>Keychain token</dt>
-            <dd>{q.data.keychainTokenPresent ? 'present' : 'missing'}</dd>
-            <dt>Data root</dt>
-            <dd className="mono">{q.data.roots.data}</dd>
-            <dt>career-ops</dt>
-            <dd className="mono">{q.data.careerOps.version ?? 'unknown'}</dd>
-          </dl>
-        )}
+
+      {trackerMissing && (
+        <div className="card hero">
+          <h2>Start with your CV</h2>
+          <p className="muted">No tracker yet. Import your CV on the Profile & CV page, then run a free scan to seed matches.</p>
+          <Link to="/profile" className="button-link">
+            Go to Profile & CV
+          </Link>
+        </div>
+      )}
+
+      <div className="grid-2">
+        <div className="stack">
+          <div className="card">
+            <h2>Shortlist top 15</h2>
+            <DataState query={shortlist} missing={<span>Run the daily job or Pipeline &gt; Rebuild shortlist.</span>}>
+              {shortlist.data?.kind === 'ok' && (
+                <>
+                  <p className="faint" style={{ marginTop: 4 }}>
+                    {shortlist.data.date ? `Built ${shortlist.data.date}. ` : ''}
+                    {shortlist.data.summary}
+                  </p>
+                  {shortlist.data.rows.length === 0 ? (
+                    <Empty>No ranked rows yet. Rank the pipeline to fill this list.</Empty>
+                  ) : (
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Score</th>
+                          <th scope="col">Sponsor</th>
+                          <th scope="col">Company</th>
+                          <th scope="col">Role</th>
+                          <th scope="col">Location</th>
+                          <th scope="col">Posted</th>
+                          <th scope="col">
+                            <span className="sr-only">Actions</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shortlist.data.rows.slice(0, 15).map((r) => (
+                          <tr key={r.rank}>
+                            <td>
+                              <ScorePill score={r.score} />
+                            </td>
+                            <td>
+                              <SponsorPill tier={r.sponsor} />
+                            </td>
+                            <td>{r.company}</td>
+                            <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
+                            <td className="muted">{r.location ?? ''}</td>
+                            <td className="mono muted">{r.posted ?? ''}</td>
+                            <td>
+                              <button type="button" disabled title="Evaluate sessions arrive with the Claude engine phase">
+                                Evaluate
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {shortlist.data.excluded.length > 0 && (
+                    <details style={{ marginTop: 12 }}>
+                      <summary>Excluded by company alerts ({shortlist.data.excluded.length})</summary>
+                      <ul>
+                        {shortlist.data.excluded.map((e) => (
+                          <li key={e.company}>
+                            <strong>{e.company}</strong> <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </>
+              )}
+            </DataState>
+          </div>
+        </div>
+
+        <div className="stack">
+          <div className="card">
+            <h2>Policy today</h2>
+            <DataState query={immigration}>
+              {immigration.data && immigration.data.digest.kind === 'ok' && immigration.data.digest.sections[0] ? (
+                <>
+                  <p className="faint">{immigration.data.digest.sections[0].date}</p>
+                  <ul className="bullets">
+                    {immigration.data.digest.sections[0].body
+                      .split('\n')
+                      .filter((l) => /^\s*[-*]\s+/.test(l))
+                      .slice(0, 4)
+                      .map((l, i) => (
+                        <li key={i}>{l.replace(/^\s*[-*]\s+/, '')}</li>
+                      ))}
+                  </ul>
+                </>
+              ) : (
+                <Empty>No digest yet. Run the AI policy pass from Sponsorship.</Empty>
+              )}
+              {immigration.data && immigration.data.alerts.latest.length > 0 && (
+                <ul className="bullets">
+                  {immigration.data.alerts.latest.slice(0, 3).map((a, i) => (
+                    <li key={i}>
+                      <Pill tone={alertTone(String(a.status))}>{String(a.status)}</Pill> <strong>{String(a.company)}</strong> <span className="muted">{String(a.headline)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DataState>
+          </div>
+
+          <div className="card">
+            <h2>Follow-ups due</h2>
+            <DataState query={followups}>
+              {followups.data && (
+                <>
+                  {followups.data.entries.filter((e) => e.urgency === 'overdue' || e.urgency === 'urgent').length === 0 ? (
+                    <Empty>Nothing due. Check the Follow-ups page for the full cadence.</Empty>
+                  ) : (
+                    <ul className="bullets">
+                      {followups.data.entries
+                        .filter((e) => e.urgency === 'overdue' || e.urgency === 'urgent')
+                        .map((e) => (
+                          <li key={e.num}>
+                            <Pill tone={e.urgency === 'overdue' ? 'danger' : 'warn'}>{e.urgency}</Pill>{' '}
+                            <Link to="/tracker/$n" params={{ n: String(e.num) }}>
+                              {e.company}
+                            </Link>{' '}
+                            <span className="muted">{e.role}</span> <span className="faint mono">next {e.nextFollowupDate ?? 'n/a'}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </DataState>
+          </div>
+
+          <div className="card">
+            <h2>Decisions</h2>
+            <DataState query={tracker}>
+              {tracker.data?.kind === 'ok' && (
+                <>
+                  {tracker.data.rows.filter((r) => r.status === 'Evaluated').length === 0 ? (
+                    <Empty>No evaluated offers waiting for a decision.</Empty>
+                  ) : (
+                    <ul className="bullets">
+                      {tracker.data.rows
+                        .filter((r) => r.status === 'Evaluated')
+                        .map((r) => (
+                          <li key={r.num} className="row gap">
+                            <ScorePill score={r.score} />
+                            <Link to="/tracker/$n" params={{ n: String(r.num) }}>
+                              {r.company}
+                            </Link>
+                            <span className="muted">{r.role}</span>
+                            <button type="button" disabled title="Status changes arrive with the runner phase">
+                              Applied
+                            </button>
+                            <button type="button" disabled title="Status changes arrive with the runner phase">
+                              Skip
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </DataState>
+          </div>
+
+          <div className="card">
+            <h2>Fresh matches this week</h2>
+            <DataState query={fresh}>
+              {fresh.data && (
+                <>
+                  {fresh.data.offers.length === 0 ? (
+                    <Empty>No new unevaluated postings in the last 7 days. Run a scan from Discover.</Empty>
+                  ) : (
+                    <ul className="bullets">
+                      {fresh.data.offers.map((o) => (
+                        <li key={o.url}>
+                          <a href={o.url} target="_blank" rel="noreferrer noopener">
+                            {o.title}
+                          </a>{' '}
+                          <span className="muted">{o.company}</span> <span className="faint mono">{o.firstSeen}</span> <Pill>{o.ats}</Pill>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="faint">{fresh.data.count} total</p>
+                </>
+              )}
+            </DataState>
+          </div>
+        </div>
       </div>
     </section>
   );

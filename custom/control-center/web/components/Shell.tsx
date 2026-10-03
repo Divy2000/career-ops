@@ -2,6 +2,7 @@ import { Link, Outlet } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
+import { useLiveInvalidation } from '../lib/sse';
 import type { SystemStatus } from '@shared/types';
 
 function HealthChip() {
@@ -18,6 +19,7 @@ function HealthChip() {
 }
 
 export function Shell() {
+  useLiveInvalidation();
   return (
     <div className="shell">
       <nav className="shell__side" aria-label="Primary">

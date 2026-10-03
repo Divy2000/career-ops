@@ -39,7 +39,7 @@ test('the token URL sets the cookie and the shell renders without serious axe vi
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Tracker' })).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
-  await expect(page.getByText(process.version)).toBeVisible();
+  await expect(page.getByText(/Setup OK|Setup needs attention/)).toBeVisible();
 
   const axe = await new AxeBuilder({ page }).analyze();
   const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');

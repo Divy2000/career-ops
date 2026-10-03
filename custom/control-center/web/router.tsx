@@ -1,24 +1,91 @@
-import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { createRootRoute, createRoute, createRouter, type SearchSchemaInput } from '@tanstack/react-router';
 import { Shell } from './components/Shell';
 import { TodayPage } from './features/today/TodayPage';
+import { TrackerPage, type TrackerSearch, type TrackerTab, type SortKey } from './features/tracker/TrackerPage';
+import { ApplicationPage } from './features/tracker/ApplicationPage';
+import { PipelinePage, type PipelineTab } from './features/pipeline/PipelinePage';
+import { SponsorshipPage, type SponsorshipTab } from './features/sponsorship/SponsorshipPage';
+import { InsightsPage, type InsightsTab } from './features/insights/InsightsPage';
+import { FollowupsPage } from './features/followups/FollowupsPage';
 import { PlaceholderPage } from './components/PlaceholderPage';
-import { NAV_GROUPS } from './nav';
 
 const rootRoute = createRootRoute({ component: Shell });
 
+function oneOf<T extends string>(allowed: readonly T[], value: unknown, fallback: T): T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+
+/** Search params are optional on links and always normalized on read. */
+type Loose = Record<string, unknown> & SearchSchemaInput;
+
+function placeholder<const P extends string>(path: P, title: string) {
+  return createRoute({ getParentRoute: () => rootRoute, path, component: () => <PlaceholderPage title={title} /> });
+}
+
+const TRACKER_TABS: TrackerTab[] = ['all', 'evaluated', 'interview', 'responded', 'applied', 'top', 'skip', 'rejected', 'discarded'];
+const SORT_KEYS: SortKey[] = ['num', 'company', 'role', 'score', 'status', 'date', 'location', 'pay', 'lastContact', 'posted'];
+
 const todayRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: TodayPage });
 
-const placeholderRoutes = NAV_GROUPS.flatMap((g) => g.items)
-  .filter((item) => item.to !== '/')
-  .map((item) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path: item.to,
-      component: () => <PlaceholderPage title={item.label} />,
-    }),
-  );
+const trackerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/tracker',
+  component: TrackerPage,
+  validateSearch: (s: Loose): TrackerSearch => ({
+    tab: oneOf(TRACKER_TABS, s.tab, 'all'),
+    q: typeof s.q === 'string' ? s.q : '',
+    sort: oneOf(SORT_KEYS, s.sort, 'num'),
+    dir: oneOf(['asc', 'desc'] as const, s.dir, 'desc'),
+    view: oneOf(['flat', 'grouped'] as const, s.view, 'flat'),
+  }),
+});
 
-const routeTree = rootRoute.addChildren([todayRoute, ...placeholderRoutes]);
+const applicationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage });
+
+const pipelineRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/pipeline',
+  component: PipelinePage,
+  validateSearch: (s: Loose): { tab: PipelineTab } => ({ tab: oneOf(['inbox', 'shortlist', 'batch'] as const, s.tab, 'inbox') }),
+});
+
+const sponsorshipRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/sponsorship',
+  component: SponsorshipPage,
+  validateSearch: (s: Loose): { tab: SponsorshipTab } => ({
+    tab: oneOf(['overview', 'changes', 'feed', 'alerts', 'companies', 'lookup', 'tiers'] as const, s.tab, 'overview'),
+  }),
+});
+
+const insightsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/insights',
+  component: InsightsPage,
+  validateSearch: (s: Loose): { tab: InsightsTab } => ({
+    tab: oneOf(['overview', 'progress', 'breakdown', 'velocity', 'patterns', 'salary', 'skills', 'legitimacy', 'ai'] as const, s.tab, 'overview'),
+  }),
+});
+
+const followupsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/followups', component: FollowupsPage });
+
+const routeTree = rootRoute.addChildren([
+  todayRoute,
+  trackerRoute,
+  applicationRoute,
+  pipelineRoute,
+  sponsorshipRoute,
+  insightsRoute,
+  followupsRoute,
+  placeholder('/apply', 'Apply'),
+  placeholder('/interviews', 'Interviews'),
+  placeholder('/discover', 'Discover'),
+  placeholder('/sessions', 'Sessions'),
+  placeholder('/runs', 'Runs & Schedule'),
+  placeholder('/profile', 'Profile & CV'),
+  placeholder('/settings', 'Settings'),
+  placeholder('/dev', 'Dev Chat'),
+]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });
 
