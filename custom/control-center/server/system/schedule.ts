@@ -11,7 +11,7 @@ export interface ScheduleJob {
   title: string;
   /** Script path relative to the code root; ProgramArguments must keep pointing at it. */
   script: string;
-  /** Log directory relative to the data root. */
+  /** Log directory relative to the data root (launchd writes there and the log browser reads there). */
   logDir: string;
   defaults: { hour: number; minute: number; weekday: number | null };
 }
@@ -53,8 +53,10 @@ export interface ScheduleInput {
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }): string {
+/** The script runs from the code root; its launchd logs go to the data root, where the log browser reads them. */
+export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string): string {
   const root = esc(codeRoot);
+  const logs = esc(path.join(dataRoot, job.logDir));
   const wd = t.weekday === null ? '' : `<key>Weekday</key><integer>${t.weekday}</integer>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,8 +68,8 @@ export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: numbe
   <key>WorkingDirectory</key><string>${root}</string>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>${t.hour}</integer><key>Minute</key><integer>${t.minute}</integer>${wd}</dict>
-  <key>StandardOutPath</key><string>${root}/${job.logDir}/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>${root}/${job.logDir}/launchd.err.log</string>
+  <key>StandardOutPath</key><string>${logs}/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>${logs}/launchd.err.log</string>
 </dict>
 </plist>
 `;
@@ -105,7 +107,7 @@ interface PlistJson {
 
 export class ScheduleService {
   constructor(
-    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; now?: () => Date },
+    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; now?: () => Date },
   ) {}
 
   job(label: string): ScheduleJob | undefined {
@@ -170,7 +172,9 @@ export class ScheduleService {
     const plistPath = this.plistPath(job);
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input));
+    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot));
+    // launchd does not create the log directory; without it the job's output is lost.
+    fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);
     const lint = await this.deps.exec('plutil', ['-lint', plistPath], { timeoutMs: 10_000 });
     if (lint.code !== 0) return { ok: false, status: 500, error: `plutil -lint rejected the plist (exit ${lint.code})`, stderr: lint.stderr.trim() };

@@ -254,6 +254,16 @@ describe('launchd schedule through the injectable executor (never the real launc
     }
   });
 
+  it('the plist sends launchd logs to the data root and the log directory exists there', async () => {
+    const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true });
+    expect(res.statusCode, res.body).toBe(200);
+    const xml = fs.readFileSync(path.join(t.cfg.launchAgentsDir, 'com.career-ops.upstream-sync.plist'), 'utf8');
+    expect(t.cfg.dataRoot).not.toBe(t.cfg.codeRoot);
+    expect(xml).toContain(`<key>StandardOutPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.out.log')}</string>`);
+    expect(xml).toContain(`<key>StandardErrorPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.err.log')}</string>`);
+    expect(fs.statSync(path.join(t.cfg.dataRoot, 'data', 'upstream-sync')).isDirectory()).toBe(true);
+  });
+
   it('validates the label and the body', async () => {
     expect((await send('PUT', '/api/schedule/com.evil', { hour: 1, minute: 1, enabled: true })).statusCode).toBe(404);
     expect((await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 25, minute: 0, enabled: true })).statusCode).toBe(400);

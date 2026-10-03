@@ -134,6 +134,14 @@ Some intro text about the file.
 });
 
 describe('launchd schedule helpers', () => {
+  it('writes the job logs under the data root (where the log browser reads them) and runs the script from the code root', () => {
+    const xml = renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data');
+    expect(xml).toContain('<string>/bin/bash</string><string>/code/custom/immigration/run-daily.sh</string>');
+    expect(xml).toContain('<key>WorkingDirectory</key><string>/code</string>');
+    expect(xml).toContain('<key>StandardOutPath</key><string>/data/data/immigration/logs/launchd.out.log</string>');
+    expect(xml).toContain('<key>StandardErrorPath</key><string>/data/data/immigration/logs/launchd.err.log</string>');
+    expect(xml).not.toContain('/code/data/');
+  });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';
     expect(parsePrintDisabled(out, 'com.career-ops.immigration-watch')).toBe(true);
@@ -145,11 +153,11 @@ describe('launchd schedule helpers', () => {
   });
   it('renders a plist that keeps ProgramArguments on the fork script and lints as XML', () => {
     const job = SCHEDULE_JOBS.find((j) => j.label === 'com.career-ops.upstream-sync')!;
-    const xml = renderPlist('/repo', job, { hour: 3, minute: 15, weekday: 0 });
+    const xml = renderPlist('/repo', job, { hour: 3, minute: 15, weekday: 0 }, '/repo');
     expect(xml).toContain('<string>/bin/bash</string><string>/repo/custom/upstream-sync/sync.sh</string>');
     expect(xml).toContain('<key>Hour</key><integer>3</integer><key>Minute</key><integer>15</integer><key>Weekday</key><integer>0</integer>');
     expect(xml).toContain('<key>Label</key><string>com.career-ops.upstream-sync</string>');
-    const daily = renderPlist('/repo', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null });
+    const daily = renderPlist('/repo', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/repo');
     expect(daily).not.toContain('Weekday');
     expect(daily).toContain('custom/immigration/run-daily.sh');
   });
