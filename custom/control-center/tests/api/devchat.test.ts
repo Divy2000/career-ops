@@ -77,7 +77,8 @@ describe('Dev Chat', () => {
   });
 
   it('the blacklist checkbox unlocks data/blacklist.md for that turn only', async () => {
-    const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'Blacklist Synthetic Corp', blacklistAllowed: true })).json();
+    const explicit = { ...t.authedWrite, 'x-cc-explicit': 'blacklist' };
+    const { id } = (await t.app.inject({ method: 'POST', url: '/api/sessions', headers: explicit, payload: { mode: 'devchat', prompt: 'Blacklist Synthetic Corp', blacklistAllowed: true } })).json();
     const first = await settle(id);
     const denied = first.events.filter((e: { event: { type: string } }) => e.event.type === 'permission.denied');
     expect(denied).toHaveLength(2);
@@ -178,6 +179,27 @@ describe('Dev Chat', () => {
     } finally {
       await b.close();
     }
+  });
+
+  it('the blacklist unlock needs a Dev Chat session and the X-CC-Explicit: blacklist header on that request', async () => {
+    const explicit = { ...t.authedWrite, 'x-cc-explicit': 'blacklist' };
+    const before = t.sessions.list().length;
+    const evaluate = await t.app.inject({ method: 'POST', url: '/api/sessions', headers: explicit, payload: { mode: 'oferta', prompt: 'Evaluate', blacklistAllowed: true } });
+    expect(evaluate.statusCode).toBe(403);
+    const bare = await post('/api/sessions', { mode: 'devchat', prompt: 'Blacklist Initech', blacklistAllowed: true });
+    expect(bare.statusCode).toBe(403);
+    expect(bare.json().error).toMatch(/X-CC-Explicit: blacklist/);
+    expect(t.sessions.list()).toHaveLength(before);
+    const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'A plain turn' })).json();
+    await settle(id);
+    expect((await post(`/api/sessions/${id}/turns`, { prompt: 'now the blacklist', blacklistAllowed: true })).statusCode).toBe(403);
+    expect(t.sessions.read(id)!.turns).toHaveLength(1);
+    // Even a direct manager call cannot unlock it outside Dev Chat.
+    const direct = await t.sessions.start({ mode: 'oferta', target: { type: 'none', value: null }, prompt: 'Evaluate', blacklistAllowed: true });
+    const policy = JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', direct.id, 'turns', '1', 'policy.json'), 'utf8'));
+    expect(policy.deny).toContain('data/blacklist.md');
+    expect(policy.allow).not.toContain('data/blacklist.md');
+    await settle(direct.id);
   });
 
   it('serves the read-only git diff of custom/', async () => {

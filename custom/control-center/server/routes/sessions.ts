@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { BusyError, NotFoundError, type SessionManager } from '../claude/manager.js';
 import { listModeIds } from '../claude/modes.js';
+import { EXPLICIT_HEADER } from './settings.js';
 import { rememberFact } from '../domains/memory.js';
 import { readSettings } from '../domains/settings.js';
 
@@ -12,6 +13,13 @@ const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
 export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager }): Promise<void> {
   const { manager } = opts;
+  // Unlocking data/blacklist.md for a turn is the same explicit gate as PUT /api/blacklist: Dev Chat only, and the header on that request.
+  const unlockRefused = (mode: string, headers: Record<string, unknown>) =>
+    manager.effectivePolicy(mode)?.policyClass !== 'devchat'
+      ? 'only a Dev Chat turn can unlock data/blacklist.md'
+      : headers[EXPLICIT_HEADER] !== 'blacklist'
+        ? 'unlocking data/blacklist.md for a turn needs the X-CC-Explicit: blacklist header on that request'
+        : null;
 
   app.get('/api/sessions', async () => manager.list());
 
@@ -21,6 +29,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, reportNum: z.number().int().positive().nullable().optional(), blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
+    const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
+    if (refused) return reply.code(403).send({ error: refused });
     // App settings supply the default model when the client sends none (empty means the CLI default).
     const chosenModel = parsed.data.model ?? (readSettings(opts.cfg.dataRoot).settings.modelDefault || null);
     const meta = await manager.start({ ...parsed.data, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
@@ -58,6 +68,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/turns', async (req, reply) => {
     const parsed = z.object({ prompt, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
+    if (parsed.data.blacklistAllowed) {
+      const meta = manager.read(req.params.id);
+      if (!meta) return reply.code(404).send({ error: 'no such session' });
+      const refused = unlockRefused(meta.mode, req.headers);
+      if (refused) return reply.code(403).send({ error: refused });
+    }
     return mutate(reply, async () => reply.code(202).send(await manager.send(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
   });
 

@@ -292,16 +292,18 @@ export class SessionManager {
     const sessionDir = this.store.guardDirOf(meta.id);
     const n = meta.turns.length + 1;
     const turnDir = path.join(sessionDir, 'turns', String(n));
+    // Only Dev Chat can unlock the blacklist (the route also demands the explicit header).
+    const blacklistAllowed = opts.blacklistAllowed === true && policy.policyClass === 'devchat';
     let token: string;
     let env: NodeJS.ProcessEnv;
     let argv: string[];
     let state: TurnState;
     try {
       const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
-      const deny = opts.blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
-      const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: opts.blacklistAllowed ? ['data/blacklist.md'] : [], deny });
+      const deny = blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
+      const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny });
       const settingsFile = writeSettingsFile(sessionDir);
-      const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed: opts.blacklistAllowed });
+      const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed });
       token = await this.deps.readToken();
       env = buildEnv({}, { token, dataRoot: this.cfg.dataRoot, policyFile: policyFile.file, policySha256: policyFile.sha256, sessionDir });
       env.CC_MODE = meta.mode;

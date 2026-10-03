@@ -161,11 +161,17 @@ export const useEngine = () => useQuery({ queryKey: ['sessions', 'engine'], quer
 
 export type Target = SessionMeta['target'];
 
+/** The Dev Chat blacklist unlock travels with the explicit header the server requires on that very request. */
+const blacklistUnlock = (allowed?: boolean): { body: { blacklistAllowed?: true }; headers: Record<string, string> } => (allowed ? { body: { blacklistAllowed: true }, headers: { 'X-CC-Explicit': 'blacklist' } } : { body: {}, headers: {} });
+
 export function startSession(input: { mode: string; target?: Target; prompt: string; model?: string | null; blacklistAllowed?: boolean }): Promise<SessionMeta> {
-  return apiSend<SessionMeta>('POST', '/api/sessions', { target: { type: 'none', value: null }, ...input });
+  const { blacklistAllowed, ...rest } = input;
+  const unlock = blacklistUnlock(blacklistAllowed);
+  return apiSend<SessionMeta>('POST', '/api/sessions', { target: { type: 'none', value: null }, ...rest, ...unlock.body }, unlock.headers);
 }
 export function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...(blacklistAllowed ? { blacklistAllowed } : {}) });
+  const unlock = blacklistUnlock(blacklistAllowed);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function forkSession(id: string, prompt: string): Promise<SessionMeta> {
   return apiSend<SessionMeta>('POST', `/api/sessions/${id}/fork`, { prompt });
