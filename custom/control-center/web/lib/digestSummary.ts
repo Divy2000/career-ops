@@ -24,8 +24,10 @@ function hostOf(url: string): string {
   }
 }
 
-/** Phrasing nodes to spans. Images and raw HTML are dropped; a link whose label is its own address shows only the host. */
-function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: DigestSpan[]): void {
+type Definitions = Map<string, string>;
+
+/** Phrasing nodes to spans. Images, footnote references and raw HTML are dropped; a link whose label is its own address shows only the host. */
+function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: DigestSpan[], defs: Definitions): void {
   for (const n of nodes) {
     switch (n.type) {
       case 'text':
@@ -36,18 +38,22 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
         out.push({ text: ' ', ...(bold ? { bold } : {}) });
         break;
       case 'strong':
-        flatten(n.children, true, href, out);
+        flatten(n.children, true, href, out, defs);
         break;
       case 'emphasis':
       case 'delete':
-        flatten(n.children, bold, href, out);
+        flatten(n.children, bold, href, out, defs);
         break;
       case 'link': {
         const label = n.children.length === 1 && n.children[0]!.type === 'text' ? (n.children[0] as { value: string }).value : null;
         if (label !== null && label === n.url) out.push({ text: hostOf(n.url), ...(bold ? { bold } : {}), href: n.url });
-        else flatten(n.children, bold, n.url, out);
+        else flatten(n.children, bold, n.url, out, defs);
         break;
       }
+      case 'linkReference':
+        // The label is the visible text; the address comes from the matching definition, if there is one.
+        flatten(n.children, bold, defs.get(n.identifier) ?? href, out, defs);
+        break;
       default:
         break;
     }
@@ -112,17 +118,18 @@ function clip(spans: DigestSpan[]): DigestSpan[] {
  */
 export function summarizeDigest(body: string, max = 4): DigestSpan[][] {
   const tree = parser.parse(body);
+  const defs: Definitions = new Map(tree.children.flatMap((n) => (n.type === 'definition' ? [[n.identifier, n.url] as const] : [])));
   const list = tree.children.filter((n): n is List => n.type === 'list');
   const out: DigestSpan[][] = [];
   for (const item of list.flatMap((l) => l.children)) {
     const para = item.children.find((c) => c.type === 'paragraph');
     if (para?.type !== 'paragraph') continue;
     const spans: DigestSpan[] = [];
-    flatten(para.children, undefined, undefined, spans);
+    flatten(para.children, undefined, undefined, spans, defs);
     const first = para.children[0];
     const lead = first?.type === 'strong' ? (() => {
       const l: DigestSpan[] = [];
-      flatten([first], undefined, undefined, l);
+      flatten([first], undefined, undefined, l, defs);
       return l;
     })() : null;
     const line = clip(tidy(lead ?? firstSentence(tidy(spans))));

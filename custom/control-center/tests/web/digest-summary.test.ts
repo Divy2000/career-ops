@@ -58,4 +58,20 @@ describe('summarizeDigest', () => {
     expect(lines('- Look <img src="https://x.example/p.png"> here. ![pic](https://x.example/q.png) end.')).toEqual(['Look here.']);
     expect(lines('')).toEqual([]);
   });
+
+  it('keeps reference-style link text and resolves its address from the definition', () => {
+    const body = '- USCIS raised the fee per [the final rule][1]. More.\n- Also see [the notice] today.\n\n[1]: https://www.uscis.gov/rule\n[the notice]: https://www.uscis.gov/notice';
+    expect(summarizeDigest(body)).toEqual([
+      [{ text: 'USCIS raised the fee per ' }, { text: 'the final rule', href: 'https://www.uscis.gov/rule' }, { text: '.' }],
+      [{ text: 'Also see ' }, { text: 'the notice', href: 'https://www.uscis.gov/notice' }, { text: ' today.' }],
+    ]);
+  });
+
+  it('shows a reference without a definition as the literal text markdown renders for it', () => {
+    expect(lines('- Per [the rule][missing] today.')).toEqual(['Per [the rule][missing] today.']);
+  });
+
+  it('drops footnote references and image references', () => {
+    expect(lines('- Fee rises[^1] for all. ![pic][x] More.\n\n[^1]: a footnote\n[x]: https://x.example/p.png')).toEqual(['Fee rises for all.']);
+  });
 });
