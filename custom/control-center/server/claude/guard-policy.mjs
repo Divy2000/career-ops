@@ -124,7 +124,7 @@ const WRITER_SCRIPTS = {
   'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
   'application-artifacts.mjs': { switches: ['--init', '--help', '-h'], next: ARTIFACT_FLAGS, eq: ARTIFACT_FLAGS, positionals: [] },
   'contacts.mjs': { switches: ['--summary', '--self-test', '--caller-id', '--vcf', '--help', '-h'], optionalNext: { '--vcf': 'output' }, eq: { '--vcf': 'output' }, positionals: [] },
-  'discover-new-companies.mjs': { switches: ['--added-only', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
+  'discover-new-companies.mjs': { switches: ['--added-only', '--summary', '--json', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
   'hired-share.mjs': { switches: ['--open', '--dry-run', '--status', '--help', '-h'], next: HIRED_FLAGS, eq: HIRED_FLAGS, positionals: [] },
   'weekly-digest.mjs': { switches: ['--summary', '--self-test', '--help', '-h'], next: DIGEST_FLAGS, eq: DIGEST_FLAGS, positionals: [] },
 };
@@ -266,7 +266,9 @@ function checkWriterScript(policy, script, spec, args, label) {
     if (a.startsWith('-')) {
       const eqAt = a.indexOf('=');
       const name = eqAt === -1 ? a : a.slice(0, eqAt);
-      if (OUTPUT_FLAG.test(a) && !(spec.next?.[name] === 'output' || spec.eq?.[name] === 'output' || spec.optionalNext?.[name] === 'output')) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
+      // A flag the spec declares is checked by its own role below (weekly-digest --dir only reads); others named like outputs are refused.
+      const declared = Boolean(spec.next?.[name] || spec.eq?.[name] || spec.optionalNext?.[name]);
+      if (OUTPUT_FLAG.test(a) && !declared) return `${label}: ${script} does not write to a caller-chosen file (${a})`;
       if (eqAt !== -1) {
         const role = spec.eq?.[name];
         if (!role) return `${label}: ${script} does not accept ${name}=...; it would read the token as a path`;

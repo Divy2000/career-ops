@@ -477,6 +477,18 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(data, 'node generate-latex.mjs data/y.tex data/out.pdf');
   });
 
+  it('declared flags are exempt from the output-flag rule whatever their role, and documented switches are accepted', () => {
+    const interview = { codeRoot: root, dataRoot: root, allow: ['interview-prep/**'], deny: [...ALWAYS_DENIED_WRITES], bash: [['node', 'weekly-digest.mjs']] };
+    // weekly-digest --dir only reads a sessions directory (role input).
+    ok(interview, 'node weekly-digest.mjs --dir interview-prep/sessions --summary');
+    ok(interview, 'node weekly-digest.mjs --dir=interview-prep/sessions --from 2026-09-28 --to 2026-10-04');
+    no(interview, 'node weekly-digest.mjs --dir /tmp/elsewhere');
+    const scan = { codeRoot: root, dataRoot: root, allow: ['portals.yml'], deny: [...ALWAYS_DENIED_WRITES], bash: [['node', 'discover-new-companies.mjs']] };
+    ok(scan, 'node discover-new-companies.mjs --summary');
+    ok(scan, 'node discover-new-companies.mjs --json --since 7 --limit 20');
+    no(scan, 'node discover-new-companies.mjs --out data/new.yml');
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
