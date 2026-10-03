@@ -661,3 +661,77 @@ textarea {
   border-radius: 6px;
   padding: 8px;
 }
+
+.quick-runs {
+  margin-bottom: var(--space-4);
+}
+.quick-runs__group {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding-block: var(--space-2);
+}
+.quick-runs__group + .quick-runs__group {
+  border-top: 1px solid var(--border);
+}
+.quick-runs__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Cells that must not push a table past its card: one clipped line, or at most two wrapped lines. */
+.clip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clip--company {
+  max-width: 11rem;
+}
+.clip--location {
+  max-width: 10rem;
+}
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 18rem;
+  overflow-wrap: anywhere;
+}
+.stack-tight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.grid-2--today {
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+}
+.prose,
+.md-inline {
+  overflow-wrap: anywhere;
+}
+.md-inline a {
+  overflow-wrap: anywhere;
+}
+.toolbar select,
+.row select {
+  width: auto;
+}
+.toolbar input[type='text'],
+.toolbar input:not([type]) {
+  width: auto;
+}
+.split > * {
+  min-width: 0;
+}
+.wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+.table td.mono {
+  white-space: nowrap;
+}

@@ -15,6 +15,7 @@ import { readText } from '../domains/files.js';
 import { execNoShell, type Exec } from './system.js';
 import { listModeIds, getModePolicy } from '../claude/modes.js';
 import type { EventBus } from '../watch/bus.js';
+import type { FollowupCadence } from '../../shared/api.js';
 
 const SERVE_ROOTS = ['output', 'jds', 'reports'] as const;
 const CONTENT_TYPES: Record<string, string> = {
@@ -43,6 +44,18 @@ export function containedPath(dataRoot: string, requested: string): { abs: strin
   }
   if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) return null;
   return { abs: realFile, root };
+}
+
+function isNoApplications(v: unknown): v is { error: string; cadenceDefaults?: Record<string, number> } {
+  return typeof v === 'object' && v !== null && typeof (v as { error?: unknown }).error === 'string' && /no applications/i.test((v as { error: string }).error);
+}
+
+function emptyFollowups(cadenceDefaults: Record<string, number> | undefined, nowMs: number): FollowupCadence {
+  return {
+    metadata: { analysisDate: new Date(nowMs).toISOString().slice(0, 10), totalTracked: 0, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 0 },
+    entries: [],
+    ...(cadenceDefaults ? { cadenceDefaults } : {}),
+  };
 }
 
 export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; bus: EventBus; exec?: Exec; now?: () => number }): Promise<void> {
@@ -113,12 +126,23 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
 
   app.get('/api/followups', async (_req, reply) => {
     const r = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, 'followupCadence'), '--json'], { cwd: cfg.codeRoot, timeoutMs: 30_000, env: coreEnv });
-    if (r.code !== 0) return reply.code(502).send({ error: 'followup-cadence failed', exit: r.code, stderr: r.stderr.slice(-2000) });
+    let parsed: unknown;
     try {
-      return JSON.parse(r.stdout);
+      parsed = JSON.parse(r.stdout);
     } catch {
-      return reply.code(502).send({ error: 'followup-cadence printed non-JSON', stdout: r.stdout.slice(0, 400) });
+      parsed = undefined;
     }
+    // The script exits 1 with a JSON error for a tracker with no rows. That is a new user's normal state, not a failure.
+    if (r.code !== 0 && isNoApplications(parsed)) {
+      // The script says "no applications" for any tracker whose rows it cannot parse too; only a missing or row-less tracker is the empty state.
+      const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
+      if (tracker.kind === 'malformed') return reply.code(502).send({ error: 'followup-cadence: tracker is malformed', detail: tracker.error, path: tracker.path });
+      if (tracker.kind === 'ok' && tracker.rows.length > 0) return reply.code(502).send({ error: 'followup-cadence reported no applications but the tracker has rows', exit: r.code });
+      return emptyFollowups(parsed.cadenceDefaults, now());
+    }
+    if (r.code !== 0) return reply.code(502).send({ error: 'followup-cadence failed', exit: r.code, stderr: r.stderr.slice(-2000) });
+    if (parsed === undefined) return reply.code(502).send({ error: 'followup-cadence printed non-JSON', stdout: r.stdout.slice(0, 400) });
+    return parsed;
   });
 
   app.get('/api/insights/dashboard', async () => {

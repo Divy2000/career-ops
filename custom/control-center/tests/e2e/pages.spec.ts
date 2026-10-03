@@ -84,6 +84,12 @@ test.describe('read-only pages render fixture data', () => {
     await page.goto('/sponsorship');
     await expect(page.getByRole('heading', { level: 1, name: 'Sponsorship' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '2026-10-02' })).toBeVisible();
+    const watcher = page.getByRole('heading', { name: 'Watcher state' }).locator('..');
+    await expect(watcher.getByText('Last run')).toBeVisible();
+    await expect(watcher.getByText('Items seen')).toBeVisible();
+    await expect(watcher.getByText('"ids"')).toBeHidden();
+    await watcher.getByText('Raw seen.json').click();
+    await expect(watcher.getByText('"ids"')).toBeVisible();
     await page.getByRole('tab', { name: /Company alerts/ }).click();
     await expect(page.getByRole('link', { name: 'Initech pauses visa sponsorship for new hires' })).toBeVisible();
     await page.getByRole('tab', { name: /Company checks/ }).click();

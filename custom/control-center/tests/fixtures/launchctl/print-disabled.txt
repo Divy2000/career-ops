@@ -1,0 +1,6 @@
+
+	disabled services = {
+		"com.career-ops.immigration-watch" => enabled
+		"com.career-ops.upstream-sync" => disabled
+		"com.example.other" => enabled
+	}

@@ -1,0 +1,27 @@
+# Synthetic portals config for tests
+title_filter:
+  include:
+    - backend # keep this comment
+    - platform
+  exclude:
+    - intern
+
+location_filter:
+  strict: false
+  allow:
+    - Remote
+    - Austin
+
+tracked_companies:
+  - name: Acme Robotics
+    ats: greenhouse
+    careers_url: https://jobs.example.com/acme
+    slug: acme-robotics
+    enabled: true
+  - name: Northwind Analytics
+    ats: lever
+    careers_url: https://boards.example.com/northwind
+    slug: northwind
+    enabled: true
+
+max_posting_age_days: 30

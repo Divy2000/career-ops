@@ -75,6 +75,8 @@ export interface FollowupCadenceEntry {
 export interface FollowupCadence {
   metadata: { analysisDate: string; totalTracked: number; actionable: number; overdue: number; urgent: number; cold: number; waiting: number; retired: number };
   entries: FollowupCadenceEntry[];
+  /** Pure cadence defaults; present on an empty tracker, where the CLI reports no other config. */
+  cadenceDefaults?: Record<string, number>;
 }
 
 export type DashboardRead = { kind: 'ok'; dashboard: Dashboard } | { kind: 'missing' | 'malformed'; path: string };

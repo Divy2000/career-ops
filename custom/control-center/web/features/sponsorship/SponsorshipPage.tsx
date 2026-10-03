@@ -1,7 +1,5 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import { SafeMarkdown } from '../../components/Md';
 import { useImmigration } from '../../lib/queries';
 import { DataState, Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
 import { Tabs } from '../../components/ui';
@@ -9,8 +7,58 @@ import { useState } from 'react';
 import { useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { SessionPanel } from '../../components/SessionPanel';
+import { summarizeWatcher } from '../../lib/watcherState';
 
 const route = getRouteApi('/sponsorship');
+
+function WatcherState({ seen, pendingCount, pendingError }: { seen: unknown; pendingCount: number | null; pendingError: string | null }) {
+  const s = summarizeWatcher(seen, pendingCount, pendingError);
+  return (
+    <div className="card" aria-labelledby="watcher-state">
+      <h2 id="watcher-state">Watcher state</h2>
+      {s === null ? (
+        <Empty>The official-feed watcher has not run yet.</Empty>
+      ) : 'error' in s ? (
+        <p className="danger-text" role="alert">
+          {s.error}
+        </p>
+      ) : (
+        <dl className="kv">
+          <div className="kv__pair">
+            <dt>Last run</dt>
+            <dd className="mono">{s.lastRun ?? 'never'}</dd>
+          </div>
+          {s.sources.map((src) => (
+            <div key={src.name} className="kv__pair">
+              <dt>Last success: {src.name}</dt>
+              <dd className="mono">{src.lastSuccess}</dd>
+            </div>
+          ))}
+          {s.lastSuccess && (
+            <div className="kv__pair">
+              <dt>Last success</dt>
+              <dd className="mono">{s.lastSuccess}</dd>
+            </div>
+          )}
+          <div className="kv__pair">
+            <dt>Items seen</dt>
+            <dd className="mono">{s.seenCount}</dd>
+          </div>
+          <div className="kv__pair">
+            <dt>Pending for the AI pass</dt>
+            <dd className="mono">{s.pendingError ? <span className="danger-text">{s.pendingError}</span> : (s.pendingCount ?? 'n/a')}</dd>
+          </div>
+        </dl>
+      )}
+      {s !== null && (
+        <details>
+          <summary>Raw seen.json</summary>
+          <pre tabIndex={0} className="mono small log">{JSON.stringify(seen, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
 export type SponsorshipTab = 'overview' | 'changes' | 'feed' | 'alerts' | 'companies' | 'lookup' | 'tiers';
 
 export function SponsorshipPage() {
@@ -73,17 +121,14 @@ export function SponsorshipPage() {
                         <h2 style={{ display: 'inline' }}>{s.date}</h2>
                       </summary>
                       <div className="prose">
-                        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                        <SafeMarkdown>
                           {s.body}
-                        </Markdown>
+                        </SafeMarkdown>
                       </div>
                     </details>
                   ))
                 )}
-                <div className="card">
-                  <h2>Watcher state</h2>
-                  <pre className="mono small">{JSON.stringify(d.seen, null, 2)}</pre>
-                </div>
+                <WatcherState seen={d.seen} pendingCount={d.pendingCount} pendingError={d.pendingError} />
               </div>
             )}
             {tab === 'changes' && (

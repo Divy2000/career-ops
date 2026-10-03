@@ -4,6 +4,7 @@ import { apiGet, apiSend } from '../../lib/api';
 import { DataState, Empty, Pill } from '../../components/ui';
 import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
 import { LogBrowser, ScheduleCards } from './ScheduleCards';
+import { groupQuickActions } from './quickActions';
 
 const ANSI = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*[A-Za-z]`, 'g');
 export const stripAnsi = (s: string) => s.replace(ANSI, '');
@@ -62,6 +63,7 @@ export function RunsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const current = runs.data?.find((r) => r.id === selected) ?? null;
   const quick = (actions.data ?? []).filter((a) => !a.sync && !a.confirm && Object.keys((a.params.properties as object) ?? {}).length === 0);
+  const groups = groupQuickActions(quick);
 
   const launch = async (id: string) => {
     try {
@@ -82,14 +84,24 @@ export function RunsPage() {
     <section aria-labelledby="page-title">
       <div className="page-header">
         <h1 id="page-title">Runs & Schedule</h1>
-        <div className="row gap">
-          {quick.map((a) => (
-            <button key={a.id} type="button" onClick={() => void launch(a.id)} title={`Cost: ${a.cost}`}>
-              Run {a.label} <Pill>{a.cost}</Pill>
-            </button>
+      </div>
+      {groups.length > 0 && (
+        <div className="card quick-runs" aria-labelledby="quick-runs-heading">
+          <h2 id="quick-runs-heading">Run a script</h2>
+          {groups.map((g) => (
+            <div key={g.label} className="quick-runs__group" role="group" aria-label={g.label}>
+              <span className="quick-runs__label muted small">{g.label}</span>
+              <div className="quick-runs__buttons">
+                {g.actions.map((a) => (
+                  <button key={a.id} type="button" onClick={() => void launch(a.id)} title={`Cost: ${a.cost}`}>
+                    Run {a.label} <Pill>{a.cost}</Pill>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
-      </div>
+      )}
       {message && (
         <p role="alert" style={{ color: 'var(--danger)' }}>
           {message}

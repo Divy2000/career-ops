@@ -42,6 +42,10 @@ export interface ImmigrationOverview {
   companies: CompanyFile[];
   tiers: unknown;
   seen: unknown;
+  /** Items the watcher queued for the AI pass (pending.json); null when absent or unreadable. */
+  pendingCount: number | null;
+  /** Set when pending.json exists but cannot be read as a list; null when it is absent or fine. */
+  pendingError: string | null;
   dailyLog: DailyLog | null;
   logDates: string[];
 }
@@ -131,6 +135,13 @@ export function readDailyLog(dataRoot: string, date: string): DailyLog | null {
   return read.kind === 'ok' ? parseDailyLog(read.text, date) : null;
 }
 
+function pendingOf(v: unknown): { count: number | null; error: string | null } {
+  if (v === null) return { count: null, error: null };
+  if (Array.isArray(v)) return { count: v.length, error: null };
+  const malformed = typeof v === 'object' && (v as { error?: unknown }).error === 'malformed JSON';
+  return { count: null, error: malformed ? 'pending.json is not valid JSON' : 'pending.json is not a list of items' };
+}
+
 function readJson(p: string): unknown {
   const read = readText(p);
   if (read.kind !== 'ok') return null;
@@ -169,6 +180,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
   const logDates = listLogDates(dataRoot);
+  const pending = pendingOf(readJson(path.join(imm, 'pending.json')));
   return {
     digest,
     policyChanges: changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : [],
@@ -177,6 +189,8 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     companies,
     tiers: readJson(path.join(imm, 'sponsor-tiers.json')),
     seen: readJson(path.join(imm, 'seen.json')),
+    pendingCount: pending.count,
+    pendingError: pending.error,
     dailyLog: logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null,
     logDates,
   };

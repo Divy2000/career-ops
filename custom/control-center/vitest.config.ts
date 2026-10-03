@@ -3,6 +3,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
+// Local-time assertions only mean something away from UTC, where the UTC slice of an ISO string equals local time.
+process.env.TZ = 'America/Los_Angeles';
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -11,7 +14,7 @@ export default defineConfig({
     },
   },
   test: {
-    env: { NODE_ENV: 'test' },
+    env: { NODE_ENV: 'test', TZ: 'America/Los_Angeles' },
     projects: [
       {
         extends: true,

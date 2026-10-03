@@ -103,6 +103,95 @@ describe('read endpoints', () => {
   });
 });
 
+describe('GET /api/followups on an empty tracker', () => {
+  const HEADER_ONLY = '# Applications Tracker\n\n| # | Date | Company | Via | Role | Score | Status | PDF | Report | Notes |\n|---|------|---------|-----|------|-------|--------|-----|--------|-------|\n';
+  const cases: Array<[string, (dataRoot: string) => void]> = [
+    ['no tracker file', (root) => fs.rmSync(path.join(root, 'data', 'applications.md'))],
+    ['a header-only tracker', (root) => fs.writeFileSync(path.join(root, 'data', 'applications.md'), HEADER_ONLY)],
+  ];
+
+  it.each(cases)('returns 200 with an empty cadence the client understands for %s', async (_name, arrange) => {
+    const t2 = await makeTestApp();
+    arrange(t2.cfg.dataRoot);
+    const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.entries).toEqual([]);
+    expect(body.metadata).toMatchObject({ totalTracked: 0, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 0 });
+    expect(body.metadata.analysisDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(body.cadenceDefaults).toMatchObject({ applied_first: 7, applied_max_followups: 2 });
+    expect(body.error).toBeUndefined();
+    await t2.close();
+  });
+
+  it('reports a header-only tracker and its dashboard as ok and empty', async () => {
+    const t2 = await makeTestApp();
+    fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), HEADER_ONLY);
+    const tracker = (await t2.app.inject({ method: 'GET', url: '/api/tracker', headers: t2.authed })).json();
+    expect(tracker).toMatchObject({ kind: 'ok', rows: [] });
+    const dash = (await t2.app.inject({ method: 'GET', url: '/api/insights/dashboard', headers: t2.authed })).json();
+    expect(dash).toMatchObject({ kind: 'ok', dashboard: { totals: { applications: 0 } } });
+    await t2.close();
+  });
+
+  it('does not hide a tracker whose rows all fail to parse behind an empty cadence', async () => {
+    const t2 = await makeTestApp();
+    fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), `${HEADER_ONLY}| x | y |\n`);
+    expect((await t2.app.inject({ method: 'GET', url: '/api/tracker', headers: t2.authed })).json().kind).toBe('malformed');
+    const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/malformed/);
+    await t2.close();
+  });
+
+  it('returns 502 when the script claims no applications but the tracker has rows', async () => {
+    const t2 = await makeTestApp({}, { exec: async () => ({ code: 1, stdout: JSON.stringify({ error: 'No applications found in tracker.' }), stderr: '' }) });
+    const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/tracker has rows/);
+    await t2.close();
+  });
+
+  const failing: Array<[string, { code: number; stdout: string; stderr: string }]> = [
+    ['non-JSON output with exit 0', { code: 0, stdout: 'not json at all', stderr: '' }],
+    ['an unrelated JSON error with exit 1', { code: 1, stdout: JSON.stringify({ error: 'templates/states.yml is unreadable' }), stderr: '' }],
+    ['a crash with no stdout', { code: 2, stdout: '', stderr: 'Cannot find package js-yaml' }],
+    ['non-JSON output with exit 1', { code: 1, stdout: 'No applications found in tracker.', stderr: '' }],
+  ];
+
+  it.each(failing)('still returns 502 for %s', async (_name, result) => {
+    const t2 = await makeTestApp({}, { exec: async () => result });
+    const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/followup-cadence/);
+    await t2.close();
+  });
+});
+
+describe('insight scripts on an empty tracker', () => {
+  const HEADER_ONLY = '# Applications Tracker\n\n| # | Date | Company | Via | Role | Score | Status | PDF | Report | Notes |\n|---|------|---------|-----|------|-------|--------|-----|--------|-------|\n';
+  const arrange: Array<[string, (root: string) => void]> = [
+    ['no tracker file', (root) => fs.rmSync(path.join(root, 'data', 'applications.md'))],
+    ['a header-only tracker', (root) => fs.writeFileSync(path.join(root, 'data', 'applications.md'), HEADER_ONLY)],
+  ];
+
+  it.each(arrange)('every cached insight script reads as ok, not failed, for %s', async (_name, prepare) => {
+    const t2 = await makeTestApp();
+    prepare(t2.cfg.dataRoot);
+    fs.rmSync(path.join(t2.cfg.dataRoot, 'data', 'follow-ups.md'));
+    fs.rmSync(path.join(t2.cfg.dataRoot, 'data', 'status-log.tsv'));
+    const ids = ((await t2.app.inject({ method: 'GET', url: '/api/insights/scripts', headers: t2.authed })).json() as Array<{ id: string }>).map((s) => s.id);
+    expect(ids.length).toBeGreaterThan(5);
+    for (const id of ids) {
+      const res = await t2.app.inject({ method: 'GET', url: `/api/insights/${id}?recompute=1`, headers: t2.authed });
+      expect(res.statusCode, id).toBe(200);
+      const body = res.json();
+      expect({ id, kind: body.kind, exit: body.exit, text: body.text }, `${id} output`).toMatchObject({ kind: 'ok', exit: 0 });
+    }
+    await t2.close();
+  });
+});
+
 describe('file serving', () => {
   it('serves reports under the data root with the right content type', async () => {
     const res = await get('/api/files/serve?path=reports/001-acme-robotics.md');

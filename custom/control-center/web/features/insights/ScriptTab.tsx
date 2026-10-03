@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { apiGet } from '../../lib/api';
 import { isPlainObject, isScalar } from '../../lib/yamlOpsClient';
 import { DataState, Empty, Pill } from '../../components/ui';
+import { emptyReason } from '../../lib/insightEmpty';
 import type { InsightRead } from '@shared/api';
 
 export const useInsight = (script: string) => useQuery({ queryKey: ['insights', 'script', script], queryFn: () => apiGet<InsightRead>(`/api/insights/${script}`) });
@@ -109,7 +110,8 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
             </details>
           </div>
         )}
-        {q.data?.kind === 'ok' && (children ? children(q.data) : q.data.json !== null ? <JsonView value={q.data.json} /> : q.data.text ? <pre tabIndex={0} className="log mono small">{q.data.text}</pre> : <Empty>The script printed nothing.</Empty>)}
+        {q.data?.kind === 'ok' && emptyReason(q.data.json) !== null && <Empty>{emptyReason(q.data.json)}</Empty>}
+        {q.data?.kind === 'ok' && emptyReason(q.data.json) === null && (children ? children(q.data) : q.data.json !== null ? <JsonView value={q.data.json} /> : q.data.text ? <pre tabIndex={0} className="log mono small">{q.data.text}</pre> : <Empty>The script printed nothing.</Empty>)}
       </DataState>
     </div>
   );

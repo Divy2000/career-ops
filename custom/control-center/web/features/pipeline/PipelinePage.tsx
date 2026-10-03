@@ -178,52 +178,65 @@ function Inbox() {
       {visible.length === 0 ? (
         <Empty>Nothing matches. Clear a filter or add URLs.</Empty>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Rank</th>
-              <th scope="col">Company</th>
-              <th scope="col">Role</th>
-              <th scope="col">Location</th>
-              <th scope="col">Source</th>
-              <th scope="col">Level</th>
-              <th scope="col">First seen</th>
-              <th scope="col">Posted</th>
-              <th scope="col">
-                <span className="sr-only">Row actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((r) => (
-              <tr key={r.url} className={r.done ? 'is-done' : ''}>
-                <td>
-                  <ScorePill score={r.rank} />
-                  {r.rankReason && <div className="faint small">{r.rankReason}</div>}
-                </td>
-                <td>{r.company || <span className="faint">unknown company</span>}</td>
-                <td>
-                  <a href={r.url} target="_blank" rel="noreferrer noopener">
-                    {r.role || r.url}
-                  </a>
-                  {r.done && <Pill>skipped</Pill>}
-                </td>
-                <td className="muted">{r.location ?? ''}</td>
-                <td>
-                  <Pill>{r.source}</Pill>
-                </td>
-                <td className="muted">{r.seniority ?? ''}</td>
-                <td className="mono muted">{r.firstSeen ?? ''}</td>
-                <td className="mono muted">{r.postedAt ?? ''}</td>
-                <td>
-                  <button type="button" aria-label={`${r.done ? 'Restore' : 'Skip'} ${r.company || r.url}`} onClick={() => void skip(r.url, !r.done)}>
-                    {r.done ? 'Undo skip' : 'Skip'}
-                  </button>
-                </td>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Rank</th>
+                <th scope="col">Company</th>
+                <th scope="col">Role</th>
+                <th scope="col">Location</th>
+                <th scope="col">First seen / posted</th>
+                <th scope="col">
+                  <span className="sr-only">Row actions</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {visible.map((r) => (
+                <tr key={r.url} className={r.done ? 'is-done' : ''}>
+                  <td title={r.rankReason ?? undefined}>
+                    <ScorePill score={r.rank} />
+                    {r.rankReason && <span className="sr-only">{r.rankReason}</span>}
+                  </td>
+                  <td>
+                    <div className="clip clip--company" title={r.company}>
+                      {r.company || <span className="faint">unknown company</span>}
+                    </div>
+                    <Pill>{r.source}</Pill>
+                  </td>
+                  <td>
+                    <div className="clamp-2" title={r.role || r.url}>
+                      <a href={r.url} target="_blank" rel="noreferrer noopener">
+                        {r.role || r.url}
+                      </a>
+                    </div>
+                    <span className="faint small">
+                      {r.done && <Pill>skipped</Pill>}
+                      {r.seniority ?? ''}
+                    </span>
+                  </td>
+                  <td className="muted">
+                    {r.location && (
+                      <div className="clip clip--location" title={r.location}>
+                        {r.location}
+                      </div>
+                    )}
+                  </td>
+                  <td className="mono muted">
+                    <div>{r.firstSeen ?? ''}</div>
+                    {r.postedAt && <div className="faint">posted {r.postedAt}</div>}
+                  </td>
+                  <td>
+                    <button type="button" aria-label={`${r.done ? 'Restore' : 'Skip'} ${r.company || r.url}`} onClick={() => void skip(r.url, !r.done)}>
+                      {r.done ? 'Undo skip' : 'Skip'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </DataState>
   );

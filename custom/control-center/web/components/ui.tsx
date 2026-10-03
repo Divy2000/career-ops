@@ -81,7 +81,8 @@ export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs:
 }
 
 /** Loading, error, missing-file and malformed-file states, kept distinct on purpose. */
-export function DataState({ query, missing, children }: { query: UseQueryResult<unknown>; missing?: ReactNode; children?: ReactNode }) {
+/** `emptyState` replaces the generic missing-file card when an absent file is the normal first-run state. */
+export function DataState({ query, missing, emptyState, children }: { query: UseQueryResult<unknown>; missing?: ReactNode; emptyState?: ReactNode; children?: ReactNode }) {
   if (query.isPending) {
     return (
       <div className="card skeleton" aria-busy="true">
@@ -104,6 +105,7 @@ export function DataState({ query, missing, children }: { query: UseQueryResult<
     );
   }
   const data = query.data as { kind?: string; path?: string; error?: string } | undefined;
+  if (data?.kind === 'missing' && emptyState) return <>{emptyState}</>;
   if (data?.kind === 'missing') {
     return (
       <div className="card">

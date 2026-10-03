@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { Link, getRouteApi } from '@tanstack/react-router';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import { SafeMarkdown } from '../../components/Md';
 import { useApplication } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone } from '../../components/ui';
 import { DocumentsTab } from './DocumentsTab';
@@ -297,9 +295,9 @@ function ReportTab({ report }: { report: NonNullable<ReturnType<typeof useApplic
               <h2 style={{ display: 'inline' }}>{s.heading}</h2>
             </summary>
             <div className="prose">
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+              <SafeMarkdown>
                 {s.content}
-              </Markdown>
+              </SafeMarkdown>
             </div>
           </details>
         ))}

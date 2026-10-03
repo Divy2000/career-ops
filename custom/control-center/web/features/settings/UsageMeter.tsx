@@ -40,7 +40,7 @@ export function UsageMeter({ compact = false }: { compact?: boolean }) {
   if (u.kind === 'missing') {
     return (
       <div className={`usage ${compact ? 'usage--compact' : ''}`}>
-        <span className="faint small">No Claude Code logs at {u.dir}</span>
+        <span className="faint small wrap-anywhere">No Claude Code logs at {u.dir}</span>
       </div>
     );
   }
