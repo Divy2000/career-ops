@@ -55,7 +55,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     const legacy = new Set(current.rows.map((r) => r.since));
     const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));
     if (badDate) return reply.code(400).send({ error: `since must be YYYY-MM-DD for ${badDate.company} (got ${badDate.since || 'nothing'})` });
-    const written = writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble, current.postamble);
+    // Extra cells fill the file's own extra columns (names come from the file, never the request).
+    const overfull = body.data.rows.find((r) => (r.extra?.length ?? 0) > current.extraColumns.length);
+    if (overfull) return reply.code(400).send({ error: `${overfull.company} has more cells than data/blacklist.md has columns (${current.extraColumns.length} extra)` });
+    const written = writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble, current.postamble, current.extraColumns);
     bus.publish('data.changed', { domain: 'config' });
     return { ok: true, etag: written.etag, rows: written.rows, path: written.path };
   });

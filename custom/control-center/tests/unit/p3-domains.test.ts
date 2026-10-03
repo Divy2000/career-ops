@@ -108,6 +108,22 @@ Some intro text about the file.
     expect(added).toBe(`# Blacklist\n\nIntro.\n\n${table}| Initech | 2026-10-03 | company | y |\n${tail}`);
   });
 
+  it('carries columns it does not manage through every row, in order, and leaves them empty on new rows', () => {
+    const md = '# Blacklist\n\n| Company | Reason | Added | Contact | Ticket |\n|---|---|---|---|---|\n| Old Corp | reposts | 2025-09-01 | jane@old.example | T-1 |\n| Short Row | spam | 2025-10-01 |\n';
+    const parsed = parseBlacklist(md);
+    expect(parsed.extraColumns).toEqual(['Contact', 'Ticket']);
+    expect(parsed.rows).toEqual([
+      { company: 'Old Corp', since: '2025-09-01', scope: 'company', reason: 'reposts', extra: ['jane@old.example', 'T-1'] },
+      { company: 'Short Row', since: '2025-10-01', scope: 'company', reason: 'spam', extra: ['', ''] },
+    ]);
+    const rendered = renderBlacklist([...parsed.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'y' }], parsed.preamble, parsed.postamble, parsed.extraColumns);
+    expect(rendered).toContain('| Company | Since | Scope | Reason | Contact | Ticket |\n|---------|-------|-------|--------|---|---|\n');
+    expect(rendered).toContain('| Old Corp | 2025-09-01 | company | reposts | jane@old.example | T-1 |\n');
+    expect(rendered).toContain('| Initech | 2026-10-03 | company | y |  |  |\n');
+    expect(parseBlacklist(rendered).extraColumns).toEqual(['Contact', 'Ticket']);
+    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, [])).not.toContain('Contact');
+  });
+
   it('renders the template format and round-trips its own output', () => {
     const parsed = parseBlacklist(TEMPLATE_STYLE);
     const rendered = renderBlacklist(parsed.rows, parsed.preamble);

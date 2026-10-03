@@ -136,6 +136,31 @@ describe('blacklist saves keep what the editor does not manage', () => {
   });
 });
 
+describe('blacklist saves keep columns the editor does not show', () => {
+  it('an extra column survives a save for every existing row, and a row cannot smuggle in more cells than the file has columns', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      fs.writeFileSync(file, '# Blacklist\n\n| Company | Reason | Added | Contact |\n|---|---|---|---|\n| Old Corp | reposts | 2025-09-01 | jane@old.example |\n');
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      expect(current.extraColumns).toEqual(['Contact']);
+      const rows = [...current.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'ghosted' }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      const raw = fs.readFileSync(file, 'utf8');
+      expect(raw).toContain('| Company | Since | Scope | Reason | Contact |');
+      expect(raw).toContain('| Old Corp | 2025-09-01 | company | reposts | jane@old.example |');
+      expect(raw).toContain('| Initech | 2026-10-03 | company | ghosted |  |');
+      const smuggled = await req('PUT', { confirm: true, rows: [{ ...rows[0], extra: ['a', 'b'] }] }, { 'if-match': saved.json().etag, 'x-cc-explicit': 'blacklist' });
+      expect(smuggled.statusCode).toBe(400);
+      expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('plugins', () => {
   it('lists bundled plugins with their enabled state from config/plugins.yml', async () => {
     const res = await get('/api/plugins');
