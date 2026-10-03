@@ -53,7 +53,12 @@ export interface ScheduleInput {
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/** The script runs from the code root; its launchd logs go to the data root, where the log browser reads them. */
+/**
+ * The script runs from the code root with CAREER_OPS_ROOT set to the data root
+ * (path-resolver.mjs gives it precedence over the .career-ops-data marker), so
+ * the job reads and writes the same data the app shows; its launchd logs go to
+ * the data root too, where the log browser reads them.
+ */
 export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string): string {
   const root = esc(codeRoot);
   const logs = esc(path.join(dataRoot, job.logDir));
@@ -66,6 +71,7 @@ export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: numbe
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>${root}/${job.script}</string></array>
   <key>WorkingDirectory</key><string>${root}</string>
+  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${esc(dataRoot)}</string></dict>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>${t.hour}</integer><key>Minute</key><integer>${t.minute}</integer>${wd}</dict>
   <key>StandardOutPath</key><string>${logs}/launchd.out.log</string>

@@ -262,6 +262,7 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(`<key>StandardOutPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.out.log')}</string>`);
     expect(xml).toContain(`<key>StandardErrorPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.err.log')}</string>`);
     expect(fs.statSync(path.join(t.cfg.dataRoot, 'data', 'upstream-sync')).isDirectory()).toBe(true);
+    expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string></dict>`);
   });
 
   it('validates the label and the body', async () => {
