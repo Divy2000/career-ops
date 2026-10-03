@@ -44,7 +44,7 @@ export function writeStressRoot(dir: string, fixtureRoot: string): void {
   const pipeline = Array.from({ length: 30 }, (_, i) => {
     const role = ROLES[i % ROLES.length]!;
     const loc = LOCATIONS[i % LOCATIONS.length]!;
-    return `- [ ] https://jobs.example.com/stress/${i} | Off Duty Management ${i} | ${role} | ${loc} | rank: 3.${i % 10}/5 ${EM_DASH} FastAPI backend in Texas, near Dallas. Python API match, but onsite in Katy means relocation or a long commute and more words | posted: 2026-09-${String(10 + (i % 15)).padStart(2, '0')}`;
+    return `- [ ] https://jobs.example.com/stress/${i} | Example Logistics ${i} | ${role} | ${loc} | rank: 3.${i % 10}/5 ${EM_DASH} FastAPI backend role. Python API match, but fully onsite in another city means relocation or a long commute and more words | posted: 2026-09-${String(10 + (i % 15)).padStart(2, '0')}`;
   });
   fs.writeFileSync(path.join(dir, 'data', 'pipeline.md'), `# Pipeline - Pending URLs\n\n## Pending\n\n${pipeline.join('\n')}\n`);
   const bullet = (lead: string) => `- **${lead}.** Three older changes that are still in effect were added to policy-changes.tsv (below). Skipped: the FY2027 registration-opening alerts, and an H-1B fraud guilty-plea release (enforcement only). Sources: [cap reached](${LONG_URL}), [selection completed](${LONG_URL}-2).`;

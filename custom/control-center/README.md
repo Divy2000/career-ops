@@ -84,6 +84,8 @@ Already applied on the fork: `local/immigration` and `local/pipeline` moved to `
 
 ## 8. Development
 
+Fixture files under `tests/fixtures/root/` share names with career-ops user-layer files (`cv.md`, `portals.yml`, `data/applications.md`), which the upstream root `.gitignore` ignores. They are tracked, so edits show up normally, but a NEW fixture file with such a name must be added with `git add -f`. Do not edit the root `.gitignore`: it is an upstream file.
+
 ```bash
 npm --prefix custom/control-center run typecheck
 npm --prefix custom/control-center run lint        # eslint plus the no-em-dash check
