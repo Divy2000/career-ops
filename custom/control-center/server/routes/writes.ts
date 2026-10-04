@@ -110,7 +110,7 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === n) : undefined;
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
-    return readDocuments(cfg.dataRoot, n, row.company);
+    return readDocuments(cfg.dataRoot, row.report, row.company);
   });
 
   app.get<{ Querystring: { n?: string } }>('/api/apply/documents', async (req, reply) => {

@@ -99,6 +99,54 @@ describe('documents', () => {
   });
 });
 
+describe('documents for a row whose number differs from its report', () => {
+  let d: TestApp;
+  beforeAll(async () => {
+    d = await makeTestApp();
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+  const write = (rel: string, text = '%PDF-1.4\n') => {
+    const file = path.join(d.cfg.dataRoot, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  };
+  const appendIndex = (line: string) => fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'pdf-index.tsv'), `${line}\n`);
+  const docsOf = async (n: number) => (await d.app.inject({ method: 'GET', url: `/api/tracker/${n}/documents`, headers: d.authed })).json();
+
+  it('reads pdf-index.tsv and the jds/ prefix by the row report number, not by the tracker row number', async () => {
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), '| 9 | 2026-10-01 | Acme Robotics | - | Platform Engineer | 4.0/5 | Evaluated | ✅ | [1](../reports/001-acme-robotics.md) | second role |\n');
+    appendIndex('9\toutput/globex-payments-cv.pdf\t\tletter\t2026-10-01\tcv');
+    write('jds/001-2026-09-20_acme-robotics_backend.pdf');
+    write('jds/009-2026-10-01_globex-payments_staff.pdf');
+    const docs = await docsOf(9);
+    expect(docs.files.find((f: { path: string }) => f.path === 'output/acme-robotics-cv.pdf')).toMatchObject({ source: 'index', kind: 'cv' });
+    expect(docs.files.map((f: { path: string }) => f.path)).not.toContain('output/globex-payments-cv.pdf');
+    expect(docs.jds).toContain('jds/001-2026-09-20_acme-robotics_backend.pdf');
+    expect(docs.jds).not.toContain('jds/009-2026-10-01_globex-payments_staff.pdf');
+  });
+
+  it('takes nothing keyed by the row number when the row has no report', async () => {
+    appendIndex('5\toutput/globex-payments-cv.pdf\t\tletter\t2026-10-01\tcv');
+    write('jds/005-2026-09-28_globex-payments_analyst.pdf');
+    const docs = await docsOf(5);
+    expect(docs.files).toEqual([]);
+    expect(docs.jds).toEqual([]);
+  });
+
+  it('classifies cover letters like the generator: manifest kind, else only an anchored cover name', async () => {
+    write('output/cv-acme-robotics-recovery-2026-10-04.pdf');
+    write('output/acme-robotics-staff-cover.pdf');
+    write('output/acme-robotics-senior-cover.pdf');
+    appendIndex('1\toutput/acme-robotics-senior-cover.pdf\t\tletter\t2026-09-21');
+    const kinds = Object.fromEntries((await docsOf(1)).files.map((f: { path: string; kind: string }) => [f.path, f.kind]));
+    expect(kinds['output/cv-acme-robotics-recovery-2026-10-04.pdf']).toBe('cv');
+    expect(kinds['output/acme-robotics-staff-cover.pdf']).toBe('cover');
+    expect(kinds['output/acme-robotics-senior-cover.pdf']).toBe('cover');
+  });
+});
+
 describe('daily job awareness', () => {
   it('reports whether run-daily.sh is running from pgrep', async () => {
     expect((await get('/api/system/daily')).json()).toMatchObject({ running: false });

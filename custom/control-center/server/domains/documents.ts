@@ -60,17 +60,17 @@ function mtime(dataRoot: string, rel: string): number {
   }
 }
 
-/** PDFs from the index for report n first, then output/ files matching the company, newest first. */
-export function readDocuments(dataRoot: string, n: number, company: string): DocumentsRead {
+/** PDFs from the index for the row's report first, then output/ files matching the company, newest first. pdf-index.tsv and jds/ are keyed by report number, never by tracker row. */
+export function readDocuments(dataRoot: string, report: number | null, company: string): DocumentsRead {
   const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
   const indexPresent = fs.existsSync(indexPath);
   const rows = indexPresent ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
   const files: DocumentFile[] = [];
   const seen = new Set<string>();
-  for (const r of rows.filter((x) => x.report === n)) {
+  for (const r of report === null ? [] : rows.filter((x) => x.report === report)) {
     if (seen.has(r.pdf)) continue;
     seen.add(r.pdf);
-    files.push({ path: r.pdf, html: r.html && exists(dataRoot, r.html) ? r.html : null, kind: r.kind === 'cover' ? 'cover' : 'cv', format: r.format || null, date: r.date || null, source: 'index' });
+    files.push({ path: r.pdf, html: r.html && exists(dataRoot, r.html) ? r.html : null, kind: documentKind(r.kind, r.pdf), format: r.format || null, date: r.date || null, source: 'index' });
   }
   const slug = companySlug(company);
   const outDir = path.join(dataRoot, 'output');
@@ -81,13 +81,13 @@ export function readDocuments(dataRoot: string, n: number, company: string): Doc
       if (seen.has(rel)) continue;
       seen.add(rel);
       const twin = `output/${name.slice(0, -4)}.html`;
-      files.push({ path: rel, html: exists(dataRoot, twin) ? twin : null, kind: /cover/i.test(name) ? 'cover' : 'cv', format: null, date: null, source: 'output' });
+      files.push({ path: rel, html: exists(dataRoot, twin) ? twin : null, kind: documentKind(undefined, rel), format: null, date: null, source: 'output' });
     }
   }
   files.sort((a, b) => mtime(dataRoot, b.path) - mtime(dataRoot, a.path));
   const jdsDir = path.join(dataRoot, 'jds');
-  const prefix = String(n).padStart(3, '0');
-  const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter((f) => f.startsWith(`${prefix}-`) || (slug && f.toLowerCase().includes(slug))).map((f) => `jds/${f}`) : [];
+  const prefix = report === null ? null : String(report).padStart(3, '0');
+  const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter((f) => (prefix !== null && f.startsWith(`${prefix}-`)) || (slug && f.toLowerCase().includes(slug))).map((f) => `jds/${f}`) : [];
   return { files, jds, indexPresent };
 }
 
@@ -122,6 +122,11 @@ export function artifactKindFromName(file: string): 'cv' | 'cover' {
   return /^cover([-_]|$)/.test(name) || /[-_]cover$/.test(name) ? 'cover' : 'cv';
 }
 
+/** The manifest's kind when it recorded one (older manifests have no kind column), else the name rule. */
+export function documentKind(manifestKind: string | undefined, file: string): 'cv' | 'cover' {
+  return manifestKind === 'cv' || manifestKind === 'cover' ? manifestKind : artifactKindFromName(file);
+}
+
 const COVER_TEXT = /\.(txt|md)$/i;
 const TAILORED_CV = /^output\/(\d+)-[^/]+\/cv\/tailored\/v(\d+)\/cv\.pdf$/;
 
@@ -152,9 +157,9 @@ export function readApplyDocuments(dataRoot: string, row: { report: number | nul
   const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
   const index = fs.existsSync(indexPath) ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
   // The generator's manifest records the kind it rendered; the name is only the fallback, as in generate-pdf.mjs.
-  const manifestKind = new Map(index.filter((r) => r.kind === 'cv' || r.kind === 'cover').map((r) => [r.pdf, r.kind]));
+  const manifestKind = new Map(index.map((r) => [r.pdf, r.kind]));
   const files = walkOutput(dataRoot).sort((a, b) => mtime(dataRoot, b) - mtime(dataRoot, a));
-  const pdfs = files.filter((f) => f.toLowerCase().endsWith('.pdf') && (manifestKind.get(f) ?? artifactKindFromName(f)) === 'cv');
+  const pdfs = files.filter((f) => f.toLowerCase().endsWith('.pdf') && documentKind(manifestKind.get(f), f) === 'cv');
   const covers = files.filter((f) => COVER_TEXT.test(f) && artifactKindFromName(f) === 'cover');
   if (!row) return { pdfs, covers, suggestedPdf: null, suggestedCover: null };
   const slug = companySlug(row.company);
