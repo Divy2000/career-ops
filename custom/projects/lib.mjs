@@ -373,3 +373,52 @@ export function rankProjects(entries, { jdText, cvText = '' }) {
   }
   return { recommended, candidates, excluded, libraryCoverage };
 }
+
+const DIFF_CONTEXT = 3;
+
+// Word-level diff in git's plain word-diff style ([-old-]{+new+}), showing
+// changed words with a few words of context. null when the words are equal.
+export function wordDiff(oldText, newText) {
+  const words = (s) => String(s ?? '').replace(/\*\*/g, '').split(/\s+/).filter(Boolean);
+  const a = words(oldText);
+  const b = words(newText);
+  const lcs = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { ops.push({ t: '=', w: a[i] }); i++; j++; }
+    else if (j < b.length && (i === a.length || lcs[i][j + 1] >= lcs[i + 1][j])) ops.push({ t: '+', w: b[j++] });
+    else ops.push({ t: '-', w: a[i++] });
+  }
+  if (ops.every((o) => o.t === '=')) return null;
+  // Group runs of changes so a replacement reads [-old words-]{+new words+}.
+  const parts = [];
+  for (const o of ops) {
+    const last = parts[parts.length - 1];
+    if (o.t === '=') parts.push({ eq: o.w });
+    else if (last && !('eq' in last)) last[o.t].push(o.w);
+    else parts.push({ '-': o.t === '-' ? [o.w] : [], '+': o.t === '+' ? [o.w] : [] });
+  }
+  const changed = parts.map((p, k) => (!('eq' in p) ? k : -1)).filter((k) => k >= 0);
+  const keep = (k) => changed.some((c) => Math.abs(c - k) <= DIFF_CONTEXT);
+  const render = (p) => ('eq' in p ? p.eq : `${p['-'].length ? `[-${p['-'].join(' ')}-]` : ''}${p['+'].length ? `{+${p['+'].join(' ')}+}` : ''}`);
+  const out = [];
+  let gap = false;
+  parts.forEach((p, k) => {
+    if (keep(k)) {
+      if (gap || (k > 0 && !out.length)) out.push('...');
+      out.push(render(p));
+      gap = false;
+    } else if (out.length) {
+      gap = true;
+    }
+  });
+  if (gap) out.push('...');
+  return out.join(' ');
+}
