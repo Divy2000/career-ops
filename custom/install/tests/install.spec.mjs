@@ -200,8 +200,8 @@ test('a tracked root lockfile makes the root install npm ci', () => {
 
 test('--ref checks the tag out after the clone', () => {
   const { w, D, args } = fresh();
-  w.run(args('--ref', 'fork-install-v1'));
-  assert.ok(w.log().includes(`git -C ${D} checkout fork-install-v1`), w.log().join('\n'));
+  w.run(args('--ref', 'fork-install-v2'));
+  assert.ok(w.log().includes(`git -C ${D} checkout fork-install-v2`), w.log().join('\n'));
 });
 
 test('re-running is idempotent: one clone, one upstream remote, and a fast-forward pull only', () => {

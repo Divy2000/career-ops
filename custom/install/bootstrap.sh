@@ -7,7 +7,7 @@ set -euo pipefail
 
 main() {
   local repo="${CAREER_OPS_REPO_URL:-https://github.com/Divy2000/career-ops.git}"
-  local ref="${CAREER_OPS_INSTALL_REF:-fork-install-v1}"
+  local ref="${CAREER_OPS_INSTALL_REF:-fork-install-v2}"
   local tty_dev="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"
   local dir="$HOME/career-ops" args=("$@") i answer=""
 
