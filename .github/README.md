@@ -32,14 +32,14 @@ I want to install the H-1B-aware career-ops fork (Divy2000/career-ops). Follow t
 4. Run the installer from the clone:
    cd ~/career-ops
    custom/install/install.sh --non-interactive --no-start --no-launchd --onboard none
-   It exits 3 when actions are still pending. That is expected: relay every pending action it prints.
+   It exits 3 when actions are still pending, such as the missing Keychain item. That is expected: relay every pending action it prints.
 5. The Keychain step must be done by me in my own terminal, because your Bash tool cannot take hidden input. Give me the exact commands (claude setup-token, then security add-generic-password) and wait until I confirm. Never ask me to paste the token into this chat.
 6. My documents (any format) are listed on the next line. Copy them into documents/ in the clone: the resume into documents/cv/, project documents into documents/projects/. Copy, never move, and never edit the originals.
 My documents: <PASTE THE PATHS OF YOUR RESUME AND PROJECT DOCUMENTS HERE>
 7. Read custom/install/ONBOARDING.md in the clone and follow it: extract my documents, ask me the questionnaire once, show me every file you will write, and write nothing until I say an explicit yes. Then verify with the doctor and offer the daily job and the Control Center.
 ```
 
-Claude shows its plan, asks before each change, and stops at the one step it cannot do for you: storing your Claude token in the macOS Keychain (see [First run](#first-run)). Until the Keychain item exists and onboarding has finished, the installer exits with code 3 and a list of pending actions. That is expected, not a failure: while the Keychain item is missing it skips the daily job and the Control Center start, and Claude relays each pending action to you. The full procedure it follows is [custom/install/ONBOARDING.md](/custom/install/ONBOARDING.md).
+Claude shows its plan, asks before each change, and stops at the one step it cannot do for you: storing your Claude token in the macOS Keychain (see [First run](#first-run)). Under these flags the installer exits with code 3 and a list of pending actions such as the missing Keychain item. That is expected, not a failure: while the Keychain item is missing it skips the daily job and the Control Center start, and Claude relays each pending action to you. The full procedure it follows is [custom/install/ONBOARDING.md](/custom/install/ONBOARDING.md).
 
 ### Option 2: install script
 
@@ -58,7 +58,7 @@ What the script does with your Markdown files:
 - Limits: the resume is at most 1 MiB, each project document at most 2 MiB, at most 20 documents. Files must be UTF-8 text. Every file is checked before anything is written; one bad file means nothing is copied (exit 2, with the file and the reason).
 - Originals are copied into `documents/cv/` and `documents/projects/` (a name that already exists gets a `-1` suffix; nothing is overwritten).
 - `cv.md` is created from your resume when it does not exist. If a different `cv.md` already exists, it is **never replaced** without your confirmation (a diff summary and a y/N prompt) or `--replace-cv`, and a `cv.md.bak-<timestamp>` backup is kept before any replacement.
-- Without the Keychain item (see [First run](#first-run)) it still installs, but skips the daily job and the Control Center start and lists them as pending actions (exit 3).
+- Without the Keychain item (see [First run](#first-run)) it still installs, but skips the daily job and the Control Center start and lists them as pending actions.
 - After the install it offers to start Claude Code with the onboarding procedure, which turns your documents into `config/profile.yml`, `modes/_profile.md`, `portals.yml` and the rest after showing you every change.
 
 | Flag | Meaning |
@@ -68,7 +68,7 @@ What the script does with your Markdown files:
 | `--replace-cv` | Allow replacing an existing, different `cv.md` (a backup is written first). |
 | `--onboard interactive\|headless\|none` | After install: start Claude Code with the onboarding prompt (default when a terminal and `claude` are present), draft the files headlessly from the Keychain token (drafts only, never live files), or only print the command. |
 | `--yes` | Do not ask for confirmation; take the default answer. |
-| `--non-interactive` | Never prompt or read the terminal; unfinished steps become pending actions (exit code 3). |
+| `--non-interactive` | Never prompt or read the terminal; unfinished steps become pending actions. |
 | `--dir <path>` | Checkout location (default: the checkout the script is in, otherwise `~/career-ops`; an existing checkout is reused). |
 | `--data-root <path>` | Keep your personal files outside the checkout. Writes a git-ignored `.career-ops-data` marker. |
 | `--ref <tag>` | Check out this tag or branch of the fork. |
@@ -81,19 +81,18 @@ What the script does with your Markdown files:
 | `--dry-run` | Validate inputs and print the plan; change nothing. |
 | `--help` | Print the flags. |
 
-Exit codes: `0` done, `1` failure, `2` usage or input error, `3` done with actions you still have to do (for example the Keychain step).
+Exit codes: `0` done, `1` failure, `2` usage or input error, `3` done with actions you still have to do (for example the Keychain step). Pending actions are printed before the Control Center starts; the script then replaces itself with the Control Center, so exit 3 only shows up when it does not start (for example with `--no-start`, or while the Keychain item is missing).
 
-**One-liner (least safe).** The script above is the safest route because you can read it first. If you want a single command, download the pinned bootstrap, check it against your own clone, read it, then run it:
+**One-liner (least safe).** Prefer `git clone`, shown first: it is the route where you read the script before it runs. If you still want a single command, download the pinned bootstrap, read it, then run it:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v1/custom/install/bootstrap.sh
 shasum -a 256 bootstrap.sh
-git show fork-install-v1:custom/install/bootstrap.sh | shasum -a 256   # run inside any clone; the two hashes must match
 less bootstrap.sh
 bash bootstrap.sh --resume resume.md
 ```
 
-Piping it straight into a shell works too, but you run code you have not read: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v1/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
+The checksum only detects a corrupted or truncated download; it is not independent proof, because it comes from the same repository as the script. The real safeguards are reading the script before you run it and pinning the tag (`fork-install-v1`, not a moving branch). Piping it straight into a shell skips both: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v1/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
 
 ## What you get
 
@@ -163,10 +162,11 @@ If the checkout is under `~/Desktop` or `~/Documents`, give `/bin/bash` Full Dis
 
 ```bash
 cd ~/career-ops
-git switch main
-git pull --ff-only
-custom/install/install.sh --non-interactive --no-start   # reruns every step; existing files are never overwritten
+git switch main && git pull --ff-only
+custom/install/install.sh --non-interactive --no-start --no-launchd --no-h1b-index   # refreshes dependencies and checks; existing files are never overwritten
 ```
+
+The extra flags keep an update from touching choices you made: without them the installer would reinstall the daily launchd job and download the H-1B index again. To (re)enable them deliberately: `custom/launchd/install.sh --jobs daily` installs the 8am job, and `node plugins.mjs enable h1b-sponsor --confirm` followed by `node plugins/h1b-sponsor/install-h1b-index.mjs` enables the sponsor plugin and downloads the index.
 
 Do **not** run `node update-system.mjs apply` in this fork: it can overwrite fork files. Do not use `npx @santifer/career-ops init` either, because that installs upstream, not this fork. The maintainer's weekly sync pull request is the update path for upstream changes.
 
@@ -187,14 +187,14 @@ rm -rf ~/Library/Application\ Support/career-ops-control-center
 | Symptom | Fix |
 |---|---|
 | The daily job does not run, or launchd cannot read the checkout | The checkout is under `~/Desktop` or `~/Documents`. Give `/bin/bash` Full Disk Access, or move the checkout. |
-| The log says the Keychain item `career-ops-claude-token` is not found | Do the Keychain step in [First run](#first-run). The installer exits 3 until it exists. |
+| The log says the Keychain item `career-ops-claude-token` is not found | Do the Keychain step in [First run](#first-run). The installer lists it as a pending action until it exists. |
 | Control Center says the port is in use | Start it on another port: `CC_PORT=4318 custom/control-center/bin/cc`. |
 | Warning that `ANTHROPIC_API_KEY` is set | Harmless: sessions and the daily job force it empty so your subscription is used. Unset it in your shell profile to silence the warning. |
 | Control Center cannot find `claude`, or you have several | Point it at the one you want: `CC_CLAUDE_BIN=/path/to/claude custom/control-center/bin/cc`. |
 | Chromium or PDF generation fails | Run `node doctor.mjs`; reinstall the browser with `npx playwright install chromium`. |
 | Sponsorship lookup says there is no H-1B index | `node plugins.mjs enable h1b-sponsor --confirm`, then `node plugins/h1b-sponsor/install-h1b-index.mjs` (about 8 MiB). |
 | Every start prints a new token URL | Expected: the token is one-time. Open the URL the latest start printed. |
-| Installer exit code 3 | Not an error: it lists the actions you still have to do. |
+| Installer exit code 3 | Not an error: it lists the actions you still have to do (it is printed before the Control Center starts, and exit 3 only shows when it does not start). |
 
 ## Links
 

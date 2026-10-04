@@ -325,3 +325,77 @@ test('ONBOARDING.md appends the shipped sponsorship template file instead of emb
   assert.ok(onboarding.includes('custom/install/templates/_custom-sponsorship.md'));
   assert.equal(/^### Sponsorship check/m.test(onboarding), false, 'ONBOARDING.md must not embed its own copy of the section');
 });
+
+test('ONBOARDING.md numbers the gate as its own step and every Step reference points at a real step', () => {
+  const stepHeads = headings(onboarding).filter((h) => /^Step \d+:/.test(h.text));
+  assert.deepEqual(stepHeads.map((h) => Number(h.text.match(/^Step (\d+)/)[1])), [1, 2, 3, 4, 5, 6, 7]);
+  assert.match(stepHeads[4].text, /^Step 5: The gate$/);
+  assert.match(stepHeads[5].text, /^Step 6: Verify and record$/);
+  assert.match(stepHeads[6].text, /^Step 7: Offers$/);
+  assert.equal(headings(onboarding).some((h) => h.text === 'The gate'), false, 'the unnumbered gate heading must be gone');
+  const text = stripCode(onboarding);
+  for (const m of text.matchAll(/\bStep (\d+)\b/g)) assert.ok(Number(m[1]) >= 1 && Number(m[1]) <= 7, `Step ${m[1]} does not exist`);
+  assert.match(section(onboarding, /^#{2,3}\s+Step 4\b/), /Step 5/);
+  assert.match(section(onboarding, /^#{2,3}\s+Resume from drafts$/), /Step 5/);
+  assert.match(onboarding, /\(see "Step 5: The gate"\)/);
+});
+
+test('ONBOARDING.md rule 5 allows staging copies and extracted text before the gate, lists them, and cleans up on decline', () => {
+  const rule5 = onboarding.split('\n').find((l) => /^5\. /.test(l));
+  assert.ok(rule5);
+  assert.match(rule5, /staging/i);
+  assert.match(rule5, /documents\//);
+  assert.match(rule5, /\.extracted\.txt/);
+  assert.match(rule5, /temp/i);
+  assert.match(rule5, /list/i);
+  assert.match(rule5, /cv\.md/);
+  assert.match(rule5, /config/);
+  assert.match(rule5, /modes/);
+  assert.match(rule5, /portals/);
+  assert.match(rule5, /data\//);
+  assert.match(rule5, /declin/i);
+  assert.match(rule5, /delete/i);
+  assert.match(section(onboarding, /^#{2,3}\s+Step 5: The gate$/), /delete the staged copies/i);
+});
+
+test('the ONBOARDING.md image row creates its temp dir and uses an absolute path under the effective data root', () => {
+  assert.match(onboarding, /getCareerOpsRoot/);
+  assert.match(onboarding, /mkdir -p "\$DATA\/data\/install\/tmp"/);
+  assert.match(onboarding, /--out "\$DATA\/data\/install\/tmp\//);
+  assert.equal(/--out data\/install\/tmp/.test(onboarding), false);
+});
+
+test('Updating pulls main and reruns the installer without re-enabling the job or the H-1B index, and explains how to opt in', () => {
+  const updating = section(readme, /^#{2,3}\s+Updating$/);
+  const installLine = updating.split('\n').find((l) => /install\.sh/.test(l));
+  assert.ok(installLine);
+  assert.match(installLine, /--no-launchd/);
+  assert.match(installLine, /--no-h1b-index/);
+  assert.match(installLine, /--no-start/);
+  assert.match(updating, /git switch main/);
+  assert.match(updating, /git pull --ff-only/);
+  assert.match(updating, /custom\/launchd\/install\.sh --jobs daily/);
+  assert.match(updating, /plugins\.mjs enable h1b-sponsor --confirm/);
+});
+
+test('the README says pending actions print before the Control Center starts and exit 3 applies when it does not start', () => {
+  assert.match(readme, /printed before the Control Center starts/i);
+  assert.match(readme, /exit 3 only shows up when it does not start/i);
+  assert.match(readme, /--no-start/);
+  const opt1 = section(readme, /^#{2,3}\s+Option 1\b/);
+  assert.match(opt1, /pending actions? such as the missing Keychain item/i);
+  assert.equal(/onboarding has finished, the installer exits/i.test(readme), false);
+  assert.equal(/\(exit 3\)/.test(readme), false, 'no unconditional exit 3 claims');
+  const row = readme.split('\n').find((l) => l.startsWith('| `--non-interactive`'));
+  assert.equal(/\(exit code 3\)/.test(row), false);
+});
+
+test('the one-liner section is honest about what the checksum proves and prefers git clone', () => {
+  const opt2 = section(readme, /^#{2,3}\s+Option 2\b/);
+  assert.match(opt2, /corrupted or truncated/i);
+  assert.match(opt2, /reading the script/i);
+  assert.match(opt2, /pinn/i);
+  assert.match(opt2, /prefer `git clone`|prefer the `git clone`/i);
+  assert.equal(/two hashes must match/i.test(opt2), false);
+  assert.equal(/git show fork-install-v1/.test(opt2), false);
+});
