@@ -8,6 +8,7 @@
 // when an entry has a `**Proof points:**` label, only its bullets count.
 
 import { normalizeTextKey } from '../../tracker-parse.mjs';
+import { extractSkills } from '../../skill-extract.mjs';
 
 export const KINDS = ['project', 'publication', 'article'];
 export const LIBRARY_HEADER = '# Projects library';
@@ -279,4 +280,96 @@ export function convertJsonProjects(data) {
     };
   });
   return { entries, warnings };
+}
+
+// The entry named `title` in cv.md: a `##`-`######` heading whose name (text
+// before the separator) matches, or a `**Title**` list item. Returns the
+// entry's text without the title, or null when cv.md does not list it.
+export function findCvEntry(cvText, title) {
+  const key = titleKey(title);
+  if (!key) return null;
+  const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
+  const plain = (s) => s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  for (let i = 0; i < lines.length; i++) {
+    const h = lines[i].match(/^#{2,6}\s+(.*\S)\s*$/);
+    if (h && titleKey(plain(h[1]).split(HEADING_SEP)[0]) === key) {
+      const body = [];
+      for (let j = i + 1; j < lines.length && !/^#{1,6}\s/.test(lines[j]); j++) body.push(lines[j]);
+      return { line: i + 1, text: oneLine(body.map((l) => l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')).join(' ')) };
+    }
+    const b = lines[i].match(/^\s*(?:[-*+]\s+)?\*\*(.+?)\*\*(.*)$/);
+    if (b && titleKey(plain(b[1])) === key) {
+      const rest = [b[2].replace(/^\s*\([^)]*\)/, '').replace(/^\s*(?:--|\u2014|\u2013|-|:)\s*/, '')];
+      for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]); j++) rest.push(lines[j]);
+      return { line: i + 1, text: oneLine(rest.join(' ')) };
+    }
+  }
+  return null;
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const mentions = (text, term) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(term)}(?![\\p{L}\\p{N}])`, 'iu').test(text);
+const byCodepoint = (a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0);
+
+const WEIGHT = { title: 3, tags: 2, bullets: 1 };
+const RECOMMEND_MIN = 2;
+const RECOMMEND_MAX = 4;
+const RECOMMEND_RATIO = 0.6;
+
+// Deterministic, no AI. Each JD skill (upstream skill vocabulary) a project
+// shows scores by where it appears: title 3, tags 2, bullets 1. A tag outside
+// the vocabulary that the JD names literally scores the same way (title 3 when
+// the title also names it, else 2). Ties keep library order.
+export function rankProjects(entries, { jdText, cvText = '' }) {
+  const jdSkills = extractSkills(jdText);
+  const cvSkills = extractSkills(cvText);
+  const candidates = [];
+  const excluded = [];
+  const skillsOf = new Map();
+  for (const e of entries) {
+    if (e.kind !== 'project') {
+      excluded.push({ id: e.id, title: e.title, kind: e.kind });
+      continue;
+    }
+    const where = {
+      title: extractSkills(e.title),
+      tags: extractSkills(e.tags.join(', ')),
+      bullets: extractSkills([e.tagline ?? '', ...e.bullets].join('\n')),
+    };
+    skillsOf.set(e.id, new Set([...where.title, ...where.tags, ...where.bullets]));
+    const matched = new Map();
+    for (const skill of jdSkills) {
+      const field = ['title', 'tags', 'bullets'].find((f) => where[f].has(skill));
+      if (field) matched.set(skill, WEIGHT[field]);
+    }
+    for (const tag of e.tags) {
+      if (extractSkills(tag).size || matched.has(tag) || !mentions(jdText, tag)) continue;
+      matched.set(tag, mentions(e.title, tag) ? WEIGHT.title : WEIGHT.tags);
+    }
+    candidates.push({
+      id: e.id,
+      title: e.title,
+      url: e.url ?? null,
+      kind: e.kind,
+      inCv: findCvEntry(cvText, e.title) !== null,
+      score: [...matched.values()].reduce((a, b) => a + b, 0),
+      matchedSkills: [...matched.keys()].sort(byCodepoint),
+      bullets: [...e.bullets],
+    });
+  }
+  const libraryOrder = candidates.map((c) => c.id);
+  candidates.sort((a, b) => b.score - a.score);
+  const scored = candidates.filter((c) => c.score > 0);
+  const top = scored[0]?.score ?? 0;
+  const recommended = scored
+    .slice(0, RECOMMEND_MAX)
+    .filter((c, i) => i < RECOMMEND_MIN || c.score >= RECOMMEND_RATIO * top)
+    .map((c) => c.id);
+  const libraryCoverage = {};
+  for (const skill of [...jdSkills].sort(byCodepoint)) {
+    if (cvSkills.has(skill)) continue;
+    const ids = libraryOrder.filter((id) => skillsOf.get(id).has(skill));
+    if (ids.length) libraryCoverage[skill] = ids;
+  }
+  return { recommended, candidates, excluded, libraryCoverage };
 }
