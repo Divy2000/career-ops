@@ -370,8 +370,12 @@ export function rankProjects(entries, { jdText, cvText = '' }) {
       const field = ['title', 'tags', 'bullets'].find((f) => where[f].has(skill));
       if (field) matched.set(skill, WEIGHT[field]);
     }
+    const seenTags = new Set();
     for (const tag of e.tags) {
-      if (extractSkills(tag).size || matched.has(tag) || !mentions(jdText, tag)) continue;
+      const key = titleKey(tag);
+      if (!key || seenTags.has(key)) continue;
+      seenTags.add(key);
+      if (extractSkills(tag).size || !mentions(jdText, tag)) continue;
       matched.set(tag, mentions(e.title, tag) ? WEIGHT.title : WEIGHT.tags);
     }
     candidates.push({

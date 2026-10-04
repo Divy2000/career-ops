@@ -65,6 +65,13 @@ test('given a tag outside the skill vocabulary that the JD names, when scored, t
   assert.deepEqual(r.candidates[0].matchedSkills, ['forecasting']);
 });
 
+test('given case variants of the same keyword tag, when scored, then the keyword counts once', () => {
+  const md = '## Tool\nTags: Foo, foo, FOO\n- Plain words.';
+  const r = rank('We like foo.', '', parseLibrary(md).entries);
+  assert.equal(r.candidates[0].score, 2);
+  assert.deepEqual(r.candidates[0].matchedSkills, ['Foo']);
+});
+
 test('given a publication entry that matches perfectly, when ranked, then it is excluded and never recommended', () => {
   const r = rank(JD);
   assert.ok(!r.candidates.some((c) => c.id === 'retrieval-benchmark-study'));
