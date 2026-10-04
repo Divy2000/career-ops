@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
 import { ModeLauncher } from '../../components/ModeLauncher';
-import { DataState, Pill } from '../../components/ui';
+import { DataState, Pill, Tabs } from '../../components/ui';
+import { ProjectsLibrary } from './ProjectsLibrary';
 
 interface UserFile {
   key: string;
@@ -13,8 +14,8 @@ interface UserFile {
   etag: string | null;
 }
 
+/** Raw editors under "More files"; cv.md has its own tab and article-digest.md its Projects tab (raw text here too). */
 const USER_FILE_KEYS: Array<{ key: string; label: string }> = [
-  { key: 'cv', label: 'cv.md' },
   { key: 'articleDigest', label: 'article-digest.md' },
   { key: 'profileMd', label: 'modes/_profile.md' },
   { key: 'briefMd', label: 'modes/_brief.md' },
@@ -146,28 +147,47 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   );
 }
 
+type ProfileTab = 'cv' | 'projects' | 'files';
+const PROFILE_TABS: Array<{ id: ProfileTab; label: string }> = [
+  { id: 'cv', label: 'CV' },
+  { id: 'projects', label: 'Projects' },
+  { id: 'files', label: 'More files' },
+];
+
 export function ProfilePage() {
-  const [file, setFile] = useState('cv');
+  const [tab, setTab] = useState<ProfileTab>('cv');
+  const [file, setFile] = useState(USER_FILE_KEYS[0]!.key);
   const chosen = USER_FILE_KEYS.find((f) => f.key === file) ?? USER_FILE_KEYS[0]!;
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
         <h1 id="page-title">Profile & CV</h1>
-        <label>
-          File{' '}
-          <select aria-label="User file" value={file} onChange={(e) => setFile(e.target.value)}>
-            {USER_FILE_KEYS.map((f) => (
-              <option key={f.key} value={f.key}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
+      <Tabs tabs={PROFILE_TABS} value={tab} onChange={setTab} label="Profile sections" />
       <div className="split">
         <div className="stack">
-          <UserFileEditor key={chosen.key} fileKey={chosen.key} label={chosen.label} />
-          <CvImport />
+          {tab === 'cv' && (
+            <>
+              <UserFileEditor key="cv" fileKey="cv" label="cv.md" />
+              <CvImport />
+            </>
+          )}
+          {tab === 'projects' && <ProjectsLibrary />}
+          {tab === 'files' && (
+            <>
+              <label className="row gap">
+                File
+                <select aria-label="User file" value={file} onChange={(e) => setFile(e.target.value)}>
+                  {USER_FILE_KEYS.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <UserFileEditor key={chosen.key} fileKey={chosen.key} label={chosen.label} />
+            </>
+          )}
         </div>
         <div className="stack">
           <ModeLauncher heading="AI flows" modes={AI_FLOWS} />

@@ -19,6 +19,7 @@ export type { ConfigRead } from '../server/routes/config.js';
 export type { YamlOp } from '../server/domains/yamlOps.js';
 export type { BlacklistRow, BlacklistRead } from '../server/domains/blacklist.js';
 export type { PluginInfo, PluginsRead } from '../server/domains/plugins.js';
+export type { ProjectView, ProjectsRead, ProjectInput, ProjectKind, ConvertResult, RankResult, RankCandidate } from '../server/domains/projects.js';
 export type { ScheduleState, ScheduleInput } from '../server/system/schedule.js';
 export type { AppSettings } from '../server/domains/settings.js';
 export type { UsageRead, UsageWindow } from '../server/domains/usage.js';

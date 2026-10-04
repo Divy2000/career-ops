@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
 import { readUserFile, writeUserFile } from './files.js';
-import { projectsLib, type ProjectsLib } from '../domains/projects.js';
+import { projectsLib, type ProjectsLib, type ProjectsRead } from '../domains/projects.js';
 
 const LINE = z.string().max(2000).regex(/^[^\r\n]*$/, 'one line');
 const entrySchema = z.object({
@@ -28,7 +28,7 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   const { cfg, bus } = opts;
   const lib = () => projectsLib(cfg.codeRoot);
 
-  async function view() {
+  async function view(): Promise<ProjectsRead> {
     const l = await lib();
     const file = readUserFile(cfg.dataRoot, 'articleDigest');
     const cv = readUserFile(cfg.dataRoot, 'cv').text;
@@ -79,6 +79,13 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     const { id } = req.params;
     return save(req, reply, (l, text) => (exists(l, text, id) ? l.removeEntry(text, id) : { notFound: `no project ${id}` }), id);
+  });
+
+  // Appends ready-made library markdown (the /convert proposal) as is, so digest blocks keep every line.
+  app.post<{ Body: unknown }>('/api/projects/append', async (req, reply) => {
+    const body = z.object({ markdown: z.string().min(1).max(2_000_000) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'invalid body', issues: body.error.issues });
+    return save(req, reply, (l, text) => l.appendBlock(text, body.data.markdown));
   });
 
   app.post<{ Body: unknown }>('/api/projects/validate', async (req, reply) => {

@@ -42,6 +42,7 @@ export interface ProjectsLib {
   serializeLibrary: (entries: ProjectInput[]) => string;
   replaceEntry: (text: string, id: string, entry: ProjectInput) => string;
   appendEntry: (text: string, entry: ProjectInput) => string;
+  appendBlock: (text: string, block: string) => string;
   removeEntry: (text: string, id: string) => string;
   convertJsonProjects: (data: unknown) => { entries: ProjectInput[]; warnings: string[] };
   findCvEntry: (cvText: string, title: string) => { line: number; text: string } | null;
@@ -50,4 +51,54 @@ export interface ProjectsLib {
 
 export function projectsLib(codeRoot: string): Promise<ProjectsLib> {
   return importCore<ProjectsLib>(codeRoot, 'custom/projects/lib.mjs');
+}
+
+/** GET /api/projects */
+export interface ProjectView {
+  id: string;
+  title: string;
+  url: string | null;
+  tagline: string | null;
+  tags: string[];
+  kind: string;
+  dates: string | null;
+  bullets: string[];
+  line: number;
+  inCv: boolean;
+}
+
+export interface ProjectsRead {
+  path: string;
+  kind: 'ok' | 'missing';
+  etag: string | null;
+  entries: ProjectView[];
+  validation: Validation;
+}
+
+/** POST /api/projects/convert */
+export interface ConvertResult {
+  markdown: string;
+  entries: Array<{ title: string }>;
+  duplicates: string[];
+  warnings: string[];
+  errors: string[];
+}
+
+/** projects.rank action result (custom/projects/rank.mjs --json). */
+export interface RankCandidate {
+  id: string;
+  title: string;
+  url: string | null;
+  kind: string;
+  inCv: boolean;
+  score: number;
+  matchedSkills: string[];
+  bullets: string[];
+}
+
+export interface RankResult {
+  recommended: string[];
+  candidates: RankCandidate[];
+  excluded: Array<{ id: string; title: string; kind: string }>;
+  libraryCoverage: Record<string, string[]>;
 }

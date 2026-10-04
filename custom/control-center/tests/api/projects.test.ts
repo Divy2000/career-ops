@@ -166,6 +166,29 @@ describe('POST /api/projects/validate and /convert', () => {
   });
 });
 
+describe('POST /api/projects/append', () => {
+  it('appends converted blocks with a matching If-Match, keeping their full text', async () => {
+    const before = await current();
+    const text = read();
+    const markdown = '## Chess Engine\n\n**Hero metrics:** 1,800 Elo\n\n**Proof points:**\n- Wrote it in Rust.\n\n---\n\n## Kite Tracker\n- Tracked kites.\n';
+    const res = await send('POST', '/api/projects/append', { markdown }, before.etag);
+    expect(res.statusCode).toBe(200);
+    expect(read()).toBe(`${text.replace(/\s+$/, '')}\n\n---\n\n${markdown}`);
+    expect((await current()).entries.map((e: { id: string }) => e.id)).toEqual(['event-router', 'expense-splitter', 'ranking-notes', 'chess-engine', 'kite-tracker']);
+  });
+
+  it('gives 422 for blocks that would not validate and 409 for a stale If-Match, writing nothing', async () => {
+    const before = await current();
+    const text = read();
+    const dup = await send('POST', '/api/projects/append', { markdown: '## Event Router\n- Again.\n' }, before.etag);
+    expect(dup.statusCode).toBe(422);
+    expect(dup.json().errors.join('\n')).toMatch(/duplicate/);
+    expect((await send('POST', '/api/projects/append', { markdown: '## Kite Tracker\n- Tracked kites.\n' }, 'deadbeef')).statusCode).toBe(409);
+    expect((await send('POST', '/api/projects/append', { markdown: '' }, before.etag)).statusCode).toBe(400);
+    expect(read()).toBe(text);
+  });
+});
+
 describe('projects.rank action', () => {
   it('ranks the library against pasted JD text', async () => {
     const res = await send('POST', '/api/actions/projects.rank', { params: { text: 'We need Python and Kafka experience.' } });

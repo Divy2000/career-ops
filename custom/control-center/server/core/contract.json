@@ -684,6 +684,7 @@
         "serializeLibrary",
         "replaceEntry",
         "appendEntry",
+        "appendBlock",
         "removeEntry",
         "convertJsonProjects",
         "findCvEntry",
