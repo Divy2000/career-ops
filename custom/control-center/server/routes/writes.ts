@@ -6,7 +6,7 @@ import type { ServerConfig } from '../config.js';
 import { importCore } from '../core/adapter.js';
 import { applyInboxSkip, postingUrl } from '../domains/inboxSkip.js';
 import { appendOffers, editFollowups, FollowupsBusyError } from '../domains/writers.js';
-import { readDocuments } from '../domains/documents.js';
+import { readApplyDocuments, readDocuments } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import type { DailyJobWatch } from '../system/daily.js';
 
@@ -110,7 +110,17 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === n) : undefined;
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
-    return readDocuments(cfg.dataRoot, n, row.company);
+    return readDocuments(cfg.dataRoot, row.report, row.company);
+  });
+
+  app.get<{ Querystring: { n?: string } }>('/api/apply/documents', async (req, reply) => {
+    if (req.query.n === undefined) return readApplyDocuments(cfg.dataRoot, null);
+    const n = Number(req.query.n);
+    if (!Number.isInteger(n) || n <= 0) return reply.code(400).send({ error: 'row number must be a positive integer' });
+    const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
+    const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === n) : undefined;
+    if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
+    return readApplyDocuments(cfg.dataRoot, row);
   });
 
   app.get('/api/system/daily', async () => opts.daily.status());

@@ -169,6 +169,10 @@ export function startSession(input: { mode: string; target?: Target; prompt: str
   const unlock = blacklistUnlock(blacklistAllowed);
   return apiSend<SessionMeta>('POST', '/api/sessions', { target: { type: 'none', value: null }, ...rest, ...unlock.body }, unlock.headers);
 }
+/** The pdf-mode session that writes the tailored CV PDF for one tracker row. */
+export function startTailoredCvSession(n: string): Promise<SessionMeta> {
+  return startSession({ mode: 'pdf', target: { type: 'app', value: n }, prompt: `Generate the tailored CV PDF for tracker row #${n}.` });
+}
 export function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
   return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);

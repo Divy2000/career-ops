@@ -6,7 +6,7 @@ import { SessionPanel } from './SessionPanel';
 import { Pill } from './ui';
 import { apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
-import { startSession } from '../lib/sessions';
+import { startSession, startTailoredCvSession } from '../lib/sessions';
 import { afterFocusSettles } from '../lib/focus';
 
 export interface Proposal {
@@ -103,7 +103,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         }
         case 'generatePdf': {
           const n = String(p.params.row ?? p.params.n ?? '');
-          const m = await startSession({ mode: 'pdf', target: { type: 'app', value: n }, prompt: `Generate the tailored CV PDF for tracker row #${n}.` });
+          const m = await startTailoredCvSession(n);
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }

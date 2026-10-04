@@ -1,11 +1,15 @@
 import { useCallback, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
+import { apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
-import { useEngine, sendTurn, type Target } from '../../lib/sessions';
-import { useRunAction } from '../../lib/actions';
+import { useEngine, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
+import { describeError, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
-import { Message } from '../../components/ActionBar';
+import { CostPill, Message } from '../../components/ActionBar';
 import { Pill } from '../../components/ui';
+import { prefillBlockers } from './prefill';
+import type { ApplyDocuments } from '@shared/api';
 
 const rowRoute = getRouteApi('/apply/$n');
 
@@ -47,7 +51,7 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
   );
 }
 
-function ApplyBody({ n, postingUrl }: { n: string | null; postingUrl: string }) {
+function ApplyBody({ n, company, postingUrl }: { n: string | null; company: string | null; postingUrl: string }) {
   const navigate = useNavigate();
   const engine = useEngine();
   const [url, setUrl] = useState(postingUrl);
@@ -56,12 +60,36 @@ function ApplyBody({ n, postingUrl }: { n: string | null; postingUrl: string }) 
   const [status, setStatus] = useState('queued');
   const [fillNote, setFillNote] = useState<string | null>(null);
   const actions = useRunAction();
+  const docs = useQuery({ queryKey: ['apply', 'documents', n], queryFn: () => apiGet<ApplyDocuments>(n ? `/api/apply/documents?n=${n}` : '/api/apply/documents') });
+  // null until the user picks, so the row's tailored CV and cover letter are preselected once the listing arrives.
+  const [pickedPdf, setPickedPdf] = useState<string | null>(null);
+  const [pickedCover, setPickedCover] = useState<string | null>(null);
+  const pdf = pickedPdf ?? docs.data?.suggestedPdf ?? '';
+  const cover = pickedCover ?? docs.data?.suggestedCover ?? '';
+  const [summary, setSummary] = useState<string | null>(null);
+  const blockers = prefillBlockers({ url, pdf, pdfCount: docs.data?.pdfs.length ?? 0, company });
   const playwright = engine.data?.playwrightAvailable ?? false;
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind === 'answers') setFields((payload as { fields: AnswerField[] }).fields);
   }, []);
   const onStatus = useCallback((s: string) => setStatus(s), []);
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
+
+  const prefill = async () => {
+    setSummary(null);
+    const out = await actions.run('docs.prepareApplication', { url, pdf, ...(cover ? { cover } : {}) }, 'Prefill summary ready below.');
+    if (out && 'result' in out) setSummary(String(out.result).trim());
+  };
+
+  const generatePdf = async () => {
+    if (!n) return;
+    try {
+      const m = await startTailoredCvSession(n);
+      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+    } catch (err) {
+      actions.setMessage({ tone: 'danger', text: `Could not start the tailored CV session: ${describeError(err)}` });
+    }
+  };
 
   const fill = async () => {
     if (!sessionId || !fields) return;
@@ -88,8 +116,41 @@ function ApplyBody({ n, postingUrl }: { n: string | null; postingUrl: string }) 
             <label>
               URL <input aria-label="Posting URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." disabled={Boolean(sessionId)} />
             </label>
+            {docs.isError && (
+              <p role="alert" className="danger-text">
+                Could not list the PDFs in output/: {describeError(docs.error)}
+              </p>
+            )}
+            {docs.data && (
+              <>
+                <label style={{ display: 'block', marginTop: 8 }}>
+                  CV PDF to attach{' '}
+                  <select aria-label="CV PDF to attach" value={pdf} onChange={(e) => setPickedPdf(e.target.value)}>
+                    <option value="">Choose a PDF</option>
+                    {docs.data.pdfs.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {docs.data.covers.length > 0 && (
+                  <label style={{ display: 'block', marginTop: 8 }}>
+                    Cover letter text{' '}
+                    <select aria-label="Cover letter text" value={cover} onChange={(e) => setPickedCover(e.target.value)}>
+                      <option value="">None</option>
+                      {docs.data.covers.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </>
+            )}
             <div className="row gap" style={{ marginTop: 8 }}>
-              <button type="button" disabled={!url || actions.busy !== null} onClick={() => void actions.run('docs.prepareApplication', { url }, 'Zero-token prefill started; see Runs for its output.')}>
+              <button type="button" disabled={!docs.data || blockers.reasons.length > 0 || actions.busy !== null} aria-describedby={docs.data && blockers.reasons.length > 0 ? 'prefill-blockers' : undefined} onClick={() => void prefill()}>
                 Zero-token prefill <Pill tone="info">Network</Pill>
               </button>
               {n && (
@@ -101,7 +162,33 @@ function ApplyBody({ n, postingUrl }: { n: string | null; postingUrl: string }) 
                 Leave
               </button>
             </div>
+            {docs.data && blockers.reasons.length > 0 && (
+              <div id="prefill-blockers" className="stack" style={{ gap: 4, marginTop: 8 }}>
+                {blockers.reasons.map((r) => (
+                  <p key={r} className="muted small">
+                    {r}
+                  </p>
+                ))}
+                {blockers.needsPdf && n && (
+                  <div>
+                    <button type="button" onClick={() => void generatePdf()}>
+                      Generate CV PDF <CostPill cost="tokens" />
+                    </button>
+                  </div>
+                )}
+                {blockers.needsPdf && !n && docs.data.pdfs.length === 0 && (
+                  <p className="small">
+                    <Link to="/tracker">Open the Tracker</Link>
+                  </p>
+                )}
+              </div>
+            )}
             <Message message={actions.message} />
+            {summary !== null && (
+              <pre tabIndex={0} aria-label="Prefill summary" className="log mono small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                {summary}
+              </pre>
+            )}
           </div>
         </div>
         <div className="stack">
@@ -145,7 +232,7 @@ export function ApplyPage() {
       <div className="page-header">
         <h1 id="page-title">Apply</h1>
       </div>
-      <ApplyBody n={null} postingUrl="" />
+      <ApplyBody n={null} company={null} postingUrl="" />
     </section>
   );
 }
@@ -164,7 +251,7 @@ export function ApplyRowPage() {
         <h1 id="page-title">Apply: {q.data?.row.company ?? `row #${n}`}</h1>
         {q.data && <span className="muted">{q.data.row.role}</span>}
       </div>
-      {q.data ? <ApplyBody key={n} n={n} postingUrl={q.data.row.url ?? ''} /> : <p className="muted">Loading the tracker row.</p>}
+      {q.data ? <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} /> : <p className="muted">Loading the tracker row.</p>}
     </section>
   );
 }

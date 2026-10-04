@@ -18,7 +18,10 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     if (!action) return reply.code(404).send({ error: `unknown action ${req.params.actionId}` });
     const parsed = action.params.safeParse(req.body?.params ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid params', issues: parsed.error.issues });
-    const cmd = action.build(parsed.data, { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot });
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot };
+    const problem = await action.check?.(parsed.data, ctx);
+    if (problem) return reply.code(400).send({ error: problem });
+    const cmd = action.build(parsed.data, ctx);
     if (!action.sync) {
       const meta = runner.start({
         actionId: action.id,
@@ -40,6 +43,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       /* plain text output */
     }
     if (r.code !== 0) {
+      const explained = action.explainFailure?.(r);
+      if (explained) return reply.code(explained.status).send({ error: explained.error, exit: r.code, result });
       const status = action.exitMap?.[r.code] ?? 500;
       return reply.code(status).send({ error: `${action.id} exited ${r.code}`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
     }

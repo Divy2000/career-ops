@@ -7,6 +7,9 @@ import { z } from 'zod';
 import YAML from 'yaml';
 import type { Cost } from '../runner/store.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
+import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
+import { readTracker } from '../domains/tracker.js';
+import { prefillUrlProblem } from '../../shared/prefill.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
 
@@ -34,9 +37,13 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   /** Sync actions run inline under a 30 s timeout and return their output. */
   sync: boolean;
   params: S;
+  /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
+  check?: (params: z.infer<S>, ctx: ActionContext) => string | null | Promise<string | null>;
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
+  /** A readable status and message for a failed sync run, replacing the generic "exited N" and the raw stderr. */
+  explainFailure?: (run: { code: number; stderr: string }) => { status: number; error: string };
 }
 
 export const TRACKER_STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
@@ -60,6 +67,13 @@ const dryRun = z.object({ dryRun: z.boolean().default(false) });
 const positive = z.number().int().positive();
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
+const outputPath = (ext: RegExp, what: string) =>
+  z
+    .string()
+    .max(512)
+    .regex(/^output\/(?:[\w.-]+\/)*[\w.-]+$/, 'a file under output/')
+    .refine((p) => !p.split('/').includes('..'), 'no .. segments')
+    .refine((p) => ext.test(p), what);
 const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) only').max(2048);
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 
@@ -278,14 +292,46 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: false,
-    params: z.object({ n: positive, html: relOutput, pdf: relOutput, format: z.enum(['letter', 'a4']).default('letter') }),
-    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), `--format=${p.format}`, `--report=${p.n}`]),
+    // generate-pdf.mjs files the PDF in pdf-index.tsv under --report, so it must be the row's report, never the row number.
+    params: z.object({ row: positive, report: positive, html: outputPath(/\.html$/i, 'an .html file'), pdf: outputPath(/\.pdf$/i, 'a .pdf file'), format: z.enum(['letter', 'a4']).default('letter') }),
+    check: async (p, ctx) => {
+      const tracker = await readTracker(ctx.codeRoot, ctx.dataRoot);
+      const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === p.row) : undefined;
+      if (!row) return `There is no tracker row #${p.row}.`;
+      if (row.report === null) return `Row #${p.row} has no evaluation report, so a re-rendered PDF has nowhere to be filed.`;
+      if (row.report !== p.report) return `Row #${p.row} is filed under report ${row.report}, not report ${p.report}. Reload the Documents tab and try again.`;
+      return rerenderProblem(readPdfIndex(ctx.dataRoot), p.report, p.html, p.pdf);
+    },
+    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), `--format=${p.format}`, `--report=${p.report}`]),
   }),
   define({ id: 'docs.coverPdf', label: 'Render cover letter PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ payloadPath: relOutput }), build: (p, ctx) => node(ctx, 'generateCoverLetter', ['--payload', path.join(ctx.dataRoot, p.payloadPath)]) }),
   define({ id: 'docs.archivePosting', label: 'Archive posting', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ n: positive, url: httpUrl }), build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.n)]) }),
   define({ id: 'docs.liveness', label: 'Check posting liveness', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ urls: z.array(httpUrl).min(1).max(200) }), build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]) }),
   define({ id: 'docs.fetchJd', label: 'Fetch job description', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'fetchJd', [p.url]) }),
-  define({ id: 'docs.prepareApplication', label: 'Prepare application (zero-token prefill)', cost: 'network', resources: [], claude: false, sync: true, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'prepareApplication', ['--url', p.url]) }),
+  define({
+    id: 'docs.prepareApplication',
+    label: 'Prepare application (zero-token prefill)',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: true,
+    params: z.object({ url: httpUrl, pdf: outputPath(/\.pdf$/i, 'a .pdf file'), cover: outputPath(/\.(txt|md)$/i, 'a .txt or .md file').optional() }),
+    check: (p, ctx) => {
+      const problem = prefillUrlProblem(p.url);
+      if (problem) return problem;
+      if (!resolveOutputFile(ctx.dataRoot, p.pdf)) return `The CV PDF ${p.pdf} does not exist. Generate the tailored CV first or choose another PDF.`;
+      if (p.cover && !resolveOutputFile(ctx.dataRoot, p.cover)) return `The cover letter ${p.cover} does not exist. Choose another or leave it out.`;
+      return null;
+    },
+    // The script resolves both paths against CAREER_OPS_ROOT and requires the PDF under output/.
+    build: (p, ctx) => node(ctx, 'prepareApplication', ['--url', p.url, '--pdf', p.pdf, ...opt(p.cover, '--cover')]),
+    explainFailure: ({ code, stderr }) => {
+      const lines = stderr.split('\n').map((l) => l.trim()).filter(Boolean);
+      const reasons = lines.filter((l) => l.startsWith('Error:')).map((l) => l.slice('Error:'.length).trim());
+      if (reasons.length) return { status: 422, error: `Prefill could not run: ${reasons.join(' ')}` };
+      return { status: 502, error: `Prefill failed: prepare-application.mjs exited ${code} (last output: ${lines.at(-1) ?? 'none'}).` };
+    },
+  }),
   define({ id: 'docs.appArtifactsInit', label: 'Initialize application artifacts', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive }), build: (p, ctx) => node(ctx, 'applicationArtifacts', ['--init', '--report', String(p.n)]) }),
   define({ id: 'docs.imgToPdf', label: 'Image to PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ file: relOutput }), build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file)]) }),
   // ---- insights ----
