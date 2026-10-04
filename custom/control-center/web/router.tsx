@@ -14,6 +14,7 @@ import { ApplyPage, ApplyRowPage } from './features/apply/ApplyPage';
 import { ProfilePage } from './features/profile/ProfilePage';
 import { DevChatPage } from './features/dev/DevChatPage';
 import { InterviewsPage } from './features/interviews/InterviewsPage';
+import { TutorialsPage } from './features/tutorials/TutorialsPage';
 import { SettingsPage, SETTINGS_TABS, type SettingsTab } from './features/settings/SettingsPage';
 
 const rootRoute = createRootRoute({ component: Shell });
@@ -92,6 +93,13 @@ const settingsRoute = createRoute({
   validateSearch: (s: Loose): { tab: SettingsTab; add?: string } => ({ tab: oneOf(SETTINGS_TABS, s.tab, 'portals'), ...(typeof s.add === 'string' && s.add ? { add: s.add.slice(0, 200) } : {}) }),
 });
 
+const tutorialsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/tutorials',
+  component: TutorialsPage,
+  validateSearch: (s: Loose): { t?: string } => (typeof s.t === 'string' && s.t ? { t: s.t.slice(0, 64) } : {}),
+});
+
 const routeTree = rootRoute.addChildren([
   todayRoute,
   trackerRoute,
@@ -110,6 +118,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/profile', component: ProfilePage }),
   settingsRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/dev', component: DevChatPage }),
+  tutorialsRoute,
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

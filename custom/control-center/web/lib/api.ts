@@ -36,3 +36,11 @@ export async function apiSend<T>(method: 'POST' | 'PUT' | 'DELETE' | 'PATCH', pa
   if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`, body);
   return body as T;
 }
+
+/** Plain text (markdown, subtitles) from a GET; unlike apiGet it never tries to parse JSON. */
+export async function apiGetText(path: string): Promise<string> {
+  const res = await fetch(path, { credentials: 'same-origin' });
+  const text = await res.text();
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`, text);
+  return text;
+}

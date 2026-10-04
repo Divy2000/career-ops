@@ -71,3 +71,19 @@ for (const [name, arrange] of [
     });
   });
 }
+
+test.describe('no tutorials', () => {
+  test('Tutorials explains the folder and the manifest format instead of showing an error', async ({ page }) => {
+    await login(page);
+    await page.goto('/tutorials');
+    await expect(page.getByRole('heading', { level: 1, name: 'Tutorials' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'No tutorials yet' })).toBeVisible();
+    await expect(page.getByText('data/control-center/tutorials/', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('"chapters": [', { exact: false })).toBeVisible();
+    await expect(page.getByText('install-tutorial.mjs', { exact: false })).toBeVisible();
+    await expect(page.locator('video')).toHaveCount(0);
+    await settled(page);
+    await noErrorBanners(page);
+    await new AxeBuilder({ page }).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
+  });
+});

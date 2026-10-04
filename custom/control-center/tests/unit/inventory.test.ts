@@ -99,6 +99,10 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['addon.h1b-name-search', { api: '/api/sponsorship/search' }],
   ['addon.sponsorship-overview', { api: '/api/immigration/overview' }],
   ['addon.today-workflow', { route: '/' }],
+  ['tutorials.list', { api: '/api/tutorials' }],
+  ['tutorials.media', { api: '/api/tutorials/:id/media/:file' }],
+  ['tutorials.page', { route: '/tutorials' }],
+  ['tutorials.player', { web: 'TutorialsPage' }],
   // P3 editors
   ['settings.portals-structured', { api: '/api/config/:key' }],
   ['settings.blacklist-explicit', { api: '/api/blacklist' }],

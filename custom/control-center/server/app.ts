@@ -16,6 +16,7 @@ import { SessionManager, keychainTokenReader, type TokenReader } from './claude/
 import { sessionRoutes } from './routes/sessions.js';
 import { fileRoutes } from './routes/files.js';
 import { sponsorshipRoutes } from './routes/sponsorship.js';
+import { tutorialRoutes } from './routes/tutorials.js';
 import { devchatRoutes } from './routes/devchat.js';
 import { configRoutes } from './routes/config.js';
 import { settingsRoutes } from './routes/settings.js';
@@ -74,6 +75,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(readRoutes, { cfg, bus, exec });
   await app.register(actionRoutes, { cfg, runner, exec });
   await app.register(sponsorshipRoutes, { cfg, exec });
+  await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });
   const sessions = new SessionManager(cfg, runner, bus, { readToken: deps.readToken ?? keychainTokenReader(exec), exec, pollMs: deps.sessionPollMs });
   closers.push(async () => sessions.close());
