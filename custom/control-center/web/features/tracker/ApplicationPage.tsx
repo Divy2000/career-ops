@@ -118,30 +118,32 @@ export function ApplicationPage() {
                   {q.data.timeline.statusLog.length === 0 ? (
                     <Empty>No transitions recorded in status-log.tsv for this row.</Empty>
                   ) : (
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th scope="col">Date</th>
-                          <th scope="col">From</th>
-                          <th scope="col">To</th>
-                          <th scope="col">Source</th>
-                          <th scope="col">Note</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {q.data.timeline.statusLog.map((s, i) => (
-                          <tr key={i}>
-                            <td className="mono">{s.date}</td>
-                            <td>{s.from}</td>
-                            <td>
-                              <StatusPill status={s.to} />
-                            </td>
-                            <td className="muted">{s.source}</td>
-                            <td className="muted">{s.note}</td>
+                    <div className="table-scroll">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Date</th>
+                            <th scope="col">From</th>
+                            <th scope="col">To</th>
+                            <th scope="col">Source</th>
+                            <th scope="col">Note</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {q.data.timeline.statusLog.map((s, i) => (
+                            <tr key={i}>
+                              <td className="mono">{s.date}</td>
+                              <td>{s.from}</td>
+                              <td>
+                                <StatusPill status={s.to} />
+                              </td>
+                              <td className="muted">{s.source}</td>
+                              <td className="muted">{s.note}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
                 <div className="card">

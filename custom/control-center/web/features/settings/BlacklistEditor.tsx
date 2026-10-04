@@ -84,36 +84,38 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
         {current.length === 0 ? (
           <Empty>No blacklisted companies. Add one below.</Empty>
         ) : (
-          <table className="table table--compact" aria-label="Blacklist rows">
-            <thead>
-              <tr>
-                <th scope="col">Company</th>
-                <th scope="col">Since</th>
-                <th scope="col">Scope</th>
-                <th scope="col">Reason</th>
-                <th scope="col">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {current.map((r, i) => (
-                <tr key={`${r.company}-${i}`}>
-                  <td>{r.company}</td>
-                  <td className="mono">{r.since}</td>
-                  <td>
-                    <Pill tone={r.scope === 'domain' ? 'info' : 'neutral'}>{r.scope}</Pill>
-                  </td>
-                  <td className="muted">{r.reason}</td>
-                  <td>
-                    <button type="button" className="button--ghost" aria-label={`Remove ${r.company} from the blacklist draft`} onClick={() => setRows(current.filter((_, j) => j !== i))}>
-                      Remove
-                    </button>
-                  </td>
+          <div className="table-scroll">
+            <table className="table table--compact" aria-label="Blacklist rows">
+              <thead>
+                <tr>
+                  <th scope="col">Company</th>
+                  <th scope="col">Since</th>
+                  <th scope="col">Scope</th>
+                  <th scope="col">Reason</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {current.map((r, i) => (
+                  <tr key={`${r.company}-${i}`}>
+                    <td>{r.company}</td>
+                    <td className="mono">{r.since}</td>
+                    <td>
+                      <Pill tone={r.scope === 'domain' ? 'info' : 'neutral'}>{r.scope}</Pill>
+                    </td>
+                    <td className="muted">{r.reason}</td>
+                    <td>
+                      <button type="button" className="button--ghost" aria-label={`Remove ${r.company} from the blacklist draft`} onClick={() => setRows(current.filter((_, j) => j !== i))}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         <div className="row gap" style={{ flexWrap: 'wrap', marginTop: 8 }}>
           <input aria-label="Blacklist company or domain" placeholder="Company or domain" value={draft.company} onChange={(e) => setDraft({ ...draft, company: e.target.value })} />

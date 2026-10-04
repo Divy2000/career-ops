@@ -52,50 +52,52 @@ export function PluginsTab() {
           {q.data && q.data.plugins.length === 0 ? (
             <Empty>No plugins found under plugins/ or plugins.local/.</Empty>
           ) : (
-            <table className="table" aria-label="Plugins">
-              <thead>
-                <tr>
-                  <th scope="col">Enabled</th>
-                  <th scope="col">Plugin</th>
-                  <th scope="col">Hooks</th>
-                  <th scope="col">Needs</th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(q.data?.plugins ?? []).map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      <input type="checkbox" aria-label={`Enable ${p.id}`} checked={p.enabled} onChange={(e) => void toggle(p.id, e.target.checked)} />
-                    </td>
-                    <td>
-                      <strong>{p.name}</strong> <span className="faint mono small">{p.id} {p.version}</span>
-                      <div className="muted small">{p.description}</div>
-                    </td>
-                    <td>
-                      {p.hooks.map((h) => (
-                        <Pill key={h}>{h}</Pill>
-                      ))}
-                    </td>
-                    <td className="mono small">{p.requiredEnv.length ? p.requiredEnv.join(', ') : <span className="faint">no keys</span>}</td>
-                    <td>
-                      <div className="row gap">
-                        <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook: p.hooks[0] }} disabled={!p.enabled} onRun={(params) => void run('plugins.run', params)}>
-                          Run {p.hooks[0] ?? 'hook'}
-                        </ActionButton>
-                        {p.hasSkill && (
-                          <button type="button" onClick={() => void showSkill(p.id)}>
-                            Skill doc
-                          </button>
-                        )}
-                      </div>
-                    </td>
+            <div className="table-scroll">
+              <table className="table" aria-label="Plugins">
+                <thead>
+                  <tr>
+                    <th scope="col">Enabled</th>
+                    <th scope="col">Plugin</th>
+                    <th scope="col">Hooks</th>
+                    <th scope="col">Needs</th>
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {(q.data?.plugins ?? []).map((p) => (
+                    <tr key={p.id}>
+                      <td>
+                        <input type="checkbox" aria-label={`Enable ${p.id}`} checked={p.enabled} onChange={(e) => void toggle(p.id, e.target.checked)} />
+                      </td>
+                      <td>
+                        <strong>{p.name}</strong> <span className="faint mono small">{p.id} {p.version}</span>
+                        <div className="muted small">{p.description}</div>
+                      </td>
+                      <td>
+                        {p.hooks.map((h) => (
+                          <Pill key={h}>{h}</Pill>
+                        ))}
+                      </td>
+                      <td className="mono small">{p.requiredEnv.length ? p.requiredEnv.join(', ') : <span className="faint">no keys</span>}</td>
+                      <td>
+                        <div className="row gap">
+                          <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook: p.hooks[0] }} disabled={!p.enabled} onRun={(params) => void run('plugins.run', params)}>
+                            Run {p.hooks[0] ?? 'hook'}
+                          </ActionButton>
+                          {p.hasSkill && (
+                            <button type="button" onClick={() => void showSkill(p.id)}>
+                              Skill doc
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </DataState>
         <Message message={message} />

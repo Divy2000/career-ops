@@ -1,10 +1,10 @@
-import { Link, Outlet } from '@tanstack/react-router';
+import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
 import { useLiveInvalidation } from '../lib/sse';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AskDrawer, useAskHotkey } from './AskDrawer';
 import { CommandPalette } from './CommandPalette';
 import { ConfirmProvider } from './ConfirmDialog';
@@ -29,7 +29,7 @@ function DailyJobChip() {
   if (!latest) return null;
   const ok = latest.status === 'ok';
   return (
-    <Link to="/runs" className={`chip ${ok ? 'chip--ok' : latest.status === 'failed' ? 'chip--danger' : 'chip--warn'}`} aria-label={`Daily job ${latest.date}: ${latest.status}`}>
+    <Link to="/runs" className={`chip chip--daily ${ok ? 'chip--ok' : latest.status === 'failed' ? 'chip--danger' : 'chip--warn'}`} aria-label={`Daily job ${latest.date}: ${latest.status}`}>
       Daily {latest.date.slice(5)}: {latest.status}
     </Link>
   );
@@ -92,10 +92,26 @@ export function Shell() {
   const togglePalette = useCallback(() => setPalette((o) => !o), []);
   useAskHotkey(toggleAsk);
   usePaletteHotkey(togglePalette);
+  // Below the md breakpoint the sidebar is a drawer. It is open for the one path it was opened on, so any navigation closes it.
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [navOpenOn, setNavOpenOn] = useState<string | null>(null);
+  const navOpen = navOpenOn === pathname;
+  const closeNav = useCallback(() => setNavOpenOn(null), []);
+  const menuRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setNavOpenOn(null);
+      menuRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
   return (
     <ConfirmProvider>
-      <div className="shell">
-        <nav className="shell__side" aria-label="Primary">
+      <div className={`shell${navOpen ? ' shell--nav-open' : ''}`}>
+        <nav className="shell__side" id="primary-nav" aria-label="Primary">
           <div className="brand">
             <span className="brand__dot" aria-hidden="true" />
             <span>Control Center</span>
@@ -104,7 +120,7 @@ export function Shell() {
             <div className="nav-group" key={g.label}>
               <div className="nav-group__label">{g.label}</div>
               {g.items.map((item) => (
-                <Link key={item.to} to={item.to} className="nav-link" activeOptions={{ exact: item.to === '/' }} activeProps={{ 'aria-current': 'page' }}>
+                <Link key={item.to} to={item.to} className="nav-link" activeOptions={{ exact: item.to === '/' }} activeProps={{ 'aria-current': 'page' }} onClick={closeNav}>
                   {item.label}
                 </Link>
               ))}
@@ -114,9 +130,15 @@ export function Shell() {
             <UsageMeter compact />
           </div>
         </nav>
+        <div className="shell__scrim" onClick={closeNav} aria-hidden="true" />
         <header className="shell__top">
+          <button ref={menuRef} type="button" className="menu-toggle" onClick={() => setNavOpenOn(navOpen ? null : pathname)} aria-expanded={navOpen} aria-controls="primary-nav">
+            Menu
+          </button>
           <button type="button" className="palette-trigger" onClick={togglePalette} aria-label="Open command palette" title="Command palette (Cmd+K)">
-            Search or run <kbd>Cmd K</kbd>
+            <span className="palette-trigger__long">Search or run</span>
+            <span className="palette-trigger__short">Search</span>
+            <kbd>Cmd K</kbd>
           </button>
           <span style={{ flex: 1 }} />
           <DailyJobChip />

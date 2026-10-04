@@ -249,40 +249,42 @@ function Shortlist() {
       {q.data?.kind === 'ok' && (
         <div className="stack">
           <p className="muted">{q.data.summary}</p>
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">#</th>
-                <th scope="col">Score</th>
-                <th scope="col">Rank</th>
-                <th scope="col">Sponsor</th>
-                <th scope="col">Company</th>
-                <th scope="col">Role</th>
-                <th scope="col">Location</th>
-                <th scope="col">Posted</th>
-                <th scope="col">Why</th>
-              </tr>
-            </thead>
-            <tbody>
-              {q.data.rows.map((r) => (
-                <tr key={r.rank}>
-                  <td className="mono">{r.rank}</td>
-                  <td>
-                    <ScorePill score={r.score} />
-                  </td>
-                  <td className="mono">{r.relevance ?? ''}</td>
-                  <td>
-                    <SponsorPill tier={r.sponsor} />
-                  </td>
-                  <td>{r.company}</td>
-                  <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
-                  <td className="muted">{r.location ?? ''}</td>
-                  <td className="mono muted">{r.posted ?? ''}</td>
-                  <td className="muted">{r.why ?? ''}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">Score</th>
+                  <th scope="col">Rank</th>
+                  <th scope="col">Sponsor</th>
+                  <th scope="col">Company</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">Location</th>
+                  <th scope="col">Posted</th>
+                  <th scope="col">Why</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {q.data.rows.map((r) => (
+                  <tr key={r.rank}>
+                    <td className="mono">{r.rank}</td>
+                    <td>
+                      <ScorePill score={r.score} />
+                    </td>
+                    <td className="mono">{r.relevance ?? ''}</td>
+                    <td>
+                      <SponsorPill tier={r.sponsor} />
+                    </td>
+                    <td>{r.company}</td>
+                    <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
+                    <td className="muted">{r.location ?? ''}</td>
+                    <td className="mono muted">{r.posted ?? ''}</td>
+                    <td className="muted">{r.why ?? ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div className="card">
             <h2>Excluded by company alerts</h2>
             {q.data.excluded.length === 0 ? (

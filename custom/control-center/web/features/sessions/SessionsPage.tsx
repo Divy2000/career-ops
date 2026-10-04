@@ -83,36 +83,38 @@ export function SessionsPage() {
         {rows.length === 0 ? (
           <Empty>No sessions yet. Start one with New session or from any page's AI panel.</Empty>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Status</th>
-                <th scope="col">Mode</th>
-                <th scope="col">Target</th>
-                <th scope="col">Turns</th>
-                <th scope="col">Cost</th>
-                <th scope="col">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <StatusLabel status={s.status} />
-                  </td>
-                  <td>
-                    <Link to="/sessions/$id" params={{ id: s.id }}>
-                      {s.mode}
-                    </Link>
-                  </td>
-                  <td className="muted">{describeTarget(s.target)}</td>
-                  <td className="mono">{s.turns.length}</td>
-                  <td className="mono">${s.totals.costUsd.toFixed(3)}</td>
-                  <td className="mono muted">{s.updatedAt.slice(0, 19).replace('T', ' ')}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Status</th>
+                  <th scope="col">Mode</th>
+                  <th scope="col">Target</th>
+                  <th scope="col">Turns</th>
+                  <th scope="col">Cost</th>
+                  <th scope="col">Updated</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.id}>
+                    <td>
+                      <StatusLabel status={s.status} />
+                    </td>
+                    <td>
+                      <Link to="/sessions/$id" params={{ id: s.id }}>
+                        {s.mode}
+                      </Link>
+                    </td>
+                    <td className="muted">{describeTarget(s.target)}</td>
+                    <td className="mono">{s.turns.length}</td>
+                    <td className="mono">${s.totals.costUsd.toFixed(3)}</td>
+                    <td className="mono muted">{s.updatedAt.slice(0, 19).replace('T', ' ')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </DataState>
     </section>
@@ -166,30 +168,32 @@ export function SessionDetailPage() {
             <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} />
             <div className="card">
               <h2>Turns</h2>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th scope="col">#</th>
-                    <th scope="col">Prompt</th>
-                    <th scope="col">Cost</th>
-                    <th scope="col">Tokens</th>
-                    <th scope="col">Denials</th>
-                    <th scope="col">Run</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {q.data.meta.turns.map((t) => (
-                    <tr key={t.n}>
-                      <td className="mono">{t.n}</td>
-                      <td>{t.userText.slice(0, 160)}</td>
-                      <td className="mono">${t.costUsd.toFixed(4)}</td>
-                      <td className="mono">{t.tokens}</td>
-                      <td className="mono">{t.permissionDenials}</td>
-                      <td className="mono faint">{t.runId}</td>
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">#</th>
+                      <th scope="col">Prompt</th>
+                      <th scope="col">Cost</th>
+                      <th scope="col">Tokens</th>
+                      <th scope="col">Denials</th>
+                      <th scope="col">Run</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {q.data.meta.turns.map((t) => (
+                      <tr key={t.n}>
+                        <td className="mono">{t.n}</td>
+                        <td>{t.userText.slice(0, 160)}</td>
+                        <td className="mono">${t.costUsd.toFixed(4)}</td>
+                        <td className="mono">{t.tokens}</td>
+                        <td className="mono">{t.permissionDenials}</td>
+                        <td className="mono faint">{t.runId}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </>
         )}

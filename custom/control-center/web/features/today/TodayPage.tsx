@@ -88,52 +88,54 @@ export function TodayPage() {
                   {shortlist.data.rows.length === 0 ? (
                     <Empty>No ranked rows yet. Rank the pipeline to fill this list.</Empty>
                   ) : (
-                    <table className="table table--compact-cells">
-                      <thead>
-                        <tr>
-                          <th scope="col">Score</th>
-                          <th scope="col">Company</th>
-                          <th scope="col">Role</th>
-                          <th scope="col">Posted</th>
-                          <th scope="col">
-                            <span className="sr-only">Actions</span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {shortlist.data.rows.slice(0, 15).map((r) => (
-                          <tr key={r.rank}>
-                            <td>
-                              <div className="stack-tight">
-                                <ScorePill score={r.score} />
-                                <SponsorPill tier={r.sponsor} />
-                              </div>
-                            </td>
-                            <td>
-                              <div className="clip clip--company" title={r.company}>
-                                {r.company}
-                              </div>
-                              {r.location && (
-                                <div className="clip clip--company muted small" title={r.location}>
-                                  {r.location}
-                                </div>
-                              )}
-                            </td>
-                            <td>
-                              <div className="clamp-2" title={r.role}>
-                                {r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}
-                              </div>
-                            </td>
-                            <td className="mono muted">{r.posted ?? ''}</td>
-                            <td>
-                              <button type="button" disabled title="Evaluate sessions arrive with the Claude engine phase">
-                                Evaluate
-                              </button>
-                            </td>
+                    <div className="table-scroll">
+  <table className="table table--compact-cells">
+                        <thead>
+                          <tr>
+                            <th scope="col">Score</th>
+                            <th scope="col">Company</th>
+                            <th scope="col">Role</th>
+                            <th scope="col">Posted</th>
+                            <th scope="col">
+                              <span className="sr-only">Actions</span>
+                            </th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {shortlist.data.rows.slice(0, 15).map((r) => (
+                            <tr key={r.rank}>
+                              <td>
+                                <div className="stack-tight">
+                                  <ScorePill score={r.score} />
+                                  <SponsorPill tier={r.sponsor} />
+                                </div>
+                              </td>
+                              <td>
+                                <div className="clip clip--company" title={r.company}>
+                                  {r.company}
+                                </div>
+                                {r.location && (
+                                  <div className="clip clip--company muted small" title={r.location}>
+                                    {r.location}
+                                  </div>
+                                )}
+                              </td>
+                              <td>
+                                <div className="clamp-2" title={r.role}>
+                                  {r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}
+                                </div>
+                              </td>
+                              <td className="mono muted">{r.posted ?? ''}</td>
+                              <td>
+                                <button type="button" disabled title="Evaluate sessions arrive with the Claude engine phase">
+                                  Evaluate
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                   {shortlist.data.excluded.length > 0 && (
                     <details style={{ marginTop: 12 }}>

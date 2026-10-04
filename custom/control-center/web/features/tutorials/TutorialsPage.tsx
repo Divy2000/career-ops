@@ -59,7 +59,7 @@ function EmptyState({ directory }: { directory: string }) {
       <p className="muted" style={{ margin: 0 }}>
         Each tutorial is a folder under <code className="mono">data/control-center/tutorials/</code> in your data root, with a <code className="mono">tutorial.json</code> that names its files. The folder name must equal the manifest <code className="mono">id</code>. Nothing here is committed to git.
       </p>
-      <p className="faint small mono" style={{ margin: 0 }}>
+      <p className="faint small mono wrap-anywhere" style={{ margin: 0 }}>
         {directory}
       </p>
       <pre className="mono small" tabIndex={0}>{example}</pre>
