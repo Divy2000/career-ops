@@ -10,7 +10,7 @@ import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
 import { writeRoutes } from './routes/writes.js';
-import { DailyJobWatch } from './system/daily.js';
+import { DailyJobWatch, maybeFakeDailyProbe } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
 import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
 import { sessionRoutes } from './routes/sessions.js';
@@ -68,7 +68,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   // Called directly, not registered: its hooks must live on the root context so
   // they guard every route, including the encapsulated plugins below.
   await authPlugin(app, cfg);
-  const daily = new DailyJobWatch(exec, bus, deps.dailyPollMs);
+  const daily = new DailyJobWatch(maybeFakeDailyProbe(cfg, exec), bus, deps.dailyPollMs);
   daily.start();
   closers.push(async () => daily.stop());
   await app.register(systemRoutes, { cfg, exec });
