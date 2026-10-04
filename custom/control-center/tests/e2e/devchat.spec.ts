@@ -46,8 +46,11 @@ test.describe('Dev Chat', () => {
     const transcript = page.getByLabel('Transcript for devchat');
     await expect.poll(() => transcript.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
     await expect(transcript).toHaveAttribute('tabindex', '0');
+    expect(await transcript.evaluate((el) => el.scrollTop)).toBe(0);
     await transcript.focus();
     await expect(transcript).toBeFocused();
+    await page.keyboard.press('PageDown');
+    await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
