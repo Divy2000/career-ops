@@ -106,6 +106,7 @@ const ENVELOPE_CONTRACT: Record<string, string> = {
   apply: 'Turn 1: read the form and emit exactly one line <<cc:answers {"fields":[{"id","label","type","options?","required","value","needsConfirmation"}]}>> outside code fences. Do not fill anything until the user confirms the answers in a later turn. Never press Submit.',
   'ai-search': 'Emit one <<cc:offer {"url","company","title","location?","source?"}>> line per posting found, outside code fences.',
   'cv-ingest': 'Emit the parsed CV as one line <<cc:cv {"markdown":"..."}>> outside code fences. Write nothing to disk.',
+  'projects-ingest': 'Emit the projects found in the document as one line <<cc:projects {"markdown":"..."}>> outside code fences: one "## Title -- link" block per project (no link line if the document gives none), an optional "Tags: a, b" line, then 1 to 6 "- " bullets copied from the document. Papers and publications get a "Kind: publication" line. Never add a fact, number, tool or link the document does not state. Write nothing to disk.',
   advisor: 'To propose an app action emit one line <<cc:act {"action":"<name>","params":{...}}>>; the app asks the user to confirm anything that writes.',
 };
 

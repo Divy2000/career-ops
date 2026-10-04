@@ -489,6 +489,23 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(scan, 'node discover-new-companies.mjs --out data/new.yml');
   });
 
+  it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
+    ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
+    no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');
+    no(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html output/extra.html');
+    no(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html --template=x');
+    ok(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --format=letter --report=008 --max-pages=1');
+    ok(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --format letter --max-pages 1 --strict-pages');
+    no(pdf, 'node custom/cv/render-pdf.mjs output/cv.html cv.md');
+    // The input HTML is rewritten with the fitted density, so it must be writable too.
+    no(pdf, 'node custom/cv/render-pdf.mjs reports/cv.html output/cv.pdf');
+    no(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --out=cv.md');
+    no(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --max-pages');
+    ok(oferta, 'node custom/projects/rank.mjs jds/acme.md --json');
+    ok(oferta, 'node custom/projects/rank.mjs --check');
+    no(oferta, 'node custom/projects/rank.mjs /etc/passwd --json');
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
@@ -526,5 +543,8 @@ describe('envelopes', () => {
     const answers = extractEnvelopes('<<cc:answers {"fields":[{"id":"q1","label":"Why us","type":"textarea","required":true,"value":"Because","needsConfirmation":true}]}>>', false);
     expect(answers.envelopes[0]).toMatchObject({ ok: true, kind: 'answers' });
     expect(extractEnvelopes('<<cc:bogus {"a":1}>>', false).envelopes[0]).toMatchObject({ ok: false });
+    const projects = extractEnvelopes('<<cc:projects {"markdown":"## Chess Engine\\n- Wrote it."}>>', false);
+    expect(projects.envelopes[0]).toMatchObject({ ok: true, kind: 'projects', payload: { markdown: '## Chess Engine\n- Wrote it.' } });
+    expect(extractEnvelopes('<<cc:projects {"markdown":""}>>', false).envelopes[0]).toMatchObject({ ok: false });
   });
 });

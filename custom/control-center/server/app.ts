@@ -15,6 +15,7 @@ import { execNoShell, type Exec } from './routes/system.js';
 import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { fileRoutes } from './routes/files.js';
+import { projectRoutes } from './routes/projects.js';
 import { sponsorshipRoutes } from './routes/sponsorship.js';
 import { tutorialRoutes } from './routes/tutorials.js';
 import { devchatRoutes } from './routes/devchat.js';
@@ -89,6 +90,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   if (!deps.deferReconcile) activate();
   await app.register(sessionRoutes, { cfg, manager: sessions });
   await app.register(fileRoutes, { cfg, bus });
+  await app.register(projectRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });
   await app.register(configRoutes, { cfg, bus, exec });
   const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, dataRootFromEnv: cfg.dataRootFromEnv });

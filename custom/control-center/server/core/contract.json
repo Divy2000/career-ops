@@ -178,6 +178,19 @@
       "flags": []
     },
     {
+      "id": "rankProjects",
+      "script": "custom/projects/rank.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": 0,
+      "flags": [
+        "--json",
+        "--summary",
+        "--check"
+      ]
+    },
+    {
       "id": "normalizeStatuses",
       "script": "normalize-statuses.mjs",
       "helpArgs": [
@@ -660,6 +673,21 @@
       "module": "custom/pipeline/lib.mjs",
       "names": [
         "parseRow"
+      ]
+    },
+    {
+      "module": "custom/projects/lib.mjs",
+      "names": [
+        "parseLibrary",
+        "validateLibrary",
+        "serializeEntry",
+        "serializeLibrary",
+        "replaceEntry",
+        "appendEntry",
+        "removeEntry",
+        "convertJsonProjects",
+        "findCvEntry",
+        "titleKey"
       ]
     }
   ],

@@ -52,7 +52,7 @@ export function isReportGated(modeId: string): boolean {
 }
 
 /** Modes whose terminal output is an envelope rather than prose. */
-export const ENVELOPE_MODES = new Set(['apply', 'ai-search', 'cv-ingest', 'advisor']);
+export const ENVELOPE_MODES = new Set(['apply', 'ai-search', 'cv-ingest', 'projects-ingest', 'advisor']);
 
 export function endsWithQuestion(text: string): boolean {
   const lines = text
