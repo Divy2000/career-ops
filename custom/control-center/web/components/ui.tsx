@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 
 export function Pill({ children, tone = 'neutral', title }: { children: ReactNode; tone?: 'neutral' | 'ok' | 'warn' | 'danger' | 'info' | 'accent'; title?: string }) {
@@ -147,5 +147,36 @@ export function TableScroll({ label, children }: { label: string; children: Reac
     <div className="table-scroll" tabIndex={0} role="region" aria-label={label}>
       {children}
     </div>
+  );
+}
+
+/** A file input behind a button styled like the app's buttons, with the chosen file's name beside it. */
+export function FilePicker({ label, accept, onFile, buttonText = 'Choose file' }: { label: string; accept: string; onFile: (file: File) => void; buttonText?: string }) {
+  const [name, setName] = useState<string | null>(null);
+  const nameId = useId();
+  return (
+    <label className="file-picker">
+      <input
+        type="file"
+        className="sr-only"
+        aria-label={label}
+        aria-describedby={nameId}
+        accept={accept}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          // Cleared so choosing the same file again still fires change.
+          e.target.value = '';
+          if (!file) return;
+          setName(file.name);
+          onFile(file);
+        }}
+      />
+      <span className="file-picker__button" aria-hidden="true">
+        {buttonText}
+      </span>
+      <span className="file-picker__name" id={nameId}>
+        {name ?? 'No file chosen'}
+      </span>
+    </label>
   );
 }

@@ -231,8 +231,13 @@
 .projects-import__controls {
   margin-bottom: var(--space-3);
 }
-.projects-import__controls input[type='file'] {
-  padding: var(--space-1) var(--space-2);
+/* About 8 lines when empty, growing with the text up to about 24 where field-sizing is supported. */
+.projects-import__text {
+  resize: vertical;
+  line-height: var(--lh-body);
+  min-height: calc(8 * var(--fs-13) * var(--lh-body) + 18px);
+  max-height: calc(24 * var(--fs-13) * var(--lh-body) + 18px);
+  field-sizing: content;
 }
 .projects-card textarea + .row {
   margin-top: var(--space-3);

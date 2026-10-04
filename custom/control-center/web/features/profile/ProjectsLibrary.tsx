@@ -9,7 +9,7 @@ import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { SessionPanel } from '../../components/SessionPanel';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
 import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
 import { KIND_OPTIONS, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, hostOf, moveItem, type ProjectDraft } from './projectsDraft';
 
@@ -358,7 +358,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
             <option value="markdown">Library markdown</option>
           </select>
         </label>
-        <input type="file" aria-label="Projects file" accept=".json,.md,.markdown,.txt,.pdf" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
+        <FilePicker label="Projects file" accept=".json,.md,.markdown,.txt,.pdf" onFile={(f) => void onFile(f)} />
       </div>
       {uploadPath && (
         <SessionPanel
@@ -378,7 +378,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           <span className="muted">Each block gets a Source line; Append records the document as ingested, as intake does.</span>
         </p>
       )}
-      <textarea aria-label="Projects to import" className="mono editor" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreview(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
+      <textarea aria-label="Projects to import" className="mono projects-import__text" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreview(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
       <div className="row gap">
         <button type="button" disabled={!text.trim()} onClick={() => void convert()}>
           Preview
@@ -397,7 +397,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       {preview && (
         <div className="projects-preview" aria-label="Import preview">
           <div className="row gap">
-            <Pill tone={fresh ? 'ok' : 'neutral'}>{fresh} new</Pill>
+            <Pill tone={fresh && preview.errors.length === 0 ? 'ok' : 'neutral'}>{fresh} new</Pill>
             {preview.duplicates.length > 0 && <Pill tone="warn">{preview.duplicates.length} already in the library</Pill>}
           </div>
           {preview.errors.length > 0 && (

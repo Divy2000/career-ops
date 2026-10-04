@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
 import { ModeLauncher } from '../../components/ModeLauncher';
-import { DataState, Pill, Tabs } from '../../components/ui';
+import { DataState, FilePicker, Pill, Tabs } from '../../components/ui';
 import { ProjectsLibrary } from './ProjectsLibrary';
 
 interface UserFile {
@@ -125,11 +125,11 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     onImported?.();
   };
   return (
-    <div className="card">
+    <div className="card import-card">
       <h2>Import CV</h2>
       <p className="muted">Paste the text, drop a .md or .txt file, or upload a PDF or DOCX for the parser session (uses tokens, read-only scope).</p>
-      <div className="row gap">
-        <input type="file" aria-label="CV file" accept=".md,.txt,.markdown,.pdf,.docx" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
+      <div className="row gap import-card__controls">
+        <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf,.docx" onFile={(f) => void onFile(f)} />
       </div>
       {uploadPath && <SessionPanel mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
       <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="# Your name ..." />

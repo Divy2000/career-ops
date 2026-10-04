@@ -872,3 +872,47 @@ textarea {
     margin-bottom: var(--space-2);
   }
 }
+
+/* File picker (components/ui.tsx FilePicker): the native input is visually hidden behind a button-styled span. */
+.file-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+  cursor: pointer;
+}
+.file-picker__button {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: var(--button-bg);
+  border: 1px solid var(--button-border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.file-picker:hover .file-picker__button {
+  background: var(--button-bg-hover);
+}
+.file-picker input:focus-visible + .file-picker__button {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+.file-picker__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--fs-13);
+}
+
+/* Import cards (Profile): picker row, text box, then the action row, one spacing step apart. */
+.import-card__controls {
+  margin-bottom: var(--space-3);
+}
+.import-card textarea + .row {
+  margin-top: var(--space-3);
+}
