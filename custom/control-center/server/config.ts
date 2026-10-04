@@ -26,6 +26,8 @@ export interface ServerConfig {
   launchAgentsDir: string;
   /** Claude Code local logs read by the usage meter (read-only). */
   claudeProjectsDir: string;
+  /** Replaces plugins/h1b-sponsor/check.mjs for the Sponsorship lookup (tests only; CC_H1B_CHECK_SCRIPT is honored under NODE_ENV=test). */
+  h1bCheckScript?: string;
 }
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,5 +57,6 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     watch: env.CC_WATCH !== '0',
     launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
     claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects'),
+    ...(env.NODE_ENV === 'test' && env.CC_H1B_CHECK_SCRIPT ? { h1bCheckScript: env.CC_H1B_CHECK_SCRIPT } : {}),
   };
 }

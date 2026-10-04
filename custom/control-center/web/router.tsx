@@ -56,8 +56,9 @@ const sponsorshipRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/sponsorship',
   component: SponsorshipPage,
-  validateSearch: (s: Loose): { tab: SponsorshipTab } => ({
+  validateSearch: (s: Loose): { tab: SponsorshipTab; q?: string; mode?: 'lookup' | 'search' } => ({
     tab: oneOf(['overview', 'changes', 'feed', 'alerts', 'companies', 'lookup', 'tiers'] as const, s.tab, 'overview'),
+    ...(typeof s.q === 'string' && s.q ? { q: s.q.slice(0, 200), mode: oneOf(['lookup', 'search'] as const, s.mode, 'lookup') } : {}),
   }),
 });
 

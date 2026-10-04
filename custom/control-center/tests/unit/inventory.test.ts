@@ -95,6 +95,8 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['addon.daily-job-logs', { api: '/api/schedule/logs/:date' }],
   ['addon.shortlist', { api: '/api/shortlist' }],
   ['addon.h1b-lookup', { action: 'immigration.h1b' }],
+  ['addon.h1b-lookup-tab', { api: '/api/sponsorship/lookup' }],
+  ['addon.h1b-name-search', { api: '/api/sponsorship/search' }],
   ['addon.sponsorship-overview', { api: '/api/immigration/overview' }],
   ['addon.today-workflow', { route: '/' }],
   // P3 editors

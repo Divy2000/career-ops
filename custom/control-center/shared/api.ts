@@ -102,3 +102,4 @@ export interface CadenceRead {
 
 export type AppSettingsRead = AppSettings & { problem: string | null };
 export type UsageResponse = UsageRead & { budgets: AppSettings['usageBudgets'] };
+export type { LookupResult, SearchResult, SearchHit, H1bCheck } from '../server/domains/sponsorshipLookup.js';
