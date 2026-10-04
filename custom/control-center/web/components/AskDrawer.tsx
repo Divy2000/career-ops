@@ -7,6 +7,7 @@ import { Pill } from './ui';
 import { apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
 import { startSession } from '../lib/sessions';
+import { afterFocusSettles } from '../lib/focus';
 
 export interface Proposal {
   id: number;
@@ -54,7 +55,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const confirm = useConfirm();
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (open) drawerRef.current?.focus();
+    if (open) return afterFocusSettles(() => drawerRef.current?.focus());
   }, [open]);
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind !== 'act') return;

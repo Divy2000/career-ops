@@ -306,3 +306,59 @@ test.describe('focus is never left on a hidden element (390 <-> 1000)', () => {
     await expect(menuButton(page)).toBeFocused();
   });
 });
+
+for (const width of [390, 1440]) {
+  test.describe(`overlays exclude each other at ${width}px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+    test.beforeEach(async ({ page }) => login(page));
+
+    const ask = (page: Page) => page.getByRole('dialog', { name: 'Ask' });
+    const palette = (page: Page) => page.locator('[role="dialog"]:not([aria-label="Ask"])');
+    const opener = (page: Page) => page.locator('button[aria-label="Open command palette"]');
+    const focusedInside = (page: Page, selector: string) => page.evaluate((sel) => !!document.activeElement?.closest(sel), selector);
+
+    test('Ctrl+K then Ctrl+J swaps the palette for Ask and closing returns focus to the original opener', async ({ page }) => {
+      await opener(page).focus();
+      await page.keyboard.press('Control+k');
+      await expect(palette(page)).toBeVisible();
+      await page.keyboard.press('Control+j');
+      await expect(ask(page)).toBeVisible();
+      await expect(palette(page)).toHaveCount(0);
+      await expect.poll(() => focusedInside(page, '[role="dialog"][aria-label="Ask"]')).toBe(true);
+      await page.keyboard.press('Control+j');
+      await expect(ask(page)).toHaveCount(0);
+      await expect(opener(page)).toBeFocused();
+    });
+
+    test('Ctrl+J then Ctrl+K swaps Ask for the palette and closing returns focus to the original opener', async ({ page }) => {
+      await opener(page).focus();
+      await page.keyboard.press('Control+j');
+      await expect(ask(page)).toBeVisible();
+      await page.keyboard.press('Control+k');
+      await expect(palette(page)).toBeVisible();
+      await expect(ask(page)).toHaveCount(0);
+      await expect.poll(() => focusedInside(page, '[role="dialog"]')).toBe(true);
+      await page.keyboard.press('Escape');
+      await expect(palette(page)).toHaveCount(0);
+      await expect(opener(page)).toBeFocused();
+    });
+  });
+}
+
+test.describe('overlays exclude each other with the drawer open (390px)', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('Ctrl+K then Ctrl+J then closing lands on Menu, the opener the drawer implied', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('[role="dialog"]:not([aria-label="Ask"])')).toBeVisible();
+    await page.keyboard.press('Control+j');
+    await expect(page.getByRole('dialog', { name: 'Ask' })).toBeVisible();
+    await expect(page.locator('[role="dialog"]:not([aria-label="Ask"])')).toHaveCount(0);
+    await page.keyboard.press('Control+j');
+    await expect(page.getByRole('dialog', { name: 'Ask' })).toHaveCount(0);
+    await expect(page.locator('.menu-toggle')).toBeFocused();
+  });
+});

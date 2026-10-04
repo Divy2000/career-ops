@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
+import { afterFocusSettles, isRendered } from '../lib/focus';
 import { useLiveInvalidation } from '../lib/sse';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AskDrawer, useAskHotkey } from './AskDrawer';
@@ -86,23 +87,6 @@ function ActivityChip() {
   );
 }
 
-/** Rendered means not display:none, not inside a hidden ancestor and not visibility:hidden. */
-function isRendered(el: Element | null | undefined): el is HTMLElement {
-  return el instanceof HTMLElement && el.checkVisibility({ checkVisibilityCSS: true });
-}
-
-/** Two frames: long enough for a closing Radix dialog to hand focus back to its opener first. */
-function afterFocusSettles(run: () => void): () => void {
-  let second = 0;
-  const first = requestAnimationFrame(() => {
-    second = requestAnimationFrame(run);
-  });
-  return () => {
-    cancelAnimationFrame(first);
-    cancelAnimationFrame(second);
-  };
-}
-
 /** Keep in step with the max-width media queries in base.css (the md breakpoint, 768px). */
 const NARROW_QUERY = '(max-width: 767px)';
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -163,19 +147,24 @@ export function Shell() {
     if (target) target.focus();
     else if (!lost) (active as HTMLElement).blur();
   }, []);
-  /** Every overlay opens through here, by button or hotkey: the drawer yields, and the opener is remembered for the close. */
-  const openOverlay = useCallback((isOpen: boolean, toggle: () => void) => {
-    if (wasOpen.current) overlayTookFocus.current = true;
-    if (!isOpen) {
-      const active = document.activeElement;
-      const inDrawer = active instanceof HTMLElement && navRef.current?.contains(active) && window.matchMedia(NARROW_QUERY).matches;
-      openerRef.current = inDrawer ? menuRef.current : active instanceof HTMLElement ? active : null;
-    }
-    setNavOpenOn(null);
-    toggle();
-  }, []);
-  const toggleAsk = useCallback(() => openOverlay(ask, () => setAsk((o) => !o)), [openOverlay, ask]);
-  const togglePalette = useCallback(() => openOverlay(palette, () => setPalette((o) => !o)), [openOverlay, palette]);
+  /** Every overlay toggles through here, by button or hotkey. At most one is open: opening one closes the other, and the original opener is kept for the close. */
+  const toggleOverlay = useCallback(
+    (which: 'ask' | 'palette') => {
+      if (wasOpen.current) overlayTookFocus.current = true;
+      if (!ask && !palette) {
+        const active = document.activeElement;
+        const inDrawer = active instanceof HTMLElement && navRef.current?.contains(active) && window.matchMedia(NARROW_QUERY).matches;
+        openerRef.current = inDrawer ? menuRef.current : active instanceof HTMLElement ? active : null;
+      }
+      setNavOpenOn(null);
+      const wasThisOpen = which === 'ask' ? ask : palette;
+      setAsk(which === 'ask' && !wasThisOpen);
+      setPalette(which === 'palette' && !wasThisOpen);
+    },
+    [ask, palette],
+  );
+  const toggleAsk = useCallback(() => toggleOverlay('ask'), [toggleOverlay]);
+  const togglePalette = useCallback(() => toggleOverlay('palette'), [toggleOverlay]);
   useAskHotkey(toggleAsk);
   usePaletteHotkey(togglePalette);
   const overlayOpen = ask || palette;
