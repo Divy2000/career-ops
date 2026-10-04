@@ -12,6 +12,7 @@ import { collectWhatsNew, resolveOfferLimit, type NormalizeTextKey } from '../do
 import { computeDashboard, readStatusLog } from '../domains/insights.js';
 import { parseFollowupsTable, parseNextOverrides } from '../domains/followups.js';
 import { readText } from '../domains/files.js';
+import { inside } from '../lib/paths.js';
 import { execNoShell, type Exec } from './system.js';
 import { listModeIds, getModePolicy } from '../claude/modes.js';
 import type { EventBus } from '../watch/bus.js';
@@ -42,7 +43,7 @@ export function containedPath(dataRoot: string, requested: string): { abs: strin
   } catch {
     return null;
   }
-  if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) return null;
+  if (realFile !== realRoot && !inside(realRoot, realFile)) return null;
   return { abs: realFile, root };
 }
 

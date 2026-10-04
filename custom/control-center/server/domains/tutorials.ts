@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ID_RE, extOf, parseManifest, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
+import { inside } from '../lib/paths.js';
 
 export const TUTORIALS_REL = path.join('data', 'control-center', 'tutorials');
 
@@ -83,12 +84,6 @@ export interface TutorialsRead {
   directory: string;
   tutorials: Tutorial[];
   warnings: Array<{ folder: string; message: string }>;
-}
-
-/** True when `p` is a strict descendant of `root`; `root + sep` is not used as a prefix because that breaks for the filesystem root. */
-export function inside(root: string, p: string): boolean {
-  const rel = path.relative(root, p);
-  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
 }
 
 function realOrNull(p: string): string | null {

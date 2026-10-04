@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { containedPath } from '../../server/routes/read.js';
@@ -215,6 +216,23 @@ describe('file serving', () => {
     fs.symlinkSync(outside, path.join(t.cfg.dataRoot, 'reports', 'link.md'));
     expect(containedPath(t.cfg.dataRoot, 'reports/link.md')).toBeNull();
     expect(containedPath(t.cfg.dataRoot, 'reports/001-acme-robotics.md')?.root).toBe('reports');
+  });
+
+  it('containedPath serves files when a serve root resolves to the filesystem root', () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-slash-root-'));
+    try {
+      fs.symlinkSync('/', path.join(dataRoot, 'output'));
+      const file = path.join(fs.realpathSync(dataRoot), 'target.md');
+      fs.writeFileSync(file, 'hi');
+      expect(containedPath(dataRoot, `output${file}`)?.abs).toBe(file);
+    } finally {
+      fs.rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('containedPath rejects a parent-directory escape out of a serve root', () => {
+    expect(containedPath(t.cfg.dataRoot, 'reports/../cv.md')).toBeNull();
+    expect(containedPath(t.cfg.dataRoot, 'reports/../../etc/hosts')).toBeNull();
   });
 
   it('html is served sandboxed', async () => {
