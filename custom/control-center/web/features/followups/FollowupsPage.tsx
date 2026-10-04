@@ -5,7 +5,7 @@ import { useFollowups } from '../../lib/queries';
 import { apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill, StatusPill, Tabs } from '../../components/ui';
+import { DataState, Empty, Pill, StatusPill, Tabs, TableScroll } from '../../components/ui';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { ContactsRead, FollowupCadenceEntry } from '@shared/api';
 
@@ -117,43 +117,45 @@ function CadenceTab() {
           (q.data.entries.length === 0 ? (
             <Empty>No applications in follow-up cadence yet. Once you apply to a job, its follow-ups are scheduled here.</Empty>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">Urgency</th>
-                  <th scope="col">Company</th>
-                  <th scope="col">Role</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Applied</th>
-                  <th scope="col">Next</th>
-                  <th scope="col">Follow-ups</th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {q.data.entries.map((e) => (
-                  <RowGroup
-                    key={e.num}
-                    e={e}
-                    open={open === e.num}
-                    onToggle={() => setOpen(open === e.num ? null : e.num)}
-                    logging={logging === e.num}
-                    onLog={() => setLogging(e.num)}
-                    onLogged={(m) => {
-                      setLogging(null);
-                      if (m) {
-                        setMessage(m);
-                        void refresh();
-                      }
-                    }}
-                    onPin={pin}
-                    onDelete={remove}
-                  />
-                ))}
-              </tbody>
-            </table>
+            <TableScroll label="Follow-up cadence">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Urgency</th>
+                    <th scope="col">Company</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Applied</th>
+                    <th scope="col">Next</th>
+                    <th scope="col">Follow-ups</th>
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {q.data.entries.map((e) => (
+                    <RowGroup
+                      key={e.num}
+                      e={e}
+                      open={open === e.num}
+                      onToggle={() => setOpen(open === e.num ? null : e.num)}
+                      logging={logging === e.num}
+                      onLog={() => setLogging(e.num)}
+                      onLogged={(m) => {
+                        setLogging(null);
+                        if (m) {
+                          setMessage(m);
+                          void refresh();
+                        }
+                      }}
+                      onPin={pin}
+                      onDelete={remove}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           ))}
       </DataState>
     </>
@@ -232,42 +234,44 @@ function ContactsTab() {
           (q.data.rows.length === 0 ? (
             <Empty>No contacts yet. The contacto and email modes add them as you reach out.</Empty>
           ) : (
-            <table className="table" aria-label="Contacts">
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">Company</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Title</th>
-                  <th scope="col">Channels</th>
-                  <th scope="col">App</th>
-                  <th scope="col">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {q.data.rows.map((c) => (
-                  <tr key={c.line}>
-                    <td>{c.name}</td>
-                    <td>{c.company}</td>
-                    <td>
-                      <Pill>{c.type || 'contact'}</Pill>
-                    </td>
-                    <td className="muted">{c.title}</td>
-                    <td className="small">{[c.email, c.phone, c.linkedin].filter(Boolean).join(' / ') || <span className="faint">none</span>}</td>
-                    <td>
-                      {c.tracker !== null ? (
-                        <Link to="/tracker/$n" params={{ n: String(c.tracker) }}>
-                          #{c.tracker}
-                        </Link>
-                      ) : (
-                        <span className="faint">-</span>
-                      )}
-                    </td>
-                    <td className="faint small">{c.notes}</td>
+            <TableScroll label="Contacts">
+              <table className="table" aria-label="Contacts">
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Company</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Title</th>
+                    <th scope="col">Channels</th>
+                    <th scope="col">App</th>
+                    <th scope="col">Notes</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {q.data.rows.map((c) => (
+                    <tr key={c.line}>
+                      <td>{c.name}</td>
+                      <td>{c.company}</td>
+                      <td>
+                        <Pill>{c.type || 'contact'}</Pill>
+                      </td>
+                      <td className="muted">{c.title}</td>
+                      <td className="small">{[c.email, c.phone, c.linkedin].filter(Boolean).join(' / ') || <span className="faint">none</span>}</td>
+                      <td>
+                        {c.tracker !== null ? (
+                          <Link to="/tracker/$n" params={{ n: String(c.tracker) }}>
+                            #{c.tracker}
+                          </Link>
+                        ) : (
+                          <span className="faint">-</span>
+                        )}
+                      </td>
+                      <td className="faint small">{c.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           ))}
       </DataState>
     </div>

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useTracker } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
-import { Pill } from '../../components/ui';
+import { Pill, TableScroll } from '../../components/ui';
 
 interface Offer {
   url: string;
@@ -49,42 +49,44 @@ export function AiSearchTab() {
               Add all new ({newOnes.length})
             </button>
           </div>
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Company</th>
-                <th scope="col">Title</th>
-                <th scope="col">Location</th>
-                <th scope="col">State</th>
-                <th scope="col">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {offers.map((o) => {
-                const dup = known.has(o.url);
-                const done = added.has(o.url);
-                return (
-                  <tr key={o.url}>
-                    <td>{o.company}</td>
-                    <td>
-                      <a href={o.url} target="_blank" rel="noreferrer noopener">
-                        {o.title}
-                      </a>
-                    </td>
-                    <td className="muted">{o.location ?? ''}</td>
-                    <td>{dup ? <Pill>already known</Pill> : done ? <Pill tone="ok">added</Pill> : <Pill tone="accent">new</Pill>}</td>
-                    <td>
-                      <button type="button" disabled={dup || done} onClick={() => void add([o])}>
-                        Add
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <TableScroll label="AI search results">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Company</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Location</th>
+                  <th scope="col">State</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {offers.map((o) => {
+                  const dup = known.has(o.url);
+                  const done = added.has(o.url);
+                  return (
+                    <tr key={o.url}>
+                      <td>{o.company}</td>
+                      <td>
+                        <a href={o.url} target="_blank" rel="noreferrer noopener">
+                          {o.title}
+                        </a>
+                      </td>
+                      <td className="muted">{o.location ?? ''}</td>
+                      <td>{dup ? <Pill>already known</Pill> : done ? <Pill tone="ok">added</Pill> : <Pill tone="accent">new</Pill>}</td>
+                      <td>
+                        <button type="button" disabled={dup || done} onClick={() => void add([o])}>
+                          Add
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableScroll>
           {note && (
             <p role="status" className="muted small">
               {note}

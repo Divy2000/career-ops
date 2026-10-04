@@ -5,7 +5,7 @@ import { useWhatsNew } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill, Tabs } from '../../components/ui';
+import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
@@ -260,42 +260,44 @@ function NetworkScan() {
                   Add all ({visible.length})
                 </button>
               </div>
-              <table className="table" aria-label="Network scan results">
-                <thead>
-                  <tr>
-                    <th scope="col">Company</th>
-                    <th scope="col">Role</th>
-                    <th scope="col">Location</th>
-                    <th scope="col">Posted</th>
-                    <th scope="col">Source</th>
-                    <th scope="col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((p) => (
-                    <tr key={p.url}>
-                      <td>{p.company}</td>
-                      <td>
-                        <a href={p.url} target="_blank" rel="noreferrer noopener">
-                          {p.title}
-                        </a>
-                      </td>
-                      <td className="muted">{p.location ?? ''}</td>
-                      <td className="mono muted">{p.postedAt ?? ''}</td>
-                      <td>
-                        <Pill>{p.source ?? ''}</Pill>
-                      </td>
-                      <td>
-                        <button type="button" aria-label={`Add ${p.company} ${p.title}`} onClick={() => void add([p])}>
-                          Add
-                        </button>
-                      </td>
+              <TableScroll label="Network scan results">
+                <table className="table" aria-label="Network scan results">
+                  <thead>
+                    <tr>
+                      <th scope="col">Company</th>
+                      <th scope="col">Role</th>
+                      <th scope="col">Location</th>
+                      <th scope="col">Posted</th>
+                      <th scope="col">Source</th>
+                      <th scope="col">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {visible.map((p) => (
+                      <tr key={p.url}>
+                        <td>{p.company}</td>
+                        <td>
+                          <a href={p.url} target="_blank" rel="noreferrer noopener">
+                            {p.title}
+                          </a>
+                        </td>
+                        <td className="muted">{p.location ?? ''}</td>
+                        <td className="mono muted">{p.postedAt ?? ''}</td>
+                        <td>
+                          <Pill>{p.source ?? ''}</Pill>
+                        </td>
+                        <td>
+                          <button type="button" aria-label={`Add ${p.company} ${p.title}`} onClick={() => void add([p])}>
+                            Add
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             </>
           )}
           <RunTail runId={runId} />
@@ -312,28 +314,30 @@ function Fresh() {
       {q.data && q.data.offers.length === 0 ? (
         <Empty>No fresh matches this week. Run a portal or network scan.</Empty>
       ) : (
-        <table className="table" aria-label="Fresh matches">
-          <thead>
-            <tr>
-              <th scope="col">Company</th>
-              <th scope="col">Role</th>
-              <th scope="col">First seen</th>
-            </tr>
-          </thead>
-          <tbody>
-            {q.data?.offers.map((o) => (
-              <tr key={o.url}>
-                <td>{o.company}</td>
-                <td>
-                  <a href={o.url} target="_blank" rel="noreferrer noopener">
-                    {o.title}
-                  </a>
-                </td>
-                <td className="mono muted">{o.firstSeen}</td>
+        <TableScroll label="Fresh matches">
+          <table className="table" aria-label="Fresh matches">
+            <thead>
+              <tr>
+                <th scope="col">Company</th>
+                <th scope="col">Role</th>
+                <th scope="col">First seen</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {q.data?.offers.map((o) => (
+                <tr key={o.url}>
+                  <td>{o.company}</td>
+                  <td>
+                    <a href={o.url} target="_blank" rel="noreferrer noopener">
+                      {o.title}
+                    </a>
+                  </td>
+                  <td className="mono muted">{o.firstSeen}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
     </DataState>
   );

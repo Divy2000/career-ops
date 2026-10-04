@@ -63,6 +63,8 @@ function serverFor(port: number, root: string, guard = fs.mkdtempSync(path.join(
       CC_LAUNCH_AGENTS_DIR: path.join(root, '.launch-agents'),
       CC_CLAUDE_PROJECTS_DIR: path.join(root, '.claude-projects'),
       CC_NO_OPEN: '1',
+      // The daily-job probe never looks at host processes, so a real run-daily.sh cannot put its banner into the suite (NODE_ENV=test only).
+      CC_FAKE_DAILY: 'idle',
       // The sponsor lookup answers from a synthetic employer table, never the real DOL index (NODE_ENV=test only).
       CC_H1B_CHECK_SCRIPT: path.join(here, 'tests/fakes/h1b-check.mjs'),
     },

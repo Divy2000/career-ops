@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../../lib/api';
 import { useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { DocumentsRead } from '@shared/api';
 
 export function DocumentsTab({ n }: { n: number }) {
@@ -20,48 +20,50 @@ export function DocumentsTab({ n }: { n: number }) {
             {q.data.files.length === 0 ? (
               <Empty>No PDFs yet. Generate one with the pdf mode (Claude engine) or drop files into output/.</Empty>
             ) : (
-              <table className="table" aria-label="Generated documents">
-                <thead>
-                  <tr>
-                    <th scope="col">Kind</th>
-                    <th scope="col">File</th>
-                    <th scope="col">Date</th>
-                    <th scope="col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {q.data.files.map((f) => (
-                    <tr key={f.path}>
-                      <td>
-                        <Pill tone={f.kind === 'cover' ? 'info' : 'accent'}>{f.kind}</Pill>
-                      </td>
-                      <td className="mono">
-                        <a href={`/api/files/serve?path=${encodeURIComponent(f.path)}`} target="_blank" rel="noreferrer noopener">
-                          {f.path}
-                        </a>
-                        {f.source === 'output' && <span className="faint small"> (matched by company)</span>}
-                      </td>
-                      <td className="mono muted">{f.date ?? ''}</td>
-                      <td>
-                        <div className="row gap">
-                          {f.html && (
-                            <a className="button-link" href={`/api/files/serve?path=${encodeURIComponent(f.html)}`} target="_blank" rel="noreferrer noopener">
-                              Open HTML
-                            </a>
-                          )}
-                          {f.html && (
-                            <ActionButton meta={render} params={{ n, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
-                              Re-render from HTML
-                            </ActionButton>
-                          )}
-                        </div>
-                      </td>
+              <TableScroll label="Generated documents">
+                <table className="table" aria-label="Generated documents">
+                  <thead>
+                    <tr>
+                      <th scope="col">Kind</th>
+                      <th scope="col">File</th>
+                      <th scope="col">Date</th>
+                      <th scope="col">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {q.data.files.map((f) => (
+                      <tr key={f.path}>
+                        <td>
+                          <Pill tone={f.kind === 'cover' ? 'info' : 'accent'}>{f.kind}</Pill>
+                        </td>
+                        <td className="mono">
+                          <a href={`/api/files/serve?path=${encodeURIComponent(f.path)}`} target="_blank" rel="noreferrer noopener">
+                            {f.path}
+                          </a>
+                          {f.source === 'output' && <span className="faint small"> (matched by company)</span>}
+                        </td>
+                        <td className="mono muted">{f.date ?? ''}</td>
+                        <td>
+                          <div className="row gap">
+                            {f.html && (
+                              <a className="button-link" href={`/api/files/serve?path=${encodeURIComponent(f.html)}`} target="_blank" rel="noreferrer noopener">
+                                Open HTML
+                              </a>
+                            )}
+                            {f.html && (
+                              <ActionButton meta={render} params={{ n, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
+                                Re-render from HTML
+                              </ActionButton>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             )}
             {q.data.jds.length > 0 && (
               <>

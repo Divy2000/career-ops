@@ -1,5 +1,5 @@
 import { useConfirm } from './ConfirmDialog';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { SessionPanel } from './SessionPanel';
@@ -7,6 +7,7 @@ import { Pill } from './ui';
 import { apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
 import { startSession } from '../lib/sessions';
+import { afterFocusSettles } from '../lib/focus';
 
 export interface Proposal {
   id: number;
@@ -52,6 +53,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const confirm = useConfirm();
+  const drawerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (open) return afterFocusSettles(() => drawerRef.current?.focus());
+  }, [open]);
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind !== 'act') return;
     const p = payload as { action: string; params: Record<string, unknown> };
@@ -125,7 +130,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
 
   if (!open) return null;
   return (
-    <aside className="drawer" role="dialog" aria-modal="false" aria-label="Ask">
+    <aside ref={drawerRef} tabIndex={-1} className="drawer" role="dialog" aria-modal="false" aria-label="Ask">
       <div className="row gap" style={{ justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0 }}>Ask</h2>
         <span className="faint small">Cmd+J toggles. Read-only advisor; every action below asks before it writes.</span>

@@ -16,6 +16,10 @@
 .transcript__tool--err {
   color: var(--danger);
 }
+/* The drawer itself takes focus when it opens so the dialog is announced; it is a container, not a control. */
+.drawer:focus {
+  outline: none;
+}
 .drawer {
   position: fixed;
   top: 0;

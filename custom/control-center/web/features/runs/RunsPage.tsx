@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
 import { LogBrowser, ScheduleCards } from './ScheduleCards';
 import { groupQuickActions } from './quickActions';
@@ -112,46 +112,48 @@ export function RunsPage() {
           {runs.data && runs.data.length === 0 ? (
             <Empty>No runs yet. Start one from the buttons above or from any page action.</Empty>
           ) : (
-            <table className="table table--interactive">
-              <thead>
-                <tr>
-                  <th scope="col">Status</th>
-                  <th scope="col">Action</th>
-                  <th scope="col">Started</th>
-                  <th scope="col">Exit</th>
-                  <th scope="col">
-                    <span className="sr-only">Controls</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(runs.data ?? []).map((r) => (
-                  <tr key={r.id} className={r.id === selected ? 'is-selected' : ''} onClick={() => setSelected(r.id)} aria-selected={r.id === selected}>
-                    <td>
-                      <Pill tone={statusTone(r.status)}>{r.status}</Pill>
-                    </td>
-                    <td>
-                      {r.label} <span className="faint mono small">{r.actionId}</span>
-                    </td>
-                    <td className="mono muted">{(r.startedAt ?? r.createdAt).slice(0, 19).replace('T', ' ')}</td>
-                    <td className="mono">{r.exitCode ?? ''}</td>
-                    <td>
-                      {(r.status === 'running' || r.status === 'queued') && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void cancel(r.id);
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </td>
+            <TableScroll label="Runs">
+              <table className="table table--interactive">
+                <thead>
+                  <tr>
+                    <th scope="col">Status</th>
+                    <th scope="col">Action</th>
+                    <th scope="col">Started</th>
+                    <th scope="col">Exit</th>
+                    <th scope="col">
+                      <span className="sr-only">Controls</span>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {(runs.data ?? []).map((r) => (
+                    <tr key={r.id} className={r.id === selected ? 'is-selected' : ''} onClick={() => setSelected(r.id)} aria-selected={r.id === selected}>
+                      <td>
+                        <Pill tone={statusTone(r.status)}>{r.status}</Pill>
+                      </td>
+                      <td>
+                        {r.label} <span className="faint mono small">{r.actionId}</span>
+                      </td>
+                      <td className="mono muted">{(r.startedAt ?? r.createdAt).slice(0, 19).replace('T', ' ')}</td>
+                      <td className="mono">{r.exitCode ?? ''}</td>
+                      <td>
+                        {(r.status === 'running' || r.status === 'queued') && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void cancel(r.id);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </DataState>
         <div className="stack">

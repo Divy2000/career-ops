@@ -122,12 +122,27 @@ button.button--danger:active {
   align-items: center;
   color: var(--text-muted);
 }
+.palette-trigger__short {
+  display: none;
+}
 .palette-trigger kbd {
   font-family: var(--font-mono);
   font-size: var(--fs-12);
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 0 4px;
+}
+@media (max-width: 767px) {
+  .palette-trigger {
+    white-space: nowrap;
+  }
+  .palette-trigger kbd,
+  .palette-trigger__long {
+    display: none;
+  }
+  .palette-trigger__short {
+    display: inline;
+  }
 }
 
 .fields {
@@ -142,6 +157,12 @@ button.button--danger:active {
   align-items: start;
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
+}
+@media (max-width: 767px) {
+  .fields__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
 }
 .fields__row:last-child {
   border-bottom: 0;

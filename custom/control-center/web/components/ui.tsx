@@ -140,3 +140,12 @@ export function Bar({ label, value, max, tone = 'accent' }: { label: string; val
     </div>
   );
 }
+
+/** A table that scrolls sideways inside its own box; focusable so keyboard users can scroll it. */
+export function TableScroll({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="table-scroll" tabIndex={0} role="region" aria-label={label}>
+      {children}
+    </div>
+  );
+}

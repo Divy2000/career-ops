@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, getRouteApi } from '@tanstack/react-router';
 import { SafeMarkdown } from '../../components/Md';
 import { useApplication } from '../../lib/queries';
-import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone } from '../../components/ui';
+import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone, TableScroll } from '../../components/ui';
 import { DocumentsTab } from './DocumentsTab';
 import { DangerZone } from './DangerZone';
 import { ModeLauncher } from '../../components/ModeLauncher';
@@ -118,30 +118,32 @@ export function ApplicationPage() {
                   {q.data.timeline.statusLog.length === 0 ? (
                     <Empty>No transitions recorded in status-log.tsv for this row.</Empty>
                   ) : (
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th scope="col">Date</th>
-                          <th scope="col">From</th>
-                          <th scope="col">To</th>
-                          <th scope="col">Source</th>
-                          <th scope="col">Note</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {q.data.timeline.statusLog.map((s, i) => (
-                          <tr key={i}>
-                            <td className="mono">{s.date}</td>
-                            <td>{s.from}</td>
-                            <td>
-                              <StatusPill status={s.to} />
-                            </td>
-                            <td className="muted">{s.source}</td>
-                            <td className="muted">{s.note}</td>
+                    <TableScroll label="Status log">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Date</th>
+                            <th scope="col">From</th>
+                            <th scope="col">To</th>
+                            <th scope="col">Source</th>
+                            <th scope="col">Note</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {q.data.timeline.statusLog.map((s, i) => (
+                            <tr key={i}>
+                              <td className="mono">{s.date}</td>
+                              <td>{s.from}</td>
+                              <td>
+                                <StatusPill status={s.to} />
+                              </td>
+                              <td className="muted">{s.source}</td>
+                              <td className="muted">{s.note}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableScroll>
                   )}
                 </div>
                 <div className="card">

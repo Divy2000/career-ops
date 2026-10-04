@@ -1,9 +1,17 @@
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
+import type { ServerConfig } from '../config.js';
 
 export interface DailyStatus {
   running: boolean;
   checkedAt: string | null;
+}
+
+/** Test builds only: answer the run-daily.sh probe from the override so a real daily job on the host never leaks into a run. */
+export function maybeFakeDailyProbe(cfg: ServerConfig, exec: Exec): Exec {
+  if (!cfg.fakeDaily || cfg.nodeEnv !== 'test') return exec;
+  const running = cfg.fakeDaily === 'running';
+  return async (cmd, args, opts) => (cmd === 'pgrep' ? { code: running ? 0 : 1, stdout: running ? '4242\n' : '', stderr: '' } : exec(cmd, args, opts));
 }
 
 /** Polls `pgrep -f custom/immigration/run-daily.sh`; never blocks anything (core locks do). */

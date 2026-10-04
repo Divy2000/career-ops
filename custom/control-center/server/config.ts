@@ -28,6 +28,8 @@ export interface ServerConfig {
   claudeProjectsDir: string;
   /** Replaces plugins/h1b-sponsor/check.mjs for the Sponsorship lookup (tests only; CC_H1B_CHECK_SCRIPT is honored under NODE_ENV=test). */
   h1bCheckScript?: string;
+  /** Answers the "is run-daily.sh running" probe without looking at host processes (tests only; CC_FAKE_DAILY is honored under NODE_ENV=test). */
+  fakeDaily?: 'idle' | 'running';
 }
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,6 +39,12 @@ function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is required (the supervisor sets it)`);
   return v;
+}
+
+function fakeDailyFromEnv(env: NodeJS.ProcessEnv): Pick<ServerConfig, 'fakeDaily'> {
+  if (env.NODE_ENV !== 'test' || !env.CC_FAKE_DAILY) return {};
+  if (env.CC_FAKE_DAILY !== 'idle' && env.CC_FAKE_DAILY !== 'running') throw new Error(`CC_FAKE_DAILY must be idle or running (got ${env.CC_FAKE_DAILY})`);
+  return { fakeDaily: env.CC_FAKE_DAILY };
 }
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -58,5 +66,6 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
     claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects'),
     ...(env.NODE_ENV === 'test' && env.CC_H1B_CHECK_SCRIPT ? { h1bCheckScript: env.CC_H1B_CHECK_SCRIPT } : {}),
+    ...fakeDailyFromEnv(env),
   };
 }

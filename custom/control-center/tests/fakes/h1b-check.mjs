@@ -8,6 +8,7 @@
 //   "Index Missing Probe"  no local index: exit 1 with the install-the-index error envelope
 //   "Exploding Corp"       backend failure: exit 1 with a different error envelope
 //   "Garbage Corp"         exit 0 with text that is not JSON
+//   "Mega Holdings"        --search only: a truncated list, 2 shown of 12345 matches
 //
 // Brand versus legal name works like the real index: "JPMorganChase" matches
 // nothing, while --search "jpmorgan" lists the two legal entities.
@@ -68,6 +69,8 @@ if (!name) {
   failure('H1B API returned 503');
 } else if (name === 'Garbage Corp') {
   process.stdout.write('this is not json\n');
+} else if (search && name === 'Mega Holdings') {
+  out({ query: name, total: 12345, shown: 2, results: [{ id: '2001', name: 'Mega Holdings One Inc.' }, { id: '2002', name: 'Mega Holdings Two Inc.' }] });
 } else if (search) {
   const q = normalize(name);
   const hits = q.length < 2 ? [] : EMPLOYERS.filter((e) => normalize(e.name).includes(q));
