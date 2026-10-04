@@ -3,10 +3,25 @@
 #   daily  08:00  custom/immigration/run-daily.sh   policy watch, scan, rank, shortlist
 #   weekly Sun 03:00 custom/upstream-sync/sync.sh   merge upstream main into the fork
 # /bin/bash needs Full Disk Access when the checkout lives under ~/Desktop or ~/Documents.
+# Usage: install.sh [--jobs daily|all]   (default all; "daily" skips the weekly sync, which only the fork maintainer needs)
 set -euo pipefail
+JOBS=all
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --jobs)
+      [ "$#" -ge 2 ] || { echo "error: --jobs needs daily or all" >&2; exit 2; }
+      JOBS="$2"
+      shift
+      ;;
+    *) echo "error: unknown option $1 (usage: install.sh [--jobs daily|all])" >&2; exit 2 ;;
+  esac
+  shift
+done
+case "$JOBS" in daily | all) ;; *) echo "error: --jobs must be daily or all (got $JOBS)" >&2; exit 2 ;; esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENTS="$HOME/Library/LaunchAgents"
-mkdir -p "$AGENTS" "$ROOT/data/immigration/logs" "$ROOT/data/upstream-sync"
+mkdir -p "$AGENTS" "$ROOT/data/immigration/logs"
+if [ "$JOBS" = all ]; then mkdir -p "$ROOT/data/upstream-sync"; fi
 
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
@@ -35,4 +50,6 @@ PLIST
 }
 
 write_plist com.career-ops.immigration-watch custom/immigration/run-daily.sh 8 0 "" data/immigration/logs
-write_plist com.career-ops.upstream-sync custom/upstream-sync/sync.sh 3 0 0 data/upstream-sync
+if [ "$JOBS" = all ]; then
+  write_plist com.career-ops.upstream-sync custom/upstream-sync/sync.sh 3 0 0 data/upstream-sync
+fi
