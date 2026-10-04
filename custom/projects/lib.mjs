@@ -180,6 +180,7 @@ export function validateLibrary(text) {
   for (const e of entries) {
     const where = `line ${e.line}: "${e.title}"`;
     if (!e.title) errors.push(`line ${e.line}: entry has no title`);
+    else if (!e.id) errors.push(`${where} needs a letter or digit in its title; it gets no id and cannot be edited or removed`);
     const key = titleKey(e.title);
     if (key && seen.has(key)) {
       const first = seen.get(key);
@@ -203,6 +204,7 @@ export function validateLibrary(text) {
 export function serializeEntry(entry) {
   const title = oneLine(entry?.title);
   if (!title) throw new Error('entry needs a non-empty title');
+  if (!projectId(title)) throw new Error(`title "${title}" needs a letter or digit; it would get no id`);
   if (HEADING_SEP.test(title)) throw new Error(`title "${title}" must not contain " -- " or a spaced dash; it would split the heading`);
   const url = entry.url ? oneLine(entry.url) : null;
   if (url && !HTTP_URL.test(url)) throw new Error(`link for "${title}" must be http(s), got "${url}"`);

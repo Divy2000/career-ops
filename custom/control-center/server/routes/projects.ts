@@ -65,7 +65,12 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const body = entrySchema.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid entry', issues: body.error.issues });
     const l = await lib();
-    const id = l.parseLibrary(l.serializeEntry(body.data)).entries[0]?.id;
+    let id: string | undefined;
+    try {
+      id = l.parseLibrary(l.serializeEntry(body.data)).entries[0]?.id;
+    } catch (err) {
+      return reply.code(422).send({ error: (err as Error).message, errors: [(err as Error).message] });
+    }
     return save(req, reply, (lb, text) => lb.appendEntry(text, body.data), id);
   });
 

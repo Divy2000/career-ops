@@ -116,6 +116,16 @@ test('given two titles that normalize the same, when validated, then an error na
   assert.match(dup, /"ticket-triage {2}bot"/);
 });
 
+test('given a title with no letter or digit, when validated, then an error says it cannot be addressed', () => {
+  const r = validateLibrary('## !!!\n- One.\n\n---\n\n## Fine\n- Two.\n');
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /line 1: "!!!" needs a letter or digit in its title/);
+});
+
+test('given a title with no letter or digit, when serialized, then it throws', () => {
+  assert.throws(() => serializeEntry({ title: '!!!', bullets: ['x'] }), /letter or digit/);
+});
+
 test('given a project with no bullets, when validated, then an error says it has no copy-paste points', () => {
   const v = validateLibrary('## Empty Project -- https://e.example\nTags: go\n');
   assert.equal(v.ok, false);

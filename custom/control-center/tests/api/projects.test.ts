@@ -70,6 +70,17 @@ describe('POST /api/projects', () => {
     expect(read()).toBe(text);
   });
 
+  it('gives 422 for a title with no letter or digit, on add and on edit, writing nothing', async () => {
+    const before = await current();
+    const text = read();
+    const add = await send('POST', '/api/projects', { ...entry, title: '!!!' }, before.etag);
+    expect(add.statusCode).toBe(422);
+    expect(add.json().errors.join('\n')).toMatch(/letter or digit/);
+    const edit = await send('PUT', '/api/projects/event-router', { title: '!!!', bullets: ['x'] }, before.etag);
+    expect(edit.statusCode).toBe(422);
+    expect(read()).toBe(text);
+  });
+
   it('gives 409 with the current file on a stale If-Match', async () => {
     const text = read();
     const res = await send('POST', '/api/projects', entry, 'deadbeef');
