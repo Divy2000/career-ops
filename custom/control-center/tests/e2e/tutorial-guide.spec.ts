@@ -40,11 +40,30 @@ const atTop = async (loc: Locator) => {
 };
 const scrollTop = (page: Page) => page.evaluate(() => (document.querySelector('.shell__main') as HTMLElement).scrollTop);
 const scrollSub = (page: Page, id: string) => page.evaluate((i) => document.querySelector(`[data-sub="${i}"]`)!.scrollIntoView({ block: 'start' }), id);
+
+// Chromium starts a lazy image once it is within a distance of the viewport that grows with a slower connection (about 1250px on 4G, up to 8000px on slow-2g).
+const LAZY_LOAD_MAX_DISTANCE = 8000;
+/**
+ * Pushes a subsection down by a fixed 10000px before the page loads, so an image inside it is out of lazy-load range whatever the fonts or text height.
+ * Call it before `openDocs`: an image that starts inside the range is requested at once, and no later change takes that back.
+ */
+const pushSubDown = (page: Page, subId: string) =>
+  page.addInitScript((id) => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(`.guide-doc [data-sub="${id}"] { margin-top: 10000px !important; }`);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  }, subId);
+/** Pixels between the bottom of the viewport and the top of an element that is still below it. */
+const belowViewport = (loc: Locator) => loc.evaluate((el) => el.getBoundingClientRect().top - window.innerHeight);
 const historyLength = (page: Page) => page.evaluate(() => history.length);
 
 test.describe('Tutorials guide, documentation style', () => {
   test.use({ colorScheme: 'dark' });
-  test.beforeEach(async ({ page }) => login(page));
+  test.beforeEach(async ({ page }) => {
+    // CC_E2E_BLOCK_FONTS=1 reproduces a checkout where the web fonts cannot be served (fallback fonts lay the page out shorter), to prove no test leans on font metrics.
+    if (process.env.CC_E2E_BLOCK_FONTS) await page.route(/\.(woff2?|ttf|otf)(\?|$)/, (route) => route.abort());
+    await login(page);
+  });
 
   test('a tutorial with a guide has a Video / Quick guide toggle that is kept in the URL, and one without has none', async ({ page }) => {
     await page.goto('/tutorials');
@@ -500,7 +519,9 @@ test.describe('Tutorials guide, documentation style', () => {
     test('images are lazy: one far down the page is not requested until it nears the viewport', async ({ page }) => {
       const requested: string[] = [];
       page.on('request', (r) => requested.push(new URL(r.url()).pathname));
+      await pushSubDown(page, 'navigate');
       await openDocs(page, '&section=getting-started');
+      expect(await belowViewport(figure(page, 'The sidebar.'))).toBeGreaterThan(LAZY_LOAD_MAX_DISTANCE);
       await expect(figure(page, 'Today, right after sign in.').locator('.doc-media__img--top')).toHaveAttribute('loading', 'lazy');
       await expect.poll(() => requested.some((p) => p.endsWith('launch.dark.png'))).toBe(true);
       await page.waitForTimeout(400);
@@ -513,7 +534,9 @@ test.describe('Tutorials guide, documentation style', () => {
     test('a theme change does not fetch images that are far off screen; they load in the new theme when they near the viewport', async ({ page }) => {
       const requested: string[] = [];
       page.on('request', (r) => requested.push(new URL(r.url()).pathname));
+      await pushSubDown(page, 'navigate');
       await openDocs(page, '&section=getting-started');
+      expect(await belowViewport(figure(page, 'The sidebar.'))).toBeGreaterThan(LAZY_LOAD_MAX_DISTANCE);
       await expect.poll(() => requested.some((p) => p.endsWith('launch.dark.png'))).toBe(true);
       const nav = figure(page, 'The sidebar.').locator('.doc-media__img--top');
       await page.emulateMedia({ colorScheme: 'light' });
