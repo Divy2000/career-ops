@@ -93,3 +93,50 @@ export function normalizePayload(payload) {
   if (!out.sections.awards) out.sections.awards = AWARDS_TITLE;
   return out;
 }
+
+// Density levels the fork template defines (html[data-density]), loosest first.
+export const DENSITIES = [0, 1, 2, 3];
+
+export function setDensity(html, density) {
+  const text = String(html ?? '');
+  const tag = text.match(/<html\b[^>]*>/i);
+  if (!tag) throw new Error('no <html> tag to set data-density on');
+  const cleaned = tag[0].replace(/\s+data-density=(?:"[^"]*"|'[^']*'|\S+)/i, '');
+  const updated = cleaned.replace(/>$/, ` data-density="${density}">`);
+  return text.slice(0, tag.index) + updated + text.slice(tag.index + tag[0].length);
+}
+
+// Tries each density in turn and stops at the first whose render fits the
+// budget. `render(html, density)` resolves to { pages } or throws; a throw
+// (fact check, section order, a crash) stops the loop at once.
+export async function fitToPages({ html, maxPages, render }) {
+  const attempts = [];
+  let last = null;
+  for (const density of DENSITIES) {
+    const candidate = setDensity(html, density);
+    const { pages } = await render(candidate, density);
+    attempts.push({ density, pages });
+    last = { density, pages, html: candidate };
+    if (pages <= maxPages) return { ...last, fits: true, attempts };
+  }
+  return { ...last, fits: false, attempts };
+}
+
+// Page count from the catalog's root /Pages dictionary (a port of upstream
+// generate-pdf.mjs countRenderedPdfPages, which is not exported). Following the
+// catalog reference ignores page-like text inside content streams.
+export function countPdfPages(pdfBuffer) {
+  const pdf = Buffer.from(pdfBuffer).toString('latin1');
+  const objects = new Map();
+  for (const m of pdf.matchAll(/(?:^|[\r\n])(\d+)\s+(\d+)\s+obj\b([\s\S]*?)\bendobj\b/g)) {
+    const streamAt = m[3].search(/\bstream(?:\r?\n|\r)/);
+    objects.set(`${m[1]} ${m[2]}`, streamAt === -1 ? m[3] : m[3].slice(0, streamAt));
+  }
+  const catalog = [...objects.values()].find((body) => /\/Type\s*\/Catalog\b/.test(body));
+  const ref = catalog?.match(/\/Pages\s+(\d+)\s+(\d+)\s+R\b/);
+  const pages = ref ? objects.get(`${ref[1]} ${ref[2]}`) : null;
+  const count = pages && /\/Type\s*\/Pages\b/.test(pages) ? pages.match(/\/Count\s+(\d+)\b/) : null;
+  const n = count ? Number(count[1]) : 0;
+  if (!Number.isInteger(n) || n < 1) throw new Error('could not read the page count from the PDF page tree');
+  return n;
+}
