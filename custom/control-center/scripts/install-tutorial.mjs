@@ -6,14 +6,14 @@
 // The source folder is either
 //   - a folder that already has tutorial.json: it is validated and copied as-is, or
 //   - a recording folder: tutorial.json is built from chapters/toc.json ([{ number, id, title, start, duration }]),
-//     the .mp4, the .vtt or .srt, an optional poster.jpg and tutorial/script.md. An optional guide/guide.json (the Quick guide)
-//     is added too, with the gifs and posters it names sitting next to it in guide/.
+//     the .mp4 (and its light-theme twin <name>-light.mp4), the .vtt or .srt, an optional poster.jpg (and poster-light.jpg) and tutorial/script.md.
+//     An optional guide/guide.json (the guide) is added too, with the images, clips and posters it names sitting next to it in guide/.
 // Only tutorial.json and the files it names (and, for a guide, the files guide.json names) are copied; chapter clips, raw takes and the rest stay behind.
 import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from '../../../lib/is-main-module.mjs';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
-import { ID_RE, MAX_GUIDE_BYTES, extOf, guideFileNames, parseGuide, parseManifest } from '../server/domains/tutorial-manifest.mjs';
+import { ID_RE, MAX_GUIDE_BYTES, extOf, guideFileRefs, isGuideV2, parseGuide, parseManifest } from '../server/domains/tutorial-manifest.mjs';
 
 const USAGE = `Usage: node custom/control-center/scripts/install-tutorial.mjs <source-folder> [options]
 
@@ -23,6 +23,8 @@ Options:
   --title <text>        tutorial title (default: the id as words)
   --description <text>  tutorial description
   --video <file>        the .mp4 to use when the folder has several
+  --video-light <file>  the light-theme .mp4 (default: <video name>-light.mp4 when it exists)
+  --strict-dims         check the width and height a version 2 guide declares against the PNG, GIF and WebP headers
   --force               replace a tutorial that is already installed
   --dry-run             print what would be installed and write nothing`;
 
@@ -44,6 +46,7 @@ const isFile = (p) => {
 };
 const rootFiles = (dir, exts) => fs.readdirSync(dir).filter((n) => !n.startsWith('.') && exts.includes(extOf(n)) && isFile(path.join(dir, n))).sort();
 const stem = (name) => path.basename(name, path.extname(name));
+const lightOf = (name) => `${stem(name)}-light${path.extname(name)}`;
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 const words = (id) => {
   const t = id.replace(/[-_]+/g, ' ').trim();
@@ -84,13 +87,17 @@ function buildManifest(source, opts) {
   let video = opts.video;
   if (video === undefined) {
     const mp4s = rootFiles(source, ['.mp4']);
-    if (mp4s.length === 0) throw new Error('no .mp4 file in the source folder');
-    if (mp4s.length > 1) throw new Error(`more than one .mp4 file in the source folder (${mp4s.join(', ')}); choose one with --video`);
-    video = mp4s[0];
+    const lights = new Set([...mp4s.map(lightOf).filter((n) => mp4s.includes(n)), ...(opts.videoLight === undefined ? [] : [opts.videoLight])]);
+    const choices = mp4s.filter((n) => !lights.has(n));
+    if (choices.length === 0) throw new Error('no .mp4 file in the source folder');
+    if (choices.length > 1) throw new Error(`more than one .mp4 file in the source folder (${choices.join(', ')}); choose one with --video`);
+    video = choices[0];
   }
+  const videoLight = opts.videoLight ?? (isFile(path.join(source, lightOf(video))) ? lightOf(video) : undefined);
   const id = opts.id ?? slug(stem(video));
   if (!ID_RE.test(id)) throw new Error(`id "${id}" is not valid: use 1 to 64 letters, digits, - or _`);
   const poster = ['poster.jpg', 'poster.jpeg', 'poster.png'].find((n) => isFile(path.join(source, n)));
+  const posterLight = ['poster-light.jpg', 'poster-light.jpeg', 'poster-light.png'].find((n) => isFile(path.join(source, n)));
   const scriptFrom = ['tutorial/script.md', 'script.md'].find((n) => isFile(path.join(source, n)));
   const subtitles = pickSubtitles(source, video);
   const guide = isFile(path.join(source, GUIDE_DIR, 'guide.json'));
@@ -99,8 +106,10 @@ function buildManifest(source, opts) {
     title: opts.title ?? words(id),
     description: opts.description ?? '',
     video,
+    ...(videoLight ? { videoLight } : {}),
     ...(subtitles ? { subtitles } : {}),
     ...(poster ? { poster } : {}),
+    ...(posterLight ? { posterLight } : {}),
     ...(scriptFrom ? { transcript: 'script.md' } : {}),
     ...(guide ? { guide: 'guide.json' } : {}),
     chapters: readChapters(source),
@@ -108,8 +117,95 @@ function buildManifest(source, opts) {
   };
 }
 
+const u16le = (b, at) => b[at] | (b[at + 1] << 8);
+const u24le = (b, at) => u16le(b, at) | (b[at + 2] << 16);
+const u32le = (b, at) => (u24le(b, at) | (b[at + 3] << 24)) >>> 0;
+const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
+
+/**
+ * Width and height from the header of a PNG, GIF or WebP (lossy, lossless, extended and animated: the extended
+ * canvas size is the image size). `bytes` needs only the first 30 bytes. Throws with a reason that continues "guide image file "x" ...".
+ */
+export function imageSize(bytes, ext) {
+  switch (ext.toLowerCase()) {
+    case '.png':
+      if (bytes.length < 8 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) throw new Error('is not a PNG file');
+      if (bytes.length < 24) throw new Error('is too short to hold a PNG header');
+      if (bytes.toString('latin1', 12, 16) !== 'IHDR') throw new Error('is not a PNG file (it has no IHDR chunk first)');
+      return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+    case '.gif':
+      if (!['GIF87a', 'GIF89a'].includes(bytes.toString('latin1', 0, 6))) throw new Error('is not a GIF file');
+      if (bytes.length < 10) throw new Error('is too short to hold a GIF header');
+      return { width: u16le(bytes, 6), height: u16le(bytes, 8) };
+    case '.webp':
+      return webpSize(bytes);
+    default:
+      throw new Error(`cannot check the size of a ${ext.toLowerCase()} file (--strict-dims reads PNG, GIF and WebP headers)`);
+  }
+}
+
+function webpSize(bytes) {
+  if (bytes.length < 12 || bytes.toString('latin1', 0, 4) !== 'RIFF' || bytes.toString('latin1', 8, 12) !== 'WEBP') throw new Error('is not a WebP file');
+  if (bytes.length < 16) throw new Error('is too short to hold a WebP header');
+  const fourcc = bytes.toString('latin1', 12, 16);
+  const need = (n) => {
+    if (bytes.length < n) throw new Error('is too short to hold a WebP header');
+  };
+  switch (fourcc) {
+    case 'VP8 ':
+      need(30);
+      if (bytes[23] !== 0x9d || bytes[24] !== 0x01 || bytes[25] !== 0x2a) throw new Error('is not a valid WebP file (the VP8 start code is missing)');
+      return { width: u16le(bytes, 26) & 0x3fff, height: u16le(bytes, 28) & 0x3fff };
+    case 'VP8L': {
+      need(25);
+      if (bytes[20] !== 0x2f) throw new Error('is not a valid WebP file (the VP8L signature is missing)');
+      const bits = u32le(bytes, 21);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+    }
+    case 'VP8X':
+      need(30);
+      return { width: u24le(bytes, 24) + 1, height: u24le(bytes, 27) + 1 };
+    default:
+      throw new Error(`is not a valid WebP file (it starts with an unknown "${fourcc}" chunk)`);
+  }
+}
+
+const readHead = (file) => {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const head = Buffer.alloc(64);
+    return head.subarray(0, fs.readSync(fd, head, 0, head.length, 0));
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
+/** Every file of every media block must have the size the block declares (--strict-dims). Legacy guides declare no sizes. */
+function checkDimensions(guide, guideRoot) {
+  if (!isGuideV2(guide)) return;
+  for (const s of guide.sections) {
+    for (const u of s.subsections) {
+      for (const b of u.blocks) {
+        if (b.type !== 'media') continue;
+        const files = [[b.kind, b.file], [`light ${b.kind}`, b.fileLight], ...(b.kind === 'gif' ? [['poster', b.poster], ['light poster', b.posterLight]] : [])];
+        for (const [kind, name] of files) {
+          let size;
+          try {
+            size = imageSize(readHead(path.join(guideRoot, name)), extOf(name));
+          } catch (err) {
+            throw new Error(`guide ${kind} file "${name}" ${err.message}`, { cause: err });
+          }
+          if (size.width !== b.width || size.height !== b.height) {
+            throw new Error(`guide ${kind} file "${name}" is ${size.width}x${size.height} but guide.json declares ${b.width}x${b.height} (subsection "${u.id}")`);
+          }
+        }
+      }
+    }
+  }
+}
+
 /** guide.json and the files it names, from `guideRoot`: validated like the server does, before anything is copied. */
-function planGuide(guideRoot, name, chapterCount) {
+function planGuide(guideRoot, name, chapterCount, strictDims) {
   const guideFrom = path.join(guideRoot, name);
   if (!isFile(guideFrom)) throw new Error(`guide file "${name}" not found in the source folder`);
   if (fs.statSync(guideFrom).size > MAX_GUIDE_BYTES) throw new Error(`${name} is too large (over ${MAX_GUIDE_BYTES / 1024 / 1024} MB), so the Control Center would not show the guide`);
@@ -121,17 +217,16 @@ function planGuide(guideRoot, name, chapterCount) {
   }
   const checked = parseGuide(json, { chapterCount });
   if (!checked.ok) throw new Error(`${name} is invalid: ${checked.error}`);
-  const gifs = new Set(checked.guide.sections.map((s) => s.gif));
-  const files = guideFileNames(checked.guide).map((file) => {
-    const kind = gifs.has(file) ? 'guide gif' : 'guide poster';
-    if (!isFile(path.join(guideRoot, file))) throw new Error(`${kind} file "${file}" not found in the source folder`);
-    return { kind, from: path.join(guideRoot, file), to: file };
+  const files = guideFileRefs(checked.guide).map(({ name: file, kind }) => {
+    if (!isFile(path.join(guideRoot, file))) throw new Error(`guide ${kind} file "${file}" not found in the source folder`);
+    return { kind: `guide ${kind}`, from: path.join(guideRoot, file), to: file };
   });
+  if (strictDims) checkDimensions(checked.guide, guideRoot);
   return [{ kind: 'guide', from: guideFrom, to: name }, ...files];
 }
 
 /**
- * @param {{ source: string, dataRoot: string, id?: string, title?: string, description?: string, video?: string, force?: boolean, dryRun?: boolean }} opts
+ * @param {{ source: string, dataRoot: string, id?: string, title?: string, description?: string, video?: string, videoLight?: string, strictDims?: boolean, force?: boolean, dryRun?: boolean }} opts
  */
 export function installTutorial(opts) {
   const source = path.resolve(opts.source);
@@ -152,8 +247,8 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
     manifestText = `${JSON.stringify(m, null, 2)}\n`;
   } else {
-    if (opts.id !== undefined || opts.title !== undefined || opts.description !== undefined || opts.video !== undefined) {
-      throw new Error('the source folder already has tutorial.json, which is copied as-is: edit it instead of passing --id, --title, --description or --video');
+    if (opts.id !== undefined || opts.title !== undefined || opts.description !== undefined || opts.video !== undefined || opts.videoLight !== undefined) {
+      throw new Error('the source folder already has tutorial.json, which is copied as-is: edit it instead of passing --id, --title, --description, --video or --video-light');
     }
     manifestText = fs.readFileSync(manifestPath, 'utf8');
     let json;
@@ -167,13 +262,13 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const named = [['video', manifest.video], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['transcript', manifest.transcript]];
+  const named = [['video', manifest.video], ['light video', manifest.videoLight], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['light poster', manifest.posterLight], ['transcript', manifest.transcript]];
   const copies = named
     .filter(([, name]) => name !== undefined)
     .map(([kind, name]) => ({ kind, from: path.join(source, built && kind === 'transcript' && scriptFrom ? scriptFrom : name), to: name }));
   for (const c of copies) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
   if (manifest.guide !== undefined) {
-    for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length)) {
+    for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
       const same = copies.find((o) => o.to === c.to);
       if (same && same.from !== c.from) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
       if (!same) copies.push(c);
@@ -193,7 +288,7 @@ export function installTutorial(opts) {
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging);
   try {
-    for (const c of copies) fs.copyFileSync(c.from, path.join(staging, c.to));
+    for (const c of copies) fs.copyFileSync(c.from, path.join(staging, c.to), fs.constants.COPYFILE_FICLONE);
     fs.writeFileSync(path.join(staging, 'tutorial.json'), manifestText);
     if (previous) fs.renameSync(dest, previous);
     try {
@@ -210,7 +305,7 @@ export function installTutorial(opts) {
   return result;
 }
 
-const VALUE_FLAGS = { '--data-root': 'dataRoot', '--id': 'id', '--title': 'title', '--description': 'description', '--video': 'video' };
+const VALUE_FLAGS = { '--data-root': 'dataRoot', '--id': 'id', '--title': 'title', '--description': 'description', '--video': 'video', '--video-light': 'videoLight' };
 
 function parseArgs(argv) {
   const opts = {};
@@ -219,6 +314,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--force') opts.force = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--strict-dims') opts.strictDims = true;
     else if (a in VALUE_FLAGS) {
       const value = argv[++i];
       if (value === undefined) return { error: `${a} needs a value` };

@@ -35,6 +35,15 @@ beforeAll(async () => {
   );
   fs.symlinkSync(path.join(outside, 'secret.mp4'), path.join(demo, 'escape.mp4'));
   fs.symlinkSync(outside, path.join(demo, 'escape-dir'));
+  writeTutorial(
+    'themed',
+    { id: 'themed', title: 'Themed', video: 't.mp4', videoLight: 't-light.mp4', poster: 'poster.jpg', posterLight: 'poster-light.jpg' },
+    { 't.mp4': VIDEO.subarray(0, 100), 't-light.mp4': VIDEO.subarray(0, 250), 'poster.jpg': Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'poster-light.jpg': Buffer.from([0xff, 0xd8, 0xff, 0xd9]) },
+  );
+  writeTutorial('missing-light', { id: 'missing-light', title: 'Missing light', video: 'm.mp4', videoLight: 'm-light.mp4', posterLight: 'nope-light.jpg' }, { 'm.mp4': 'x' });
+  writeTutorial('same-light', { id: 'same-light', title: 'Same light', video: 's.mp4', videoLight: 's.mp4' }, { 's.mp4': 'x' });
+  writeTutorial('escape-light', { id: 'escape-light', title: 'Escaping light', video: 'e.mp4', videoLight: 'escape.mp4' }, { 'e.mp4': 'x' });
+  fs.symlinkSync(path.join(outside, 'secret.mp4'), path.join(tutorialsDir(), 'escape-light', 'escape.mp4'));
   writeTutorial('vtt-only', { id: 'vtt-only', title: 'VTT tutorial', video: 'v.mp4', subtitles: 'v.vtt' }, { 'v.mp4': VIDEO.subarray(0, 10), 'v.vtt': VTT });
   writeTutorial('bad-json', '{ not json', {});
   writeTutorial('bad-schema', { id: 'bad-schema', video: 'a.mp4' }, { 'a.mp4': 'x' });
@@ -60,7 +69,7 @@ describe('GET /api/tutorials', () => {
     const body = (await get('/api/tutorials')).json();
     expect(body.directory).toBe(tutorialsDir());
     const ids = body.tutorials.map((x: { id: string }) => x.id);
-    expect(ids).toEqual(['demo', 'missing-extras', 'vtt-only']);
+    expect(ids).toEqual(['demo', 'escape-light', 'missing-extras', 'missing-light', 'themed', 'vtt-only']);
     const demo = body.tutorials[0];
     expect(demo).toMatchObject({
       id: 'demo',
@@ -95,6 +104,55 @@ describe('GET /api/tutorials', () => {
     expect(entry.subtitles).toBeNull();
     expect(entry.warnings).toHaveLength(3);
     expect(entry.warnings.join(' ')).toMatch(/poster.*nope\.jpg/);
+  });
+
+  it('lists videoLight and posterLight with media urls and the light video size', async () => {
+    const themed = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'themed');
+    expect(themed).toMatchObject({
+      video: { file: 't.mp4', url: '/api/tutorials/themed/media/t.mp4', bytes: 100 },
+      videoLight: { file: 't-light.mp4', url: '/api/tutorials/themed/media/t-light.mp4', bytes: 250 },
+      poster: { url: '/api/tutorials/themed/media/poster.jpg' },
+      posterLight: { file: 'poster-light.jpg', url: '/api/tutorials/themed/media/poster-light.jpg' },
+      warnings: [],
+    });
+  });
+
+  it('lists videoLight and posterLight as null for a tutorial that has no light version', async () => {
+    const demo = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'demo');
+    expect(demo.videoLight).toBeNull();
+    expect(demo.posterLight).toBeNull();
+  });
+
+  it('drops a light video and poster that are missing, with a warning each, and keeps the dark video', async () => {
+    const entry = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'missing-light');
+    expect(entry.videoLight).toBeNull();
+    expect(entry.posterLight).toBeNull();
+    expect(entry.video.file).toBe('m.mp4');
+    expect(entry.warnings).toHaveLength(2);
+    expect(entry.warnings.join(' ')).toMatch(/light video.*m-light\.mp4.*not found.*ignored/);
+    expect(entry.warnings.join(' ')).toMatch(/light poster.*nope-light\.jpg.*not found.*ignored/);
+  });
+
+  it('drops a light video that is a symlink out of the folder and never serves it', async () => {
+    const entry = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'escape-light');
+    expect(entry.videoLight).toBeNull();
+    expect(entry.warnings.join(' ')).toMatch(/light video.*escape\.mp4.*outside the tutorial folder/);
+    const res = await media('escape-light', 'escape.mp4');
+    expect(res.statusCode).toBe(404);
+    expect(res.body).not.toContain(SECRET);
+  });
+
+  it('skips a tutorial whose videoLight is the same file as video, naming the reason', async () => {
+    const { warnings, tutorials } = (await get('/api/tutorials')).json() as { warnings: Array<{ folder: string; message: string }>; tutorials: Array<{ id: string }> };
+    expect(tutorials.map((x) => x.id)).not.toContain('same-light');
+    expect(warnings.find((w) => w.folder === 'same-light')?.message).toMatch(/videoLight.*different.*video/);
+  });
+
+  it('serves the light video with range support', async () => {
+    const res = await media('themed', 't-light.mp4', { range: 'bytes=0-9' });
+    expect(res.statusCode).toBe(206);
+    expect(res.headers['content-range']).toBe('bytes 0-9/250');
+    expect(res.headers['content-type']).toBe('video/mp4');
   });
 
   it('returns an empty list, with no warning, when the folder does not exist', async () => {

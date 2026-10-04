@@ -103,4 +103,4 @@ export interface CadenceRead {
 export type AppSettingsRead = AppSettings & { problem: string | null };
 export type UsageResponse = UsageRead & { budgets: AppSettings['usageBudgets'] };
 export type { LookupResult, SearchResult, SearchHit, H1bCheck } from '../server/domains/sponsorshipLookup.js';
-export type { GuideSectionView, Tutorial, TutorialGuide, TutorialsRead } from '../server/domains/tutorials.js';
+export type { GuideBlockView, GuideDocs, GuideDocsSectionView, GuideSectionView, GuideSubsectionView, Tutorial, TutorialGuide, TutorialsRead } from '../server/domains/tutorials.js';

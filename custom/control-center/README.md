@@ -96,7 +96,7 @@ npm --prefix custom/control-center run derive:modes
 npm --prefix custom/control-center run probe:claude   # two real haiku calls; records CLI semantics
 ```
 
-- The Tutorials e2e tests write their tutorial folders at setup (`tests/e2e/roots.ts`): the 2 second clip and the poster come from `ffmpeg` when it is installed, otherwise from the committed copies in `tests/fixtures/media/` (16 KB and 8 KB, same content). `CC_H1B_CHECK_SCRIPT` (honored only under `NODE_ENV=test`) points the Sponsorship lookup at `tests/fakes/h1b-check.mjs` instead of the real DOL index. `CC_E2E_PORT_BASE` (default 4399) moves the three e2e servers (base, base-1, base-2) when something else already listens on those ports.
+- The Tutorials e2e tests write their tutorial folders at setup (`tests/e2e/roots.ts`): the 2 second clips (dark and light, `demo-tour.mp4` and `demo-tour-light.mp4`) and the posters come from `ffmpeg` when it is installed, otherwise from the committed copies in `tests/fixtures/media/` (16 KB and 22 KB for the clips, about 7 KB for each poster, same content). A `docs-tour` tutorial with a version 2 guide is written too; its dark and light PNG and GIF pairs are generated in code, so no image binaries are committed. `CC_H1B_CHECK_SCRIPT` (honored only under `NODE_ENV=test`) points the Sponsorship lookup at `tests/fakes/h1b-check.mjs` instead of the real DOL index. `CC_E2E_PORT_BASE` (default 4399) moves the three e2e servers (base, base-1, base-2) when something else already listens on those ports.
 - `tests/fixtures/root/` is a synthetic career-ops data root (no real names or companies). Every test copies it to a temp dir; nothing touches the real data root, `~/Library/LaunchAgents` or `~/.claude/projects`.
 - `tests/fakes/claude.mjs` replays stream-json scenario files, honors `--session-id` / `--resume`, performs scripted writes and Bash steps and runs the real guard hook from `--settings`. Scenarios live in `tests/fixtures/scenarios/<mode>.json`.
 - `tests/unit/inventory.test.ts` is the table-driven inventory: every capability id from spec section 1 names its API route, action, mode, component or e2e step, and the test proves it exists and is exercised.
@@ -128,8 +128,10 @@ Tutorials are user data: each is a folder `data/control-center/tutorials/<id>/` 
   "title": "career-ops Control Center tour",
   "description": "A narrated walk through every page.",
   "video": "tour.mp4",
+  "videoLight": "tour-light.mp4",
   "subtitles": "tour.vtt",
   "poster": "poster.jpg",
+  "posterLight": "poster-light.jpg",
   "transcript": "script.md",
   "guide": "guide.json",
   "chapters": [{ "title": "Intro", "start": 0 }, { "title": "Launching", "start": 130.2 }]
@@ -138,27 +140,59 @@ Tutorials are user data: each is a folder `data/control-center/tutorials/<id>/` 
 
 `video` is required (.mp4); `subtitles` is `.vtt` (served as-is) or `.srt` (converted to WebVTT on the fly for the `<track>`), `poster` is `.jpg`, `.jpeg` or `.png` (the video poster and the list thumbnail), `transcript` is `.md`, and `chapters` are `{ title, start }` with `start` in seconds. Every file is a plain name inside the folder. `GET /api/tutorials` validates each manifest with zod and lists the valid ones; an invalid folder is skipped with a visible warning on the page (bad JSON, missing video, path in a file name, id different from the folder). A missing optional file is dropped with a warning on that tutorial.
 
-`guide` (optional, `.json`) adds a **Quick guide** tab next to **Video** for fast review of every feature. `guide.json`:
+**Light and dark recordings.** `videoLight` (.mp4) is the same recording rendered for the light theme and `posterLight` (`.jpg`, `.jpeg` or `.png`) its poster; both are optional. A `videoLight` that is the same file as `video` (compared without case) is refused, so the tutorial is skipped with that reason. A light file that is missing, or that resolves outside the folder, is dropped with a warning (`light video file "x" not found, so it is ignored`) and the page falls back to the dark one. Subtitles, transcript and chapters are shared by both videos, so the light recording must keep the dark one's timeline (same chapter starts and cue times, same frame alignment); the page does not retime anything. `GET /api/tutorials` lists them as `videoLight` (`{ file, url, bytes }`) and `posterLight` (`{ file, url }`), each `null` when there is none.
+
+`guide` (optional, `.json`) names a guide. There are two formats, told apart by `version`.
+
+**Version 2: documentation guide** (`"version": 2`). Sections hold subsections, subsections hold blocks, and every image or clip has a dark file and a light file of the same size so the page can follow the theme:
 
 ```json
 {
+  "version": 2,
   "sections": [
     {
-      "id": "today",
-      "title": "Today",
-      "summary": "One or two sentences.",
-      "route": "/today",
-      "gif": "today.gif",
-      "poster": "today.jpg",
-      "steps": ["Open Today.", "Pick a row."],
-      "tips": ["Optional hints."],
-      "chapter": 2
+      "id": "tracking",
+      "title": "Tracking",
+      "summary": "Keep the tracker current.",
+      "subsections": [
+        {
+          "id": "change-status",
+          "title": "Change a status",
+          "summary": "Move an application to its next state.",
+          "route": "/tracker",
+          "chapter": 1,
+          "blocks": [
+            { "type": "text", "text": "Pick a row, then choose the new status." },
+            { "type": "steps", "items": ["Open Tracker.", "Pick a row."] },
+            { "type": "tips", "items": ["Press j and k to move."] },
+            { "type": "media", "kind": "image", "file": "tracker.dark.webp", "fileLight": "tracker.light.webp", "alt": "The tracker table.", "caption": "Optional.", "width": 1440, "height": 900 },
+            { "type": "media", "kind": "gif", "file": "status.dark.webp", "fileLight": "status.light.webp", "poster": "status.dark.png", "posterLight": "status.light.png", "alt": "A status change.", "width": 960, "height": 540 }
+          ]
+        }
+      ]
     }
   ]
 }
 ```
 
-`sections` has 1 to 60 entries. Per section: `id` (unique, 1 to 64 letters, digits, `-` or `_`), `title` (up to 120 characters), `summary` (up to 600), `gif` (plain file name ending `.gif` or `.webp`), `steps` (1 to 12 strings, up to 500 characters each) are required; `route` (an app path such as `/tracker?status=Applied`: one leading `/`, no scheme, `//`, backslash, spaces or `..`), `poster` (`.jpg`, `.jpeg` or `.png`), `tips` (up to 6 strings) and `chapter` (0-based index into the tutorial's chapters, which must exist) are optional. The guide is all or nothing: if `guide.json` is missing, too large (over 1 MB), not valid JSON, fails validation or names a file that is missing or outside the folder, the tutorial still lists, the Quick guide tab is hidden and a warning naming the problem shows on the tutorial. `GET /api/tutorials` returns the parsed guide as `guide` (`null` when absent or invalid) with `gif` and `poster` as media urls.
+Every object is strict: an unknown key is an error, not a dropped field. Limits: 1 to 12 sections; 1 to 8 subsections per section and at most 80 in total; 1 to 10 blocks per subsection; ids (section ids unique, subsection ids unique within their section) are 1 to 64 letters, digits, `-` or `_`; titles up to 120 characters; section `summary` up to 300; subsection `summary` and `text` up to 600; `steps` 1 to 8 items and `tips` 1 to 4 items, up to 300 characters each; `alt` (required) and `caption` (optional) up to 200; `width` and `height` are the files' pixel size, whole numbers from 1 to 4096. `route` (optional) is an app path such as `/tracker?status=Applied` (one leading `/`, no scheme, `//`, backslash, spaces or `..`, also not when percent-encoded) and `chapter` (optional) is a 0-based index into the tutorial's chapters, which must exist. A block is `text`, `steps`, `tips` or `media`. `media` of kind `image` takes `.png`, `.jpg`, `.jpeg` or `.webp` files; kind `gif` (a clip) takes `.gif` or `.webp` (animated WebP is fine) plus a required `poster` and `posterLight` (`.png`, `.jpg` or `.jpeg`) shown until the clip plays. `fileLight` is required (use the same file name only if the image is genuinely theme neutral).
+
+**Version 1: legacy quick guide** (no `version`). Still read, read-only, and adapted by the server into the version 2 view; new guides should use version 2.
+
+```json
+{
+  "sections": [
+    { "id": "today", "title": "Today", "summary": "One or two sentences.", "route": "/today", "gif": "today.gif", "poster": "today.jpg", "steps": ["Open Today.", "Pick a row."], "tips": ["Optional hints."], "chapter": 2 }
+  ]
+}
+```
+
+`sections` has 1 to 60 entries. Per section: `id` (unique), `title` (up to 120 characters), `summary` (up to 600), `gif` (`.gif` or `.webp`), `steps` (1 to 12 strings, up to 500 characters each) are required; `route`, `poster` (`.jpg`, `.jpeg` or `.png`), `tips` (up to 6 strings) and `chapter` are optional.
+
+Both formats are all or nothing: if `guide.json` is missing, too large (over 1 MB, `MAX_GUIDE_BYTES`), not valid JSON, fails validation (a `version` other than 2 included) or names a file that is missing or outside the folder (for version 2 that includes every light file and poster), the tutorial still lists, the guide is hidden and a warning naming the problem shows on the tutorial. `GET /api/tutorials` returns two views of a valid guide:
+
+- `guideDocs` (`null` when absent or invalid): `{ version: 1 | 2, legacy: boolean, sections }`, each section `{ id, title, summary, subsections }`, each subsection `{ id, title, summary, route, chapter, blocks }` (`route` and `chapter` are `null` when absent), each block `{ type: 'text', text }`, `{ type: 'steps', items }`, `{ type: 'tips', items }` or `{ type: 'media', kind, alt, caption, width, height, url, urlLight, posterUrl, posterLightUrl }` with media urls (`null` where a file does not exist). A version 1 guide is adapted: each section becomes one section with one subsection (its summary as the first text block, then the clip, steps and tips), `legacy` is `true`, `width` and `height` are `null`, there is no light variant (`urlLight` is `null`, so the dark file shows) and the subsection `summary` is empty.
+- `guide` (`null` when absent, invalid, or a version 2 guide): the legacy shape, `{ sections: [{ id, title, summary, route, gif, poster, steps, tips, chapter }] }` with `gif` and `poster` as `{ file, url }`. It exists only for the current Quick guide tab and will go away with it.
 
 In the Quick guide (`/tutorials?t=<id>&view=guide&section=<section id>`, so every state is a shareable link and back and forward work): a section list with a search box (title, summary, steps), the animation (click to pause on the poster, or on the current frame when there is no poster; with reduced motion it starts paused behind a play button), numbered steps, tips, **Open this page** (goes to `route` inside the app), **Watch this part** (switches to Video at the start of `chapter`), **Mark reviewed** with an "N of M reviewed" bar and Reset (kept in this browser's localStorage; the guide works when storage is blocked), and Previous and Next. `j` and `k` or Up and Down move between sections (not while typing in a field). On a phone the list becomes a select above the content.
 
@@ -169,10 +203,10 @@ Player keys (not while typing in a field): Space or `k` play/pause, `j` back 10 
 To install a recording folder (or any folder that already has a `tutorial.json`):
 
 ```bash
-node custom/control-center/scripts/install-tutorial.mjs <source-folder> [--data-root <dir>] [--id <id>] [--title <text>] [--description <text>] [--video <file>] [--force] [--dry-run]
+node custom/control-center/scripts/install-tutorial.mjs <source-folder> [--data-root <dir>] [--id <id>] [--title <text>] [--description <text>] [--video <file>] [--video-light <file>] [--strict-dims] [--force] [--dry-run]
 ```
 
-With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[{ number, id, title, start, duration }]`), the single `.mp4` at the root, a `.vtt` (preferred) or `.srt`, an optional `poster.jpg`, `tutorial/script.md` (installed as `script.md`) and an optional `guide/guide.json` with the gifs and posters it names next to it in `guide/` (the manifest then gets `"guide": "guide.json"`). With a `tutorial.json` it validates it and copies it unchanged (so `--id`, `--title`, `--description` and `--video` are refused). A guide is validated like the server does (schema, every named file present, `chapter` within the chapters) before anything is copied, and two different source files that would land on the same name are refused. Only `tutorial.json`, the files it names and, for a guide, the files `guide.json` names are copied, into a staging folder that replaces the destination in one rename; an installed tutorial is replaced only with `--force`, and `--dry-run` writes nothing. The data root defaults to `CC_DATA_ROOT`, then the career-ops data root. Example for the recording folder: `node custom/control-center/scripts/install-tutorial.mjs ~/Desktop/Divy/career-ops-tutorial --id control-center-tour --title "career-ops Control Center tour" --description "A narrated walk through every page."`.
+With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[{ number, id, title, start, duration }]`), the single `.mp4` at the root, a `.vtt` (preferred) or `.srt`, an optional `poster.jpg`, `tutorial/script.md` (installed as `script.md`) and an optional `guide/guide.json` with the media it names next to it in `guide/` (the manifest then gets `"guide": "guide.json"`). A light recording is paired by name: `<name>.mp4` with `<name>-light.mp4` becomes `video` and `videoLight` (the light file is not counted as a second video, an unrelated second `.mp4` is still refused and needs `--video`), and `poster-light.jpg`, `.jpeg` or `.png` becomes `posterLight`. `--video-light <file>` names the light video explicitly (any `.mp4` name in the folder, taking precedence over a paired one). With a `tutorial.json` it validates it and copies it unchanged, including the `videoLight` and `posterLight` files it names (so `--id`, `--title`, `--description`, `--video` and `--video-light` are refused). A guide is validated like the server does (schema, every named file present, `chapter` within the chapters) before anything is copied, and two different source files that would land on the same name are refused. `--strict-dims` also reads the header of every media file of a version 2 guide (dark, light and posters; PNG, GIF, and WebP including lossless, extended and animated, where the canvas size counts) and refuses one whose size is not the `width` x `height` its block declares; a `.jpg` cannot be checked and is refused under the flag rather than skipped. A legacy guide declares no sizes, so the flag does nothing for it. Files are copied with copy-on-write where the filesystem supports it. Only `tutorial.json`, the files it names and, for a guide, the files `guide.json` names are copied, into a staging folder that replaces the destination in one rename; an installed tutorial is replaced only with `--force`, and `--dry-run` writes nothing. The data root defaults to `CC_DATA_ROOT`, then the career-ops data root. Example for the recording folder: `node custom/control-center/scripts/install-tutorial.mjs ~/Desktop/Divy/career-ops-tutorial --id control-center-tour --title "career-ops Control Center tour" --description "A narrated walk through every page."`.
 
 ## 12. Known limitations
 
