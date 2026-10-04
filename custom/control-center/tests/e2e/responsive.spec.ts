@@ -15,6 +15,7 @@ const TABS: Record<string, string[]> = {
 const EXTRA = [
   ...Object.entries(TABS).flatMap(([route, tabs]) => tabs.map((tab) => `${route}?tab=${tab}`)),
   '/tracker/1',
+  '/tutorials?t=demo-tour&view=guide',
   '/sponsorship?tab=lookup&q=JPMorgan%20Chase%20%26%20Co.',
   '/sponsorship?tab=lookup&q=Mega%20Holdings&mode=search',
 ];
