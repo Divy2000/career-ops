@@ -7,7 +7,8 @@ import { apiGetText } from '../../lib/api';
 import { useTutorials } from '../../lib/queries';
 import { useTheme } from '../../lib/theme';
 import { chapterIndexAt, filterTranscript, formatTimestamp, keyAction, type KeyTarget } from '../../lib/tutorials';
-import { QuickGuide } from './QuickGuide';
+import { GuideDocs } from './guide/GuideDocs';
+import type { GuideLocation, GuideSearchParams } from '../../lib/guide';
 import { useThemedVideo } from './useThemedVideo';
 import type { Tutorial, TutorialsRead } from '@shared/api';
 
@@ -73,7 +74,7 @@ function EmptyState({ directory }: { directory: string }) {
           <code className="mono">chapters</code> are <code className="mono">{'{ title, start }'}</code> with start in seconds.
         </li>
         <li>
-          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab, one section per feature with a .gif or .webp, steps and a link into the app.
+          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab: a documentation-style guide of sections and subsections with text, steps, tips, and images or clips in a dark and a light version.
         </li>
         <li>
           To install one from a recording folder: <code className="mono">node custom/control-center/scripts/install-tutorial.mjs &lt;folder&gt;</code>
@@ -322,16 +323,17 @@ const VIEWS = [
 ] as const;
 
 function Loaded({ data }: { data: TutorialsRead }) {
-  const { t, view, section } = route.useSearch();
+  const { t, view, section, sub } = route.useSearch();
   const navigate = useNavigate({ from: '/tutorials' });
   // The chapter time "Watch this part" asked for, tied to the tutorial it was asked on.
   const [seek, setSeek] = useState<{ id: string; at: number } | null>(null);
   const selected = data.tutorials.find((x) => x.id === t) ?? data.tutorials[0];
-  const guide = selected?.guide ?? null;
+  const guide = selected?.guideDocs ?? null;
   const startAt = seek !== null && seek.id === selected?.id ? seek.at : null;
   const showGuide = guide !== null && view === 'guide';
   // The URL carries the tutorial, the view and the section, so every state of the page is a shareable link.
-  const go = (to: { view?: 'guide'; section?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
+  const go = (to: { view?: 'guide'; section?: string; sub?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
+  const searchFor = (loc: GuideLocation): GuideSearchParams => ({ ...(t ? { t } : {}), view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) });
   const setView = (next: 'video' | 'guide') => {
     setSeek(null);
     go(next === 'guide' ? { view: 'guide' } : {});
@@ -374,13 +376,15 @@ function Loaded({ data }: { data: TutorialsRead }) {
           ))}
           {selected && guide && <Tabs label="Tutorial view" tabs={[...VIEWS]} value={showGuide ? 'guide' : 'video'} onChange={setView} />}
           {selected && guide && showGuide && (
-            <QuickGuide
+            <GuideDocs
               key={selected.id}
               tutorialId={selected.id}
-              guide={guide}
+              docs={guide}
               chapters={selected.chapters}
-              sectionId={section}
-              onSelect={(id, replace) => go({ view: 'guide', section: id }, replace)}
+              section={section}
+              sub={sub}
+              searchFor={searchFor}
+              onNavigate={(loc, replace) => go({ view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) }, replace)}
               onWatch={(start) => {
                 setSeek({ id: selected.id, at: start });
                 go({});

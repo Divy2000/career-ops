@@ -1,0 +1,851 @@
+/*
+ * The Quick guide, laid out as documentation: a sticky two-level contents on the left, one section at a time on the right,
+ * with its subsections stacked under it. Everything reads the design tokens, so both themes come from tokens.css.
+ * Motion follows motion.css: only transform, opacity and colors move, and the duration tokens go to zero under reduced motion.
+ */
+@keyframes guide-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes guide-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.guide {
+  display: grid;
+  grid-template-columns: 288px minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+/* ---- Sidebar ---- */
+.guide__side {
+  position: sticky;
+  top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: calc(100vh - 48px - var(--space-6) - var(--space-2));
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--inner-highlight), var(--shadow-1);
+}
+.guide__keys {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-12);
+  line-height: 1.8;
+}
+.guide__keys kbd,
+.guide-search__hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.guide-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.guide-search input[type='search'] {
+  width: 100%;
+  min-width: 0;
+  padding: 0 38px 0 34px;
+}
+.guide-search__icon {
+  position: absolute;
+  left: 11px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.guide-search__hint {
+  position: absolute;
+  right: 9px;
+  pointer-events: none;
+  transition: opacity var(--dur-2) var(--ease-out);
+}
+.guide-search input:focus ~ .guide-search__hint,
+.guide-search input:not(:placeholder-shown) ~ .guide-search__hint {
+  opacity: 0;
+}
+
+.guide-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.guide-progress__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.guide-progress__count {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-13);
+}
+.guide-progress__count strong {
+  color: var(--text);
+  font-weight: 600;
+}
+button.guide-progress__reset {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-12);
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+button.guide-progress__reset:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.guide-progress__track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--chart-track);
+}
+.guide-progress__fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand-gradient);
+  transform-origin: left center;
+  transition: transform var(--dur-4) var(--ease-out);
+}
+
+/* ---- Contents ---- */
+.guide-toc {
+  min-height: 0;
+  margin: 0 calc(var(--space-1) * -1);
+  padding: 0 var(--space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.guide-toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.guide-toc__section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-weight: 500;
+  text-decoration: none;
+}
+.guide-toc__section:hover,
+.guide-toc__sub:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  text-decoration: none;
+}
+.guide-toc__item--active > .guide-toc__section {
+  color: var(--text);
+  font-weight: 600;
+}
+.guide-toc__section[data-toc-active='true'] {
+  background: var(--accent-soft);
+  color: var(--nav-active-fg);
+}
+.guide-toc__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.guide-toc__subs {
+  position: relative;
+  margin: 2px 0 var(--space-2) 19px;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border);
+  animation: guide-fade var(--dur-3) var(--ease-out);
+}
+/* Rows are one fixed height, so the marker can slide to a row with a transform alone. */
+.guide-toc__marker {
+  position: absolute;
+  left: -1px;
+  top: 0;
+  width: 2px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--brand-gradient);
+  transform: translateY(calc(var(--at, 0) * 32px));
+  transition:
+    transform var(--dur-3) var(--ease-out),
+    opacity var(--dur-2) var(--ease-out);
+}
+.guide-toc__marker[data-visible='false'] {
+  opacity: 0;
+}
+.guide-toc__sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-13);
+  text-decoration: none;
+}
+.guide-toc__sub-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.guide-toc__sub[aria-current='true'] {
+  color: var(--nav-active-fg);
+  font-weight: 500;
+}
+.guide-toc__sub-check {
+  flex: none;
+  color: var(--success);
+}
+
+.guide-ring {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+.guide-ring svg {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+.guide-ring__track,
+.guide-ring__fill {
+  fill: none;
+  stroke-width: 2.5;
+}
+.guide-ring__track {
+  stroke: var(--border-strong);
+}
+.guide-ring__fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition:
+    stroke-dashoffset var(--dur-4) var(--ease-out),
+    stroke var(--dur-2) var(--ease-out);
+}
+.guide-ring--done .guide-ring__track,
+.guide-ring--done .guide-ring__fill {
+  stroke: var(--success);
+}
+.guide-ring__check {
+  position: relative;
+  color: var(--success);
+  animation: guide-fade var(--dur-3) var(--ease-out);
+}
+
+/* The phone contents bar; hidden while the sidebar is there. */
+.guide-bar {
+  display: none;
+}
+
+/* ---- Document ---- */
+.guide-doc,
+.guide-results {
+  min-width: 0;
+  max-width: 900px;
+  padding: var(--space-8) clamp(var(--space-5), 5vw, 56px) clamp(var(--space-6), 4vw, 48px);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--inner-highlight), var(--shadow-1);
+  animation: guide-fade var(--dur-4) var(--ease-out) backwards;
+}
+.guide-eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--accent);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.guide-eyebrow__progress {
+  color: var(--text-muted);
+}
+.guide-doc__head h2,
+.guide-results__title {
+  margin: 0;
+  font-size: var(--fs-28);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.guide-doc__head h2::after {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 3px;
+  margin-top: var(--space-3);
+  border-radius: 3px;
+  background: var(--brand-gradient);
+}
+.guide-doc__lead {
+  max-width: 70ch;
+  margin: var(--space-4) 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-18);
+  line-height: 1.6;
+}
+
+.guide-sub {
+  margin-top: var(--space-8);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--border);
+}
+/* A subsection fades in and its content rises. The heading only fades: scrolling to it measures its position, and a transform in flight would put it off by the rise. */
+.guide-sub h3 {
+  animation: guide-fade var(--dur-4) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+.guide-sub > :not(h3),
+.guide-doc__head > * {
+  animation: guide-rise var(--dur-4) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+.guide-sub h3 {
+  margin: 0 0 var(--space-3);
+  /* Landing from the contents leaves the heading clear of the top of the scroll area. */
+  scroll-margin-top: var(--space-4);
+  font-size: var(--fs-22);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.guide-sub__summary {
+  max-width: 70ch;
+  margin: 0 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--fs-16);
+  line-height: 1.65;
+}
+.guide-sub__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.guide-text {
+  max-width: 70ch;
+  margin: 0;
+  font-size: var(--fs-16);
+  line-height: 1.7;
+}
+
+.guide-steps {
+  max-width: 70ch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.guide-steps li {
+  position: relative;
+  counter-increment: step;
+  padding: 2px 0 2px 42px;
+  line-height: 1.6;
+}
+.guide-steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.guide-steps li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 13.5px;
+  top: 32px;
+  bottom: calc(var(--space-3) * -1 + 4px);
+  width: 1px;
+  background: var(--border-strong);
+}
+
+.guide-tips {
+  max-width: 70ch;
+  padding: var(--space-3) var(--space-4);
+  background: var(--info-soft);
+  border: 1px solid color-mix(in srgb, var(--info) 26%, transparent);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-md);
+}
+.guide-tips__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--info);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.guide-tips ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  line-height: 1.6;
+}
+
+.guide-sub__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.guide-action {
+  gap: 6px;
+  white-space: nowrap;
+}
+.guide-action--primary,
+.guide-action--primary:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+.guide-action--primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+button.guide-action--mark {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+button.guide-action--on,
+button.guide-action--on:hover {
+  background: var(--success-soft);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* ---- Figures ---- */
+.doc-media {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+}
+/* The frame has its final size before the image arrives (aspect-ratio from the declared width and height), so nothing moves when it loads. */
+.doc-media__frame {
+  position: relative;
+  width: 100%;
+  max-width: var(--w, 100%);
+  aspect-ratio: var(--ar, 16 / 9);
+  overflow: hidden;
+  background: var(--media-stage);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--inner-highlight), var(--shadow-2);
+}
+.doc-media__frame[data-ready='false']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, var(--skeleton-shine) 50%, transparent 100%) 0 0 / 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+button.doc-media__hit,
+button.doc-media__hit:hover,
+button.doc-media__hit:active {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  transform: none;
+  cursor: pointer;
+}
+button.doc-media__hit--zoom {
+  cursor: zoom-in;
+}
+.doc-media__img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.doc-media__img--enter {
+  animation: guide-fade var(--dur-3) var(--ease-out);
+}
+.doc-media__img--capturing {
+  visibility: hidden;
+}
+.doc-media__capture {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.doc-media__expand {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--radius-md);
+  background: var(--osd-bg);
+  border: 1px solid var(--border-strong);
+  color: var(--osd-fg);
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition:
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+button.doc-media__expand {
+  min-width: 0;
+  min-height: 0;
+  pointer-events: auto;
+  background: var(--osd-bg);
+}
+.doc-media__frame:hover .doc-media__expand,
+.doc-media__frame:focus-within .doc-media__expand {
+  opacity: 1;
+  transform: none;
+}
+@media (hover: none) {
+  .doc-media__expand {
+    opacity: 1;
+    transform: none;
+  }
+}
+.doc-media__state {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--osd-bg);
+  border: 1px solid var(--border-strong);
+  color: var(--osd-fg);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+  transition:
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+.doc-media__frame[data-playing='false'] .doc-media__state {
+  left: 50%;
+  top: 50%;
+  width: 60px;
+  height: 60px;
+  margin: -30px 0 0 -30px;
+}
+.doc-media__frame[data-playing='false'] .doc-media__state svg {
+  margin-left: 3px;
+}
+.doc-media__frame[data-playing='false'] .doc-media__hit:hover .doc-media__state {
+  transform: scale(1.08);
+  border-color: var(--accent);
+}
+.doc-media__frame[data-playing='true'] .doc-media__state {
+  left: var(--space-2);
+  bottom: var(--space-2);
+  width: 30px;
+  height: 30px;
+  opacity: 0;
+}
+.doc-media__frame[data-playing='true']:hover .doc-media__state,
+.doc-media__frame[data-playing='true'] .doc-media__hit:focus-visible .doc-media__state {
+  opacity: 1;
+}
+.doc-media__caption {
+  max-width: 70ch;
+  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text-muted);
+  font-size: var(--fs-13);
+  line-height: 1.55;
+}
+
+/* ---- Lightbox (a Radix dialog, so it shares the .dialog overlay, focus handling and enter animation) ---- */
+.dialog.guide-lightbox {
+  width: min(1280px, calc(100vw - 32px));
+  align-items: stretch;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+.guide-lightbox__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 150px);
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: var(--media-stage);
+}
+button.guide-lightbox__close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--osd-bg);
+  border-color: var(--border-strong);
+  color: var(--osd-fg);
+  box-shadow: var(--shadow-popover);
+}
+.guide-lightbox__caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-13);
+  text-align: center;
+}
+
+/* ---- Search results ---- */
+.guide-results__term {
+  color: var(--accent);
+}
+.guide-results__count {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+}
+.guide-results__group h3 {
+  margin: var(--space-6) 0 var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--fs-12);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.guide-results__group ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.guide-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+}
+.guide-hit:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+  text-decoration: none;
+  transform: translateY(var(--lift));
+}
+.guide-hit__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.guide-hit__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.guide-hit__field {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-12);
+}
+.guide-hit__excerpt {
+  color: var(--text-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+mark.guide-mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  color: inherit;
+}
+
+/* ---- Previous and next section ---- */
+.guide-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+}
+.guide-pager__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+}
+.guide-pager__card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+  text-decoration: none;
+  transform: translateY(var(--lift));
+}
+.guide-pager__card--prev {
+  grid-column: 1;
+}
+.guide-pager__card--next {
+  grid-column: 2;
+  align-items: flex-end;
+  text-align: right;
+}
+.guide-pager__dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-12);
+}
+.guide-pager__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Phone and narrow windows ---- */
+@media (max-width: 900px) {
+  /* A flex column, not a grid: a sticky item may only move inside its grid area, but inside a flex container it moves along the whole column. */
+  .guide {
+    --guide-pad: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-4);
+  }
+  /* The select stays at the top while the page scrolls under it; the negative margins let its backdrop span the padding of the page. */
+  .guide-bar {
+    position: sticky;
+    /* Sticky offsets are measured from inside the padding of the scroll area, so this is what puts the bar flush with its top edge. */
+    top: calc(var(--guide-pad) * -1);
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: calc(var(--guide-pad) * -1) calc(var(--guide-pad) * -1) 0;
+    padding: var(--space-2) var(--guide-pad);
+    background: var(--chrome);
+    border-bottom: 1px solid var(--border);
+  }
+  .guide-bar__label {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--fs-12);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .guide-bar select {
+    flex: 1;
+    min-width: 0;
+  }
+  .guide__side {
+    position: static;
+    max-height: none;
+    padding: var(--space-3);
+  }
+  .guide-toc,
+  .guide__keys {
+    display: none;
+  }
+  .guide-doc,
+  .guide-results {
+    padding: var(--space-5) var(--space-4) var(--space-6);
+  }
+  .guide-sub {
+    margin-top: var(--space-6);
+    padding-top: var(--space-6);
+  }
+  .guide-sub h3 {
+    /* Clear of the sticky Contents bar. */
+    scroll-margin-top: 64px;
+  }
+  .guide-doc__head h2,
+  .guide-results__title {
+    font-size: var(--fs-22);
+  }
+  button.guide-action--mark {
+    margin-left: 0;
+  }
+  .guide-pager {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .guide-pager__card--prev,
+  .guide-pager__card--next {
+    grid-column: 1;
+    align-items: flex-start;
+    text-align: left;
+  }
+}
+
+/* The page padding is smaller on a phone (base.css), and the contents bar has to match it. */
+@media (max-width: 767px) {
+  .guide {
+    --guide-pad: var(--space-4);
+  }
+}

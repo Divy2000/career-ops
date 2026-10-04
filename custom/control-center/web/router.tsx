@@ -97,10 +97,11 @@ const tutorialsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/tutorials',
   component: TutorialsPage,
-  validateSearch: (s: Loose): { t?: string; view?: 'guide'; section?: string } => ({
+  validateSearch: (s: Loose): { t?: string; view?: 'guide'; section?: string; sub?: string } => ({
     ...(typeof s.t === 'string' && s.t ? { t: s.t.slice(0, 64) } : {}),
     ...(s.view === 'guide' ? { view: 'guide' as const } : {}),
     ...(typeof s.section === 'string' && s.section ? { section: s.section.slice(0, 64) } : {}),
+    ...(typeof s.sub === 'string' && s.sub ? { sub: s.sub.slice(0, 64) } : {}),
   }),
 });
 

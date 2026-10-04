@@ -159,8 +159,18 @@ const DEMO_GUIDE = {
   ],
 };
 
-/** A version 2 (documentation) guide: still images and a clip, each as a dark and light pair of the same size. */
-const DOCS_GUIDE = {
+/** Paragraphs long enough that a subsection is taller than the viewport, so the scroll-spy has something to track. */
+const filler = (topic: string, count: number) =>
+  Array.from({ length: count }, (_, i) => ({
+    type: 'text',
+    text: `Paragraph ${i + 1} about the ${topic}. The quiet routine keeps every step small and every screen predictable, so a first time reader can follow along without guessing what the next click will do or where the data went afterward.`,
+  }));
+
+/**
+ * A version 2 (documentation) guide: still images and a clip, each as a dark and light pair of the same size.
+ * Subsection ids repeat across sections on purpose (`safety`), and the later subsections are far enough down to be lazy.
+ */
+export const DOCS_GUIDE = {
   version: 2,
   sections: [
     {
@@ -175,14 +185,27 @@ const DOCS_GUIDE = {
           blocks: [
             { type: 'text', text: 'Run the launcher, then open the printed link.' },
             { type: 'steps', items: ['Open a terminal in the repo.', 'Run npm start.', 'Open the link it prints.'] },
-            { type: 'media', kind: 'image', file: 'launch.dark.png', fileLight: 'launch.light.png', alt: 'The Today page after signing in.', caption: 'Today, right after sign in.', width: 64, height: 36 },
+            { type: 'media', kind: 'image', file: 'launch.dark.png', fileLight: 'launch.light.png', alt: 'The Today page after signing in.', caption: 'Today, right after sign in.', width: 320, height: 180 },
+            ...filler('first launch', 6),
           ],
         },
         {
           id: 'safety',
           title: 'Safety model',
           summary: 'The app never submits an application for you.',
-          blocks: [{ type: 'text', text: 'Everything that writes asks first.' }, { type: 'tips', items: ['Read the confirmation dialog before you accept.'] }],
+          blocks: [{ type: 'text', text: 'Everything that writes asks first.' }, { type: 'tips', items: ['Read the confirmation dialog before you accept.'] }, ...filler('safety model', 8)],
+        },
+        {
+          id: 'navigate',
+          title: 'Find your way around',
+          summary: 'The sidebar groups every page.',
+          blocks: [...filler('sidebar', 4), { type: 'media', kind: 'image', file: 'navigate.dark.png', fileLight: 'navigate.light.png', alt: 'The sidebar with its groups.', caption: 'The sidebar.', width: 320, height: 180 }],
+        },
+        {
+          id: 'appearance',
+          title: 'Appearance',
+          summary: 'Pick light, dark or follow the system.',
+          blocks: [{ type: 'text', text: 'The theme switcher sits in the top bar.' }, ...filler('theme', 6)],
         },
       ],
     },
@@ -199,10 +222,29 @@ const DOCS_GUIDE = {
           chapter: 1,
           blocks: [
             { type: 'text', text: 'Pick a row, then choose the new status.' },
-            { type: 'media', kind: 'gif', file: 'status.dark.gif', fileLight: 'status.light.gif', poster: 'status.dark.png', posterLight: 'status.light.png', alt: 'A status being changed.', width: 32, height: 18 },
+            { type: 'media', kind: 'gif', file: 'status.dark.gif', fileLight: 'status.light.gif', poster: 'status.dark.png', posterLight: 'status.light.png', alt: 'A status being changed.', caption: 'Changing a status.', width: 320, height: 180 },
+            ...filler('status', 3),
           ],
         },
+        {
+          id: 'follow-ups',
+          title: 'Follow-ups and replies',
+          summary: 'Who to nudge next, and when.',
+          blocks: [{ type: 'text', text: 'Cadence comes from your profile.' }, { type: 'steps', items: ['Open Follow-ups.', 'Log a message.'] }, ...filler('cadence', 3)],
+        },
+        {
+          id: 'safety',
+          title: 'Safety of the data',
+          summary: 'Nothing leaves the machine.',
+          blocks: [{ type: 'text', text: 'Files stay in your data root.' }],
+        },
       ],
+    },
+    {
+      id: 'automation',
+      title: 'Automation',
+      summary: 'Let the machine do the routine work.',
+      subsections: [{ id: 'sessions', title: 'Sessions', summary: 'Run a mode in the background.', blocks: [{ type: 'text', text: 'A session streams its output as it runs.' }] }],
     },
   ],
 };
@@ -272,12 +314,12 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
   fs.writeFileSync(path.join(docs, 'guide.json'), JSON.stringify(DOCS_GUIDE));
   const dark: [number, number, number] = [0x1b, 0x1f, 0x2a];
   const light: [number, number, number] = [0xf4, 0xf6, 0xfa];
-  fs.writeFileSync(path.join(docs, 'launch.dark.png'), tinyPng(dark, 64, 36));
-  fs.writeFileSync(path.join(docs, 'launch.light.png'), tinyPng(light, 64, 36));
-  fs.writeFileSync(path.join(docs, 'status.dark.png'), tinyPng(dark, 32, 18));
-  fs.writeFileSync(path.join(docs, 'status.light.png'), tinyPng(light, 32, 18));
-  fs.writeFileSync(path.join(docs, 'status.dark.gif'), tinyGif([0, 1]));
-  fs.writeFileSync(path.join(docs, 'status.light.gif'), tinyGif([2, 3]));
+  for (const name of ['launch', 'navigate', 'status']) {
+    fs.writeFileSync(path.join(docs, `${name}.dark.png`), tinyPng(dark, 320, 180));
+    fs.writeFileSync(path.join(docs, `${name}.light.png`), tinyPng(light, 320, 180));
+  }
+  fs.writeFileSync(path.join(docs, 'status.dark.gif'), tinyGif([0, 1], 320, 180));
+  fs.writeFileSync(path.join(docs, 'status.light.gif'), tinyGif([2, 3], 320, 180));
   fs.writeFileSync(path.join(docs, 'tutorial.json'), JSON.stringify({ id: 'docs-tour', title: 'Docs tour', video: 'docs.mp4', guide: 'guide.json', chapters: [{ title: 'Intro', start: 0 }, { title: 'Middle', start: 0.5 }] }));
   const broken = path.join(root, 'broken-demo');
   fs.mkdirSync(broken, { recursive: true });

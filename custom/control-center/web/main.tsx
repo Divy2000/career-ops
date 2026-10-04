@@ -7,6 +7,7 @@ import './styles/base.css';
 import './styles/sessions.css';
 import './styles/dialogs.css';
 import './styles/tutorials.css';
+import './styles/guide.css';
 import './styles/theme.css';
 import './styles/motion.css';
 import { StrictMode } from 'react';
