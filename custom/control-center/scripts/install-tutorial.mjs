@@ -6,13 +6,14 @@
 // The source folder is either
 //   - a folder that already has tutorial.json: it is validated and copied as-is, or
 //   - a recording folder: tutorial.json is built from chapters/toc.json ([{ number, id, title, start, duration }]),
-//     the .mp4, the .vtt or .srt, an optional poster.jpg and tutorial/script.md.
-// Only tutorial.json and the files it names are copied; chapter clips, raw takes and the rest stay behind.
+//     the .mp4, the .vtt or .srt, an optional poster.jpg and tutorial/script.md. An optional guide/guide.json (the Quick guide)
+//     is added too, with the gifs and posters it names sitting next to it in guide/.
+// Only tutorial.json and the files it names (and, for a guide, the files guide.json names) are copied; chapter clips, raw takes and the rest stay behind.
 import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from '../../../lib/is-main-module.mjs';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
-import { ID_RE, extOf, parseManifest } from '../server/domains/tutorial-manifest.mjs';
+import { ID_RE, extOf, guideFileNames, parseGuide, parseManifest } from '../server/domains/tutorial-manifest.mjs';
 
 const USAGE = `Usage: node custom/control-center/scripts/install-tutorial.mjs <source-folder> [options]
 
@@ -24,6 +25,8 @@ Options:
   --video <file>        the .mp4 to use when the folder has several
   --force               replace a tutorial that is already installed
   --dry-run             print what would be installed and write nothing`;
+
+const GUIDE_DIR = 'guide';
 
 const isDir = (p) => {
   try {
@@ -90,6 +93,7 @@ function buildManifest(source, opts) {
   const poster = ['poster.jpg', 'poster.jpeg', 'poster.png'].find((n) => isFile(path.join(source, n)));
   const scriptFrom = ['tutorial/script.md', 'script.md'].find((n) => isFile(path.join(source, n)));
   const subtitles = pickSubtitles(source, video);
+  const guide = isFile(path.join(source, GUIDE_DIR, 'guide.json'));
   return {
     id,
     title: opts.title ?? words(id),
@@ -98,9 +102,31 @@ function buildManifest(source, opts) {
     ...(subtitles ? { subtitles } : {}),
     ...(poster ? { poster } : {}),
     ...(scriptFrom ? { transcript: 'script.md' } : {}),
+    ...(guide ? { guide: 'guide.json' } : {}),
     chapters: readChapters(source),
     scriptFrom,
   };
+}
+
+/** guide.json and the files it names, from `guideRoot`: validated like the server does, before anything is copied. */
+function planGuide(guideRoot, name, chapterCount) {
+  const guideFrom = path.join(guideRoot, name);
+  if (!isFile(guideFrom)) throw new Error(`guide file "${name}" not found in the source folder`);
+  let json;
+  try {
+    json = JSON.parse(fs.readFileSync(guideFrom, 'utf8'));
+  } catch (err) {
+    throw new Error(`${name} is not valid JSON (${err.message})`, { cause: err });
+  }
+  const checked = parseGuide(json, { chapterCount });
+  if (!checked.ok) throw new Error(`${name} is invalid: ${checked.error}`);
+  const gifs = new Set(checked.guide.sections.map((s) => s.gif));
+  const files = guideFileNames(checked.guide).map((file) => {
+    const kind = gifs.has(file) ? 'guide gif' : 'guide poster';
+    if (!isFile(path.join(guideRoot, file))) throw new Error(`${kind} file "${file}" not found in the source folder`);
+    return { kind, from: path.join(guideRoot, file), to: file };
+  });
+  return [{ kind: 'guide', from: guideFrom, to: name }, ...files];
 }
 
 /**
@@ -140,11 +166,18 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const copies = [manifest.video, manifest.subtitles, manifest.poster, manifest.transcript]
-    .filter((n) => n !== undefined)
-    .map((name) => ({ from: path.join(source, built && name === manifest.transcript && scriptFrom ? scriptFrom : name), to: name }));
-  const kinds = { [manifest.video]: 'video', [manifest.subtitles]: 'subtitles', [manifest.poster]: 'poster', [manifest.transcript]: 'transcript' };
-  for (const c of copies) if (!isFile(c.from)) throw new Error(`${kinds[c.to]} file "${c.to}" not found in the source folder`);
+  const named = [['video', manifest.video], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['transcript', manifest.transcript]];
+  const copies = named
+    .filter(([, name]) => name !== undefined)
+    .map(([kind, name]) => ({ kind, from: path.join(source, built && kind === 'transcript' && scriptFrom ? scriptFrom : name), to: name }));
+  for (const c of copies) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
+  if (manifest.guide !== undefined) {
+    for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length)) {
+      const same = copies.find((o) => o.to === c.to);
+      if (same && same.from !== c.from) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
+      if (!same) copies.push(c);
+    }
+  }
 
   const tutorialsDir = path.join(dataRoot, 'data', 'control-center', 'tutorials');
   const dest = path.join(tutorialsDir, manifest.id);

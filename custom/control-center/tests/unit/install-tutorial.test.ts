@@ -8,6 +8,13 @@ import { parseManifest } from '../../server/domains/tutorials.js';
 import { listTutorials } from '../../server/domains/tutorials.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 
+const GUIDE = {
+  sections: [
+    { id: 'today', title: 'Today', summary: 'The daily shortlist.', route: '/today', gif: 'today.gif', poster: 'today.jpg', steps: ['Open Today.'], chapter: 1 },
+    { id: 'tracker', title: 'Tracker', summary: 'Every application.', gif: 'tracker.webp', steps: ['Open Tracker.'] },
+  ],
+};
+
 const SCRIPT = path.join(PACKAGE_ROOT, 'scripts', 'install-tutorial.mjs');
 const TOC = [
   { number: 1, id: 'intro', title: 'Intro and safety model', start: 0, duration: 130.2 },
@@ -156,6 +163,122 @@ describe('installTutorial from a folder that already has tutorial.json', () => {
   it('does not let --id rename a manifest that is copied as-is', () => {
     files();
     expect(() => installTutorial({ source: src(), dataRoot, id: 'other' })).toThrow(/already has tutorial\.json.*id/);
+  });
+});
+
+describe('installTutorial with a quick guide', () => {
+  const manifest = { id: 'guided', title: 'Guided', video: 'tour.mp4', guide: 'guide.json', chapters: [{ title: 'A', start: 0 }, { title: 'B', start: 20 }] };
+  const guideText = JSON.stringify(GUIDE, null, 2) + '\n';
+  /** A folder with its own tutorial.json: the guide and its gifs sit next to it. */
+  const folder = (over: { manifest?: unknown; guide?: string | null } = {}) => {
+    write('tutorial.json', JSON.stringify(over.manifest ?? manifest));
+    write('tour.mp4', 'V');
+    if (over.guide !== null) write('guide.json', over.guide ?? guideText);
+    write('today.gif', 'GIF-TODAY');
+    write('today.jpg', 'JPEG');
+    write('tracker.webp', 'WEBP');
+    write('unreferenced.gif', 'must not be copied');
+  };
+  /** A recording folder: the guide and its gifs sit in guide/. */
+  const recording = (guide = guideText) => {
+    write('chapters/toc.json', JSON.stringify(TOC));
+    write('tour.mp4', 'V');
+    write('guide/guide.json', guide);
+    write('guide/today.gif', 'GIF-TODAY');
+    write('guide/today.jpg', 'JPEG');
+    write('guide/tracker.webp', 'WEBP');
+    write('guide/unreferenced.gif', 'must not be copied');
+  };
+
+  it('copies guide.json byte for byte with the gifs and posters it names, and nothing else', () => {
+    folder();
+    const r = installTutorial({ source: src(), dataRoot });
+    expect(r.files.sort()).toEqual(['guide.json', 'today.gif', 'today.jpg', 'tour.mp4', 'tracker.webp', 'tutorial.json']);
+    expect(fs.readdirSync(dest('guided')).sort()).toEqual(['guide.json', 'today.gif', 'today.jpg', 'tour.mp4', 'tracker.webp', 'tutorial.json']);
+    expect(fs.readFileSync(path.join(dest('guided'), 'guide.json'), 'utf8')).toBe(guideText);
+    expect(fs.readFileSync(path.join(dest('guided'), 'today.gif'), 'utf8')).toBe('GIF-TODAY');
+  });
+
+  it('is picked up by the Tutorials listing with the guide', () => {
+    folder();
+    installTutorial({ source: src(), dataRoot });
+    const listed = listTutorials(dataRoot);
+    expect(listed.warnings).toEqual([]);
+    expect(listed.tutorials[0]?.warnings).toEqual([]);
+    expect(listed.tutorials[0]?.guide?.sections.map((x) => x.id)).toEqual(['today', 'tracker']);
+  });
+
+  it('builds the manifest from a recording folder that has guide/guide.json and copies the gifs from guide/', () => {
+    recording();
+    const r = installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' });
+    expect(r.built).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8'))).toMatchObject({ video: 'tour.mp4', guide: 'guide.json' });
+    expect(fs.readdirSync(dest('guided')).sort()).toEqual(['guide.json', 'today.gif', 'today.jpg', 'tour.mp4', 'tracker.webp', 'tutorial.json']);
+    expect(fs.readFileSync(path.join(dest('guided'), 'guide.json'), 'utf8')).toBe(guideText);
+    const listed = listTutorials(dataRoot);
+    expect(listed.tutorials[0]?.warnings).toEqual([]);
+    expect(listed.tutorials[0]?.guide?.sections).toHaveLength(2);
+  });
+
+  it('does not add a guide to a recording folder whose guide/ has no guide.json', () => {
+    recording();
+    fs.rmSync(path.join(src(), 'guide', 'guide.json'));
+    installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' });
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8')).guide).toBeUndefined();
+    expect(fs.readdirSync(dest('guided')).sort()).toEqual(['tour.mp4', 'tutorial.json']);
+  });
+
+  it('lets two sections share one poster and copies it once', () => {
+    folder({ guide: JSON.stringify({ sections: GUIDE.sections.map((x) => ({ ...x, poster: 'today.jpg' })) }) });
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readdirSync(dest('guided')).filter((n) => n === 'today.jpg')).toHaveLength(1);
+  });
+
+  it('lists the guide files in a dry run and writes nothing', () => {
+    folder();
+    const r = installTutorial({ source: src(), dataRoot, dryRun: true });
+    expect(r.files.sort()).toEqual(['guide.json', 'today.gif', 'today.jpg', 'tour.mp4', 'tracker.webp', 'tutorial.json']);
+    expect(fs.existsSync(path.join(dataRoot, 'data'))).toBe(false);
+  });
+
+  it('refuses a guide poster that would overwrite a different file of the tutorial', () => {
+    recording();
+    write('poster.jpg', 'TUTORIAL-POSTER');
+    write('guide/poster.jpg', 'GUIDE-POSTER');
+    write('guide/guide.json', JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'poster.jpg' }] }));
+    expect(() => installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' })).toThrow(/poster\.jpg.*both/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it.each([
+    ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
+    ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],
+    ['a guide that is not an object', '[]', /guide\.json is invalid.*object/],
+    ['a gif that is not in the folder', JSON.stringify({ sections: [{ ...GUIDE.sections[0], gif: 'gone.gif' }] }), /guide gif file "gone\.gif" not found/],
+    ['a poster that is not in the folder', JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'gone.jpg' }] }), /guide poster file "gone\.jpg" not found/],
+    ['a gif with a bad extension', JSON.stringify({ sections: [{ ...GUIDE.sections[0], gif: 'today.mp4' }] }), /guide\.json is invalid.*sections\.0\.gif/],
+    ['a gif that climbs out', JSON.stringify({ sections: [{ ...GUIDE.sections[0], gif: '../today.gif' }] }), /sections\.0\.gif/],
+    ['a route that is not an app path', JSON.stringify({ sections: [{ ...GUIDE.sections[0], route: '//evil.example' }] }), /sections\.0\.route/],
+    ['duplicate section ids', JSON.stringify({ sections: [GUIDE.sections[0], GUIDE.sections[0]] }), /duplicate.*"today"/],
+    ['a chapter the tutorial does not have', JSON.stringify({ sections: [{ ...GUIDE.sections[0], chapter: 2 }] }), /chapter 2.*2 chapters/],
+  ])('refuses %s and writes nothing', (_label, guide, message) => {
+    folder({ guide });
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(message);
+    expect(fs.existsSync(path.join(dataRoot, 'data', 'control-center', 'tutorials', 'guided'))).toBe(false);
+  });
+
+  it('refuses a bad guide in a recording folder, naming the chapters from toc.json', () => {
+    recording(JSON.stringify({ sections: [{ ...GUIDE.sections[0], chapter: 5 }] }));
+    expect(() => installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' })).toThrow(/chapter 5.*2 chapters/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it('keeps an installed tutorial untouched when --force is given with a bad guide', () => {
+    folder();
+    installTutorial({ source: src(), dataRoot });
+    write('guide.json', '{ nope');
+    expect(() => installTutorial({ source: src(), dataRoot, force: true })).toThrow(/not valid JSON/);
+    expect(fs.readFileSync(path.join(dest('guided'), 'guide.json'), 'utf8')).toBe(guideText);
   });
 });
 
