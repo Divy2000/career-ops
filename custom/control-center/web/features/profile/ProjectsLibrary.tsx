@@ -58,7 +58,7 @@ export function ProjectsLibrary() {
               <span className="mono">article-digest.md</span>: every project with copy-paste bullets. Tailored CVs pick 2 to 4 from here.
             </p>
           </div>
-          <button type="button" className="button--primary" disabled={!data || editing?.id === null} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null })}>
+          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null })}>
             <Plus size={16} aria-hidden="true" /> Add project
           </button>
         </div>

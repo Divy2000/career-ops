@@ -139,4 +139,16 @@ describe('Projects library tab', () => {
     const append = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Append'))!;
     expect(append.disabled).toBe(true);
   });
+
+  it('disables Add project while an entry is being edited, so the unsaved draft cannot be replaced', async () => {
+    await mount();
+    await click(byRole('tab', 'Projects')!);
+    await until(() => byRole('button', 'Edit Event Router'), 'the edit button');
+    const add = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === 'Add project')!;
+    expect(add().disabled).toBe(false);
+    await click(byRole('button', 'Edit Event Router')!);
+    expect(add().disabled).toBe(true);
+    await click(byRole('button', 'Cancel')!);
+    expect(add().disabled).toBe(false);
+  });
 });
