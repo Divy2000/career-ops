@@ -110,6 +110,24 @@ describe('runThemeChange', () => {
     expect(document.documentElement.classList.contains('theme-fading')).toBe(false);
   });
 
+  it.each([
+    ['an instant change from another tab', { kind: 'none' as const, reduced: false, vt: true }],
+    ['a user reveal', { kind: 'reveal' as const, reduced: false, vt: true }],
+    ['a reduced-motion change', { kind: 'reveal' as const, reduced: true, vt: true }],
+  ])('%s cancels a pending fade: the class goes at once, not when the old timer fires', (_name, o) => {
+    stubMotion({ viewTransitions: o.vt });
+    runThemeChange(vi.fn(), 'fade');
+    expect(document.documentElement.classList.contains('theme-fading')).toBe(true);
+    vi.advanceTimersByTime(100);
+    stubMotion({ reduced: o.reduced, viewTransitions: o.vt });
+    const seen: boolean[] = [];
+    runThemeChange(() => seen.push(document.documentElement.classList.contains('theme-fading')), o.kind, { x: 1, y: 1 });
+    expect(seen).toEqual([false]);
+    expect(document.documentElement.classList.contains('theme-fading')).toBe(false);
+    vi.advanceTimersByTime(500);
+    expect(document.documentElement.classList.contains('theme-fading')).toBe(false);
+  });
+
   it('uses the same 200ms fade for an OS-driven change, and overlapping fades keep the class until the last ends', () => {
     stubMotion({ viewTransitions: true });
     runThemeChange(vi.fn(), 'fade');

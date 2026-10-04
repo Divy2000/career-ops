@@ -114,6 +114,8 @@ export function watchSystemAndStorage(): () => void {
   };
   mql?.addEventListener('change', onSystem);
   window.addEventListener('storage', onStorage);
+  // The system may have flipped between the first render and now, before any listener existed.
+  update({ mode: current().mode, systemDark: systemPrefersDark() }, 'none');
   return () => {
     mql?.removeEventListener('change', onSystem);
     window.removeEventListener('storage', onStorage);

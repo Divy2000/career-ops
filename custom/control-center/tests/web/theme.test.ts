@@ -189,6 +189,30 @@ describe('theme store', () => {
     stop();
   });
 
+  it('catches up with an OS change that happened before the watcher was registered', async () => {
+    const sys = installSystemTheme(false);
+    installStorage();
+    const t = await loadTheme();
+    t.initTheme();
+    expect(t.getThemeState().resolved).toBe('light');
+    sys.set(true); // no listener yet: the change is missed unless the watcher samples on start
+    const stop = t.watchSystemAndStorage();
+    expect(t.getThemeState()).toMatchObject({ mode: 'auto', resolved: 'dark' });
+    expect(root().dataset.theme).toBe('dark');
+    stop();
+  });
+
+  it('does not let a catch-up sample override an explicit choice', async () => {
+    const sys = installSystemTheme(false);
+    installStorage({ 'cc.theme': 'light' });
+    const t = await loadTheme();
+    t.initTheme();
+    sys.set(true);
+    const stop = t.watchSystemAndStorage();
+    expect(t.getThemeState()).toMatchObject({ mode: 'light', resolved: 'light' });
+    stop();
+  });
+
   it('treats a missing matchMedia as a dark system (the app default) instead of throwing', async () => {
     installSystemTheme('unsupported');
     installStorage();

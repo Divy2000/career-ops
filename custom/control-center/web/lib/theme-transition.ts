@@ -26,6 +26,12 @@ export function originPoint(origin: RevealOrigin, viewport: { width: number; hei
 const prefersReducedMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let fadeTimer = 0;
+/** An instant or reveal change must not inherit a fade started a moment earlier: its timer would still be running. */
+function cancelFade(): void {
+  window.clearTimeout(fadeTimer);
+  document.documentElement.classList.remove(FADING);
+}
+
 /** CSS transitions on color-ish properties for one beat (see theme.css/motion.css); overlapping fades extend the same window. */
 function fade(commit: () => void): void {
   const root = document.documentElement;
@@ -43,9 +49,13 @@ type ViewTransitionDocument = Document & { startViewTransition?: (update: () => 
  * control via the View Transitions API; without it, and for OS-driven flips, the colors cross-fade instead.
  */
 export function runThemeChange(commit: () => void, kind: ThemeChangeKind, origin?: RevealOrigin): void {
-  if (kind === 'none' || prefersReducedMotion()) return commit();
+  if (kind === 'none' || prefersReducedMotion()) {
+    cancelFade();
+    return commit();
+  }
   const doc = document as ViewTransitionDocument;
   if (kind === 'fade' || typeof doc.startViewTransition !== 'function') return fade(commit);
+  cancelFade();
   const { x, y } = originPoint(origin, { width: window.innerWidth, height: window.innerHeight });
   const radius = revealRadius(x, y, window.innerWidth, window.innerHeight);
   // The callback must leave the DOM fully updated, React included, before the browser snapshots the new state.
