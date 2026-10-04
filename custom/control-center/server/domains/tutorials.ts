@@ -85,7 +85,11 @@ export interface TutorialsRead {
   warnings: Array<{ folder: string; message: string }>;
 }
 
-const inside = (root: string, p: string) => p.startsWith(root + path.sep);
+/** True when `p` is a strict descendant of `root`; `root + sep` is not used as a prefix because that breaks for the filesystem root. */
+export function inside(root: string, p: string): boolean {
+  const rel = path.relative(root, p);
+  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
 
 function realOrNull(p: string): string | null {
   try {
