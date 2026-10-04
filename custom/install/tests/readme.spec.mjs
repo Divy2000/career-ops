@@ -357,7 +357,7 @@ test('ONBOARDING.md rule 5 allows staging copies and extracted text before the g
   assert.match(rule5, /delete/i);
   assert.match(rule5, /delete[^.]*onboarding-draft/i, 'decline cleanup also covers the draft dir');
   const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
-  assert.match(gate, /delete the staged copies/i);
+  assert.match(gate, /delete the staging artifacts created in this session/i);
   assert.match(gate, /onboarding-draft/);
 });
 
@@ -419,4 +419,26 @@ test('ONBOARDING.md writes no third-party contact data before the gate: Connecti
   assert.equal(/ask(s)? for it/i.test(after), false, 'Step 7 must offer it, as Step 2 says, not wait to be asked');
   assert.match(section(onboarding, /^#{2,3}\s+Step 2: Extract text \(the ladder\)$/), /Step 7 offers/);
   assert.match(after, /offer/i);
+});
+
+test('decline cleanup only touches staging created in this session and keeps pre-existing drafts unless separately chosen', () => {
+  const rule5 = onboarding.split('\n').find((l) => /^5\. /.test(l));
+  const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
+  for (const [name, text] of [['rule 5', rule5], ['the gate', gate]]) {
+    assert.match(text, /this session/i, `${name}: scoped to this session`);
+    assert.match(text, /pre-?existing/i, `${name}: pre-existing drafts`);
+    assert.match(text, /separately/i, `${name}: separate explicit choice`);
+  }
+  assert.equal(/delete[^.]*staged copies, extracted files, temp conversions and `data\/install\/onboarding-draft\/`/i.test(onboarding), false, 'no blanket delete of the whole draft dir');
+});
+
+test('the gate lists each draft file and whether it pre-existed or was created or updated this session, before asking for cleanup consent', () => {
+  const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
+  const inventory = gate.slice(gate.search(/staging inventory/i));
+  assert.match(inventory, /each (draft )?file/i);
+  assert.match(inventory, /data\/install\/onboarding-draft\//);
+  assert.match(inventory, /pre-?existed/i);
+  assert.match(inventory, /created or updated this session/i);
+  assert.ok(gate.search(/staging inventory/i) < gate.search(/Write these files\?/), 'inventory comes before the question');
+  assert.ok(gate.search(/created or updated this session/i) < gate.search(/offer to delete/i), 'inventory comes before the cleanup offer');
 });
