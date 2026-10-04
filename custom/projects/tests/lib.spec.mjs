@@ -50,6 +50,24 @@ test('given a spaced em dash as the separator, when parsed, then it splits like 
   assert.equal(b.title, 'Multi-agent - Planner');
 });
 
+test('given a markdown URL containing balanced parentheses, when parsed, then the whole URL is kept', () => {
+  const md = '## [P](https://example.com/a_(b))\n- One.\n\n## Q -- [repo](https://example.com/q_(r)_s)\n- Two.\n';
+  const [p, q] = parseLibrary(md).entries;
+  assert.equal(p.title, 'P');
+  assert.equal(p.url, 'https://example.com/a_(b)');
+  assert.equal(q.url, 'https://example.com/q_(r)_s');
+  assert.deepEqual(validateLibrary(md).errors, []);
+});
+
+test('given heading text left over after a link, when validated, then an error names the leftover text', () => {
+  const md = '## [P](https://p.example) stray words\n- One.\n\n## Q -- https://q.example and more\n- Two.\n\n## R -- [r](https://r.example/(x)\n- Three.\n';
+  const v = validateLibrary(md);
+  assert.equal(v.ok, false);
+  assert.match(v.errors.join('\n'), /"P".*unexpected text after the link: "stray words"/);
+  assert.match(v.errors.join('\n'), /"Q".*unexpected text after the link: "and more"/);
+  assert.match(v.errors.join('\n'), /"R".*unbalanced/);
+});
+
 test('given "## Title -- tagline", when parsed, then the title is the text before the separator and the tagline is kept', () => {
   const e = byId(LIBRARY, 'inventory-forecaster');
   assert.equal(e.title, 'Inventory Forecaster');

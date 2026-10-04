@@ -37,13 +37,34 @@ export function projectId(title) {
 
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
+// `[text](url)` at the start of `s`, with balanced parentheses inside the URL
+// (https://example.com/a_(b)). `rest` is whatever follows the closing paren.
+function readMdLink(s) {
+  const m = s.match(/^\[([^\]]*)\]\(/);
+  if (!m) return null;
+  let depth = 1;
+  let i = m[0].length;
+  for (; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')' && --depth === 0) break;
+  }
+  if (depth !== 0) return { text: m[1], url: null, rest: '', unbalanced: true };
+  return { text: m[1], url: s.slice(m[0].length, i).trim(), rest: s.slice(i + 1) };
+}
+
 function parseLink(text) {
-  const md = text.match(/^\[([^\]]*)\]\(([^)\s]*)\)$/);
-  if (md) return md[2];
-  const angle = text.match(/^<([^>\s]+)>$/);
-  if (angle) return angle[1];
-  if (/^[a-z][a-z0-9+.-]*:\S+$/i.test(text)) return text;
+  const md = readMdLink(text);
+  if (md) return { link: md.url, trailing: md.rest.trim(), unbalanced: md.unbalanced };
+  const angle = text.match(/^<([^>\s]+)>(.*)$/);
+  if (angle) return { link: angle[1], trailing: angle[2].trim() };
+  const bare = text.match(/^([a-z][a-z0-9+.-]*:\S+)(?:\s+(.*))?$/i);
+  if (bare && (!bare[2] || bare[1].includes('://'))) return { link: bare[1], trailing: (bare[2] ?? '').trim() };
   return null;
+}
+
+function headingProblem({ trailing, unbalanced }) {
+  if (unbalanced) return 'has unbalanced parentheses in its link';
+  return trailing ? `has unexpected text after the link: "${trailing}"` : null;
 }
 
 function parseHeading(raw) {
@@ -51,25 +72,31 @@ function parseHeading(raw) {
   let title;
   let link = null;
   let tagline = null;
-  const lead = s.match(/^\[([^\]]+)\]\(([^)\s]*)\)(.*)$/);
-  if (lead) {
-    title = lead[1].trim();
-    link = lead[2];
-    const rest = lead[3];
-    if (HEADING_SEP_AT_START.test(rest)) tagline = rest.replace(HEADING_SEP_AT_START, '').trim() || null;
+  let problem = null;
+  const lead = readMdLink(s);
+  if (lead && lead.text.trim()) {
+    title = lead.text.trim();
+    link = lead.url;
+    if (HEADING_SEP_AT_START.test(lead.rest)) tagline = lead.rest.replace(HEADING_SEP_AT_START, '').trim() || null;
+    else problem = headingProblem({ trailing: lead.rest.trim(), unbalanced: lead.unbalanced });
   } else {
     const m = s.match(HEADING_SEP);
     if (m) {
       title = s.slice(0, m.index).trim();
       const rest = s.slice(m.index + m[0].length).trim();
-      link = parseLink(rest);
-      if (link === null) tagline = rest || null;
+      const parsed = parseLink(rest);
+      if (parsed) {
+        link = parsed.link;
+        problem = headingProblem(parsed);
+      } else {
+        tagline = rest || null;
+      }
     } else {
       title = s;
     }
   }
   const url = link !== null && HTTP_URL.test(link) ? link : null;
-  return { title, url, tagline, invalidUrl: link !== null && url === null ? link : null };
+  return { title, url, tagline, invalidUrl: link !== null && url === null ? link : null, headingProblem: problem };
 }
 
 function parseBody(lines) {
@@ -160,6 +187,7 @@ export function validateLibrary(text) {
     } else if (key) {
       seen.set(key, e);
     }
+    if (e.headingProblem) errors.push(`${where} ${e.headingProblem}`);
     if (e.invalidUrl) errors.push(`${where} link must be http(s), got "${e.invalidUrl}" (dropped)`);
     if (!KINDS.includes(e.kind)) errors.push(`${where} unknown kind "${e.kind}"; use one of ${KINDS.join(', ')}`);
     if (e.kind === 'project') {
