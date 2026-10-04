@@ -355,7 +355,10 @@ test('ONBOARDING.md rule 5 allows staging copies and extracted text before the g
   assert.match(rule5, /data\//);
   assert.match(rule5, /declin/i);
   assert.match(rule5, /delete/i);
-  assert.match(section(onboarding, /^#{2,3}\s+Step 5: The gate$/), /delete the staged copies/i);
+  assert.match(rule5, /delete[^.]*onboarding-draft/i, 'decline cleanup also covers the draft dir');
+  const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
+  assert.match(gate, /delete the staged copies/i);
+  assert.match(gate, /onboarding-draft/);
 });
 
 test('the ONBOARDING.md image row creates its temp dir and uses an absolute path under the effective data root', () => {
@@ -413,4 +416,7 @@ test('ONBOARDING.md writes no third-party contact data before the gate: Connecti
   assert.match(after, /data\/Connections\.csv/);
   assert.match(after, /linkedin-join\.mjs/);
   assert.match(after, /consent/i);
+  assert.equal(/ask(s)? for it/i.test(after), false, 'Step 7 must offer it, as Step 2 says, not wait to be asked');
+  assert.match(section(onboarding, /^#{2,3}\s+Step 2: Extract text \(the ladder\)$/), /Step 7 offers/);
+  assert.match(after, /offer/i);
 });
