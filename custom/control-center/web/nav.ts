@@ -35,6 +35,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/profile', label: 'Profile & CV' },
       { to: '/settings', label: 'Settings' },
       { to: '/dev', label: 'Dev Chat' },
+      { to: '/tutorials', label: 'Tutorials' },
     ],
   },
 ];

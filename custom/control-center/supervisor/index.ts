@@ -305,6 +305,10 @@ async function main(): Promise<void> {
         if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
         res.end(`server child unavailable: ${err.message}`);
       });
+      // A client that goes away mid-response (a video seek cancels its range request) must release the child's file too.
+      res.on('close', () => {
+        if (!res.writableFinished) upstream.destroy();
+      });
       req.pipe(upstream);
     });
   });

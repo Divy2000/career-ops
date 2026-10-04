@@ -7,7 +7,7 @@ const VIEWPORTS = [
   { width: 1440, height: 900 },
   { width: 1280, height: 800 },
 ];
-const PAGES = ['/', '/pipeline', '/pipeline?tab=shortlist', '/tracker', '/insights', '/runs', '/sponsorship', '/followups'];
+const PAGES = ['/', '/pipeline', '/pipeline?tab=shortlist', '/tracker', '/insights', '/runs', '/sponsorship', '/sponsorship?tab=lookup&q=Acme%20Robotics', '/followups', '/tutorials'];
 
 async function login(page: Page) {
   await page.goto(`/auth?t=${E2E_TOKEN}`);

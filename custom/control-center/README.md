@@ -30,7 +30,7 @@ Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-op
 
 ## 3. Pages tour
 
-Sidebar groups: Work (Today, Pipeline, Tracker, Apply, Follow-ups, Interviews), Intel (Discover, Sponsorship, Insights), System (Sessions, Runs & Schedule, Profile & CV, Settings, Dev Chat). The top bar has the command palette (Cmd+K), the daily-job chip, the Activity chip, the setup-health chip and the Ask drawer (Cmd+J). The sidebar footer shows the 5h/7d token meter.
+Sidebar groups: Work (Today, Pipeline, Tracker, Apply, Follow-ups, Interviews), Intel (Discover, Sponsorship, Insights), System (Sessions, Runs & Schedule, Profile & CV, Settings, Dev Chat, Tutorials). The top bar has the command palette (Cmd+K), the daily-job chip, the Activity chip, the setup-health chip and the Ask drawer (Cmd+J). The sidebar footer shows the 5h/7d token meter.
 
 - **Today**: shortlist top 15 with sponsor tiers, excluded-by-alert list, daily job result from the latest log, digest staleness, policy bullets, follow-ups due, decisions, fresh matches, quick evaluate (and the CV import hero when `cv.md` is missing).
 - **Pipeline**: inbox with facets, skip/undo, add URLs, Evaluate visible (fan-out), Process inbox; shortlist with the excluded list; batch runner.
@@ -40,13 +40,14 @@ Sidebar groups: Work (Today, Pipeline, Tracker, Apply, Follow-ups, Interviews), 
 - **Follow-ups**: Cadence (log, pin, history, AI drafts), Replies (paste a reply, reply-watch digest, invite match, reply-watch session), Contacts (`data/contacts.tsv`, vCard export, LinkedIn join lookup).
 - **Interviews**: active interviews, story bank with provenance counts, prep documents, weekly digest, process quality, rejection latency with explicit "Add to blacklist" buttons (they only open the Blacklist editor prefilled).
 - **Discover**: network scan, portal scan, AI search, fresh matches, funded companies, reposts.
-- **Sponsorship**: digest, policy changes, official feed, company alerts, company checks, H-1B lookup, tier cache, AI policy pass.
+- **Sponsorship**: digest, policy changes, official feed, company alerts, company checks, H-1B lookup, tier cache, AI policy pass. The Lookup tab (`/sponsorship?tab=lookup&q=...`) runs `plugins/h1b-sponsor/check.mjs` (argv only, no shell; name validated: non-empty, at most 200 characters, no control characters, no leading dash) and shows the resolved DOL name, tier, totals, staffing-shop flag and index build, plus the `freshness.mjs` decision, the saved `data/immigration/companies/<slug>.md` and matching `company-alerts.tsv` rows. "Search names" lists DOL entities (brand versus legal names), each linking to an exact lookup. "Run sponsorship check" starts the `sponsorship-check` session. With no local index it prints the install command (`node plugins/h1b-sponsor/install-h1b-index.mjs`) as text and never runs it.
 - **Insights**: Overview, Progress and Breakdown computed server-side; Funnel velocity, Patterns, Salary, Skills and Reposts & legitimacy run the core scripts (JSON, cached by input mtimes, with a run timestamp and Recompute); AI analyses launch patterns, calibrate, upskill and titles.
 - **Sessions**: list, transcript, reply, fork, cancel, delete (dialog confirm); New session with any mode.
 - **Runs & Schedule**: every run with its live log, cancel; both launchd jobs (daily `com.career-ops.immigration-watch`, weekly `com.career-ops.upstream-sync`) with loaded state, next fire, last exit, time editing, enable/disable and Run now; a log browser over `data/immigration/logs` and `data/upstream-sync`.
 - **Profile & CV**: editors for the user markdown files, CV import, AI flows and exports.
 - **Settings**: Portals (structured editor for every top-level key, raw YAML, health), Profile (form for every `profile.example.yml` section, follow-up cadence form, raw YAML), House rules, Blacklist, Plugins, AI engine (status, concurrency, model default, usage budgets, usage meter), Health, Updates (read-only, link to the sync PR), App (logos opt-in, run retention).
 - **Dev Chat**: scoped edits with per-turn diffs and reverts.
+- **Tutorials** (`/tutorials`): plays the narrated tutorials in `data/control-center/tutorials/` (see section 11).
 
 Structured editors send `{ops}` (set, delete, insert) that the server applies with the `yaml` Document API, so comments, key order and unknown keys survive. Saves are ETag-gated: a 409 keeps your pending edits on top of the current file so "save again" is the merge. Portals go through `validate-portals.mjs`, the profile through `validate-profile.mjs`; a failing validator returns 422 and nothing is written.
 
@@ -84,7 +85,7 @@ Already applied on the fork: `local/immigration` and `local/pipeline` moved to `
 
 ## 8. Development
 
-Fixture files under `tests/fixtures/root/` share names with career-ops user-layer files (`cv.md`, `portals.yml`, `data/applications.md`), which the upstream root `.gitignore` ignores. They are tracked, so edits show up normally, but a NEW fixture file with such a name must be added with `git add -f`. Do not edit the root `.gitignore`: it is an upstream file.
+Fixture files under `tests/fixtures/root/` share names with career-ops user-layer files (`cv.md`, `portals.yml`, `data/applications.md`), which the upstream root `.gitignore` ignores. They are tracked, so edits show up normally, but a NEW fixture file with such a name must be added with `git add -f`; the same goes for `tests/fixtures/media/*.mp4` (the root `.gitignore` ignores `*.mp4`). Do not edit the root `.gitignore`: it is an upstream file.
 
 ```bash
 npm --prefix custom/control-center run typecheck
@@ -95,6 +96,7 @@ npm --prefix custom/control-center run derive:modes
 npm --prefix custom/control-center run probe:claude   # two real haiku calls; records CLI semantics
 ```
 
+- The Tutorials e2e tests write their tutorial folders at setup (`tests/e2e/roots.ts`): the 2 second clip and the poster come from `ffmpeg` when it is installed, otherwise from the committed copies in `tests/fixtures/media/` (16 KB and 8 KB, same content). `CC_H1B_CHECK_SCRIPT` (honored only under `NODE_ENV=test`) points the Sponsorship lookup at `tests/fakes/h1b-check.mjs` instead of the real DOL index. `CC_E2E_PORT_BASE` (default 4399) moves the three e2e servers (base, base-1, base-2) when something else already listens on those ports.
 - `tests/fixtures/root/` is a synthetic career-ops data root (no real names or companies). Every test copies it to a temp dir; nothing touches the real data root, `~/Library/LaunchAgents` or `~/.claude/projects`.
 - `tests/fakes/claude.mjs` replays stream-json scenario files, honors `--session-id` / `--resume`, performs scripted writes and Bash steps and runs the real guard hook from `--settings`. Scenarios live in `tests/fixtures/scenarios/<mode>.json`.
 - `tests/unit/inventory.test.ts` is the table-driven inventory: every capability id from spec section 1 names its API route, action, mode, component or e2e step, and the test proves it exists and is exercised.
@@ -116,7 +118,38 @@ Note: `custom/` is public. `custom/immigration/daily-prompt.md` describes the us
 - A structured save returns 409: the file changed on disk (another editor, Dev Chat or the daily job). Your pending edits stay in the form on top of the current version; review and save again, or discard.
 - The usage meter says "No Claude Code logs": set `CC_CLAUDE_PROJECTS_DIR` if your Claude Code config lives elsewhere.
 
-## 11. Known limitations
+## 11. Tutorials
+
+Tutorials are user data: each is a folder `data/control-center/tutorials/<id>/` in the data root (gitignored, never committed) with a `tutorial.json` that names its files. The folder name must equal `id`.
+
+```json
+{
+  "id": "control-center-tour",
+  "title": "career-ops Control Center tour",
+  "description": "A narrated walk through every page.",
+  "video": "tour.mp4",
+  "subtitles": "tour.vtt",
+  "poster": "poster.jpg",
+  "transcript": "script.md",
+  "chapters": [{ "title": "Intro", "start": 0 }, { "title": "Launching", "start": 130.2 }]
+}
+```
+
+`video` is required (.mp4); `subtitles` is `.vtt` (served as-is) or `.srt` (converted to WebVTT on the fly for the `<track>`), `poster` is `.jpg`, `.jpeg` or `.png` (the video poster and the list thumbnail), `transcript` is `.md`, and `chapters` are `{ title, start }` with `start` in seconds. Every file is a plain name inside the folder. `GET /api/tutorials` validates each manifest with zod and lists the valid ones; an invalid folder is skipped with a visible warning on the page (bad JSON, missing video, path in a file name, id different from the folder). A missing optional file is dropped with a warning on that tutorial.
+
+`GET /api/tutorials/:id/media/:file` streams one file with HTTP Range support (206, `Accept-Ranges`, `Content-Range`, 416 for an unsatisfiable range) and the same session cookie as every other route. Only `.mp4`, `.vtt`, `.srt`, `.md`, `.jpg`, `.jpeg` and `.png` are served, `file` must be a plain name, and the real path (after symlinks) must stay inside that tutorial's own folder, which in turn must stay inside the tutorials folder, so `..`, absolute paths and symlinks that point out are refused.
+
+Player keys (not while typing in a field): Space or `k` play/pause, `j` back 10 s, `l` forward 10 s, `c` captions, Up and Down previous and next chapter. Clicking a chapter seeks to it; the chapter that is playing is highlighted. The transcript is collapsible and searchable (rendered with the sanitizing markdown renderer, authoring comments hidden). Captions default to on and the choice is remembered in the browser.
+
+To install a recording folder (or any folder that already has a `tutorial.json`):
+
+```bash
+node custom/control-center/scripts/install-tutorial.mjs <source-folder> [--data-root <dir>] [--id <id>] [--title <text>] [--description <text>] [--video <file>] [--force] [--dry-run]
+```
+
+With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[{ number, id, title, start, duration }]`), the single `.mp4` at the root, a `.vtt` (preferred) or `.srt`, an optional `poster.jpg` and `tutorial/script.md` (installed as `script.md`). With a `tutorial.json` it validates it and copies it unchanged (so `--id`, `--title`, `--description` and `--video` are refused). Only `tutorial.json` and the files it names are copied, into a staging folder that replaces the destination in one rename; an installed tutorial is replaced only with `--force`, and `--dry-run` writes nothing. The data root defaults to `CC_DATA_ROOT`, then the career-ops data root. Example for the recording folder: `node custom/control-center/scripts/install-tutorial.mjs ~/Desktop/Divy/career-ops-tutorial --id control-center-tour --title "career-ops Control Center tour" --description "A narrated walk through every page."`.
+
+## 12. Known limitations
 
 - The session guard is defense in depth for sessions you start, not a sandbox. Dev Chat in particular edits and reloads this app's code, so it can always run code it writes; the guard stops accidents.
 - `generate-latex.mjs`: the guard derives the compile's side files (`<base>.pdf`, aux files, tectonic files) from a fixed list rather than requiring the input's whole folder to be writable. Every scope that ships today allows the whole `output/` folder, so this only matters for a future narrower scope; inputs should end in `.tex`.

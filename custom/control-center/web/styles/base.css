@@ -735,3 +735,12 @@ textarea {
 .table td.mono {
   white-space: nowrap;
 }
+
+/* Sponsorship lookup */
+.lookup-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.tile__value--small {
+  font-size: var(--fs-18);
+  line-height: 1.6;
+}

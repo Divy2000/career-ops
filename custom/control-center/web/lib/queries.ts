@@ -10,6 +10,7 @@ import type {
   ShortlistRead,
   SystemStatus,
   TrackerRead,
+  TutorialsRead,
   WhatsNewResponse,
 } from '@shared/api';
 
@@ -24,3 +25,4 @@ export const useImmigration = () => useQuery({ queryKey: ['immigration'], queryF
 export const useFollowups = () => useQuery({ queryKey: ['followups'], queryFn: () => apiGet<FollowupCadence>('/api/followups') });
 export const useDashboard = () => useQuery({ queryKey: ['insights', 'dashboard'], queryFn: () => apiGet<DashboardRead>('/api/insights/dashboard') });
 export const useScheduleLogs = () => useQuery({ queryKey: ['immigration', 'logs'], queryFn: () => apiGet<ScheduleLogs>('/api/schedule/logs') });
+export const useTutorials = () => useQuery({ queryKey: ['tutorials'], queryFn: () => apiGet<TutorialsRead>('/api/tutorials') });

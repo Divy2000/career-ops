@@ -1,0 +1,198 @@
+/* Tutorials page: list, player, chapter rail and transcript. */
+.tut-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-3);
+}
+.tut-card {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  min-width: 0;
+}
+.tut-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  text-decoration: none;
+}
+.tut-card--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.tut-card__thumb {
+  flex: none;
+  width: 112px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+.tut-card__thumb--none {
+  display: inline-block;
+  background: linear-gradient(135deg, var(--surface-3), var(--surface-2));
+  position: relative;
+}
+.tut-card__thumb--none::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-35%, -50%);
+  border-left: 14px solid var(--text-faint);
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+}
+.tut-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tut-card__title {
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.tut-card__desc {
+  color: var(--text-muted);
+  font-size: var(--fs-12);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tut {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  align-items: start;
+}
+.tut__stage {
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  box-shadow: var(--shadow-popover);
+  position: relative;
+}
+.tut__stage video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.tut__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tut__keys kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.tut__osd {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  pointer-events: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  background: rgba(11, 13, 18, 0.85);
+  border: 1px solid var(--border-strong);
+  font-size: var(--fs-13);
+}
+.tut__chapters {
+  position: sticky;
+  top: var(--space-4);
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  padding: var(--space-3);
+}
+.tut__chapters h2 {
+  padding: 0 var(--space-2);
+}
+.tut__chapter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tut__chapter {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.tut__chapter:hover {
+  background: var(--surface-2);
+}
+.tut__chapter--active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.tut__time {
+  flex: none;
+  width: 4.5ch;
+  color: var(--text-muted);
+  font-size: var(--fs-12);
+}
+.tut__chapter--active .tut__time {
+  color: var(--accent);
+}
+.tut-disclosure {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+}
+.tut-search {
+  flex: 0 1 320px;
+}
+.tut-search input {
+  width: 100%;
+}
+.tut-transcript {
+  max-height: 420px;
+  overflow: auto;
+  padding-right: var(--space-2);
+}
+@media (max-width: 1100px) {
+  .tut {
+    grid-template-columns: 1fr;
+  }
+  .tut__chapters {
+    position: static;
+    max-height: 320px;
+  }
+}
