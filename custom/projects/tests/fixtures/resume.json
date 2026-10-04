@@ -1,0 +1,14 @@
+{
+  "basics": { "name": "Sam Example" },
+  "projects": [
+    {
+      "name": "Ticket Triage Bot",
+      "url": "https://github.com/example-dev/ticket-triage",
+      "description": "Built a FastAPI service that routes support tickets with a RAG clasifier.",
+      "highlights": ["Cut median first-response time from 9 h to 2 h."],
+      "keywords": ["python", "fastapi", "rag"],
+      "startDate": "2024-02",
+      "endDate": "2024-06"
+    }
+  ]
+}

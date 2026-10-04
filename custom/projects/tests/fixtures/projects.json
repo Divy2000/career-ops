@@ -1,0 +1,18 @@
+[
+  {
+    "id": "ticket-triage-bot",
+    "name": "Ticket Triage Bot",
+    "url": "https://github.com/example-dev/ticket-triage",
+    "description": "Built a FastAPI service that routes support tickets with a RAG clasifier.",
+    "highlights": ["Cut median first-response time from 9 h to 2 h."],
+    "tags": ["python", "fastapi", "rag"]
+  },
+  {
+    "id": "weather-dashboard",
+    "name": "Weather Dashboard",
+    "url": "",
+    "description": "Built a React dashboard showing hourly forecasts.",
+    "highlights": [],
+    "keywords": ["react"]
+  }
+]
