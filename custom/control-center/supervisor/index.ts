@@ -16,6 +16,7 @@ import { BlueGreen, type ChildHandle } from './bluegreen.js';
 import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
 import { PAGE_THEME_CSS } from '../shared/page-theme.js';
+import { dataRootFromEnv } from '../shared/data-root.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -209,6 +210,8 @@ async function main(): Promise<void> {
     ...process.env,
     CC_CODE_ROOT: CODE_ROOT,
     CC_DATA_ROOT: dataRoot,
+    // Read before CAREER_OPS_ROOT is overwritten below: only an environment-chosen root (CC_DATA_ROOT included) is pinned into launchd plists.
+    CC_DATA_ROOT_FROM_ENV: process.env.CC_DATA_ROOT || dataRootFromEnv(process.env) ? '1' : '0',
     CC_GUARD_DIR: guardRoot,
     CC_PUBLIC_PORT: String(PORT),
     CC_TOKEN: token,

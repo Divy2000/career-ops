@@ -1,0 +1,4 @@
+#!/bin/bash
+# Test shim: reports FAKE_NODE_VERSION for version probes, otherwise runs the real node.
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then echo "${FAKE_NODE_VERSION:-v26.0.0}"; exit 0; fi
+exec "$REAL_NODE" "$@"

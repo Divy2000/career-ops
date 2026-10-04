@@ -1,0 +1,4 @@
+#!/bin/bash
+echo "npm $* (cwd=$PWD)" >> "$STUB_LOG"
+echo "npm stub: $*"
+exit "${FAKE_NPM_EXIT:-0}"

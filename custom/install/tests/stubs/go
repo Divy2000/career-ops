@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "go $*" >> "$STUB_LOG"
+exit 0

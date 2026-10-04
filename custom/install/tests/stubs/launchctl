@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "launchctl $*" >> "$STUB_LOG"
+exit 0

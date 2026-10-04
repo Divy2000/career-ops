@@ -1,0 +1,30 @@
+#!/bin/bash
+# Test stub: records argv and fakes just the git calls install.sh makes.
+echo "git $*" >> "$STUB_LOG"
+dir=""
+if [ "${1:-}" = "-C" ]; then dir="$2"; shift 2; fi
+case "${1:-}" in
+  clone)
+    shift
+    url="${@: -2:1}"; target="${@: -1}"
+    mkdir -p "$target"
+    cp -R "$FAKE_SRC/." "$target/"
+    mkdir -p "$target/.git"
+    printf '%s\n' "$url" > "$target/.git/origin-url"
+    ;;
+  remote)
+    case "${2:-}" in
+      get-url)
+        f="$dir/.git/remote-$3"
+        [ "$3" = origin ] && f="$dir/.git/origin-url"
+        [ -f "$f" ] && cat "$f" || exit 2
+        ;;
+      add) printf '%s\n' "$4" > "$dir/.git/remote-$3" ;;
+    esac
+    ;;
+  status) cat "$dir/.git/dirty" 2>/dev/null || true ;;
+  rev-parse) cat "$dir/.git/branch" 2>/dev/null || echo main ;;
+  ls-files) [ -f "$dir/.git/lock-tracked" ]; exit $? ;;
+  fetch|pull|checkout) exit 0 ;;
+esac
+exit 0

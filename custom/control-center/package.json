@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.web.json",
     "lint": "eslint . && node scripts/no-em-dash.mjs",
     "derive:modes": "tsx scripts/derive-mode-policies.ts",
-    "probe:claude": "node scripts/claude-probe.mjs"
+    "probe:claude": "node scripts/claude-probe.mjs",
+    "preflight": "tsx supervisor/preflight-cli.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

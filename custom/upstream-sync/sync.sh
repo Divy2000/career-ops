@@ -17,6 +17,8 @@
 set -uo pipefail
 
 LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=custom/upstream-sync/lib.sh
+source "$LIVE/custom/upstream-sync/lib.sh"
 WT="$HOME/.career-ops-sync"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 # Logs and reports follow career-ops' data-root contract (CAREER_OPS_ROOT /
@@ -32,6 +34,7 @@ BRANCH="sync/upstream-$TODAY"
 FORK="Divy2000/career-ops"
 MODEL="claude-opus-5-5[1m]"
 AUTO_MERGE=1
+KEPT_README=0
 [ "${1:-}" = "--no-merge" ] && AUTO_MERGE=0
 
 mkdir -p "$STATE_DIR"
@@ -64,8 +67,8 @@ suite_failures() {
 }
 
 cd "$LIVE" || fail "live checkout missing"
-git fetch -q upstream main || fail "git fetch upstream failed"
-git fetch -q origin main || fail "git fetch origin failed"
+fetch_main upstream || fail "cannot fetch main from the upstream remote (see the line above)"
+fetch_main origin || fail "cannot fetch main from the origin remote (see the line above)"
 
 if git merge-base --is-ancestor upstream/main origin/main; then
   echo "fork already contains upstream/main ($(git rev-parse --short upstream/main)); nothing to do"
@@ -73,6 +76,7 @@ if git merge-base --is-ancestor upstream/main origin/main; then
   exit 0
 fi
 BEHIND="$(git rev-list --count origin/main..upstream/main)"
+[[ "$BEHIND" =~ ^[0-9]+$ ]] || fail "could not count commits between origin/main and upstream/main"
 echo "fork is $BEHIND commit(s) behind upstream/main"
 
 if ! TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
@@ -84,7 +88,7 @@ rm -rf "$WT"
 git worktree prune
 git worktree add -q -B "$BRANCH" "$WT" origin/main || fail "git worktree add failed"
 cd "$WT" || fail "worktree missing"
-npm ci --ignore-scripts --silent >/dev/null 2>&1 || fail "npm ci failed on origin/main"
+install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"
 
 echo "--- baseline suite on origin/main"
 suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"
@@ -96,6 +100,13 @@ CONFLICTS=""
 if ! git merge --no-ff --no-edit -m "chore(sync): merge upstream main $TODAY" upstream/main; then
   CONFLICTS="$(git diff --name-only --diff-filter=U)"
   echo "conflicts:"; echo "$CONFLICTS"
+  # The fork's .github/README.md always wins; a human compares upstream's copy.
+  bash "$LIVE/custom/upstream-sync/keep-fork-readme.sh" "$STATE_DIR" "$TODAY"
+  case $? in
+    0) ;;
+    10) KEPT_README=1; CONFLICTS="$(git diff --name-only --diff-filter=U)" ;;
+    *) fail "keep-fork-readme.sh failed" ;;
+  esac
 fi
 
 echo "--- headless Claude ($MODEL)"
@@ -121,7 +132,7 @@ echo "--- verifying"
 git merge-base --is-ancestor upstream/main HEAD || fail "upstream/main is not merged into $BRANCH"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || fail "uncommitted changes left in the sync worktree"
 
-CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**')"
+CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then
   echo "NOTE: files outside custom/ differ from upstream/main (expected only for conflict resolutions):"
   echo "$CHANGED_UPSTREAM"
@@ -145,6 +156,9 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo "- custom/ tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
+  if [ $KEPT_README = 1 ]; then
+    echo "- .github/README.md conflicted with upstream: the fork's version was kept. Upstream's copy: data/upstream-sync/$TODAY.upstream-github-readme.md (not auto-merged; compare, then merge by hand)."
+  fi
   echo
   echo "## Claude report"
   cat "$STATE_DIR/$TODAY.report.md" 2>/dev/null || echo "(no report written)"
@@ -158,15 +172,17 @@ else
 fi
 echo "PR: $PR_URL"
 
-if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ]; then
+if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEPT_README = 0 ]; then
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
-  git fetch -q origin main
+  fetch_main origin || fail "cannot refresh origin/main after the merge"
   if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-    LOCK_BEFORE="$(git rev-parse HEAD:package-lock.json)"
+    DEPS_BEFORE="$(deps_fingerprint HEAD)" || fail "cannot read the live checkout's dependency files"
     git merge -q --ff-only origin/main || fail "live checkout could not fast-forward"
-    [ "$LOCK_BEFORE" = "$(git rev-parse HEAD:package-lock.json)" ] || npm install --silent >/dev/null 2>&1
+    if [ "$DEPS_BEFORE" != "$(deps_fingerprint HEAD)" ]; then
+      install_root_deps run-scripts >/dev/null 2>&1 || notify "Merged upstream, but npm install failed in the live checkout; run it by hand"
+    fi
     echo "live checkout now at $(git rev-parse --short HEAD)"
     notify "Merged upstream ($BEHIND commits) and updated career-ops"
   else
@@ -174,7 +190,7 @@ if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ]; then
   fi
   git worktree remove --force "$WT" >/dev/null 2>&1
 else
-  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}." >/dev/null || true
+  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}; fork README kept over an upstream .github/README.md: $([ $KEPT_README = 1 ] && echo yes || echo no)." >/dev/null || true
   notify "Upstream sync PR needs review: $PR_URL"
 fi
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') done"

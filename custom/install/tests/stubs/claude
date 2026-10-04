@@ -1,0 +1,22 @@
+#!/bin/bash
+# Test stub. Never prints the keychain token; `setup-token` prints a fake secret to its stdout on purpose
+# so tests can prove the installer keeps that stream away from its own output and log.
+printf 'claude %s(cwd=%s)\n' "$(printf '%s ' "$@" | tr '\n' ' ')" "$PWD" >> "$STUB_LOG"
+printf '%s\0' "$@" > "$STUB_LOG.claude.argv"
+case "${1:-}" in
+  setup-token) echo "FAKE-SECRET-123"; exit 0 ;;
+  --version) echo "2.0.0 (Claude Code)"; exit 0 ;;
+esac
+if [ "${1:-}" = "-p" ]; then
+  echo "claude-env TOKEN_SET=${CLAUDE_CODE_OAUTH_TOKEN:+1} API_KEY_EMPTY=$([ -z "${ANTHROPIC_API_KEY-x}" ] && echo 1)" >> "$STUB_LOG"
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--add-dir" ] && [ -z "${draft:-}" ]; then draft="$a"; fi
+    prev="$a"
+  done
+  if [ -n "${FAKE_CLAUDE_DRAFTS:-}" ] && [ -n "${draft:-}" ]; then
+    mkdir -p "$draft"; echo "- stub question" > "$draft/questions.md"
+  fi
+  echo "stub headless run finished"
+fi
+exit 0
