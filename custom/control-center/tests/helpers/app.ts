@@ -27,6 +27,7 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   return {
     codeRoot: DEFAULT_CODE_ROOT,
     dataRoot,
+    dataRootFromEnv: true,
     // Outside both roots, like the supervisor's default; never the real ~/Library.
     guardRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-')),
     publicPort: TEST_PORT,

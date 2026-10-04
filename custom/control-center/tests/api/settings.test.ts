@@ -265,6 +265,21 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string></dict>`);
   });
 
+  it('writes no CAREER_OPS_ROOT when the server root did not come from the environment, and keeps it when it did', async () => {
+    for (const [fromEnv, expected] of [[false, false], [true, true]] as const) {
+      const app = await makeTestApp({ dataRootFromEnv: fromEnv }, { exec: fakeLaunchdExec().exec });
+      try {
+        const res = await app.app.inject({ method: 'PUT', url: '/api/schedule/com.career-ops.immigration-watch', headers: app.authedWrite, payload: { hour: 8, minute: 0, enabled: true } });
+        expect(res.statusCode, res.body).toBe(200);
+        const xml = fs.readFileSync(path.join(app.cfg.launchAgentsDir, 'com.career-ops.immigration-watch.plist'), 'utf8');
+        expect(xml.includes('<key>CAREER_OPS_ROOT</key>')).toBe(expected);
+        expect(xml).toContain(path.join(app.cfg.dataRoot, 'data', 'immigration', 'logs', 'launchd.out.log'));
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
   it('validates the label and the body', async () => {
     expect((await send('PUT', '/api/schedule/com.evil', { hour: 1, minute: 1, enabled: true })).statusCode).toBe(404);
     expect((await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 25, minute: 0, enabled: true })).statusCode).toBe(400);

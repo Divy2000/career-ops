@@ -147,6 +147,14 @@ describe('launchd schedule helpers', () => {
     expect(xml).toContain('<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>/data</string></dict>');
     expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/Users/me/R&D <data>')).toContain('<key>CAREER_OPS_ROOT</key><string>/Users/me/R&amp;D &lt;data&gt;</string>');
   });
+  it('leaves CAREER_OPS_ROOT out when the root did not come from the environment, so the job resolves a marker at run time', () => {
+    const xml = renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { pinDataRoot: false });
+    expect(xml).not.toContain('EnvironmentVariables');
+    expect(xml).not.toContain('CAREER_OPS_ROOT');
+    expect(xml).toContain('<key>StandardOutPath</key><string>/data/data/immigration/logs/launchd.out.log</string>');
+    const pinned = renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { pinDataRoot: true });
+    expect(pinned).toContain('<key>CAREER_OPS_ROOT</key><string>/data</string>');
+  });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';
     expect(parsePrintDisabled(out, 'com.career-ops.immigration-watch')).toBe(true);

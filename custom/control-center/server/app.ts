@@ -91,7 +91,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(fileRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });
   await app.register(configRoutes, { cfg, bus, exec });
-  const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot });
+  const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, dataRootFromEnv: cfg.dataRootFromEnv });
   await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings });
 
   if (cfg.watch) {

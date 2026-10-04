@@ -9,6 +9,8 @@ export interface ServerConfig {
   codeRoot: string;
   /** User data root (CAREER_OPS_ROOT contract). */
   dataRoot: string;
+  /** The data root came from CAREER_OPS_ROOT or CAREER_OPS_DATA_DIR (set by the supervisor); only then do launchd plists pin it. */
+  dataRootFromEnv: boolean;
   /** Session policies, hook settings and revert bookkeeping; outside both roots (CC_GUARD_DIR, set by the supervisor). */
   guardRoot: string;
   /** Port the supervisor listens on; Host headers must name it. */
@@ -55,6 +57,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
   return {
     codeRoot: env.CC_CODE_ROOT ?? DEFAULT_CODE_ROOT,
     dataRoot: requireEnv('CC_DATA_ROOT'),
+    dataRootFromEnv: env.CC_DATA_ROOT_FROM_ENV !== '0',
     guardRoot: requireEnv('CC_GUARD_DIR'),
     publicPort,
     token: requireEnv('CC_TOKEN'),

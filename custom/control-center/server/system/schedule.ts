@@ -61,7 +61,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  * the job reads and writes the same data the app shows; its launchd logs go to
  * the data root too, where the log browser reads them.
  */
-export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string): string {
+export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string, opts: { pinDataRoot?: boolean } = {}): string {
   const root = esc(codeRoot);
   const logs = esc(path.join(dataRoot, job.logDir));
   const wd = t.weekday === null ? '' : `<key>Weekday</key><integer>${t.weekday}</integer>`;
@@ -73,7 +73,7 @@ export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: numbe
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>${root}/${job.script}</string></array>
   <key>WorkingDirectory</key><string>${root}</string>
-  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${esc(dataRoot)}</string></dict>
+  ${opts.pinDataRoot === false ? '' : `<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${esc(dataRoot)}</string></dict>`}
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>${t.hour}</integer><key>Minute</key><integer>${t.minute}</integer>${wd}</dict>
   <key>StandardOutPath</key><string>${logs}/launchd.out.log</string>
@@ -119,7 +119,7 @@ interface PlistJson {
 
 export class ScheduleService {
   constructor(
-    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; now?: () => Date },
+    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; dataRootFromEnv?: boolean; now?: () => Date },
   ) {}
 
   job(label: string): ScheduleJob | undefined {
@@ -186,7 +186,7 @@ export class ScheduleService {
     const plistPath = this.plistPath(job);
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot));
+    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv }));
     // launchd does not create the log directory; without it the job's output is lost.
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);
