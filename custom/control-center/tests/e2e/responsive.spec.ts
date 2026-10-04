@@ -362,3 +362,25 @@ test.describe('overlays exclude each other with the drawer open (390px)', () => 
     await expect(page.locator('.menu-toggle')).toBeFocused();
   });
 });
+
+test.describe('overlay hotkeys stay out of a parameter dialog', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  for (const hotkey of ['Control+j', 'Control+k']) {
+    test(`${hotkey} does nothing while the delete dialog opened from the palette is up`, async ({ page }) => {
+      await page.keyboard.press('Control+k');
+      const input = page.getByPlaceholder('Go to a page, run an action or start a mode');
+      await input.fill('tracker.delete');
+      await page.keyboard.press('Enter');
+      const dialog = page.locator('[role="dialog"].dialog');
+      await expect(dialog).toBeVisible();
+      await page.keyboard.press(hotkey);
+      await expect(page.getByRole('dialog', { name: 'Ask' })).toHaveCount(0);
+      await expect(page.locator('[role="dialog"].palette')).toHaveCount(0);
+      await expect(dialog).toBeVisible();
+      expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"].dialog'))).toBe(true);
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+    });
+  }
+});

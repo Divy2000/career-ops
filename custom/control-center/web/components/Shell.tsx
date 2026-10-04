@@ -87,6 +87,11 @@ function ActivityChip() {
   );
 }
 
+/** Any open Radix dialog other than the palette itself (confirm, action parameters, mode launch) is modal and owns the keyboard. */
+function otherModalOpen(): boolean {
+  return document.querySelector('[role="dialog"][data-state="open"]:not(.palette), [role="alertdialog"][data-state="open"]') !== null;
+}
+
 /** Keep in step with the max-width media queries in base.css (the md breakpoint, 768px). */
 const NARROW_QUERY = '(max-width: 767px)';
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -150,6 +155,7 @@ export function Shell() {
   /** Every overlay toggles through here, by button or hotkey. At most one is open: opening one closes the other, and the original opener is kept for the close. */
   const toggleOverlay = useCallback(
     (which: 'ask' | 'palette') => {
+      if (otherModalOpen()) return;
       if (wasOpen.current) overlayTookFocus.current = true;
       if (!ask && !palette) {
         const active = document.activeElement;
