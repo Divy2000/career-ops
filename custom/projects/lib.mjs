@@ -236,22 +236,27 @@ function assertNewTitle(entries, title, exceptId) {
   if (clash) throw new Error(`"${clash.title}" is already in the library`);
 }
 
+// Edits write new text in the file's own newline convention (CRLF or LF).
+const newlineOf = (text) => (String(text ?? '').includes('\r\n') ? '\r\n' : '\n');
+const withNewline = (s, nl) => s.replace(/\r?\n/g, nl);
+
 export function replaceEntry(text, id, entry) {
   const { entries } = parseLibrary(text);
   const target = entries.find((e) => e.id === id);
   if (!target) throw new Error(`no entry with id "${id}"`);
   const block = serializeEntry(entry);
   assertNewTitle(entries, entry.title, id);
-  return text.slice(0, target.start) + block + text.slice(target.end);
+  return text.slice(0, target.start) + withNewline(block, newlineOf(text)) + text.slice(target.end);
 }
 
 // Appends a ready-made markdown block (already validated by the caller).
 export function appendBlock(text, block) {
+  const nl = newlineOf(text);
   const body = block.replace(/\s+$/, '');
   const base = String(text ?? '').replace(/\s+$/, '');
-  if (!base) return `${LIBRARY_HEADER}\n\n${body}\n`;
+  if (!base) return withNewline(`${LIBRARY_HEADER}\n\n${body}\n`, nl);
   const sep = parseLibrary(base).entries.length ? ENTRY_SEPARATOR : '\n\n';
-  return `${base}${sep}${body}\n`;
+  return base + withNewline(`${sep}${body}\n`, nl);
 }
 
 export function appendEntry(text, entry) {

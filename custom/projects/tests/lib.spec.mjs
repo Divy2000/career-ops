@@ -222,6 +222,17 @@ test('given an unknown id or a rename onto another title, when replaced, then it
   assert.throws(() => replaceEntry(LIBRARY, 'weather-dashboard', { title: 'Ticket Triage Bot', bullets: ['a'] }), /already/);
 });
 
+test('given a CRLF library, when an entry is replaced or appended, then every line ending stays CRLF', () => {
+  const crlf = LIBRARY.replace(/\n/g, '\r\n');
+  const lone = (t) => /(^|[^\r])\n/.test(t);
+  const replaced = replaceEntry(crlf, 'weather-dashboard', { title: 'Weather Dashboard', tags: ['react'], bullets: ['One.', 'Two.'] });
+  assert.equal(lone(replaced), false);
+  assert.ok(replaced.includes('## Weather Dashboard\r\nTags: react\r\n- One.\r\n- Two.\r\n'));
+  const appended = appendEntry(crlf, { title: 'New Thing', bullets: ['Did it.'] });
+  assert.equal(lone(appended), false);
+  assert.ok(appended.endsWith('\r\n---\r\n\r\n## New Thing\r\n- Did it.\r\n'));
+});
+
 test('given an existing library, when an entry is appended, then it follows a --- separator and the old text is untouched', () => {
   const out = appendEntry(LIBRARY, { title: 'New Thing', bullets: ['Did it.'] });
   assert.equal(out, `${LIBRARY.replace(/\s+$/, '')}\n\n---\n\n## New Thing\n- Did it.\n`);
