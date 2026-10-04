@@ -16,6 +16,8 @@ export interface DocumentsRead {
   files: DocumentFile[];
   jds: string[];
   indexPresent: boolean;
+  /** The report this row is filed under; pdf-index.tsv rows and re-renders are keyed by it. */
+  report: number | null;
 }
 
 export interface PdfIndexRow {
@@ -86,9 +88,10 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
   }
   files.sort((a, b) => mtime(dataRoot, b.path) - mtime(dataRoot, a.path));
   const jdsDir = path.join(dataRoot, 'jds');
-  const prefix = report === null ? null : String(report).padStart(3, '0');
-  const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter((f) => (prefix !== null && f.startsWith(`${prefix}-`)) || (slug && f.toLowerCase().includes(slug))).map((f) => `jds/${f}`) : [];
-  return { files, jds, indexPresent };
+  // With a report, only its own jds/NNN- captures: a company match would also list the JDs of the company's other reports.
+  const ownsJd = report === null ? (f: string) => Boolean(slug) && f.toLowerCase().includes(slug) : (f: string) => f.startsWith(`${String(report).padStart(3, '0')}-`);
+  const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter(ownsJd).map((f) => `jds/${f}`) : [];
+  return { files, jds, indexPresent, report };
 }
 
 /** Absolute real path of a regular file under the data root's output/ (symlinks resolved), or null. */

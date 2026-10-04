@@ -17,6 +17,7 @@ export function DocumentsTab({ n }: { n: number }) {
         {q.data && (
           <>
             {!q.data.indexPresent && <p className="faint">No data/pdf-index.tsv yet; showing output/ files that match the company.</p>}
+            {q.data.report === null && q.data.files.some((f) => f.html) && <p className="faint">Re-render needs an evaluation report for this application, because the PDF index files every PDF under its report number.</p>}
             {q.data.files.length === 0 ? (
               <Empty>No PDFs yet. Generate one with the pdf mode (Claude engine) or drop files into output/.</Empty>
             ) : (
@@ -53,7 +54,7 @@ export function DocumentsTab({ n }: { n: number }) {
                               </a>
                             )}
                             {f.html && (
-                              <ActionButton meta={render} params={{ n, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
+                              <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
                                 Re-render from HTML
                               </ActionButton>
                             )}

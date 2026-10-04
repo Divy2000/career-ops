@@ -134,6 +134,8 @@ describe('action registry covers section 3.3', () => {
     expect(batch.bin).toBe('/bin/bash');
     expect(batch.args[0]).toMatch(/batch-runner\.sh$/);
     expect(batch.args).toContain('--parallel');
+    const render = findAction('docs.renderPdf')!.build({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'a4' }, ctx);
+    expect(render.args.slice(1)).toEqual([path.join(ctx.dataRoot, 'output/a.html'), path.join(ctx.dataRoot, 'output/a.pdf'), '--format=a4', '--report=1']);
     const prefill = findAction('docs.prepareApplication')!;
     expect(prefill.build({ url: 'https://jobs.lever.co/acme/1', pdf: 'output/a.pdf' }, ctx).args.slice(1)).toEqual(['--url', 'https://jobs.lever.co/acme/1', '--pdf', 'output/a.pdf']);
     expect(prefill.build({ url: 'https://jobs.lever.co/acme/1', pdf: 'output/a.pdf', cover: 'output/a-cover.txt' }, ctx).args.slice(1)).toEqual(['--url', 'https://jobs.lever.co/acme/1', '--pdf', 'output/a.pdf', '--cover', 'output/a-cover.txt']);
@@ -165,7 +167,7 @@ function sampleParams(id: string): Record<string, unknown> {
     'scan.seeds': { list: 'yc' },
     'immigration.freshness': { company: 'Acme' },
     'immigration.h1b': { company: 'Acme', mode: 'summary' },
-    'docs.renderPdf': { n: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'letter' },
+    'docs.renderPdf': { row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'letter' },
     'docs.coverPdf': { payloadPath: 'output/p.json' },
     'docs.archivePosting': { n: 1, url: 'https://x.example/1' },
     'docs.liveness': { urls: ['https://x.example/1'] },

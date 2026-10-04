@@ -8,6 +8,7 @@ import YAML from 'yaml';
 import type { Cost } from '../runner/store.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { resolveOutputFile } from '../domains/documents.js';
+import { readTracker } from '../domains/tracker.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
@@ -37,7 +38,7 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   sync: boolean;
   params: S;
   /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
-  check?: (params: z.infer<S>, ctx: ActionContext) => string | null;
+  check?: (params: z.infer<S>, ctx: ActionContext) => string | null | Promise<string | null>;
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
@@ -291,8 +292,17 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: false,
-    params: z.object({ n: positive, html: relOutput, pdf: relOutput, format: z.enum(['letter', 'a4']).default('letter') }),
-    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), `--format=${p.format}`, `--report=${p.n}`]),
+    // generate-pdf.mjs files the PDF in pdf-index.tsv under --report, so it must be the row's report, never the row number.
+    params: z.object({ row: positive, report: positive, html: relOutput, pdf: relOutput, format: z.enum(['letter', 'a4']).default('letter') }),
+    check: async (p, ctx) => {
+      const tracker = await readTracker(ctx.codeRoot, ctx.dataRoot);
+      const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === p.row) : undefined;
+      if (!row) return `There is no tracker row #${p.row}.`;
+      if (row.report === null) return `Row #${p.row} has no evaluation report, so a re-rendered PDF has nowhere to be filed.`;
+      if (row.report !== p.report) return `Row #${p.row} is filed under report ${row.report}, not report ${p.report}. Reload the Documents tab and try again.`;
+      return null;
+    },
+    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), `--format=${p.format}`, `--report=${p.report}`]),
   }),
   define({ id: 'docs.coverPdf', label: 'Render cover letter PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ payloadPath: relOutput }), build: (p, ctx) => node(ctx, 'generateCoverLetter', ['--payload', path.join(ctx.dataRoot, p.payloadPath)]) }),
   define({ id: 'docs.archivePosting', label: 'Archive posting', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ n: positive, url: httpUrl }), build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.n)]) }),

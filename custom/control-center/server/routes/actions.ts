@@ -19,7 +19,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     const parsed = action.params.safeParse(req.body?.params ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid params', issues: parsed.error.issues });
     const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot };
-    const problem = action.check?.(parsed.data, ctx);
+    const problem = await action.check?.(parsed.data, ctx);
     if (problem) return reply.code(400).send({ error: problem });
     const cmd = action.build(parsed.data, ctx);
     if (!action.sync) {
