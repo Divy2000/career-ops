@@ -19,7 +19,7 @@ const onboarding = readFileSync(path.join(ROOT, ONBOARDING_REL), 'utf8');
 const FROZEN_FLAGS = [
   '--yes', '--non-interactive', '--dir', '--data-root', '--ref', '--no-launchd', '--with-upstream-sync',
   '--no-start', '--no-h1b-index', '--resume', '--docs', '--replace-cv', '--onboard', '--install-missing',
-  '--core-only', '--dry-run', '--help',
+  '--core-only', '--dry-run', '--help', '--projects',
 ];
 
 function stripCode(markdown) {
@@ -180,7 +180,7 @@ test('the README uses only flags from the frozen installer contract on install.s
   assert.ok(used.size >= 8, `expected a flags table and command lines, found ${[...used].join(' ')}`);
   const unknown = [...used].filter((f) => !FROZEN_FLAGS.includes(f));
   assert.deepEqual(unknown, []);
-  for (const needed of ['--resume', '--docs', '--replace-cv', '--onboard', '--dry-run', '--non-interactive', '--no-start', '--no-launchd', '--yes', '--data-root', '--with-upstream-sync']) {
+  for (const needed of ['--resume', '--docs', '--replace-cv', '--onboard', '--dry-run', '--non-interactive', '--no-start', '--no-launchd', '--yes', '--data-root', '--with-upstream-sync', '--projects']) {
     assert.ok(used.has(needed), `README never mentions ${needed}`);
   }
 });
@@ -546,4 +546,29 @@ test('the questionnaire asks which 2 or 3 projects stay in cv.md, and Step 6 che
 test('the headless draft prompt asks for article-digest.md in the projects-library format', () => {
   const prompt = readFileSync(path.join(ROOT, 'custom/install/onboard-headless-prompt.md'), 'utf8');
   assert.match(prompt, /article-digest\.md in the projects-library format/);
+});
+
+test('the landing README documents the projects library, the Recent Achievements rule and --projects', () => {
+  const opt2 = section(readme, /^###\s+Option 2\b/);
+  assert.match(opt2, /--projects/);
+  assert.match(opt2, /article-digest\.md/);
+  assert.match(opt2, /never (?:replaced|overwritten)/i);
+  const got = section(readme, /^##\s+What you get\b/);
+  assert.match(got, /Projects library/);
+  assert.match(got, /custom\/projects\/rank\.mjs/);
+  assert.match(got, /Recent Achievements/);
+});
+
+test('custom/README.md lists the projects library and the fork CV build and render', () => {
+  const custom = readFileSync(path.join(ROOT, 'custom/README.md'), 'utf8');
+  for (const needle of ['`projects/`', '`cv/`', 'rank.mjs', 'import.mjs', 'build-html.mjs', 'render-pdf.mjs', 'Recent Achievements', 'article-digest.md', '_custom-projects.md']) {
+    assert.ok(custom.includes(needle), `custom/README.md mentions ${needle}`);
+  }
+});
+
+test('the Control Center README documents Profile > Projects, its API and the intake-backed PDF import', () => {
+  const cc = readFileSync(path.join(ROOT, 'custom/control-center/README.md'), 'utf8');
+  for (const needle of ['Projects', '/api/projects', 'projects.rank', 'projects-ingest', 'documents/projects/', 'intake.mjs --commit', 'Source:']) {
+    assert.ok(cc.includes(needle), `custom/control-center/README.md mentions ${needle}`);
+  }
 });

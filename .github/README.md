@@ -51,12 +51,13 @@ cd ~/Documents/job-search   # the folder that holds resume.md and your project .
 ~/career-ops/custom/install/install.sh --resume resume.md --docs project-a.md project-b.md
 ```
 
-`--docs` is optional. Relative `--resume` and `--docs` paths resolve against the current directory you run the script from. Commands the script prints for you to run later are shell-quoted, so they are safe to paste even when a path contains spaces. Run `install.sh --help` for the full list.
+`--docs` is optional. If you already keep a list of your projects, pass it with `--projects projects.md` (or a `projects.json`, see below). Relative `--resume`, `--docs` and `--projects` paths resolve against the current directory you run the script from. Commands the script prints for you to run later are shell-quoted, so they are safe to paste even when a path contains spaces. Run `install.sh --help` for the full list.
 
 What the script does with your Markdown files:
 
 - Limits: the resume is at most 1 MiB, each project document at most 2 MiB, at most 20 documents. Files must be UTF-8 text. Every file is checked before anything is written; one bad file means nothing is copied (exit 2, with the file and the reason).
 - Originals are copied into `documents/cv/` and `documents/projects/` (a name that already exists gets a `-1` suffix; nothing is overwritten).
+- `--projects` takes your projects library (`.md`, one `## Title -- link` block per project with `- ` bullets) or a projects JSON (AutoJobApply or JSON Resume). It is validated before anything else changes (exit 2 with the reason), copied into `documents/projects/`, and turned into `article-digest.md` when that file does not exist. An existing `article-digest.md` is never replaced; a pending action prints the command that adds only the new projects.
 - `cv.md` is created from your resume when it does not exist. If a different `cv.md` already exists, it is **never replaced** without your confirmation (a diff summary and a y/N prompt) or `--replace-cv`, and a `cv.md.bak-<timestamp>` backup is kept before any replacement.
 - Without the Keychain item (see [First run](#first-run)) it still installs, but skips the daily job and the Control Center start and lists them as pending actions.
 - After the install it offers to start Claude Code with the onboarding procedure, which turns your documents into `config/profile.yml`, `modes/_profile.md`, `portals.yml` and the rest after showing you every change.
@@ -66,6 +67,7 @@ What the script does with your Markdown files:
 | `--resume <file.md>` | Resume in Markdown. Seeds `cv.md` when absent. |
 | `--docs <a.md> [b.md ...]` | Project documents in Markdown (values run until the next flag). |
 | `--replace-cv` | Allow replacing an existing, different `cv.md` (a backup is written first). |
+| `--projects <file>` | Projects library (`.md`) or projects JSON. Validated, copied to `documents/projects/`, creates `article-digest.md` when absent (never replaces it). |
 | `--onboard interactive\|headless\|none` | After install: start Claude Code with the onboarding prompt (default when a terminal and `claude` are present), draft the files headlessly from the Keychain token (drafts only, never live files), or only print the command. |
 | `--yes` | Do not ask for confirmation; take the default answer. |
 | `--non-interactive` | Never prompt or read the terminal; unfinished steps become pending actions. |
@@ -109,6 +111,12 @@ Everything upstream career-ops does (see the [upstream README](/README.md)), plu
 - **Backend and AI priority (hardcoded).** The daily ordering of new postings puts titles matching backend, Python, Django, API, AI, ML, LLM or agentic first. The pattern is hardcoded as `PRIORITY_TITLE` in `custom/pipeline/lib.mjs` and is not configurable yet; edit it if your targets differ.
 - **Shortlist.** `data/shortlist.md` combines the relevance rank (0 to 5) with a DOL tier adjustment: strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none or staffing shop -1.5. Companies with a paused, stopped or restricted alert are listed separately and never shortlisted.
 - **Blocklist (opt-in).** `data/blacklist.md` is a do-not-apply list the scanner honors. It is never created or filled automatically: onboarding suggests an entry (for example your current employer) and writes it only after an explicit yes.
+
+**CV and projects**
+
+- **Projects library.** `article-digest.md` lists every project with copy-paste bullets; `cv.md` keeps only your default 2 or 3. For each job, `custom/projects/rank.mjs` ranks the library against the job description (no tokens spent) and the tailored CV picks 2 to 4 from it. Onboarding builds the library from your documents; the Control Center edits it under Profile & CV > Projects.
+- **Papers under Recent Achievements.** Research papers and publications go in `cv.md` under `## Recent Achievements`, never under Projects; the CV build refuses a paper listed as a project, a project from nowhere, and a link its source does not give.
+- **One-page fit.** The fork CV template tightens its spacing step by step until the PDF fits your page budget, and every upstream check (fact gate, section order, ATS normalization) still runs.
 
 **Automation**
 
