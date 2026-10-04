@@ -41,6 +41,8 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
+  /** A readable status and message for a failed sync run, replacing the generic "exited N" and the raw stderr. */
+  explainFailure?: (run: { code: number; stderr: string }) => { status: number; error: string };
 }
 
 export const TRACKER_STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
@@ -313,6 +315,12 @@ export const ACTIONS: ActionDef[] = [
     },
     // The script resolves both paths against CAREER_OPS_ROOT and requires the PDF under output/.
     build: (p, ctx) => node(ctx, 'prepareApplication', ['--url', p.url, '--pdf', p.pdf, ...opt(p.cover, '--cover')]),
+    explainFailure: ({ code, stderr }) => {
+      const lines = stderr.split('\n').map((l) => l.trim()).filter(Boolean);
+      const reasons = lines.filter((l) => l.startsWith('Error:')).map((l) => l.slice('Error:'.length).trim());
+      if (reasons.length) return { status: 422, error: `Prefill could not run: ${reasons.join(' ')}` };
+      return { status: 502, error: `Prefill failed: prepare-application.mjs exited ${code} (last output: ${lines.at(-1) ?? 'none'}).` };
+    },
   }),
   define({ id: 'docs.appArtifactsInit', label: 'Initialize application artifacts', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive }), build: (p, ctx) => node(ctx, 'applicationArtifacts', ['--init', '--report', String(p.n)]) }),
   define({ id: 'docs.imgToPdf', label: 'Image to PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ file: relOutput }), build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file)]) }),

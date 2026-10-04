@@ -111,8 +111,19 @@ export interface ApplyDocuments {
   suggestedCover: string | null;
 }
 
-const COVER_NAME = /cover/i;
+/**
+ * The kind generate-pdf.mjs's resolveArtifactKind() infers from a file name: a cover letter only for an anchored
+ * cover-... or ...-cover name, so a company or role containing "cover" stays a CV. tests/unit/apply-documents.test.ts
+ * checks it against the generator.
+ */
+export function artifactKindFromName(file: string): 'cv' | 'cover' {
+  const name = path.basename(file).toLowerCase().replace(/\.[^.]*$/, '');
+  if (name.startsWith('cv-')) return 'cv';
+  return /^cover([-_]|$)/.test(name) || /[-_]cover$/.test(name) ? 'cover' : 'cv';
+}
+
 const COVER_TEXT = /\.(txt|md)$/i;
+const TAILORED_CV = /^output\/(\d+)-[^/]+\/cv\/tailored\/v(\d+)\/cv\.pdf$/;
 
 function walkOutput(dataRoot: string): string[] {
   const out: string[] = [];
@@ -133,15 +144,34 @@ function walkOutput(dataRoot: string): string[] {
   return out;
 }
 
-/** What the Apply page can attach: every CV PDF and text cover under output/, plus the tailored CV for tracker row n when one is known. */
-export function readApplyDocuments(dataRoot: string, row: { num: number; company: string } | null): ApplyDocuments {
+/**
+ * What the Apply page can attach: every CV PDF and text cover under output/, plus a suggestion for one tracker row.
+ * Everything about that row is keyed by its report number (pdf-index.tsv and the application bundles), never by the row number.
+ */
+export function readApplyDocuments(dataRoot: string, row: { report: number | null; company: string } | null): ApplyDocuments {
+  const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
+  const index = fs.existsSync(indexPath) ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
+  // The generator's manifest records the kind it rendered; the name is only the fallback, as in generate-pdf.mjs.
+  const manifestKind = new Map(index.filter((r) => r.kind === 'cv' || r.kind === 'cover').map((r) => [r.pdf, r.kind]));
   const files = walkOutput(dataRoot).sort((a, b) => mtime(dataRoot, b) - mtime(dataRoot, a));
-  const pdfs = files.filter((f) => f.toLowerCase().endsWith('.pdf') && !COVER_NAME.test(path.basename(f)));
-  const covers = files.filter((f) => COVER_TEXT.test(f) && COVER_NAME.test(path.basename(f)));
+  const pdfs = files.filter((f) => f.toLowerCase().endsWith('.pdf') && (manifestKind.get(f) ?? artifactKindFromName(f)) === 'cv');
+  const covers = files.filter((f) => COVER_TEXT.test(f) && artifactKindFromName(f) === 'cover');
   if (!row) return { pdfs, covers, suggestedPdf: null, suggestedCover: null };
-  const cvs = readDocuments(dataRoot, row.num, row.company).files.filter((f) => f.kind === 'cv' && pdfs.includes(f.path));
-  const suggestedPdf = (cvs.find((f) => f.source === 'index') ?? cvs[0])?.path ?? null;
   const slug = companySlug(row.company);
-  const suggestedCover = (slug && covers.find((c) => path.basename(c).toLowerCase().includes(slug))) || null;
-  return { pdfs, covers, suggestedPdf, suggestedCover };
+  const namesCompany = (f: string) => Boolean(slug) && new RegExp(`(^|[^a-z0-9])${slug}([^a-z0-9]|$)`).test(path.basename(f).toLowerCase());
+  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? pdfs.find(namesCompany) ?? null, suggestedCover: covers.find(namesCompany) ?? null };
+}
+
+/** The manifest's CV for the report (its last row is the newest), else the highest tailored version in the report's bundle. */
+function suggestCv(index: PdfIndexRow[], pdfs: string[], report: number | null): string | undefined {
+  if (report === null) return undefined;
+  const indexed = index.filter((r) => r.report === report && pdfs.includes(r.pdf)).at(-1)?.pdf;
+  if (indexed) return indexed;
+  let best: { path: string; version: number } | undefined;
+  for (const f of pdfs) {
+    const m = f.match(TAILORED_CV);
+    if (!m || Number(m[1]) !== report) continue;
+    if (!best || Number(m[2]) > best.version) best = { path: f, version: Number(m[2]) };
+  }
+  return best?.path;
 }

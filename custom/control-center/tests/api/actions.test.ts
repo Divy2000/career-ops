@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { execNoShell, type Exec } from '../../server/routes/system.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -185,5 +186,83 @@ describe('Apply documents', () => {
     expect(body.pdfs).toContain('output/globex-payments-cv.pdf');
     expect((await get('/api/apply/documents?n=abc')).statusCode).toBe(400);
     expect((await get('/api/apply/documents?n=99')).statusCode).toBe(404);
+  });
+});
+
+describe('docs.prepareApplication when the script itself fails', () => {
+  // Only the prefill script is replaced; every other child process runs for real.
+  const failing = (stderr: string, code = 1): Exec => (cmd, args, opts) => (args[0]?.endsWith('prepare-application.mjs') ? Promise.resolve({ code, stdout: '', stderr }) : execNoShell(cmd, args, opts));
+  const prefill = async (exec: Exec) => {
+    const app = await makeTestApp({}, { exec });
+    try {
+      return await app.app.inject({ method: 'POST', url: '/api/actions/docs.prepareApplication', headers: app.authedWrite, payload: { params: { url: 'https://boards.greenhouse.io/acme/jobs/1', pdf: 'output/acme-robotics-cv.pdf' } } });
+    } finally {
+      await app.close();
+    }
+  };
+
+  it('turns the script error lines into a readable 422', async () => {
+    const res = await prefill(failing('Error: URL not recognized as Greenhouse, Ashby, or Lever.\n  URL: https://boards.greenhouse.io/acme/jobs/1\n'));
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.json().error).toBe('Prefill could not run: URL not recognized as Greenhouse, Ashby, or Lever.');
+    expect(res.json().stderr).toBeUndefined();
+  });
+
+  it('still says what happened when the script fails without an error line', async () => {
+    const res = await prefill(failing('TypeError: boom\n    at main (prepare-application.mjs:9:1)\n', 2));
+    expect(res.statusCode, res.body).toBe(502);
+    expect(res.json().error).toBe('Prefill failed: prepare-application.mjs exited 2 (last output: at main (prepare-application.mjs:9:1)).');
+  });
+});
+
+describe('Apply documents classification and suggestion', () => {
+  let a: TestApp;
+  beforeAll(async () => {
+    a = await makeTestApp();
+  });
+  afterAll(async () => {
+    await a.close();
+  });
+  const out = (rel: string) => {
+    const file = path.join(a.cfg.dataRoot, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '%PDF-1.4\n');
+  };
+  const docs = async (n?: number) => (await a.app.inject({ method: 'GET', url: `/api/apply/documents${n ? `?n=${n}` : ''}`, headers: a.authed })).json();
+
+  it('keeps a CV whose company or role merely contains the word cover, and one the PDF manifest marks cv', async () => {
+    out('output/cv-jane-cover-genius-2026-10-04.pdf');
+    out('output/cover-genius-staff-engineer-2026-10-04.pdf');
+    out('output/cv-jane-cover-genius-2026-10-04.md');
+    fs.appendFileSync(path.join(a.cfg.dataRoot, 'data', 'pdf-index.tsv'), '4\toutput/cover-genius-staff-engineer-2026-10-04.pdf\t\tletter\t2026-10-04\tcv\n');
+    const body = await docs();
+    expect(body.pdfs).toContain('output/cv-jane-cover-genius-2026-10-04.pdf');
+    expect(body.pdfs).toContain('output/cover-genius-staff-engineer-2026-10-04.pdf');
+    expect(body.covers).not.toContain('output/cv-jane-cover-genius-2026-10-04.md');
+  });
+
+  it('drops cover letters named the way the cover flow names them, or marked cover in the PDF manifest', async () => {
+    out('output/globex-payments-staff-software-engineer-cover.pdf');
+    out('output/cover_globex.pdf');
+    out('output/globex-letter.pdf');
+    fs.appendFileSync(path.join(a.cfg.dataRoot, 'data', 'pdf-index.tsv'), '3\toutput/globex-letter.pdf\t\tletter\t2026-09-26\tcover\n');
+    const body = await docs();
+    expect(body.pdfs).not.toContain('output/globex-payments-staff-software-engineer-cover.pdf');
+    expect(body.pdfs).not.toContain('output/cover_globex.pdf');
+    expect(body.pdfs).not.toContain('output/globex-letter.pdf');
+  });
+
+  it('suggests the CV indexed under the row report number, not under the tracker row number', async () => {
+    const tracker = path.join(a.cfg.dataRoot, 'data', 'applications.md');
+    fs.appendFileSync(tracker, '| 9 | 2026-10-01 | Acme Robotics | - | Platform Engineer | 4.0/5 | Evaluated | ✅ | [1](../reports/001-acme-robotics.md) | second role |\n');
+    fs.appendFileSync(path.join(a.cfg.dataRoot, 'data', 'pdf-index.tsv'), '9\toutput/globex-payments-cv.pdf\t\tletter\t2026-10-01\tcv\n');
+    expect((await docs(9)).suggestedPdf).toBe('output/acme-robotics-cv.pdf');
+  });
+
+  it('suggests the newest tailored CV in the report application bundle when the manifest has none', async () => {
+    out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v002/cv.pdf');
+    out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
+    out('output/006-vandelay-systems-senior-python-engineer/cv/source/original.pdf');
+    expect((await docs(6)).suggestedPdf).toBe('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
   });
 });

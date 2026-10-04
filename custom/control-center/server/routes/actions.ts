@@ -43,6 +43,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       /* plain text output */
     }
     if (r.code !== 0) {
+      const explained = action.explainFailure?.(r);
+      if (explained) return reply.code(explained.status).send({ error: explained.error, exit: r.code, result });
       const status = action.exitMap?.[r.code] ?? 500;
       return reply.code(status).send({ error: `${action.id} exited ${r.code}`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
     }
