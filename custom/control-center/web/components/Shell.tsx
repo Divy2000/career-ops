@@ -86,6 +86,23 @@ function ActivityChip() {
   );
 }
 
+/** Rendered means not display:none, not inside a hidden ancestor and not visibility:hidden. */
+function isRendered(el: Element | null | undefined): el is HTMLElement {
+  return el instanceof HTMLElement && el.checkVisibility({ checkVisibilityCSS: true });
+}
+
+/** Two frames: long enough for a closing Radix dialog to hand focus back to its opener first. */
+function afterFocusSettles(run: () => void): () => void {
+  let second = 0;
+  const first = requestAnimationFrame(() => {
+    second = requestAnimationFrame(run);
+  });
+  return () => {
+    cancelAnimationFrame(first);
+    cancelAnimationFrame(second);
+  };
+}
+
 /** Keep in step with the max-width media queries in base.css (the md breakpoint, 768px). */
 const NARROW_QUERY = '(max-width: 767px)';
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -117,15 +134,65 @@ export function Shell() {
   const wasOpen = useRef(false);
   // Set when another overlay closes the drawer: that overlay owns focus, so it is not handed back to Menu.
   const overlayTookFocus = useRef(false);
-  const openOverlay = useCallback((toggle: () => void) => {
+  const openerRef = useRef<HTMLElement | null>(null);
+  // Browsers may already have moved focus to the body when its element is hidden, so remember whether it was last inside the nav.
+  const focusInNav = useRef(false);
+  useEffect(() => {
+    const inNav = (t: EventTarget | null) => t instanceof Node && Boolean(navRef.current?.contains(t));
+    const onIn = (e: FocusEvent) => {
+      focusInNav.current = inNav(e.target);
+    };
+    const onOut = (e: FocusEvent) => {
+      if (inNav(e.target) && isRendered(e.target as Element)) focusInNav.current = false;
+    };
+    document.addEventListener('focusin', onIn);
+    document.addEventListener('focusout', onOut);
+    return () => {
+      document.removeEventListener('focusin', onIn);
+      document.removeEventListener('focusout', onOut);
+    };
+  }, []);
+  /** The one place that keeps the invariant: focus is never left on an element that is not rendered. */
+  const rescueFocus = useCallback((preferred?: HTMLElement | null) => {
+    const active = document.activeElement;
+    const lost = !active || active === document.body;
+    const narrow = window.matchMedia(NARROW_QUERY).matches;
+    if (lost ? !(focusInNav.current && narrow) : isRendered(active)) return;
+    const fallback = narrow ? menuRef.current : navRef.current?.querySelector<HTMLElement>('a[href]');
+    const target = [preferred, fallback].find(isRendered);
+    if (target) target.focus();
+    else if (!lost) (active as HTMLElement).blur();
+  }, []);
+  /** Every overlay opens through here, by button or hotkey: the drawer yields, and the opener is remembered for the close. */
+  const openOverlay = useCallback((isOpen: boolean, toggle: () => void) => {
     if (wasOpen.current) overlayTookFocus.current = true;
+    if (!isOpen) {
+      const active = document.activeElement;
+      const inDrawer = active instanceof HTMLElement && navRef.current?.contains(active) && window.matchMedia(NARROW_QUERY).matches;
+      openerRef.current = inDrawer ? menuRef.current : active instanceof HTMLElement ? active : null;
+    }
     setNavOpenOn(null);
     toggle();
   }, []);
-  const toggleAsk = useCallback(() => openOverlay(() => setAsk((o) => !o)), [openOverlay]);
-  const togglePalette = useCallback(() => openOverlay(() => setPalette((o) => !o)), [openOverlay]);
+  const toggleAsk = useCallback(() => openOverlay(ask, () => setAsk((o) => !o)), [openOverlay, ask]);
+  const togglePalette = useCallback(() => openOverlay(palette, () => setPalette((o) => !o)), [openOverlay, palette]);
   useAskHotkey(toggleAsk);
   usePaletteHotkey(togglePalette);
+  const overlayOpen = ask || palette;
+  const wasOverlayOpen = useRef(false);
+  useEffect(() => {
+    const closed = wasOverlayOpen.current && !overlayOpen;
+    wasOverlayOpen.current = overlayOpen;
+    if (!closed) return;
+    return afterFocusSettles(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body) {
+        const opener = openerRef.current;
+        if (isRendered(opener)) opener.focus();
+        else rescueFocus();
+      } else rescueFocus(openerRef.current);
+    });
+  }, [overlayOpen, rescueFocus]);
   useEffect(() => {
     if (navOpen) navRef.current?.querySelector<HTMLElement>('a[href]')?.focus();
     else if (wasOpen.current && !overlayTookFocus.current && window.matchMedia(NARROW_QUERY).matches) menuRef.current?.focus();
@@ -153,12 +220,18 @@ export function Shell() {
   }, [navOpen]);
   useEffect(() => {
     const mq = window.matchMedia(NARROW_QUERY);
+    let cancel = () => {};
     const onChange = () => {
       if (!mq.matches) setNavOpenOn(null);
+      cancel();
+      cancel = afterFocusSettles(() => rescueFocus());
     };
     mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
+    return () => {
+      mq.removeEventListener('change', onChange);
+      cancel();
+    };
+  }, [rescueFocus]);
   return (
     <ConfirmProvider>
       <div className={`shell${navOpen ? ' shell--nav-open' : ''}`}>

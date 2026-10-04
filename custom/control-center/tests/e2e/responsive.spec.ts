@@ -215,3 +215,94 @@ test.describe('desktop window (1440x900)', () => {
     expect(box.width).toBe(232);
   });
 });
+
+/** The invariant: focus is never left on an element that is hidden (display none, hidden ancestor, zero size). The page body counts as visible. */
+async function expectFocusRendered(page: Page, step: string) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const a = document.activeElement;
+          if (!a || a === document.body) return 'body';
+          const r = a.getBoundingClientRect();
+          const rendered = (a as HTMLElement).checkVisibility({ checkVisibilityCSS: true }) && r.width > 0 && r.height > 0;
+          return rendered ? 'rendered' : `hidden <${a.tagName.toLowerCase()}> "${(a.textContent ?? '').trim().slice(0, 30)}"`;
+        }),
+      { message: `focus after: ${step}` },
+    )
+    .toMatch(/^(body|rendered)$/);
+}
+
+const insideOverlay = (page: Page, which: 'ask' | 'palette') =>
+  page.evaluate((w) => !!document.activeElement?.closest(w === 'ask' ? '[role="dialog"][aria-label="Ask"]' : '[role="dialog"]'), which);
+
+test.describe('focus is never left on a hidden element (390 <-> 1000)', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test.beforeEach(async ({ page }) => login(page));
+
+  async function resizeRoundTrip(page: Page, step: string) {
+    // A modal overlay hides the rest of the page from the role tree, so the menu button is found by class here.
+    const menuToggle = page.locator('.menu-toggle');
+    await page.setViewportSize({ width: 1000, height: 844 });
+    await expect(menuToggle).toBeHidden();
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    await expectFocusRendered(page, `${step}, widened`);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(menuToggle).toBeVisible();
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    await expectFocusRendered(page, `${step}, narrowed again`);
+  }
+
+  for (const drawerOpen of [false, true]) {
+    for (const resizeFirst of [false, true]) {
+      for (const [overlay, via] of [['ask', 'button'], ['ask', 'hotkey'], ['palette', 'button'], ['palette', 'hotkey']] as const) {
+        test(`drawer ${drawerOpen ? 'open' : 'closed'}, resize ${resizeFirst ? 'before' : 'after'}, ${overlay} by ${via}`, async ({ page }) => {
+          if (drawerOpen) {
+            await menuButton(page).click();
+            await expect(sidebar(page)).toBeVisible();
+            await expectFocusRendered(page, 'drawer opened');
+          }
+          if (resizeFirst) await resizeRoundTrip(page, 'before the overlay');
+          if (drawerOpen && resizeFirst) {
+            await menuButton(page).click();
+            await expect(sidebar(page)).toBeVisible();
+            await sidebar(page).getByRole('link', { name: 'Today' }).focus();
+          }
+
+          if (overlay === 'ask') {
+            if (via === 'button') await page.getByRole('button', { name: 'Open Ask drawer' }).click();
+            else await page.keyboard.press('Control+j');
+            await expect(page.getByRole('dialog', { name: 'Ask' })).toBeVisible();
+          } else {
+            if (via === 'button') await page.getByRole('button', { name: 'Open command palette' }).click();
+            else await page.keyboard.press('Control+k');
+            await expect(page.getByRole('dialog')).toBeVisible();
+          }
+          await expectFocusRendered(page, 'overlay opened');
+          await expect.poll(() => insideOverlay(page, overlay), { message: 'focus moved into the overlay' }).toBe(true);
+          await expect(page.locator('.shell')).not.toHaveClass(/shell--nav-open/);
+
+          await resizeRoundTrip(page, 'overlay open');
+
+          if (overlay === 'ask' && via === 'button') await page.getByRole('button', { name: 'Close Ask' }).click();
+          else if (overlay === 'ask') await page.keyboard.press('Control+j');
+          else await page.keyboard.press('Escape');
+          await expect(page.getByRole('dialog')).toHaveCount(0);
+          await expectFocusRendered(page, 'overlay closed');
+          // Back to the opener: the button that was pressed, or for a hotkey Menu when the drawer was what had focus.
+          if (via === 'button') await expect(page.getByRole('button', { name: overlay === 'ask' ? 'Open Ask drawer' : 'Open command palette' })).toBeFocused();
+          else if (drawerOpen) await expect(page.locator('.menu-toggle')).toBeFocused();
+
+          await resizeRoundTrip(page, 'overlay closed');
+        });
+      }
+    }
+  }
+
+  test('drawer open with focus on a link: widen then narrow moves focus to Menu', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
+    await resizeRoundTrip(page, 'drawer open');
+    await expect(menuButton(page)).toBeFocused();
+  });
+});
