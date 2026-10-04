@@ -129,6 +129,18 @@ test('given a cv.md project whose link is written without a scheme, when the pay
   assert.match(bad.errors.join('\n'), /"Graph Tool".*does not match/);
 });
 
+test('given a cv.md project whose link is on a body or continuation line, when the payload uses it, then it matches', () => {
+  const url = 'https://github.com/me/graph-tool';
+  const headed = '## Projects\n\n### Graph Tool\nRepo: https://github.com/me/graph-tool\n- Built it.\n\n### Other\nhttps://github.com/me/other\n';
+  const continued = '## Projects\n\n- **Graph Tool** -- Built it.\n  Repo: github.com/me/graph-tool\n- **Other** -- https://github.com/me/other\n';
+  for (const cv of [headed, continued]) {
+    assert.deepEqual(checkPayload({ projects: [{ name: 'Graph Tool', url, bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, [], cv);
+    // A link that belongs to the next entry is not this project's link.
+    const other = checkPayload({ projects: [{ name: 'Graph Tool', url: 'https://github.com/me/other', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+    assert.match(other.errors.join('\n'), /"Graph Tool".*does not match/, cv);
+  }
+});
+
 test('given a project in both the library and cv.md, when checked, then the library link is authoritative', () => {
   const cv = '## Projects\n\n- **Ticket Triage Bot** (github.com/old/triage) -- x\n';
   const r = checkPayload({ projects: [{ name: 'Ticket Triage Bot', url: 'https://github.com/old/triage', bullets: ['x'] }] }, { cvText: cv, libraryText: LIBRARY });

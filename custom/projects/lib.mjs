@@ -328,9 +328,22 @@ export function convertJsonProjects(data) {
 }
 
 // The entry named `title` in cv.md: a `##`-`######` heading whose name (text
-// before the separator) matches, or a `**Title**` list item. Returns the
-// entry's text without the title, or null when cv.md does not list it.
+// before the separator) matches, with its body up to the next heading, or a
+// `**Title**` list item with its indented continuation lines. Returns the raw
+// lines (`line`/`endLine` are 1-based, inclusive) or null.
+export function findCvBlock(cvText, title) {
+  const located = locateCvEntry(cvText, title);
+  if (!located) return null;
+  return { line: located.start + 1, endLine: located.end + 1, raw: located.lines.slice(located.start, located.end + 1).join('\n') };
+}
+
+// The same entry's text without the title, or null when cv.md does not list it.
 export function findCvEntry(cvText, title) {
+  const located = locateCvEntry(cvText, title);
+  return located ? { line: located.start + 1, text: located.text } : null;
+}
+
+function locateCvEntry(cvText, title) {
   const key = titleKey(title);
   if (!key) return null;
   const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
@@ -338,15 +351,19 @@ export function findCvEntry(cvText, title) {
   for (let i = 0; i < lines.length; i++) {
     const h = lines[i].match(/^#{2,6}\s+(.*\S)\s*$/);
     if (h && titleKey(plain(h[1]).split(HEADING_SEP)[0]) === key) {
-      const body = [];
-      for (let j = i + 1; j < lines.length && !/^#{1,6}\s/.test(lines[j]); j++) body.push(lines[j]);
-      return { line: i + 1, text: oneLine(body.map((l) => l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')).join(' ')) };
+      let j = i + 1;
+      while (j < lines.length && !/^#{1,6}\s/.test(lines[j])) j++;
+      let end = j - 1;
+      while (end > i && !lines[end].trim()) end--;
+      const body = lines.slice(i + 1, j);
+      return { lines, start: i, end, text: oneLine(body.map((l) => l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')).join(' ')) };
     }
     const b = lines[i].match(/^\s*(?:[-*+]\s+)?\*\*(.+?)\*\*(.*)$/);
     if (b && titleKey(plain(b[1])) === key) {
       const rest = [b[2].replace(/^\s*\([^)]*\)/, '').replace(/^\s*(?:--|\u2014|\u2013|-|:)\s*/, '')];
-      for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]); j++) rest.push(lines[j]);
-      return { line: i + 1, text: oneLine(rest.join(' ')) };
+      let j = i + 1;
+      for (; j < lines.length && /^\s+\S/.test(lines[j]); j++) rest.push(lines[j]);
+      return { lines, start: i, end: j - 1, text: oneLine(rest.join(' ')) };
     }
   }
   return null;

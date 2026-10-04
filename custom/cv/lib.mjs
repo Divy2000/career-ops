@@ -2,7 +2,7 @@
 // projects library, payload normalization for the fork template, and the
 // fit-to-page loop and PDF page count used by render-pdf.mjs.
 
-import { parseLibrary, findCvEntry, titleKey } from '../projects/lib.mjs';
+import { parseLibrary, findCvBlock, titleKey } from '../projects/lib.mjs';
 
 export const AWARDS_TITLE = 'Recent Achievements';
 const PUBLISHER_HOSTS = ['doi.org', 'sciencedirect.com', 'wiley.com', 'arxiv.org'];
@@ -60,7 +60,6 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
   const warnings = [];
   const achievements = recentAchievements(cvText);
   const library = libraryText === null ? [] : parseLibrary(libraryText).entries;
-  const cvLines = String(cvText ?? '').split('\n');
   for (const p of Array.isArray(payload?.projects) ? payload.projects : []) {
     const name = typeof p?.name === 'string' ? p.name.trim() : '';
     if (!name) continue;
@@ -72,14 +71,14 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
     if (entry && entry.kind !== 'project') {
       errors.push(`project "${name}" is a ${entry.kind} in article-digest.md (line ${entry.line}); only kind project can be listed under Projects`);
     }
-    const inCv = entry ? null : findCvEntry(cvText, name);
+    const inCv = entry ? null : findCvBlock(cvText, name);
     if (!entry && !inCv) {
       errors.push(`project "${name}" is in neither article-digest.md nor cv.md; take projects from node custom/projects/rank.mjs output`);
     }
     const url = typeof p.url === 'string' ? p.url.trim() : '';
     if (url && (entry || inCv)) {
       const source = entry ? 'article-digest.md' : 'cv.md';
-      const known = entry ? (entry.url ? [entry.url] : []) : linksIn(cvLines[inCv.line - 1] ?? '');
+      const known = entry ? (entry.url ? [entry.url] : []) : linksIn(inCv.raw);
       if (!known.length) {
         errors.push(`project "${name}" has link ${url} but ${source} has no link for it; a link cannot be invented`);
       } else if (!known.some((k) => urlKey(k) === urlKey(url))) {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { findCvEntry, wordDiff, validateLibrary, parseLibrary } from '../lib.mjs';
+import { findCvEntry, findCvBlock, wordDiff, validateLibrary, parseLibrary } from '../lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -56,6 +56,14 @@ test('given long texts with no words in common, when diffed, then the work is ca
   assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
   assert.match(out, /^\[-a0 a1 /);
   assert.match(out, /\(diff truncated: compared the first \d+ differing words of each text\)$/);
+});
+
+test('findCvBlock returns the raw lines of a cv.md entry: heading through body, or a bold item and its continuation lines', () => {
+  const headed = '## Projects\n\n### Graph Tool\nRepo: https://x.example/g\n- Built it.\n### Next\n- n\n';
+  assert.deepEqual(findCvBlock(headed, 'graph tool'), { line: 3, endLine: 5, raw: '### Graph Tool\nRepo: https://x.example/g\n- Built it.' });
+  const bold = '- **Graph Tool** -- Built it.\n  Repo: x.example/g\n- **Next** -- n\n';
+  assert.deepEqual(findCvBlock(bold, 'Graph Tool'), { line: 1, endLine: 2, raw: '- **Graph Tool** -- Built it.\n  Repo: x.example/g' });
+  assert.equal(findCvBlock(bold, 'Missing'), null);
 });
 
 test('findCvEntry finds a bold list item or a heading and returns its text without the title', () => {
