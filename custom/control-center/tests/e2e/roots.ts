@@ -1,6 +1,7 @@
 // Extra synthetic data roots for the e2e suite, derived from the shared fixture root.
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -106,6 +107,24 @@ export function tinyGif(frameColours: number[], width = 32, height = 18): Buffer
   return Buffer.from(parts.flat());
 }
 
+/** A solid-colour PNG, built with zlib so no binary is committed. */
+export function tinyPng(rgb: [number, number, number], width = 64, height = 36): Buffer {
+  const row = Buffer.concat([Buffer.from([0]), Buffer.concat(Array.from({ length: width }, () => Buffer.from(rgb)))]);
+  const chunk = (type: string, data: Buffer) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length, 0);
+    head.write(type, 4, 'latin1');
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(Buffer.concat([head.subarray(4), data])), 0);
+    return Buffer.concat([head, data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(Buffer.concat(Array.from({ length: height }, () => row)))), chunk('IEND', Buffer.alloc(0))]);
+}
+
 const DEMO_GUIDE = {
   sections: [
     {
@@ -136,6 +155,54 @@ const DEMO_GUIDE = {
       gif: 'followups.gif',
       steps: ['Log a follow-up.'],
       tips: ['Cadence comes from your profile.', 'Overdue ones sort first.'],
+    },
+  ],
+};
+
+/** A version 2 (documentation) guide: still images and a clip, each as a dark and light pair of the same size. */
+const DOCS_GUIDE = {
+  version: 2,
+  sections: [
+    {
+      id: 'getting-started',
+      title: 'Getting started',
+      summary: 'Launch the app and find your way around.',
+      subsections: [
+        {
+          id: 'launch',
+          title: 'Launch and sign in',
+          summary: 'Open the app with the token the launcher prints.',
+          blocks: [
+            { type: 'text', text: 'Run the launcher, then open the printed link.' },
+            { type: 'steps', items: ['Open a terminal in the repo.', 'Run npm start.', 'Open the link it prints.'] },
+            { type: 'media', kind: 'image', file: 'launch.dark.png', fileLight: 'launch.light.png', alt: 'The Today page after signing in.', caption: 'Today, right after sign in.', width: 64, height: 36 },
+          ],
+        },
+        {
+          id: 'safety',
+          title: 'Safety model',
+          summary: 'The app never submits an application for you.',
+          blocks: [{ type: 'text', text: 'Everything that writes asks first.' }, { type: 'tips', items: ['Read the confirmation dialog before you accept.'] }],
+        },
+      ],
+    },
+    {
+      id: 'tracking',
+      title: 'Tracking',
+      summary: 'Keep the tracker current.',
+      subsections: [
+        {
+          id: 'change-status',
+          title: 'Change a status',
+          summary: 'Move an application to its next state.',
+          route: '/tracker',
+          chapter: 1,
+          blocks: [
+            { type: 'text', text: 'Pick a row, then choose the new status.' },
+            { type: 'media', kind: 'gif', file: 'status.dark.gif', fileLight: 'status.light.gif', poster: 'status.dark.png', posterLight: 'status.light.png', alt: 'A status being changed.', width: 32, height: 18 },
+          ],
+        },
+      ],
     },
   ],
 };
@@ -198,6 +265,20 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
   fs.copyFileSync(path.join(demo, 'today.gif'), path.join(warn, 'today.gif'));
   fs.writeFileSync(path.join(warn, 'guide.json'), JSON.stringify({ sections: [{ ...DEMO_GUIDE.sections[0], poster: undefined, chapter: undefined }] }));
   fs.writeFileSync(path.join(warn, 'tutorial.json'), JSON.stringify({ id: 'warn-tour', title: 'Warning tour', video: 'warn.mp4', transcript: 'missing.md', guide: 'guide.json' }));
+  // A tutorial with a version 2 guide (dark and light media) and no light video.
+  const docs = path.join(root, 'docs-tour');
+  fs.mkdirSync(docs, { recursive: true });
+  fs.copyFileSync(path.join(demo, 'demo-tour.mp4'), path.join(docs, 'docs.mp4'));
+  fs.writeFileSync(path.join(docs, 'guide.json'), JSON.stringify(DOCS_GUIDE));
+  const dark: [number, number, number] = [0x1b, 0x1f, 0x2a];
+  const light: [number, number, number] = [0xf4, 0xf6, 0xfa];
+  fs.writeFileSync(path.join(docs, 'launch.dark.png'), tinyPng(dark, 64, 36));
+  fs.writeFileSync(path.join(docs, 'launch.light.png'), tinyPng(light, 64, 36));
+  fs.writeFileSync(path.join(docs, 'status.dark.png'), tinyPng(dark, 32, 18));
+  fs.writeFileSync(path.join(docs, 'status.light.png'), tinyPng(light, 32, 18));
+  fs.writeFileSync(path.join(docs, 'status.dark.gif'), tinyGif([0, 1]));
+  fs.writeFileSync(path.join(docs, 'status.light.gif'), tinyGif([2, 3]));
+  fs.writeFileSync(path.join(docs, 'tutorial.json'), JSON.stringify({ id: 'docs-tour', title: 'Docs tour', video: 'docs.mp4', guide: 'guide.json', chapters: [{ title: 'Intro', start: 0 }, { title: 'Middle', start: 0.5 }] }));
   const broken = path.join(root, 'broken-demo');
   fs.mkdirSync(broken, { recursive: true });
   fs.writeFileSync(path.join(broken, 'tutorial.json'), '{ "id": "broken-demo", ');
