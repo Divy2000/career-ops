@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
 
 async function login(page: Page) {
@@ -49,7 +49,7 @@ test.describe('deterministic writes from the pages', () => {
     await expect(page.getByRole('button', { name: 'Confirm delete #1' })).toBeVisible();
     const tracker = await (await page.request.get('/api/tracker')).json();
     expect(tracker.rows.some((r: { num: number }) => r.num === 1)).toBe(true);
-    const axe = await new AxeBuilder({ page }).analyze();
+    const axe = await (await axeBuilder(page)).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
@@ -60,7 +60,7 @@ test.describe('deterministic writes from the pages', () => {
     await page.getByRole('tab', { name: 'Fresh' }).click();
     await expect(page).toHaveURL(/tab=fresh/);
     await expect(page.getByRole('table', { name: 'Fresh matches' })).toBeVisible();
-    const axe = await new AxeBuilder({ page }).analyze();
+    const axe = await (await axeBuilder(page)).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 });

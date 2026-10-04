@@ -244,6 +244,32 @@ describe('theme store', () => {
   });
 });
 
+describe('how a change is animated', () => {
+  it('an explicit choice reveals from the control, an OS change fades, a change from another tab is instant', async () => {
+    const sys = installSystemTheme(false);
+    installStorage();
+    const kinds: string[] = [];
+    vi.doMock('@web/lib/theme-transition', () => ({
+      runThemeChange: (commit: () => void, kind: string, origin?: unknown) => {
+        kinds.push(origin ? `${kind}:origin` : kind);
+        commit();
+      },
+    }));
+    const t = await loadTheme();
+    const stop = t.watchSystemAndStorage();
+    const trigger = document.createElement('button');
+    t.setThemeMode('dark', trigger); // light -> dark: revealed from the control
+    sys.set(true); // an explicit mode ignores the system: nothing to animate
+    t.setThemeMode('auto'); // dark -> dark: only the mode label changes
+    sys.set(false); // auto, dark -> light: an OS-driven fade
+    window.dispatchEvent(new StorageEvent('storage', { key: 'cc.theme', newValue: 'dark' })); // another tab: instant
+    t.setThemeMode('light'); // dark -> light without an origin: still a reveal
+    stop();
+    vi.doUnmock('@web/lib/theme-transition');
+    expect(kinds).toEqual(['reveal:origin', 'fade', 'none', 'reveal']);
+  });
+});
+
 describe('theme-boot.js (the pre-paint script) agrees with resolveTheme', () => {
   const TABLE: Array<[stored: string | null | 'throws', systemDark: boolean | 'unsupported']> = [
     [null, true],

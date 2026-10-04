@@ -8,6 +8,7 @@ import './styles/sessions.css';
 import './styles/dialogs.css';
 import './styles/tutorials.css';
 import './styles/theme.css';
+import './styles/motion.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

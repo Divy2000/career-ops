@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { test, expect, type Page } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
 async function login(page: Page) {
@@ -10,7 +10,7 @@ async function login(page: Page) {
 }
 
 async function axeClean(page: Page) {
-  const axe = await new AxeBuilder({ page }).analyze();
+  const axe = await (await axeBuilder(page)).analyze();
   const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 }

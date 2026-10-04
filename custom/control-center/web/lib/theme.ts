@@ -1,4 +1,5 @@
 import { createElement, Fragment, useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { runThemeChange, type RevealOrigin, type ThemeChangeKind } from './theme-transition';
 
 export type ThemeMode = 'auto' | 'light' | 'dark';
 export type ResolvedTheme = 'light' | 'dark';
@@ -78,13 +79,18 @@ function applyToDocument({ mode, resolved }: ThemeState): void {
   applyMetas(mode, resolved);
 }
 
-function update(next: { mode: ThemeMode; systemDark: boolean }): void {
+function update(next: { mode: ThemeMode; systemDark: boolean }, kind: ThemeChangeKind, origin?: RevealOrigin): void {
   const prev = current();
   const resolved = resolveTheme(next.mode, next.systemDark);
   if (prev.mode === next.mode && prev.resolved === resolved && prev.systemDark === next.systemDark) return;
-  state = { ...next, resolved };
-  applyToDocument(state);
-  for (const l of [...listeners]) l();
+  const commit = () => {
+    state = { ...next, resolved };
+    applyToDocument(state);
+    for (const l of [...listeners]) l();
+  };
+  // Only a change of the resolved theme is visible; a mode label or an ignored system flip needs no motion.
+  if (resolved === prev.resolved) commit();
+  else runThemeChange(commit, kind, origin);
 }
 
 /** Applies the current (stored) choice to <html>; theme-boot.js already did this before paint, so this only heals a missing boot script. */
@@ -92,19 +98,19 @@ export function initTheme(): void {
   applyToDocument(current());
 }
 
-export function setThemeMode(mode: ThemeMode): void {
+export function setThemeMode(mode: ThemeMode, origin?: RevealOrigin): void {
   // Read the state before the write: a lazily created state would otherwise pick up the new stored value and see no change.
   const { systemDark } = current();
   writeStoredMode(mode);
-  update({ mode, systemDark });
+  update({ mode, systemDark }, 'reveal', origin);
 }
 
 /** Live OS changes (they only matter in Auto) and changes made in another tab. Returns the cleanup. */
 export function watchSystemAndStorage(): () => void {
   const mql = typeof window.matchMedia === 'function' ? window.matchMedia(DARK_QUERY) : null;
-  const onSystem = () => update({ mode: current().mode, systemDark: systemPrefersDark() });
+  const onSystem = () => update({ mode: current().mode, systemDark: systemPrefersDark() }, 'fade');
   const onStorage = (e: StorageEvent) => {
-    if (e.key === THEME_KEY || e.key === null) update({ mode: asMode(e.key === null ? null : e.newValue), systemDark: current().systemDark });
+    if (e.key === THEME_KEY || e.key === null) update({ mode: asMode(e.key === null ? null : e.newValue), systemDark: current().systemDark }, 'none');
   };
   mql?.addEventListener('change', onSystem);
   window.addEventListener('storage', onStorage);
@@ -124,8 +130,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 }
 
 /** `origin` is where the change was asked for (a control or a point); the reveal animation grows from there. */
-export function useTheme(): ThemeState & { setMode: (mode: ThemeMode, origin?: Element) => void } {
+export function useTheme(): ThemeState & { setMode: (mode: ThemeMode, origin?: RevealOrigin) => void } {
   const snapshot = useSyncExternalStore(subscribeTheme, getThemeState, getThemeState);
-  const setMode = useCallback((mode: ThemeMode, _origin?: Element) => setThemeMode(mode), []);
+  const setMode = useCallback((mode: ThemeMode, origin?: RevealOrigin) => setThemeMode(mode, origin), []);
   return { mode: snapshot.mode, resolved: snapshot.resolved, setMode };
 }

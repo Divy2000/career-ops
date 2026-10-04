@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 import { test, expect, type Page } from '@playwright/test';
 import { E2E_TOKEN } from '../../playwright.config.js';
+import { axeBuilder } from './helpers.js';
 
 const DARK_BG = 'rgb(11, 13, 18)';
 const LIGHT_BG = 'rgb(244, 246, 250)';
@@ -53,7 +54,8 @@ test.describe('auto follows the OS', () => {
     expect(await activeThemeColor(page)).toBe('#11141a');
     await page.emulateMedia({ colorScheme: 'light' });
     await expect.poll(() => attrs(page)).toEqual({ theme: 'light', mode: 'auto', scheme: 'light' });
-    expect(await bodyBg(page)).toBe(LIGHT_BG);
+    // The colors cross-fade for 200ms, so the settled value is what counts.
+    await expect.poll(() => bodyBg(page)).toBe(LIGHT_BG);
     expect(await activeThemeColor(page)).toBe('#fbfcfe');
     await ctx.close();
   });
@@ -105,6 +107,12 @@ test('blocked storage never breaks the app: it renders in Auto', async ({ browse
   await ctx.close();
 });
 
+async function axeSerious(page: Page) {
+  const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
+  const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+  expect(serious, JSON.stringify(serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target).slice(0, 6) })), null, 2)).toEqual([]);
+}
+
 const switcher = (page: Page) => page.getByRole('button', { name: /^Theme:/ });
 const stored = (page: Page) => page.evaluate(() => localStorage.getItem('cc.theme'));
 
@@ -142,7 +150,7 @@ test.describe('theme switcher', () => {
     await expect(page.getByRole('menu')).toHaveCount(0);
     await expect(switcher(page)).toBeFocused();
     await expect(switcher(page)).toHaveAccessibleName('Theme: Light');
-    expect((await attrs(page)).theme).toBe('light');
+    await expect.poll(async () => (await attrs(page)).theme).toBe('light');
     expect(await stored(page)).toBe('light');
     await page.reload();
     await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
@@ -152,7 +160,7 @@ test.describe('theme switcher', () => {
     await expect(page.getByRole('menuitemradio', { name: 'Light' })).toBeFocused();
     await page.keyboard.press('End');
     await page.keyboard.press('Space');
-    expect((await attrs(page)).theme).toBe('dark');
+    await expect.poll(async () => (await attrs(page)).theme).toBe('dark');
     await ctx.close();
   });
 
@@ -185,7 +193,7 @@ test.describe('theme switcher', () => {
     await page.getByRole('menuitemradio', { name: 'Light' }).click();
     await page.emulateMedia({ colorScheme: 'light' });
     await page.emulateMedia({ colorScheme: 'dark' });
-    expect((await attrs(page)).theme).toBe('light');
+    await expect.poll(async () => (await attrs(page)).theme).toBe('light');
     await switcher(page).click();
     await page.getByRole('menuitemradio', { name: 'Auto' }).click();
     await expect.poll(() => attrs(page)).toEqual({ theme: 'dark', mode: 'auto', scheme: 'dark' });
@@ -216,15 +224,92 @@ test.describe('theme switcher', () => {
     await expect(group.getByRole('radio')).toHaveCount(3);
     await expect(group.getByRole('radio', { name: 'Auto' })).toBeChecked();
     await group.getByRole('radio', { name: 'Light' }).click();
-    expect((await attrs(page)).theme).toBe('light');
+    await expect.poll(async () => (await attrs(page)).theme).toBe('light');
     await group.getByRole('radio', { name: 'Light' }).focus();
     await page.keyboard.press('ArrowRight');
     await expect(group.getByRole('radio', { name: 'Dark' })).toBeFocused();
     await expect(group.getByRole('radio', { name: 'Dark' })).toBeChecked();
-    expect((await attrs(page)).theme).toBe('dark');
+    await expect.poll(async () => (await attrs(page)).theme).toBe('dark');
     // Each preview is drawn in its own theme regardless of the page's.
     const bgs = await group.getByRole('radio').evaluateAll((els) => els.map((el) => [...el.querySelectorAll('.theme-preview__mock')].map((m) => getComputedStyle(m).backgroundColor)));
     expect(bgs).toEqual([['rgb(244, 246, 250)', 'rgb(11, 13, 18)'], ['rgb(244, 246, 250)'], ['rgb(11, 13, 18)']]);
     await ctx.close();
   });
+});
+
+test.describe('server-rendered pages follow the system theme', () => {
+  for (const [scheme, bg, text] of [
+    ['dark', DARK_BG, 'rgb(231, 234, 240)'],
+    ['light', LIGHT_BG, 'rgb(21, 26, 38)'],
+  ] as const) {
+    test(`the locked page is ${scheme} on a ${scheme} system`, async ({ browser }) => {
+      const ctx = await browser.newContext({ colorScheme: scheme });
+      const page = await ctx.newPage();
+      const res = await page.goto('/tracker');
+      expect(res?.status()).toBe(401);
+      await expect(page.getByRole('heading', { name: 'Open the link from your terminal' })).toBeVisible();
+      expect(await bodyBg(page)).toBe(bg);
+      expect(await page.locator('h1').evaluate((el) => getComputedStyle(el).color)).toBe(text);
+      await ctx.close();
+    });
+
+    test(`the recovery page is ${scheme} on a ${scheme} system`, async ({ browser }) => {
+      const ctx = await browser.newContext({ colorScheme: scheme });
+      const page = await ctx.newPage();
+      await login(page);
+      const res = await page.goto('/__recovery');
+      expect(res?.status()).toBe(200);
+      await expect(page.getByRole('heading', { name: 'Control Center recovery' })).toBeVisible();
+      expect(await bodyBg(page)).toBe(bg);
+      expect(await page.locator('h1').evaluate((el) => getComputedStyle(el).color)).toBe(text);
+      await ctx.close();
+    });
+  }
+});
+
+const AXE_PAGES = ['/', '/pipeline', '/tracker', '/tracker/1', '/insights', '/sponsorship?tab=lookup&q=Acme%20Robotics', '/followups', '/runs', '/sessions', '/dev', '/settings?tab=app', '/tutorials'];
+
+test.describe('accessibility in both themes (serious and critical axe violations)', () => {
+  for (const scheme of ['light', 'dark'] as const) {
+    test.describe(scheme, () => {
+      test.use({ colorScheme: scheme });
+      test.beforeEach(async ({ page }) => login(page));
+
+      for (const url of AXE_PAGES) {
+        test(`${url}`, async ({ page }) => {
+          await page.goto(url);
+          await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+          await expect(page.locator('.skeleton')).toHaveCount(0);
+          expect((await attrs(page)).theme).toBe(scheme);
+          await axeSerious(page);
+        });
+      }
+
+      test('theme menu open', async ({ page }) => {
+        await switcher(page).click();
+        await expect(page.getByRole('menu', { name: 'Theme' })).toBeVisible();
+        await axeSerious(page);
+      });
+
+      test('command palette open', async ({ page }) => {
+        await page.keyboard.press('Control+k');
+        await expect(page.locator('.palette')).toBeVisible();
+        await axeSerious(page);
+      });
+
+      test('Ask drawer open', async ({ page }) => {
+        await page.keyboard.press('Control+j');
+        await expect(page.getByRole('dialog', { name: 'Ask' })).toBeVisible();
+        await axeSerious(page);
+      });
+
+      test('confirm dialog open', async ({ page }) => {
+        await page.keyboard.press('Control+k');
+        await page.getByPlaceholder(/Go to a page/).fill('tracker.delete');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('[role="dialog"].dialog')).toBeVisible();
+        await axeSerious(page);
+      });
+    });
+  }
 });

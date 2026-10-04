@@ -75,7 +75,7 @@ const SEMANTIC = [
   '--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5', '--chart-6', '--chart-track',
   '--code-bg', '--code-border', '--scrim', '--overlay', '--osd-bg', '--osd-fg', '--selection',
   '--shadow-1', '--shadow-2', '--shadow-popover', '--shadow-dialog', '--inner-highlight', '--skeleton-base', '--skeleton-shine',
-  '--input-bg', '--button-bg', '--button-bg-hover', '--button-border', '--row-hover', '--nav-active-fg', '--canvas-glow', '--brand-glow',
+  '--input-bg', '--button-bg', '--button-bg-hover', '--button-border', '--row-hover', '--nav-active-fg', '--canvas-glow', '--brand-glow', '--lift',
 ];
 
 const THEMES: Array<['dark' | 'light', Map<string, string>]> = [];
@@ -106,6 +106,13 @@ describe('theme tokens: structure', () => {
 
   it('defines every semantic token the components consume', () => {
     for (const [name, t] of THEMES) for (const token of SEMANTIC) expect(t.has(token), `${name} ${token}`).toBe(true);
+  });
+
+  it('defines the motion scale in :root: five durations and three easings', () => {
+    const root = ALL.get(':root');
+    for (const token of ['--dur-1', '--dur-2', '--dur-3', '--dur-4', '--dur-theme', '--ease-out', '--ease-in-out', '--ease-spring']) expect(root?.has(token), token).toBe(true);
+    expect(root?.get('--dur-theme')).toBe('520ms');
+    expect(root?.get('--ease-out')).toBe('cubic-bezier(0.2, 0.8, 0.2, 1)');
   });
 
   it('defines the radius scale the dialog and palette rules rely on', () => {

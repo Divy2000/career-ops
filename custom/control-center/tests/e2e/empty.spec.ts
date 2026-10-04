@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN, EMPTY_ROOT } from '../../playwright.config.js';
 
 // Runs against an app whose data root has a header-only tracker: the normal first launch.
@@ -37,7 +37,7 @@ for (const [name, arrange] of [
       await expect(page.getByRole('heading', { level: 1, name: 'Follow-ups' })).toBeVisible();
       await expect(page.getByText('No applications in follow-up cadence yet.')).toBeVisible();
       await noErrorBanners(page);
-      await new AxeBuilder({ page }).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
+      await (await axeBuilder(page)).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
     });
 
     test('Today points a new user at the first step and its Follow-ups card says nothing is due', async ({ page }) => {
@@ -84,6 +84,6 @@ test.describe('no tutorials', () => {
     await expect(page.locator('video')).toHaveCount(0);
     await settled(page);
     await noErrorBanners(page);
-    await new AxeBuilder({ page }).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
+    await (await axeBuilder(page)).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
   });
 });

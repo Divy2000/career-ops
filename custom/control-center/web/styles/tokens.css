@@ -35,6 +35,15 @@
   --focus-ring: 2px solid var(--accent);
   --focus-offset: 2px;
   --target-min: 32px;
+
+  --dur-1: 120ms;
+  --dur-2: 180ms;
+  --dur-3: 240ms;
+  --dur-4: 360ms;
+  --dur-theme: 520ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 :root,
@@ -64,6 +73,7 @@
   --brand-gradient: linear-gradient(135deg, #8b9dff 0%, #c084fc 100%);
   --brand-glow: 0 0 14px rgba(139, 157, 255, 0.55);
   --canvas-glow: none;
+  --lift: 0px;
   --nav-active-fg: #e7eaf0;
 
   --success: #3ecf8e;
@@ -151,6 +161,7 @@
   --brand-gradient: linear-gradient(135deg, #4a55d6 0%, #8b3fd9 100%);
   --brand-glow: 0 0 0 3px rgba(74, 85, 214, 0.14);
   --canvas-glow: radial-gradient(900px 360px at 12% -8%, rgba(74, 85, 214, 0.07), transparent 70%), radial-gradient(700px 300px at 92% -12%, rgba(139, 63, 217, 0.05), transparent 70%);
+  --lift: -1px;
   --nav-active-fg: #3d47c2;
 
   --success: #0b6b45;
