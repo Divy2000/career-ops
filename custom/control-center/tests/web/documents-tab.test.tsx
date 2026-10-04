@@ -12,17 +12,17 @@ let host: HTMLElement;
 let root: Root;
 
 const RENDER_META = { id: 'docs.renderPdf', label: 'Re-render PDF from HTML', cost: 'free', confirm: null, resources: [], claude: false, sync: false, params: {} };
-const docsFor = (report: number | null) => ({
-  files: [{ path: 'output/acme-robotics-cv.pdf', html: 'output/acme-robotics-cv.html', kind: 'cv', format: 'letter', date: null, source: 'index' }],
+const docsFor = (report: number | null, rerenderBlock: string | null = null) => ({
+  files: [{ path: 'output/acme-robotics-cv.pdf', html: 'output/acme-robotics-cv.html', kind: 'cv', format: 'letter', date: null, source: 'index', rerenderBlock }],
   jds: [],
   indexPresent: true,
   report,
 });
 
-async function mount(row: number, report: number | null) {
+async function mount(row: number, report: number | null, rerenderBlock: string | null = null) {
   const posts: unknown[] = [];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    const body = url === '/api/actions' ? [RENDER_META] : url.endsWith('/documents') ? docsFor(report) : url.startsWith('/api/actions/') ? { runId: 'r1' } : [];
+    const body = url === '/api/actions' ? [RENDER_META] : url.endsWith('/documents') ? docsFor(report, rerenderBlock) : url.startsWith('/api/actions/') ? { runId: 'r1' } : [];
     if (init?.method === 'POST') posts.push(JSON.parse(String(init.body)));
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   });
@@ -37,6 +37,7 @@ async function mount(row: number, report: number | null) {
 }
 
 const rerenderButton = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Re-render from HTML'))!;
+const BLOCK = 'output/acme-robotics-cv.pdf belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.';
 
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -51,6 +52,12 @@ describe('DocumentsTab re-render', () => {
     await act(async () => rerenderButton().click());
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(posts).toEqual([{ params: { row: 9, report: 1, html: 'output/acme-robotics-cv.html', pdf: 'output/acme-robotics-cv.pdf', format: 'letter' } }]);
+  });
+
+  it('does not offer re-render for a file another report owns and says why', async () => {
+    await mount(1, 1, BLOCK);
+    expect(rerenderButton()).toBeUndefined();
+    expect(host.textContent).toContain(BLOCK);
   });
 
   it('disables re-render with the reason when the row has no report', async () => {

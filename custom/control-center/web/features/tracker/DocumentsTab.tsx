@@ -53,7 +53,8 @@ export function DocumentsTab({ n }: { n: number }) {
                                 Open HTML
                               </a>
                             )}
-                            {f.html && (
+                            {f.html && f.rerenderBlock && <span className="faint small">{f.rerenderBlock}</span>}
+                            {f.html && !f.rerenderBlock && (
                               <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
                                 Re-render from HTML
                               </ActionButton>

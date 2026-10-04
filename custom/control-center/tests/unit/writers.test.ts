@@ -136,6 +136,9 @@ describe('action registry covers section 3.3', () => {
     expect(batch.args).toContain('--parallel');
     const render = findAction('docs.renderPdf')!.build({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'a4' }, ctx);
     expect(render.args.slice(1)).toEqual([path.join(ctx.dataRoot, 'output/a.html'), path.join(ctx.dataRoot, 'output/a.pdf'), '--format=a4', '--report=1']);
+    const bundle = 'output/001-acme-robotics-backend/cv/tailored/v002/cv';
+    expect(findAction('docs.renderPdf')!.params.safeParse({ row: 1, report: 1, html: `${bundle}.html`, pdf: `${bundle}.pdf` }).success).toBe(true);
+    expect(findAction('docs.renderPdf')!.params.safeParse({ row: 1, report: 1, html: 'output/../cv.html', pdf: `${bundle}.pdf` }).success).toBe(false);
     const prefill = findAction('docs.prepareApplication')!;
     expect(prefill.build({ url: 'https://jobs.lever.co/acme/1', pdf: 'output/a.pdf' }, ctx).args.slice(1)).toEqual(['--url', 'https://jobs.lever.co/acme/1', '--pdf', 'output/a.pdf']);
     expect(prefill.build({ url: 'https://jobs.lever.co/acme/1', pdf: 'output/a.pdf', cover: 'output/a-cover.txt' }, ctx).args.slice(1)).toEqual(['--url', 'https://jobs.lever.co/acme/1', '--pdf', 'output/a.pdf', '--cover', 'output/a-cover.txt']);

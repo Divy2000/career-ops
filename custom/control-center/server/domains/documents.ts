@@ -10,6 +10,8 @@ export interface DocumentFile {
   format: string | null;
   date: string | null;
   source: 'index' | 'output';
+  /** Why Re-render is not offered for this file (another report owns it), or null. */
+  rerenderBlock: string | null;
 }
 
 export interface DocumentsRead {
@@ -42,6 +44,33 @@ export function parsePdfIndex(text: string): PdfIndexRow[] {
   return rows;
 }
 
+export function readPdfIndex(dataRoot: string): PdfIndexRow[] {
+  const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
+  return fs.existsSync(indexPath) ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
+}
+
+const BUNDLE = /^output\/(\d+)-[^/]+\//;
+const bundleReport = (file: string): number | null => {
+  const m = file.match(BUNDLE);
+  return m ? Number(m[1]) : null;
+};
+
+/**
+ * Why re-rendering (html, pdf) for `report` would file another report's document under it, or null when the pair is
+ * indexed under that report, sits in that report's application folder, or is claimed by no report at all.
+ */
+export function rerenderProblem(index: PdfIndexRow[], report: number, html: string, pdf: string): string | null {
+  if (index.some((r) => r.report === report && r.pdf === pdf)) return null;
+  if (bundleReport(pdf) === report && bundleReport(html) === report) return null;
+  for (const file of [pdf, html]) {
+    const indexed = index.find((r) => r.report !== report && (r.pdf === file || r.html === file))?.report;
+    const bundled = bundleReport(file);
+    const owner = indexed ?? (bundled !== null && bundled !== report ? bundled : null);
+    if (owner !== null) return `${file} belongs to report ${owner}, so re-rendering it here would file it under report ${report}. Re-render it from that application instead.`;
+  }
+  return null;
+}
+
 export function companySlug(company: string): string {
   return company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
@@ -72,7 +101,7 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
   for (const r of report === null ? [] : rows.filter((x) => x.report === report)) {
     if (seen.has(r.pdf)) continue;
     seen.add(r.pdf);
-    files.push({ path: r.pdf, html: r.html && exists(dataRoot, r.html) ? r.html : null, kind: documentKind(r.kind, r.pdf), format: r.format || null, date: r.date || null, source: 'index' });
+    files.push({ path: r.pdf, html: r.html && exists(dataRoot, r.html) ? r.html : null, kind: documentKind(r.kind, r.pdf), format: r.format || null, date: r.date || null, source: 'index', rerenderBlock: null });
   }
   const slug = companySlug(company);
   const outDir = path.join(dataRoot, 'output');
@@ -83,10 +112,11 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
       if (seen.has(rel)) continue;
       seen.add(rel);
       const twin = `output/${name.slice(0, -4)}.html`;
-      files.push({ path: rel, html: exists(dataRoot, twin) ? twin : null, kind: documentKind(undefined, rel), format: null, date: null, source: 'output' });
+      files.push({ path: rel, html: exists(dataRoot, twin) ? twin : null, kind: documentKind(undefined, rel), format: null, date: null, source: 'output', rerenderBlock: null });
     }
   }
   files.sort((a, b) => mtime(dataRoot, b.path) - mtime(dataRoot, a.path));
+  for (const f of files) f.rerenderBlock = report !== null && f.html ? rerenderProblem(rows, report, f.html, f.path) : null;
   const jdsDir = path.join(dataRoot, 'jds');
   // With a report, only its own jds/NNN- captures: a company match would also list the JDs of the company's other reports.
   const ownsJd = report === null ? (f: string) => Boolean(slug) && f.toLowerCase().includes(slug) : (f: string) => f.startsWith(`${String(report).padStart(3, '0')}-`);

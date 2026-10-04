@@ -154,6 +154,18 @@ describe('documents for a row whose number differs from its report', () => {
     expect(res.json().error).toBe('Row #9 is filed under report 1, not report 9. Reload the Documents tab and try again.');
   });
 
+  it('offers Re-render only for files the row report owns and refuses another report CV server-side', async () => {
+    write('output/acme-robotics-platform-cv.pdf');
+    write('output/acme-robotics-platform-cv.html', '<html></html>');
+    appendIndex('99\toutput/acme-robotics-platform-cv.pdf\toutput/acme-robotics-platform-cv.html\tletter\t2026-10-02\tcv');
+    const files = (await docsOf(1)).files as { path: string; rerenderBlock: string | null }[];
+    expect(files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.rerenderBlock).toBeNull();
+    expect(files.find((f) => f.path === 'output/acme-robotics-platform-cv.pdf')?.rerenderBlock).toMatch(/belongs to report 99/);
+    const res = await rerender({ row: 1, report: 1, html: 'output/acme-robotics-platform-cv.html', pdf: 'output/acme-robotics-platform-cv.pdf' });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toBe('output/acme-robotics-platform-cv.pdf belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.');
+  });
+
   it('refuses a re-render for a row without a report or for a missing row', async () => {
     const none = await rerender({ row: 5, report: 5 });
     expect(none.statusCode, none.body).toBe(400);
