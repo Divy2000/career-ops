@@ -48,6 +48,8 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
 
   useEffect(() => {
     if (wanted !== shown.current) swap.current?.swapTo(wanted, wanted === dark ? null : dark);
+    // Already showing what the theme wants (a failed light file left the dark one up and the theme went back to dark): no notice applies.
+    else setWarning(null);
   }, [wanted, dark]);
 
   return {

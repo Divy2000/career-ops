@@ -39,14 +39,21 @@ function useCrossfade(target: string) {
   useEffect(() => {
     if (target === shown.url) return;
     let cancelled = false;
+    const settle = (keep: boolean) => {
+      if (!cancelled) setShown((s) => ({ url: target, from: keep ? s.url : null }));
+    };
+    if (!loaded.current) {
+      // Nothing is painted yet (the image is lazy and off screen): just point it at the new file and let lazy loading fetch it when it is near.
+      void Promise.resolve().then(() => settle(false));
+      return () => {
+        cancelled = true;
+      };
+    }
+    // Painted: decode the new one off-screen so it can fade in over the old one. A failure keeps the current image, which beats a broken one.
     const next = new Image();
     next.src = target;
-    const settle = () => {
-      if (!cancelled) setShown((s) => ({ url: target, from: loaded.current ? s.url : null }));
-    };
-    // decode() resolves once the image can be painted without a flash. A failure keeps the current image, which is better than a broken one.
-    const decoded = loaded.current && typeof next.decode === 'function' ? next.decode() : Promise.resolve();
-    void decoded.then(settle, () => undefined);
+    const decoded = typeof next.decode === 'function' ? next.decode() : Promise.resolve();
+    void decoded.then(() => settle(true), () => undefined);
     return () => {
       cancelled = true;
     };

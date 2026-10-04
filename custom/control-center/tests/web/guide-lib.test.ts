@@ -6,6 +6,7 @@ import {
   guideKeyAction,
   highlight,
   isSearching,
+  loadReviewed,
   pruneReviewed,
   readReviewed,
   resolveLocation,
@@ -390,5 +391,68 @@ describe('guideKeyAction', () => {
     expect(key('j', { ctrlKey: true })).toBeNull();
     expect(key('j', { metaKey: true })).toBeNull();
     expect(key('/', { altKey: true })).toBeNull();
+  });
+});
+
+describe('loadReviewed (and the move from the old per-section marks)', () => {
+  const legacy: GuideDocs = {
+    version: 1,
+    legacy: true,
+    sections: [
+      { id: 'today', title: 'Today', summary: 's', subsections: [sub('today', 'Today', [text('s')])] },
+      { id: 'tracker', title: 'Tracker', summary: 's', subsections: [sub('tracker', 'Tracker', [text('s')])] },
+    ],
+  };
+  const OLD = 'cc.tutorials.guide.reviewed.tour';
+  const NEW = 'cc.guide.v2.tour';
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  it('carries the marks of an adapted version 1 guide over once, as section/subsection keys, and leaves the old key alone', () => {
+    window.localStorage.setItem(OLD, '["today","gone"]');
+    expect([...loadReviewed('tour', legacy)]).toEqual(['today/today']);
+    expect(window.localStorage.getItem(NEW)).toBe('["today/today"]');
+    expect(window.localStorage.getItem(OLD)).toBe('["today","gone"]');
+  });
+
+  it('does not carry them over again once the new key exists, even when it is empty', () => {
+    window.localStorage.setItem(OLD, '["today"]');
+    window.localStorage.setItem(NEW, '[]');
+    expect([...loadReviewed('tour', legacy)]).toEqual([]);
+    window.localStorage.setItem(NEW, '["tracker/tracker"]');
+    expect([...loadReviewed('tour', legacy)]).toEqual(['tracker/tracker']);
+  });
+
+  it('never reads the old key for a guide that is not an adapted version 1 guide', () => {
+    window.localStorage.setItem(OLD, '["start"]');
+    expect([...loadReviewed('tour', docs)]).toEqual([]);
+    expect(window.localStorage.getItem(NEW)).toBeNull();
+  });
+
+  it('writes nothing when there is nothing to carry over', () => {
+    expect([...loadReviewed('tour', legacy)]).toEqual([]);
+    expect(window.localStorage.getItem(NEW)).toBeNull();
+    window.localStorage.setItem(OLD, '{ nope');
+    expect([...loadReviewed('tour', legacy)]).toEqual([]);
+    expect(window.localStorage.getItem(NEW)).toBeNull();
+  });
+
+  it('drops marks of subsections that no longer exist', () => {
+    window.localStorage.setItem(NEW, '["start/launch","start/gone","gone/x"]');
+    expect([...loadReviewed('tour', docs)]).toEqual(['start/launch']);
+  });
+
+  it('still returns the carried marks when storage refuses the write, and works with storage blocked', () => {
+    window.localStorage.setItem(OLD, '["tracker"]');
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect([...loadReviewed('tour', legacy)]).toEqual(['tracker/tracker']);
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect([...loadReviewed('tour', legacy)]).toEqual([]);
   });
 });

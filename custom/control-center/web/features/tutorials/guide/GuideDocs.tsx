@@ -4,8 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   guideKeyAction,
   isSearching,
-  pruneReviewed,
-  readReviewed,
+  loadReviewed,
   resolveLocation,
   sectionProgress,
   spyInitial,
@@ -154,7 +153,7 @@ export function GuideDocs({ tutorialId, docs, chapters, section, sub, searchFor,
   const prev = docs.sections[sectionIndex - 1];
   const next = docs.sections[sectionIndex + 1];
 
-  const [reviewed, setReviewed] = useState(() => pruneReviewed(docs, readReviewed(tutorialId)));
+  const [reviewed, setReviewed] = useState(() => loadReviewed(tutorialId, docs));
   const [term, setTerm] = useState('');
   const searching = isSearching(term);
   const progress = totalProgress(docs, reviewed);

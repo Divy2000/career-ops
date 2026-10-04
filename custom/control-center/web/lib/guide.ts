@@ -83,6 +83,37 @@ export function readReviewed(tutorialId: string): string[] {
   }
 }
 
+const LEGACY_REVIEWED_PREFIX = 'cc.tutorials.guide.reviewed.';
+
+const parseKeys = (raw: string | null): string[] => {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * The marks to start from. A tutorial that has never had version 2 marks and whose guide is an adapted version 1 guide inherits the marks
+ * of the old per-section guide once: an adapted section holds one subsection with the same id, so `today` becomes `today/today`.
+ * The old key is left alone; once the new key exists it is the only one read.
+ */
+export function loadReviewed(tutorialId: string, docs: GuideDocs): Set<string> {
+  let stored: string | null;
+  try {
+    stored = window.localStorage.getItem(REVIEWED_PREFIX + tutorialId);
+    if (stored === null && docs.legacy) {
+      const carried = [...pruneReviewed(docs, parseKeys(window.localStorage.getItem(LEGACY_REVIEWED_PREFIX + tutorialId)).map((id) => subKey(id, id)))];
+      if (carried.length > 0) writeReviewed(tutorialId, carried);
+      return new Set(carried);
+    }
+  } catch {
+    return new Set();
+  }
+  return pruneReviewed(docs, parseKeys(stored));
+}
+
 export function writeReviewed(tutorialId: string, keys: string[]): void {
   try {
     window.localStorage.setItem(REVIEWED_PREFIX + tutorialId, JSON.stringify(keys));

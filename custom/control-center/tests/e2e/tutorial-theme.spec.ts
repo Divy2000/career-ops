@@ -120,9 +120,14 @@ test.describe('the player follows the theme', () => {
     await expect.poll(() => srcOf(page)).toBe(DARK_VIDEO);
     await expect.poll(async () => Math.abs((await snapshot(page)).t - 1)).toBeLessThan(0.25);
     await expect.poll(async () => (await snapshot(page)).ready).toBeGreaterThanOrEqual(2);
-    // A later switch to dark and back tries again instead of staying on the failure.
+    // Back to dark: the dark recording is already showing, so the notice about the light one goes away.
     await page.emulateMedia({ colorScheme: 'dark' });
     await expect.poll(() => theme(page)).toBe('dark');
+    await expect(page.getByText('The light video could not be loaded; showing the dark video.')).toHaveCount(0);
+    expect(await srcOf(page)).toBe(DARK_VIDEO);
+    // Light again: it tries the light file again (and fails again), so the notice returns.
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.getByText('The light video could not be loaded; showing the dark video.')).toBeVisible();
     await ctx.close();
   });
 

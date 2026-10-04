@@ -510,6 +510,22 @@ test.describe('Tutorials guide, documentation style', () => {
       await expect.poll(() => requested.some((p) => p.endsWith('navigate.dark.png'))).toBe(true);
     });
 
+    test('a theme change does not fetch images that are far off screen; they load in the new theme when they near the viewport', async ({ page }) => {
+      const requested: string[] = [];
+      page.on('request', (r) => requested.push(new URL(r.url()).pathname));
+      await openDocs(page, '&section=getting-started');
+      await expect.poll(() => requested.some((p) => p.endsWith('launch.dark.png'))).toBe(true);
+      const nav = figure(page, 'The sidebar.').locator('.doc-media__img--top');
+      await page.emulateMedia({ colorScheme: 'light' });
+      await expect(figure(page, 'Today, right after sign in.').locator('.doc-media__img--top')).toHaveAttribute('src', /launch\.light\.png/);
+      await expect(nav).toHaveAttribute('src', /navigate\.light\.png/);
+      await page.waitForTimeout(500);
+      expect(requested.filter((p) => p.includes('navigate.'))).toEqual([]);
+      await scrollSub(page, 'navigate');
+      await page.evaluate(() => (document.querySelector('.shell__main') as HTMLElement).scrollBy(0, 300));
+      await expect.poll(() => requested.filter((p) => p.includes('navigate.'))).toEqual(['/api/tutorials/docs-tour/media/navigate.light.png']);
+    });
+
     test('a clip shows its poster until half of it is on screen, then plays; a click pauses it on the poster and plays it again', async ({ page }) => {
       await openDocs(page, '&section=tracking&sub=change-status');
       const fig = figure(page, 'Changing a status.');
