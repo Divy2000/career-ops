@@ -270,6 +270,11 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect((await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 25, minute: 0, enabled: true })).statusCode).toBe(400);
     expect((await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 1, minute: 0, weekday: 2, enabled: true })).statusCode).toBe(400);
   });
+  it('answers for the weekly job of an install that never had it: an empty log list, not an error', async () => {
+    const res = await get('/api/schedule/logs?job=upstream-sync');
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ job: 'com.career-ops.upstream-sync', dates: [], latest: null });
+  });
   it('lists logs per job, including the upstream-sync directory', async () => {
     fs.mkdirSync(path.join(t.cfg.dataRoot, 'data', 'upstream-sync'), { recursive: true });
     fs.writeFileSync(path.join(t.cfg.dataRoot, 'data', 'upstream-sync', '2026-09-27.log'), '=== sync start\n--- fetch upstream\n!!! merge failed\n');
