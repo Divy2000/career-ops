@@ -13,7 +13,10 @@
 
 <!-- The onboarding procedure (custom/install/ONBOARDING.md) appends a
      "Sponsorship check" section here when you told it you need visa
-     sponsorship. Add your own rules below. -->
+     sponsorship, and the "Projects library" section from
+     custom/install/templates/_custom-projects.md (project picking,
+     papers under Recent Achievements, the fork CV build). Add your own
+     rules below. -->
 
 (none yet -- add yours above)
 
