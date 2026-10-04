@@ -201,3 +201,12 @@ test('lib.mjs same-path compares normalized and real paths, existing or not', ()
   assert.equal(run(LIB, ['same-path', path.join(d, 'nope'), path.join(d, 'nope')]).status, 0);
   assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'b')]).status, 1);
 });
+
+test('lib.mjs same-path resolves symlinks in the deepest existing ancestor of a path that does not exist yet', () => {
+  const d = tmp();
+  fs.mkdirSync(path.join(d, 'real'));
+  fs.symlinkSync(path.join(d, 'real'), path.join(d, 'link'));
+  assert.equal(run(LIB, ['same-path', path.join(d, 'link', 'new', 'deeper'), path.join(d, 'real', 'new', 'deeper')]).status, 0);
+  assert.equal(run(LIB, ['same-path', path.join(d, 'link', 'new'), path.join(d, 'real', 'other')]).status, 1);
+  assert.equal(run(LIB, ['same-path', path.join(d, 'link', 'a', '..', 'new'), path.join(d, 'real', 'new')]).status, 0);
+});

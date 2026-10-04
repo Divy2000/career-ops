@@ -791,6 +791,55 @@ test('blank CAREER_OPS_ROOT and CAREER_OPS_DATA_DIR are not overrides: --data-ro
   assert.equal(read(D, '.career-ops-data').trim(), data);
 });
 
+test('a marker that spells the same --data-root differently (trailing slash, relative, symlink) is accepted and left untouched', () => {
+  const data = (w) => {
+    const d = path.join(w.T, 'mydata');
+    fs.mkdirSync(d);
+    return d;
+  };
+  const spellings = [
+    (w, d) => `${d}/`,
+    (w) => '../mydata',
+    (w, d) => {
+      fs.symlinkSync(d, path.join(w.T, 'datalink'));
+      return path.join(w.T, 'datalink');
+    },
+  ];
+  for (const spell of spellings) {
+    const { w, D, args } = fresh();
+    const d = data(w);
+    const marker = `${spell(w, d)}\n`;
+    w.makeCheckout(D, { files: { '.career-ops-data': marker } });
+    const r = w.run(args('--data-root', d));
+    assert.notEqual(r.status, 1, `${marker}: ${r.out}`);
+    assert.equal(read(D, '.career-ops-data'), marker);
+    assert.equal(read(d, 'modes', '_custom.md'), read(INSTALL_DIR, 'templates', '_custom.md'));
+  }
+});
+
+test('an empty marker is reported as empty, not as pointing somewhere', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { '.career-ops-data': '  \n' } });
+  const before = w.snapshot();
+  const r = w.run(args('--data-root', path.join(w.T, 'wanted')));
+  assert.equal(r.status, 1);
+  assert.match(r.out, /\.career-ops-data is empty/);
+  assert.deepEqual(w.snapshot(), before);
+});
+
+test('without node the environment half of the data-root check still runs: the intro shows the right root and a conflict fails before the plan question', () => {
+  const tools = ['git', 'npm', 'security', 'uname', 'launchctl', 'plutil', 'claude'];
+  const a = fresh({ tools });
+  const env = path.join(a.w.T, 'envdata');
+  const intro = a.w.run(['--dir', a.D, '--non-interactive', '--dry-run'], { env: { CAREER_OPS_ROOT: env } });
+  assert.ok(intro.out.includes(`data root: ${env}`), intro.out);
+  const b = fresh({ tools });
+  const r = b.w.run(['--dir', b.D, '--data-root', path.join(b.w.T, 'wanted')], { env: { CAREER_OPS_ROOT: path.join(b.w.T, 'other') }, tty: 'y\ny\n' });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /CAREER_OPS_ROOT/);
+  assert.doesNotMatch(r.out, /Proceed\?/);
+});
+
 test('printed commands shell-quote every path, so a checkout directory with a space is copy-pasteable', () => {
   const w = makeWorld({ keychain: true });
   const D = path.join(w.T, 'my checkout');

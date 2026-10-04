@@ -23,6 +23,8 @@ AGENTS="$HOME/Library/LaunchAgents"
 # The data root, resolved exactly as the jobs resolve it (CAREER_OPS_ROOT, else the .career-ops-data marker, else the checkout).
 # It fixes the launchd log paths now. It is written into the plist only when it came from the environment, which launchd
 # would not otherwise see; a marker is read by the job itself at run time, so changing the marker later still works.
+# The launchd log paths (StandardOutPath/StandardErrorPath) are fixed in the plist now: after moving the marker, rerun this
+# script to point them at the new root.
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 mkdir -p "$AGENTS" "$DATA/data/immigration/logs"
 if [ "$JOBS" = all ]; then mkdir -p "$DATA/data/upstream-sync"; fi

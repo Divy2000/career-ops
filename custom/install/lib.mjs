@@ -123,6 +123,26 @@ export function parseFlags(argv, listFlags = []) {
   return out;
 }
 
+/**
+ * Absolute path with symlinks resolved. For a path that does not exist yet, the deepest existing ancestor is resolved
+ * and the missing tail is appended, so /tmp/x and /private/tmp/x compare equal before x is created.
+ */
+export function canonicalPath(p) {
+  const abs = path.resolve(p);
+  const tail = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(cur), ...tail.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return abs;
+      tail.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
 const EXT_OK = new Set(['.md', '.markdown']);
 const PROMPT_HINT = 'use option 1 (Claude Code prompt) for PDF, DOCX and other formats';
 
@@ -197,17 +217,8 @@ function main(argv) {
       return versionAtLeast(rest[0], rest[1]) ? 0 : 1;
     case 'same-repo':
       return sameRepo(rest[0], rest[1]) ? 0 : 1;
-    case 'same-path': {
-      const canon = (p) => {
-        const abs = path.resolve(p);
-        try {
-          return fs.realpathSync(abs);
-        } catch {
-          return abs;
-        }
-      };
-      return canon(rest[0]) === canon(rest[1]) ? 0 : 1;
-    }
+    case 'same-path':
+      return canonicalPath(rest[0]) === canonicalPath(rest[1]) ? 0 : 1;
     case 'doctor-state': {
       const s = parseDoctorState(fs.readFileSync(0, 'utf8'));
       process.stdout.write(`${s.ready ? 'ready' : 'incomplete'}\t${[...s.missing, ...s.unpersonalized].join(',')}\n`);

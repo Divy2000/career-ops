@@ -242,13 +242,22 @@ effective_data_root() {
 }
 
 # --data-root must be the root the tools will use. Checked before anything is created, so no directory or log appears
-# in the other root.
+# in the other root. The environment half needs no node: without it, paths are compared as written (trailing slashes
+# ignored); with node, symlinks and relative spellings are resolved first.
 check_data_root_conflict() {
   [ -n "$DATA_ROOT_ARG" ] || return 0
-  have node || return 0
-  local eff
+  local eff want
+  if [ -f "$DIR/.career-ops-data" ] && [ -z "$(env_data_root)" ] && [ -z "$(trim "$(cat "$DIR/.career-ops-data")")" ]; then
+    die 1 "$DIR/.career-ops-data is empty. Remove it or write the data root into it, then re-run."
+  fi
   eff="$(effective_data_root)"
-  if lib same-path "$eff" "$DATA_REQ"; then return 0; fi
+  if have node; then
+    if lib same-path "$eff" "$DATA_REQ"; then return 0; fi
+  else
+    want="$DATA_REQ"
+    while [ "${#eff}" -gt 1 ] && [ "${eff%/}" != "$eff" ]; do eff="${eff%/}"; done
+    if [ "$eff" = "$want" ]; then return 0; fi
+  fi
   if [ -n "$(env_data_root)" ]; then
     die 1 "CAREER_OPS_ROOT or CAREER_OPS_DATA_DIR in your environment makes the data root $eff, not the requested $DATA_REQ. Unset it and re-run."
   fi
@@ -276,7 +285,7 @@ validate_inputs() {
 # ---------------------------------------------------------------- intro and platform
 
 check_data_root_conflict
-if have node; then DATA="$(effective_data_root)"; fi
+DATA="$(effective_data_root)"
 validate_inputs
 
 say "career-ops (H-1B-aware fork) installer"
@@ -459,8 +468,10 @@ else
   if [ -n "$DATA_ROOT_ARG" ]; then
     mkdir -p "$DATA_REQ"
     if [ -f "$marker" ]; then
-      current="$(head -n 1 "$marker")"
-      [ "$current" = "$DATA_REQ" ] || die 1 "$marker already points at $current, not $DATA_REQ. Remove the marker or drop --data-root."
+      current="$(trim "$(cat "$marker")")"
+      [ -n "$current" ] || die 1 "$marker is empty. Remove it or write the data root into it, then re-run."
+      case "$current" in /*) ;; *) current="$DIR/$current" ;; esac
+      lib same-path "$current" "$DATA_REQ" || die 1 "$marker already points at $current, not $DATA_REQ. Remove the marker or drop --data-root."
     else
       printf '%s\n' "$DATA_REQ" > "$marker"
       say "  wrote $marker -> $DATA_REQ"
