@@ -355,9 +355,9 @@ test('ONBOARDING.md rule 5 allows staging copies and extracted text before the g
   assert.match(rule5, /data\//);
   assert.match(rule5, /declin/i);
   assert.match(rule5, /delete/i);
-  assert.match(rule5, /delete[^.]*onboarding-draft/i, 'decline cleanup also covers the draft dir');
+  assert.match(rule5, /pre-existing set/i, 'decline cleanup is bounded by the pre-existing set');
   const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
-  assert.match(gate, /delete the staging artifacts created in this session/i);
+  assert.match(gate, /delete only the files labelled `created this session`/i);
   assert.match(gate, /onboarding-draft/);
 });
 
@@ -427,18 +427,41 @@ test('decline cleanup only touches staging created in this session and keeps pre
   for (const [name, text] of [['rule 5', rule5], ['the gate', gate]]) {
     assert.match(text, /this session/i, `${name}: scoped to this session`);
     assert.match(text, /pre-?existing/i, `${name}: pre-existing drafts`);
-    assert.match(text, /separately/i, `${name}: separate explicit choice`);
+    assert.match(text, /own explicit question/i, `${name}: separate explicit choice`);
   }
   assert.equal(/delete[^.]*staged copies, extracted files, temp conversions and `data\/install\/onboarding-draft\/`/i.test(onboarding), false, 'no blanket delete of the whole draft dir');
 });
 
-test('the gate lists each draft file and whether it pre-existed or was created or updated this session, before asking for cleanup consent', () => {
+test('the gate lists every pre-existing file, each draft file and whether it was created this session, before asking for cleanup consent', () => {
   const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
   const inventory = gate.slice(gate.search(/staging inventory/i));
-  assert.match(inventory, /each (draft )?file/i);
+  assert.match(inventory, /individually/i);
   assert.match(inventory, /data\/install\/onboarding-draft\//);
-  assert.match(inventory, /pre-?existed/i);
-  assert.match(inventory, /created or updated this session/i);
+  assert.match(inventory, /pre-?existing/i);
+  assert.match(inventory, /pre-?existing, updated this session/i);
+  assert.match(inventory, /created this session/i);
   assert.ok(gate.search(/staging inventory/i) < gate.search(/Write these files\?/), 'inventory comes before the question');
-  assert.ok(gate.search(/created or updated this session/i) < gate.search(/offer to delete/i), 'inventory comes before the cleanup offer');
+  assert.ok(gate.search(/created this session/i) < gate.search(/offer to delete/i), 'inventory comes before the cleanup offer');
+});
+
+test('ONBOARDING.md records the pre-existing set before Step 1, and pre-existing always wins over "updated this session"', () => {
+  const titles = headings(onboarding).map((h) => h.text);
+  const pre = titles.findIndex((t) => /^Before Step 1: record the pre-existing set$/.test(t));
+  assert.ok(pre !== -1, titles.join(' | '));
+  assert.ok(pre < titles.indexOf('Step 1: State and inventory'));
+  const rec = section(onboarding, /^#{2,3}\s+Before Step 1: record the pre-existing set$/);
+  for (const dir of ['documents/', 'data/install/tmp/', 'data/install/onboarding-draft/']) assert.ok(rec.includes(dir), `records ${dir}`);
+  assert.match(rec, /before (you )?(run|do|touch|create|copy|write)/i);
+  assert.match(rec, /pre-existing set/);
+
+  const rule5 = onboarding.split('\n').find((l) => /^5\. /.test(l));
+  const gate = section(onboarding, /^#{2,3}\s+Step 5: The gate$/);
+  for (const [name, text] of [['rule 5', rule5], ['the gate', gate]]) {
+    assert.match(text, /pre-existing set/i, `${name}: names the set`);
+    assert.match(text, /even if[^.]*updated[^.]*this session/i, `${name}: pre-existing wins over updated`);
+    assert.match(text, /never[^.]*(removed|deleted)|(removed|deleted)[^.]*never/i, `${name}: never removed by the decline cleanup`);
+    assert.match(text, /not in the pre-existing set/i, `${name}: only files created this session are deleted`);
+    assert.match(text, /own explicit question/i, `${name}: deleting a pre-existing file needs its own question`);
+    assert.match(text, /per file or (per )?group/i, `${name}: per file or group`);
+  }
 });
