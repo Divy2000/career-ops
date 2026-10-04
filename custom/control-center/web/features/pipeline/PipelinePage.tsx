@@ -5,7 +5,7 @@ import { usePipeline, useShortlist } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone } from '../../components/ui';
+import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
 import { InboxAi } from './InboxAi';
 
 const route = getRouteApi('/pipeline');
@@ -249,7 +249,7 @@ function Shortlist() {
       {q.data?.kind === 'ok' && (
         <div className="stack">
           <p className="muted">{q.data.summary}</p>
-          <div className="table-scroll">
+          <TableScroll label="Shortlist rows">
             <table className="table">
               <thead>
                 <tr>
@@ -284,7 +284,7 @@ function Shortlist() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
           <div className="card">
             <h2>Excluded by company alerts</h2>
             {q.data.excluded.length === 0 ? (

@@ -5,7 +5,7 @@ import { apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { Md } from '../../components/Md';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { PluginsRead } from '@shared/api';
 
 export function PluginsTab() {
@@ -52,7 +52,7 @@ export function PluginsTab() {
           {q.data && q.data.plugins.length === 0 ? (
             <Empty>No plugins found under plugins/ or plugins.local/.</Empty>
           ) : (
-            <div className="table-scroll">
+            <TableScroll label="Plugins">
               <table className="table" aria-label="Plugins">
                 <thead>
                   <tr>
@@ -97,7 +97,7 @@ export function PluginsTab() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </DataState>
         <Message message={message} />

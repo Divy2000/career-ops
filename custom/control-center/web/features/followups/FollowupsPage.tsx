@@ -5,7 +5,7 @@ import { useFollowups } from '../../lib/queries';
 import { apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill, StatusPill, Tabs } from '../../components/ui';
+import { DataState, Empty, Pill, StatusPill, Tabs, TableScroll } from '../../components/ui';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { ContactsRead, FollowupCadenceEntry } from '@shared/api';
 
@@ -117,7 +117,7 @@ function CadenceTab() {
           (q.data.entries.length === 0 ? (
             <Empty>No applications in follow-up cadence yet. Once you apply to a job, its follow-ups are scheduled here.</Empty>
           ) : (
-            <div className="table-scroll">
+            <TableScroll label="Follow-up cadence">
               <table className="table">
                 <thead>
                   <tr>
@@ -155,7 +155,7 @@ function CadenceTab() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           ))}
       </DataState>
     </>
@@ -234,7 +234,7 @@ function ContactsTab() {
           (q.data.rows.length === 0 ? (
             <Empty>No contacts yet. The contacto and email modes add them as you reach out.</Empty>
           ) : (
-            <div className="table-scroll">
+            <TableScroll label="Contacts">
               <table className="table" aria-label="Contacts">
                 <thead>
                   <tr>
@@ -271,7 +271,7 @@ function ContactsTab() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           ))}
       </DataState>
     </div>

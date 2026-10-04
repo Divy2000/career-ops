@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, getRouteApi } from '@tanstack/react-router';
 import { SafeMarkdown } from '../../components/Md';
 import { useApplication } from '../../lib/queries';
-import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone } from '../../components/ui';
+import { DataState, Empty, Pill, ScorePill, SponsorPill, StatusPill, Tabs, alertTone, TableScroll } from '../../components/ui';
 import { DocumentsTab } from './DocumentsTab';
 import { DangerZone } from './DangerZone';
 import { ModeLauncher } from '../../components/ModeLauncher';
@@ -118,7 +118,7 @@ export function ApplicationPage() {
                   {q.data.timeline.statusLog.length === 0 ? (
                     <Empty>No transitions recorded in status-log.tsv for this row.</Empty>
                   ) : (
-                    <div className="table-scroll">
+                    <TableScroll label="Status log">
                       <table className="table">
                         <thead>
                           <tr>
@@ -143,7 +143,7 @@ export function ApplicationPage() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </TableScroll>
                   )}
                 </div>
                 <div className="card">

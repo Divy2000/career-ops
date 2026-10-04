@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
 import { useSessions } from '../../lib/sessions';
 import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
-import { DataState, Empty } from '../../components/ui';
+import { DataState, Empty, TableScroll } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
@@ -83,7 +83,7 @@ export function SessionsPage() {
         {rows.length === 0 ? (
           <Empty>No sessions yet. Start one with New session or from any page's AI panel.</Empty>
         ) : (
-          <div className="table-scroll">
+          <TableScroll label="Sessions">
             <table className="table">
               <thead>
                 <tr>
@@ -114,7 +114,7 @@ export function SessionsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
         )}
       </DataState>
     </section>
@@ -168,7 +168,7 @@ export function SessionDetailPage() {
             <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} />
             <div className="card">
               <h2>Turns</h2>
-              <div className="table-scroll">
+              <TableScroll label="Turns">
                 <table className="table">
                   <thead>
                     <tr>
@@ -193,7 +193,7 @@ export function SessionDetailPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
             </div>
           </>
         )}

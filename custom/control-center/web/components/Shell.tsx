@@ -23,6 +23,16 @@ function DailyBanner() {
   );
 }
 
+/** Narrow windows show a chip as its colored dot; the text stays in the accessibility tree. */
+function ChipLabel({ children }: { children: string }) {
+  return (
+    <>
+      <span className="chip__dot" aria-hidden="true" />
+      <span className="chip__text">{children}</span>
+    </>
+  );
+}
+
 function DailyJobChip() {
   const q = useQuery({ queryKey: ['immigration', 'logs', 'immigration-watch'], queryFn: () => apiGet<ScheduleLogs>('/api/schedule/logs?job=immigration-watch') });
   const latest = q.data?.latest;
@@ -37,13 +47,13 @@ function DailyJobChip() {
 
 function HealthChip() {
   const q = useQuery({ queryKey: ['system', 'status'], queryFn: () => apiGet<SystemStatus>('/api/system/status') });
-  if (q.isPending) return <span className="chip" aria-busy="true">Checking setup</span>;
-  if (q.isError) return <span className="chip chip--danger">Status unavailable</span>;
+  if (q.isPending) return <span className="chip" aria-busy="true"><ChipLabel>Checking setup</ChipLabel></span>;
+  if (q.isError) return <span className="chip chip--danger"><ChipLabel>Status unavailable</ChipLabel></span>;
   const s = q.data;
   const ok = Boolean(s.claude.version) && s.keychainTokenPresent;
   return (
     <Link to="/settings" search={{ tab: 'engine' }} className={`chip ${ok ? 'chip--ok' : 'chip--warn'}`} title={ok ? 'Claude CLI and Keychain token found' : 'Setup incomplete: see Settings'}>
-      {ok ? 'Setup OK' : 'Setup needs attention'}
+      <ChipLabel>{ok ? 'Setup OK' : 'Setup needs attention'}</ChipLabel>
     </Link>
   );
 }
@@ -66,10 +76,14 @@ function ActivityChip() {
   const waiting = (sessions.data ?? []).filter((s) => s.status === 'awaiting_user').length;
   return (
     <Link to="/sessions" className={`chip ${active ? 'chip--info' : waiting ? 'chip--warn' : 'chip--neutral'}`} aria-label={`Activity: ${active} running, ${waiting} waiting for you`}>
-      {active ? `${active} running` : waiting ? `${waiting} waiting for you` : 'Idle'}
+      <ChipLabel>{active ? `${active} running` : waiting ? `${waiting} waiting for you` : 'Idle'}</ChipLabel>
     </Link>
   );
 }
+
+/** Keep in step with the max-width media queries in base.css (the md breakpoint, 768px). */
+const NARROW_QUERY = '(max-width: 767px)';
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function usePaletteHotkey(toggle: () => void) {
   useEffect(() => {
@@ -98,20 +112,44 @@ export function Shell() {
   const navOpen = navOpenOn === pathname;
   const closeNav = useCallback(() => setNavOpenOn(null), []);
   const menuRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (navOpen) navRef.current?.querySelector<HTMLElement>('a[href]')?.focus();
+    else if (wasOpen.current) menuRef.current?.focus();
+    wasOpen.current = navOpen;
+  }, [navOpen]);
   useEffect(() => {
     if (!navOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      setNavOpenOn(null);
-      menuRef.current?.focus();
+      if (e.key === 'Escape') return setNavOpenOn(null);
+      const nav = navRef.current;
+      if (e.key !== 'Tab' || !nav) return;
+      const items = [...nav.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const first = items[0];
+      const last = items.at(-1);
+      if (!first || !last) return;
+      const active = document.activeElement;
+      if (!nav.contains(active) || (e.shiftKey && active === first) || (!e.shiftKey && active === last)) {
+        e.preventDefault();
+        (e.shiftKey && nav.contains(active) ? last : first).focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [navOpen]);
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY);
+    const onChange = () => {
+      if (!mq.matches) setNavOpenOn(null);
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
   return (
     <ConfirmProvider>
       <div className={`shell${navOpen ? ' shell--nav-open' : ''}`}>
-        <nav className="shell__side" id="primary-nav" aria-label="Primary">
+        <nav ref={navRef} className="shell__side" id="primary-nav" aria-label="Primary">
           <div className="brand">
             <span className="brand__dot" aria-hidden="true" />
             <span>Control Center</span>

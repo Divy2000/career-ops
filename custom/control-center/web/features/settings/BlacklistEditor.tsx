@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { BlacklistRead, BlacklistRow } from '@shared/api';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -84,7 +84,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
         {current.length === 0 ? (
           <Empty>No blacklisted companies. Add one below.</Empty>
         ) : (
-          <div className="table-scroll">
+          <TableScroll label="Blacklist rows">
             <table className="table table--compact" aria-label="Blacklist rows">
               <thead>
                 <tr>
@@ -115,7 +115,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
         )}
         <div className="row gap" style={{ flexWrap: 'wrap', marginTop: 8 }}>
           <input aria-label="Blacklist company or domain" placeholder="Company or domain" value={draft.company} onChange={(e) => setDraft({ ...draft, company: e.target.value })} />

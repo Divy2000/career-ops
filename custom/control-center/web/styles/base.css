@@ -336,6 +336,13 @@ input[type='checkbox'] {
   font-size: var(--fs-12);
   white-space: nowrap;
 }
+.chip__dot {
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .chip--neutral {
   color: var(--text-muted);
 }
@@ -506,6 +513,7 @@ input[type='checkbox'] {
 .table-scroll {
   position: relative;
 }
+.table-scroll:focus-visible,
 .table-wrap:focus-visible {
   outline-offset: 0;
 }
@@ -796,6 +804,22 @@ textarea {
   }
   .chip--daily {
     display: none;
+  }
+  .shell__top .chip {
+    position: relative;
+    flex: none;
+    padding: 0 var(--space-2);
+  }
+  .shell__top .chip__dot {
+    display: block;
+  }
+  .shell__top .chip__text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
   .shell__main {
     padding: var(--space-4);

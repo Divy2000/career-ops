@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
-import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone } from '../../components/ui';
+import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
 
@@ -88,7 +88,7 @@ export function TodayPage() {
                   {shortlist.data.rows.length === 0 ? (
                     <Empty>No ranked rows yet. Rank the pipeline to fill this list.</Empty>
                   ) : (
-                    <div className="table-scroll">
+                    <TableScroll label="Shortlist top 15">
   <table className="table table--compact-cells">
                         <thead>
                           <tr>
@@ -135,7 +135,7 @@ export function TodayPage() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </TableScroll>
                   )}
                   {shortlist.data.excluded.length > 0 && (
                     <details style={{ marginTop: 12 }}>

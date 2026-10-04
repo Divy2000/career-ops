@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../../lib/api';
 import { useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { DocumentsRead } from '@shared/api';
 
 export function DocumentsTab({ n }: { n: number }) {
@@ -20,7 +20,7 @@ export function DocumentsTab({ n }: { n: number }) {
             {q.data.files.length === 0 ? (
               <Empty>No PDFs yet. Generate one with the pdf mode (Claude engine) or drop files into output/.</Empty>
             ) : (
-              <div className="table-scroll">
+              <TableScroll label="Generated documents">
                 <table className="table" aria-label="Generated documents">
                   <thead>
                     <tr>
@@ -63,7 +63,7 @@ export function DocumentsTab({ n }: { n: number }) {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
             )}
             {q.data.jds.length > 0 && (
               <>

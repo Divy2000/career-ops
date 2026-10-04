@@ -46,8 +46,84 @@ test.describe('narrow window (390x844)', () => {
       expect(m.mainScroll).toBeLessThanOrEqual(m.mainClient);
       expect(m.topScroll).toBeLessThanOrEqual(m.topClient);
       expect(m.triggerHeight).toBeLessThan(40);
+      const regions = await page.evaluate(() => [...document.querySelectorAll('.table-scroll')].map((el) => ({ tabindex: el.getAttribute('tabindex'), role: el.getAttribute('role'), label: el.getAttribute('aria-label') })));
+      for (const r of regions) expect(r).toEqual({ tabindex: '0', role: 'region', label: expect.stringMatching(/\S/) });
     });
   }
+
+  test('a scrollable table region takes keyboard focus and shows the focus ring', async ({ page }) => {
+    await page.goto('/');
+    const region = page.getByRole('region', { name: /shortlist/i });
+    await expect(region).toBeVisible();
+    await page.keyboard.press('Tab');
+    await region.focus();
+    await expect(region).toBeFocused();
+    const outline = await region.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(outline).not.toBe('none');
+  });
+
+  for (const [name, status, sessions] of [
+    ['setup needs attention and a running session', { code: 200, token: false }, [{ status: 'running' }, { status: 'running' }, { status: 'running' }, { status: 'queued' }]],
+    ['status unavailable and sessions waiting for you', { code: 500, token: true }, [{ status: 'awaiting_user' }, { status: 'awaiting_user' }]],
+  ] as const) {
+    test(`the top bar still fits with ${name}`, async ({ page }) => {
+      await page.route('**/api/system/status', async (route) => {
+        if (status.code !== 200) return route.fulfill({ status: status.code, contentType: 'application/json', body: '{"error":"forced"}' });
+        const res = await route.fetch();
+        const body = (await res.json()) as Record<string, unknown>;
+        await route.fulfill({ response: res, json: { ...body, keychainTokenPresent: status.token } });
+      });
+      await page.route('**/api/sessions', (route) => route.fulfill({ json: sessions }));
+      await page.goto('/');
+      await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
+      await expect(page.getByRole('link', { name: /^Activity:/ })).toBeVisible();
+      const m = await page.evaluate(() => {
+        const top = document.querySelector('.shell__top') as HTMLElement;
+        const items = [...top.children].filter((el) => (el.textContent ?? '').trim() !== '' && el.getBoundingClientRect().width > 0);
+        const boxes = items.map((el) => ({ name: (el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 30), left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right, clipped: el.scrollWidth > el.clientWidth + 1 }));
+        return { topScroll: top.scrollWidth, topClient: top.clientWidth, innerWidth: window.innerWidth, boxes };
+      });
+      expect(m.topScroll).toBeLessThanOrEqual(m.topClient);
+      expect(m.boxes.filter((b) => b.clipped).map((b) => b.name)).toEqual([]);
+      expect(m.boxes.at(-1)!.right).toBeLessThanOrEqual(m.innerWidth);
+      expect(m.boxes[0]!.left).toBeGreaterThanOrEqual(0);
+      for (let i = 1; i < m.boxes.length; i++) expect(m.boxes[i]!.left, `${m.boxes[i]!.name} overlaps ${m.boxes[i - 1]!.name}`).toBeGreaterThanOrEqual(m.boxes[i - 1]!.right - 0.5);
+      if (status.code === 200) await expect(page.getByRole('link', { name: 'Setup needs attention' })).toBeVisible();
+    });
+  }
+
+  test('opening the menu moves focus into the drawer and Tab stays inside it', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
+    const inside = () => page.evaluate(() => document.querySelector('#primary-nav')!.contains(document.activeElement));
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press('Tab');
+      expect(await inside()).toBe(true);
+    }
+    await sidebar(page).getByRole('link', { name: 'Today' }).focus();
+    await page.keyboard.press('Shift+Tab');
+    expect(await inside()).toBe(true);
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).not.toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
+  });
+
+  test('closing the menu by choosing a link returns focus to the menu button', async ({ page }) => {
+    await menuButton(page).click();
+    await sidebar(page).getByRole('link', { name: 'Tutorials' }).click();
+    await expect(sidebar(page)).toBeHidden();
+    await expect(menuButton(page)).toBeFocused();
+  });
+
+  test('an open drawer does not come back after the window is widened and narrowed again', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page)).toBeVisible();
+    await page.setViewportSize({ width: 1000, height: 844 });
+    await expect(sidebar(page)).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(sidebar(page)).toBeHidden();
+    await expect(menuButton(page)).toHaveAttribute('aria-expanded', 'false');
+  });
 
   test('the sidebar is hidden until the menu button opens it, and a nav click closes it', async ({ page }) => {
     await expect(sidebar(page)).toBeHidden();

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
-import { DataState, Empty, Pill } from '../../components/ui';
+import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
 import { LogBrowser, ScheduleCards } from './ScheduleCards';
 import { groupQuickActions } from './quickActions';
@@ -112,7 +112,7 @@ export function RunsPage() {
           {runs.data && runs.data.length === 0 ? (
             <Empty>No runs yet. Start one from the buttons above or from any page action.</Empty>
           ) : (
-            <div className="table-scroll">
+            <TableScroll label="Runs">
               <table className="table table--interactive">
                 <thead>
                   <tr>
@@ -153,7 +153,7 @@ export function RunsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </DataState>
         <div className="stack">

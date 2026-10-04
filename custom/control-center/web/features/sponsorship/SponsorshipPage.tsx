@@ -1,7 +1,7 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { SafeMarkdown } from '../../components/Md';
 import { useImmigration } from '../../lib/queries';
-import { DataState, Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
+import { DataState, Empty, Pill, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { Tabs } from '../../components/ui';
 import { useState } from 'react';
 import { useActions, useRunAction } from '../../lib/actions';
@@ -135,7 +135,7 @@ export function SponsorshipPage() {
                 </div>
               )}
               {tab === 'changes' && (
-                <div className="table-scroll">
+                <TableScroll label="Policy changes">
                   <table className="table">
                     <thead>
                       <tr>
@@ -166,13 +166,13 @@ export function SponsorshipPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableScroll>
               )}
               {tab === 'feed' &&
                 (d.officialFeed.length === 0 ? (
                   <Empty>No official feed rows yet.</Empty>
                 ) : (
-                  <div className="table-scroll">
+                  <TableScroll label="Official feed">
                     <table className="table">
                       <thead>
                         <tr>
@@ -201,10 +201,10 @@ export function SponsorshipPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 ))}
               {tab === 'alerts' && (
-                <div className="table-scroll">
+                <TableScroll label="Company alerts">
                   <table className="table">
                     <thead>
                       <tr>
@@ -235,13 +235,13 @@ export function SponsorshipPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableScroll>
               )}
               {tab === 'companies' &&
                 (d.companies.length === 0 ? (
                   <Empty>No company checks yet.</Empty>
                 ) : (
-                  <div className="table-scroll">
+                  <TableScroll label="Company checks">
                     <table className="table">
                       <thead>
                         <tr>
@@ -266,7 +266,7 @@ export function SponsorshipPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 ))}
               {tab === 'tiers' && (
                 <div className="card">

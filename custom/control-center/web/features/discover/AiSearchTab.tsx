@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useTracker } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
-import { Pill } from '../../components/ui';
+import { Pill, TableScroll } from '../../components/ui';
 
 interface Offer {
   url: string;
@@ -49,7 +49,7 @@ export function AiSearchTab() {
               Add all new ({newOnes.length})
             </button>
           </div>
-          <div className="table-scroll">
+          <TableScroll label="AI search results">
             <table className="table">
               <thead>
                 <tr>
@@ -86,7 +86,7 @@ export function AiSearchTab() {
                 })}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
           {note && (
             <p role="status" className="muted small">
               {note}

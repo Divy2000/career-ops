@@ -5,7 +5,7 @@ import { useWhatsNew } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill, Tabs } from '../../components/ui';
+import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
@@ -260,7 +260,7 @@ function NetworkScan() {
                   Add all ({visible.length})
                 </button>
               </div>
-              <div className="table-scroll">
+              <TableScroll label="Network scan results">
                 <table className="table" aria-label="Network scan results">
                   <thead>
                     <tr>
@@ -297,7 +297,7 @@ function NetworkScan() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
             </>
           )}
           <RunTail runId={runId} />
@@ -314,7 +314,7 @@ function Fresh() {
       {q.data && q.data.offers.length === 0 ? (
         <Empty>No fresh matches this week. Run a portal or network scan.</Empty>
       ) : (
-        <div className="table-scroll">
+        <TableScroll label="Fresh matches">
           <table className="table" aria-label="Fresh matches">
             <thead>
               <tr>
@@ -337,7 +337,7 @@ function Fresh() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </DataState>
   );
