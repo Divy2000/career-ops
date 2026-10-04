@@ -5,8 +5,10 @@ import { Md } from '../../components/Md';
 import { DataState, Empty, Tabs } from '../../components/ui';
 import { apiGetText } from '../../lib/api';
 import { useTutorials } from '../../lib/queries';
+import { useTheme } from '../../lib/theme';
 import { chapterIndexAt, filterTranscript, formatTimestamp, keyAction, type KeyTarget } from '../../lib/tutorials';
 import { QuickGuide } from './QuickGuide';
+import { useThemedVideo } from './useThemedVideo';
 import type { Tutorial, TutorialsRead } from '@shared/api';
 
 const route = getRouteApi('/tutorials');
@@ -82,7 +84,9 @@ function EmptyState({ directory }: { directory: string }) {
 }
 
 function Thumb({ tutorial }: { tutorial: Tutorial }) {
-  return tutorial.poster ? <img className="tut-card__thumb" src={tutorial.poster.url} alt="" loading="lazy" /> : <span className="tut-card__thumb tut-card__thumb--none" aria-hidden="true" />;
+  const { resolved } = useTheme();
+  const poster = resolved === 'light' && tutorial.posterLight ? tutorial.posterLight : tutorial.poster;
+  return poster ? <img className="tut-card__thumb" src={poster.url} alt="" loading="lazy" /> : <span className="tut-card__thumb tut-card__thumb--none" aria-hidden="true" />;
 }
 
 function Transcript({ url }: { url: string }) {
@@ -127,6 +131,8 @@ function Transcript({ url }: { url: string }) {
 
 function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; startAt: number | null; onStartApplied: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
+  const cover = useRef<HTMLCanvasElement>(null);
+  const themed = useThemedVideo(video, cover, tutorial, startAt);
   const [current, setCurrent] = useState(-1);
   const [captions, setCaptions] = useState(readCaptionsPref);
   const [osd, setOsd] = useState('');
@@ -246,10 +252,10 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
       <div className="tut">
         <div className="stack">
           <div className="tut__stage">
-            <video ref={video} controls preload="metadata" poster={tutorial.poster?.url} aria-label={tutorial.title} onTimeUpdate={update} onSeeked={update} onLoadedMetadata={update}>
-              <source src={tutorial.video.url} type="video/mp4" />
+            <video ref={video} controls preload="metadata" src={themed.initialSrc} poster={themed.poster} aria-label={tutorial.title} onTimeUpdate={update} onSeeked={update} onLoadedMetadata={update}>
               {tutorial.subtitles && <track kind="subtitles" srcLang="en" label="English" src={tutorial.subtitles.url} />}
             </video>
+            <canvas ref={cover} className="tut__freeze" data-state="off" aria-hidden="true" />
             {osd && (
               <p className="tut__osd" aria-hidden="true">
                 {osd}
@@ -273,6 +279,12 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
               )}
             </div>
             {tutorial.description && <p className="muted" style={{ margin: 0 }}>{tutorial.description}</p>}
+            {themed.lightMissing && <p className="faint small tut__note" style={{ margin: 0 }}>No light version; showing the dark video</p>}
+            {themed.warning && (
+              <p className="small tut__note" role="status" style={{ margin: 0, color: 'var(--warning)' }}>
+                {themed.warning}
+              </p>
+            )}
             <p className="faint small tut__keys" style={{ margin: 0 }}>
               <kbd>Space</kbd> or <kbd>K</kbd> play or pause, <kbd>J</kbd> back 10s, <kbd>L</kbd> forward 10s, <kbd>C</kbd> captions, <kbd>Up</kbd> and <kbd>Down</kbd> previous and next chapter
             </p>

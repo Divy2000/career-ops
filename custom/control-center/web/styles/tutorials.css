@@ -94,6 +94,22 @@
   object-fit: contain;
   background: var(--media-stage);
 }
+/* The last frame of the old recording, held over the video while the other one loads, then faded out. */
+.tut__freeze {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--media-stage);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease-out);
+}
+.tut__freeze[data-state='on'] {
+  opacity: 1;
+  transition: none;
+}
 .tut__meta {
   display: flex;
   flex-direction: column;
