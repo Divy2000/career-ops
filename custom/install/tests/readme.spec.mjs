@@ -161,7 +161,6 @@ test('Option 2 states the Markdown-only rule, the size limits and what happens t
   assert.match(opt2, /cv\.md/);
   assert.match(opt2, /--replace-cv/);
   assert.match(opt2, /backup/i);
-  assert.match(opt2, /shasum -a 256/, 'the pinned one-liner comes with checksum instructions');
   assert.match(opt2, /fork-install-v1/);
 });
 
@@ -347,6 +346,7 @@ test('ONBOARDING.md rule 5 allows staging copies and extracted text before the g
   assert.match(rule5, /documents\//);
   assert.match(rule5, /\.extracted\.txt/);
   assert.match(rule5, /temp/i);
+  assert.match(rule5, /data\/install\/onboarding-draft\//);
   assert.match(rule5, /list/i);
   assert.match(rule5, /cv\.md/);
   assert.match(rule5, /config/);
@@ -390,12 +390,27 @@ test('the README says pending actions print before the Control Center starts and
   assert.equal(/\(exit code 3\)/.test(row), false);
 });
 
-test('the one-liner section is honest about what the checksum proves and prefers git clone', () => {
+test('the one-liner section makes no checksum claim, explains the truncation guard, and prefers git clone', () => {
   const opt2 = section(readme, /^#{2,3}\s+Option 2\b/);
-  assert.match(opt2, /corrupted or truncated/i);
+  assert.equal(/shasum|checksum|corrupted/i.test(opt2), false, 'no checksum line or corruption claim');
+  assert.match(opt2, /runs nothing if the download is cut off/i);
+  assert.match(opt2, /one function/i);
+  assert.match(opt2, /last line/i);
   assert.match(opt2, /reading the script/i);
-  assert.match(opt2, /pinn/i);
+  assert.match(opt2, /pinned tag|pinning the tag/i);
+  assert.match(opt2, /skips reading it/i);
+  assert.equal(/skips both/i.test(opt2), false);
   assert.match(opt2, /prefer `git clone`|prefer the `git clone`/i);
   assert.equal(/two hashes must match/i.test(opt2), false);
-  assert.equal(/git show fork-install-v1/.test(opt2), false);
+});
+
+test('ONBOARDING.md writes no third-party contact data before the gate: Connections.csv is placed only after it, with consent', () => {
+  const pre = ['Draft mode', 'Resume from drafts', 'Step 1: State and inventory', 'Step 2: Extract text (the ladder)', 'Step 3: The questionnaire (once, before writing)', 'Step 4: Map answers to files']
+    .map((t) => section(onboarding, new RegExp(`^#{2,3}\\s+${t.replace(/[()]/g, '\\$&')}$`))).join('\n');
+  assert.equal(/data\/Connections\.csv/.test(pre), false, 'no write of data/Connections.csv before the gate');
+  assert.match(pre, /Never read `Connections\.csv` into the profile/);
+  const after = section(onboarding, /^#{2,3}\s+Step 7: Offers$/);
+  assert.match(after, /data\/Connections\.csv/);
+  assert.match(after, /linkedin-join\.mjs/);
+  assert.match(after, /consent/i);
 });

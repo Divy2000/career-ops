@@ -87,12 +87,11 @@ Exit codes: `0` done, `1` failure, `2` usage or input error, `3` done with actio
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v1/custom/install/bootstrap.sh
-shasum -a 256 bootstrap.sh
 less bootstrap.sh
 bash bootstrap.sh --resume resume.md
 ```
 
-The checksum only detects a corrupted or truncated download; it is not independent proof, because it comes from the same repository as the script. The real safeguards are reading the script before you run it and pinning the tag (`fork-install-v1`, not a moving branch). Piping it straight into a shell skips both: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v1/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
+`bootstrap.sh` runs nothing if the download is cut off: its whole body is one function that is called on the last line, so a truncated file defines nothing and executes nothing. The real safeguards are reading the script before you run it and the pinned tag (`fork-install-v1`, not a moving branch). Piping it straight into a shell skips reading it: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v1/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
 
 ## What you get
 
