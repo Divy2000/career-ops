@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { makeTestApp, testConfig, type TestApp } from '../helpers/app.js';
+import { maybeFakeDailyProbe } from '../../server/system/daily.js';
 import { configFromEnv } from '../../server/config.js';
 import type { Exec } from '../../server/routes/system.js';
 
@@ -29,6 +30,21 @@ describe('daily job detection', () => {
   it('asks the host through pgrep when no override is set', async () => {
     t = await makeTestApp({}, { exec: hostSays(true), dailyPollMs: 30 });
     expect(await dailyRunning(t)).toBe(true);
+  });
+});
+
+describe('maybeFakeDailyProbe', () => {
+  const probe = (exec: Exec) => exec('pgrep', ['-f', 'custom/immigration/run-daily.sh'], { timeoutMs: 1000 });
+  it('ignores fakeDaily on a config that is not NODE_ENV=test', async () => {
+    const cfg = { ...testConfig(), nodeEnv: 'production', fakeDaily: 'running' as const };
+    expect(await probe(maybeFakeDailyProbe(cfg, hostSays(false)))).toMatchObject({ code: 1 });
+    expect(await probe(maybeFakeDailyProbe({ ...cfg, fakeDaily: 'idle' }, hostSays(true)))).toMatchObject({ code: 0 });
+  });
+  it('answers from fakeDaily on a NODE_ENV=test config and leaves other commands to the host exec', async () => {
+    const cfg = { ...testConfig(), fakeDaily: 'running' as const };
+    expect(await probe(maybeFakeDailyProbe(cfg, hostSays(false)))).toMatchObject({ code: 0 });
+    const other = await maybeFakeDailyProbe(cfg, async () => ({ code: 7, stdout: 'host', stderr: '' }))('ls', [], { timeoutMs: 1000 });
+    expect(other).toMatchObject({ code: 7, stdout: 'host' });
   });
 });
 
