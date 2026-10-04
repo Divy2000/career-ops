@@ -115,7 +115,8 @@ export function setDensity(html, density) {
   const text = String(html ?? '');
   const tag = text.match(/<html\b[^>]*>/i);
   if (!tag) throw new Error('no <html> tag to set data-density on');
-  const cleaned = tag[0].replace(/\s+data-density=(?:"[^"]*"|'[^']*'|\S+)/i, '');
+  // Every spelling: any case, whitespace around "=", any quoting, repeats.
+  const cleaned = tag[0].replace(/\s+data-density(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>"']+))?(?=[\s/>])/gi, '');
   const updated = cleaned.replace(/>$/, ` data-density="${density}">`);
   return text.slice(0, tag.index) + updated + text.slice(tag.index + tag[0].length);
 }

@@ -39,6 +39,15 @@ test('given html with or without a density, when a density is set, then the html
   assert.match(setDensity(once, 3), /<html lang="en" data-density="3">/);
 });
 
+test('given a data-density with spaces around =, other quoting or repeats, when a density is set, then exactly one remains', () => {
+  for (const tag of ['<html data-density = "0">', "<html lang=\"en\" DATA-DENSITY='1' data-density=2>", '<html\n  data-density\t=\t"3"\n  lang="en">']) {
+    const out = setDensity(`${tag}<body></body></html>`, 2);
+    const html = out.match(/<html\b[^>]*>/i)[0];
+    assert.equal((html.match(/data-density/gi) ?? []).length, 1, html);
+    assert.match(html, /data-density="2"/, html);
+  }
+});
+
 test('given html without an <html> tag, when a density is set, then it throws', () => {
   assert.throws(() => setDensity('<body></body>', 1), /<html>/);
 });
