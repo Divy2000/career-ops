@@ -80,6 +80,31 @@ describe('parseManifest', () => {
     if (!m.ok) expect(m.error).toMatch(/guide/);
   });
 
+  it('accepts videoLight and posterLight and keeps them', () => {
+    const m = parseManifest({ ...ok, poster: 'poster.jpg', videoLight: 'demo-light.mp4', posterLight: 'poster-light.png' }, 'demo');
+    expect(m).toMatchObject({ ok: true, manifest: { videoLight: 'demo-light.mp4', posterLight: 'poster-light.png' } });
+  });
+
+  it('leaves videoLight and posterLight out when the manifest does not name them', () => {
+    const m = parseManifest(ok, 'demo');
+    expect(m.ok && 'videoLight' in m.manifest).toBe(false);
+    expect(m.ok && 'posterLight' in m.manifest).toBe(false);
+  });
+
+  it.each([
+    ['a videoLight that is not an mp4', { videoLight: 'demo-light.webm' }, /videoLight/],
+    ['a videoLight in a subfolder', { videoLight: 'sub/demo-light.mp4' }, /videoLight/],
+    ['a videoLight that climbs out', { videoLight: '../demo-light.mp4' }, /videoLight/],
+    ['a posterLight that is a gif', { posterLight: 'poster-light.gif' }, /posterLight/],
+    ['a posterLight that climbs out', { posterLight: '../poster-light.jpg' }, /posterLight/],
+    ['a videoLight that is the same file as video', { videoLight: 'demo.mp4' }, /videoLight.*different.*video/],
+    ['a videoLight that differs from video only by case', { videoLight: 'DEMO.mp4' }, /videoLight.*different.*video/],
+  ])('rejects %s', (_label, extra, message) => {
+    const m = parseManifest({ ...ok, ...extra }, 'demo');
+    expect(m.ok).toBe(false);
+    if (!m.ok) expect(m.error).toMatch(message);
+  });
+
   it('defaults the description and chapters', () => {
     const m = parseManifest({ id: 'demo', title: 'Demo', video: 'demo.mp4' }, 'demo');
     expect(m).toEqual({ ok: true, manifest: { id: 'demo', title: 'Demo', description: '', video: 'demo.mp4', chapters: [] } });

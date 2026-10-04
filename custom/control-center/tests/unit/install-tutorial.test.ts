@@ -293,6 +293,156 @@ describe('installTutorial with a quick guide', () => {
   });
 });
 
+describe('installTutorial with a light version of the recording', () => {
+  const read = (id: string, name: string) => fs.readFileSync(path.join(dest(id), name), 'utf8');
+  const manifestOf = (id: string) => JSON.parse(read(id, 'tutorial.json'));
+  const pairedFolder = () => {
+    write('chapters/toc.json', JSON.stringify(TOC));
+    write('tour.mp4', 'DARK-BYTES');
+    write('tour-light.mp4', 'LIGHT-BYTES');
+    write('tour.vtt', 'WEBVTT\n');
+  };
+
+  it('pairs <stem>.mp4 with <stem>-light.mp4 instead of calling them two videos, and copies both as-is', () => {
+    pairedFolder();
+    installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed' });
+    expect(manifestOf('themed')).toMatchObject({ video: 'tour.mp4', videoLight: 'tour-light.mp4' });
+    expect(read('themed', 'tour.mp4')).toBe('DARK-BYTES');
+    expect(read('themed', 'tour-light.mp4')).toBe('LIGHT-BYTES');
+    expect(fs.readdirSync(dest('themed')).sort()).toEqual(['tour-light.mp4', 'tour.mp4', 'tour.vtt', 'tutorial.json']);
+  });
+
+  it('is picked up by the Tutorials listing with the light video and no warning', () => {
+    pairedFolder();
+    installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed' });
+    const listed = listTutorials(dataRoot);
+    expect(listed.tutorials[0]?.warnings).toEqual([]);
+    expect(listed.tutorials[0]?.videoLight).toMatchObject({ file: 'tour-light.mp4', bytes: 'LIGHT-BYTES'.length });
+  });
+
+  it('pairs poster-light.jpg, .jpeg or .png with poster.jpg as posterLight and copies it as-is', () => {
+    pairedFolder();
+    write('poster.jpg', 'DARK-POSTER');
+    write('poster-light.png', 'LIGHT-POSTER');
+    installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed' });
+    expect(manifestOf('themed')).toMatchObject({ poster: 'poster.jpg', posterLight: 'poster-light.png' });
+    expect(read('themed', 'poster-light.png')).toBe('LIGHT-POSTER');
+  });
+
+  it('adds no videoLight or posterLight when the folder has none', () => {
+    recordingFolder();
+    installTutorial({ source: src(), dataRoot, id: 'plain', title: 'Plain' });
+    expect(manifestOf('plain')).not.toHaveProperty('videoLight');
+    expect(manifestOf('plain')).not.toHaveProperty('posterLight');
+  });
+
+  it('still refuses an unrelated second .mp4, and does not list the paired light video among the choices', () => {
+    pairedFolder();
+    write('other.mp4', 'OTHER');
+    const attempt = () => installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed' });
+    expect(attempt).toThrow(/more than one \.mp4.*other\.mp4, tour\.mp4.*--video/);
+    expect(attempt).not.toThrow(/tour-light\.mp4/);
+    expect(fs.existsSync(dest('themed'))).toBe(false);
+  });
+
+  it('with --video, picks that video and its own -light partner', () => {
+    pairedFolder();
+    write('other.mp4', 'OTHER');
+    write('other-light.mp4', 'OTHER-LIGHT');
+    installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed', video: 'other.mp4' });
+    expect(manifestOf('themed')).toMatchObject({ video: 'other.mp4', videoLight: 'other-light.mp4' });
+    expect(fs.existsSync(path.join(dest('themed'), 'tour.mp4'))).toBe(false);
+  });
+
+  it('treats a lone x-light.mp4 with no x.mp4 as the video, not as a light version', () => {
+    write('tour-light.mp4', 'ONLY');
+    installTutorial({ source: src(), dataRoot, id: 'lone', title: 'Lone' });
+    const m = manifestOf('lone');
+    expect(m.video).toBe('tour-light.mp4');
+    expect(m).not.toHaveProperty('videoLight');
+  });
+
+  it('--video-light names the light video explicitly, whatever it is called', () => {
+    write('tour.mp4', 'DARK');
+    write('night-mode.mp4', 'LIGHT');
+    installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed', videoLight: 'night-mode.mp4' });
+    expect(manifestOf('themed')).toMatchObject({ video: 'tour.mp4', videoLight: 'night-mode.mp4' });
+    expect(read('themed', 'night-mode.mp4')).toBe('LIGHT');
+  });
+
+  it('--video-light wins over a -light file that would have been paired by name', () => {
+    pairedFolder();
+    write('better.mp4', 'BETTER');
+    installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed', video: 'tour.mp4', videoLight: 'better.mp4' });
+    expect(manifestOf('themed').videoLight).toBe('better.mp4');
+    expect(fs.existsSync(path.join(dest('themed'), 'tour-light.mp4'))).toBe(false);
+  });
+
+  it.each([
+    ['a file that is not in the folder', 'gone.mp4', /light video file "gone\.mp4" not found in the source folder/],
+    ['a path', 'sub/light.mp4', /videoLight/],
+    ['a file that is not an mp4', 'light.webm', /videoLight/],
+    ['the same file as the video', 'tour.mp4', /videoLight.*different.*video/],
+  ])('refuses --video-light with %s and writes nothing', (_label, videoLight, message) => {
+    write('tour.mp4', 'DARK');
+    expect(() => installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed', video: 'tour.mp4', videoLight })).toThrow(message);
+    expect(fs.existsSync(dest('themed'))).toBe(false);
+  });
+
+  it('copies the light files a tutorial.json names, as-is, and refuses one that is missing', () => {
+    const manifest = { id: 'asis', title: 'As is', video: 'a.mp4', videoLight: 'a-night.mp4', poster: 'p.jpg', posterLight: 'p-night.jpg' };
+    write('tutorial.json', JSON.stringify(manifest));
+    write('a.mp4', 'D');
+    write('a-night.mp4', 'L');
+    write('p.jpg', 'PD');
+    write('p-night.jpg', 'PL');
+    write('stray-light.mp4', 'must not be copied');
+    installTutorial({ source: src(), dataRoot, dryRun: true });
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readdirSync(dest('asis')).sort()).toEqual(['a-night.mp4', 'a.mp4', 'p-night.jpg', 'p.jpg', 'tutorial.json']);
+    fs.rmSync(path.join(src(), 'a-night.mp4'));
+    expect(() => installTutorial({ source: src(), dataRoot, force: true })).toThrow(/light video file "a-night\.mp4" not found in the source folder/);
+    write('a-night.mp4', 'L');
+    fs.rmSync(path.join(src(), 'p-night.jpg'));
+    expect(() => installTutorial({ source: src(), dataRoot, force: true })).toThrow(/light poster file "p-night\.jpg" not found in the source folder/);
+  });
+
+  it('refuses a tutorial.json whose videoLight is the video itself', () => {
+    write('tutorial.json', JSON.stringify({ id: 'same', title: 'Same', video: 'a.mp4', videoLight: 'a.mp4' }));
+    write('a.mp4', 'D');
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/tutorial\.json is invalid.*videoLight.*different/);
+  });
+
+  it('refuses --video-light next to a tutorial.json, which is copied as-is', () => {
+    write('tutorial.json', JSON.stringify({ id: 'asis', title: 'As is', video: 'a.mp4' }));
+    write('a.mp4', 'D');
+    write('b.mp4', 'L');
+    expect(() => installTutorial({ source: src(), dataRoot, videoLight: 'b.mp4' })).toThrow(/already has tutorial\.json.*--video-light/);
+  });
+
+  it('lists the light files in a dry run and writes nothing', () => {
+    pairedFolder();
+    const r = installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed', dryRun: true });
+    expect(r.files).toContain('tour-light.mp4');
+    expect(fs.existsSync(path.join(dataRoot, 'data'))).toBe(false);
+  });
+
+  it('takes --video-light on the command line', () => {
+    write('tour.mp4', 'DARK');
+    write('night-mode.mp4', 'LIGHT');
+    const r = spawnSync(process.execPath, [SCRIPT, src(), '--data-root', dataRoot, '--id', 'themed', '--video-light', 'night-mode.mp4'], { encoding: 'utf8', env: { ...process.env, CAREER_OPS_ROOT: '', CC_DATA_ROOT: '' } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(manifestOf('themed').videoLight).toBe('night-mode.mp4');
+    expect(r.stdout).toContain('night-mode.mp4');
+  });
+
+  it('asks for a value when --video-light is last', () => {
+    const r = spawnSync(process.execPath, [SCRIPT, src(), '--video-light'], { encoding: 'utf8' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('--video-light needs a value');
+  });
+});
+
 describe('installTutorial safety', () => {
   it('refuses to replace an installed tutorial without force, and replaces it with force', () => {
     recordingFolder();

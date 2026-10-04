@@ -17,17 +17,25 @@ const plainName = (field, exts) =>
 
 const chapterSchema = z.object({ title: z.string().min(1).max(200), start: z.number().finite().min(0) });
 
-const manifestSchema = z.object({
-  id: z.string().regex(ID_RE, 'must be 1 to 64 letters, digits, - or _'),
-  title: z.string().min(1).max(200),
-  description: z.string().max(4000).default(''),
-  video: plainName('video', ['.mp4']),
-  subtitles: plainName('subtitles', ['.srt', '.vtt']).optional(),
-  poster: plainName('poster', ['.jpg', '.jpeg', '.png']).optional(),
-  transcript: plainName('transcript', ['.md']).optional(),
-  guide: plainName('guide', ['.json']).optional(),
-  chapters: z.array(chapterSchema).max(500).default([]),
-});
+const manifestSchema = z
+  .object({
+    id: z.string().regex(ID_RE, 'must be 1 to 64 letters, digits, - or _'),
+    title: z.string().min(1).max(200),
+    description: z.string().max(4000).default(''),
+    video: plainName('video', ['.mp4']),
+    videoLight: plainName('videoLight', ['.mp4']).optional(),
+    subtitles: plainName('subtitles', ['.srt', '.vtt']).optional(),
+    poster: plainName('poster', ['.jpg', '.jpeg', '.png']).optional(),
+    posterLight: plainName('posterLight', ['.jpg', '.jpeg', '.png']).optional(),
+    transcript: plainName('transcript', ['.md']).optional(),
+    guide: plainName('guide', ['.json']).optional(),
+    chapters: z.array(chapterSchema).max(500).default([]),
+  })
+  // Compared without case: on a case-insensitive disk "Demo.mp4" and "demo.mp4" are one file.
+  .refine((m) => m.videoLight === undefined || m.videoLight.toLowerCase() !== m.video.toLowerCase(), {
+    path: ['videoLight'],
+    message: 'must be a different file from video (the light version of the recording)',
+  });
 
 export const MAX_GUIDE_SECTIONS = 60;
 /** guide.json larger than this is refused by the server, so the installer refuses it too. */

@@ -6,8 +6,8 @@
 // The source folder is either
 //   - a folder that already has tutorial.json: it is validated and copied as-is, or
 //   - a recording folder: tutorial.json is built from chapters/toc.json ([{ number, id, title, start, duration }]),
-//     the .mp4, the .vtt or .srt, an optional poster.jpg and tutorial/script.md. An optional guide/guide.json (the Quick guide)
-//     is added too, with the gifs and posters it names sitting next to it in guide/.
+//     the .mp4 (and its light-theme twin <name>-light.mp4), the .vtt or .srt, an optional poster.jpg (and poster-light.jpg) and tutorial/script.md.
+//     An optional guide/guide.json (the guide) is added too, with the images, clips and posters it names sitting next to it in guide/.
 // Only tutorial.json and the files it names (and, for a guide, the files guide.json names) are copied; chapter clips, raw takes and the rest stay behind.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +23,7 @@ Options:
   --title <text>        tutorial title (default: the id as words)
   --description <text>  tutorial description
   --video <file>        the .mp4 to use when the folder has several
+  --video-light <file>  the light-theme .mp4 (default: <video name>-light.mp4 when it exists)
   --force               replace a tutorial that is already installed
   --dry-run             print what would be installed and write nothing`;
 
@@ -44,6 +45,7 @@ const isFile = (p) => {
 };
 const rootFiles = (dir, exts) => fs.readdirSync(dir).filter((n) => !n.startsWith('.') && exts.includes(extOf(n)) && isFile(path.join(dir, n))).sort();
 const stem = (name) => path.basename(name, path.extname(name));
+const lightOf = (name) => `${stem(name)}-light${path.extname(name)}`;
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 const words = (id) => {
   const t = id.replace(/[-_]+/g, ' ').trim();
@@ -84,13 +86,17 @@ function buildManifest(source, opts) {
   let video = opts.video;
   if (video === undefined) {
     const mp4s = rootFiles(source, ['.mp4']);
-    if (mp4s.length === 0) throw new Error('no .mp4 file in the source folder');
-    if (mp4s.length > 1) throw new Error(`more than one .mp4 file in the source folder (${mp4s.join(', ')}); choose one with --video`);
-    video = mp4s[0];
+    const lights = new Set([...mp4s.map(lightOf).filter((n) => mp4s.includes(n)), ...(opts.videoLight === undefined ? [] : [opts.videoLight])]);
+    const choices = mp4s.filter((n) => !lights.has(n));
+    if (choices.length === 0) throw new Error('no .mp4 file in the source folder');
+    if (choices.length > 1) throw new Error(`more than one .mp4 file in the source folder (${choices.join(', ')}); choose one with --video`);
+    video = choices[0];
   }
+  const videoLight = opts.videoLight ?? (isFile(path.join(source, lightOf(video))) ? lightOf(video) : undefined);
   const id = opts.id ?? slug(stem(video));
   if (!ID_RE.test(id)) throw new Error(`id "${id}" is not valid: use 1 to 64 letters, digits, - or _`);
   const poster = ['poster.jpg', 'poster.jpeg', 'poster.png'].find((n) => isFile(path.join(source, n)));
+  const posterLight = ['poster-light.jpg', 'poster-light.jpeg', 'poster-light.png'].find((n) => isFile(path.join(source, n)));
   const scriptFrom = ['tutorial/script.md', 'script.md'].find((n) => isFile(path.join(source, n)));
   const subtitles = pickSubtitles(source, video);
   const guide = isFile(path.join(source, GUIDE_DIR, 'guide.json'));
@@ -99,8 +105,10 @@ function buildManifest(source, opts) {
     title: opts.title ?? words(id),
     description: opts.description ?? '',
     video,
+    ...(videoLight ? { videoLight } : {}),
     ...(subtitles ? { subtitles } : {}),
     ...(poster ? { poster } : {}),
+    ...(posterLight ? { posterLight } : {}),
     ...(scriptFrom ? { transcript: 'script.md' } : {}),
     ...(guide ? { guide: 'guide.json' } : {}),
     chapters: readChapters(source),
@@ -131,7 +139,7 @@ function planGuide(guideRoot, name, chapterCount) {
 }
 
 /**
- * @param {{ source: string, dataRoot: string, id?: string, title?: string, description?: string, video?: string, force?: boolean, dryRun?: boolean }} opts
+ * @param {{ source: string, dataRoot: string, id?: string, title?: string, description?: string, video?: string, videoLight?: string, force?: boolean, dryRun?: boolean }} opts
  */
 export function installTutorial(opts) {
   const source = path.resolve(opts.source);
@@ -152,8 +160,8 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
     manifestText = `${JSON.stringify(m, null, 2)}\n`;
   } else {
-    if (opts.id !== undefined || opts.title !== undefined || opts.description !== undefined || opts.video !== undefined) {
-      throw new Error('the source folder already has tutorial.json, which is copied as-is: edit it instead of passing --id, --title, --description or --video');
+    if (opts.id !== undefined || opts.title !== undefined || opts.description !== undefined || opts.video !== undefined || opts.videoLight !== undefined) {
+      throw new Error('the source folder already has tutorial.json, which is copied as-is: edit it instead of passing --id, --title, --description, --video or --video-light');
     }
     manifestText = fs.readFileSync(manifestPath, 'utf8');
     let json;
@@ -167,7 +175,7 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const named = [['video', manifest.video], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['transcript', manifest.transcript]];
+  const named = [['video', manifest.video], ['light video', manifest.videoLight], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['light poster', manifest.posterLight], ['transcript', manifest.transcript]];
   const copies = named
     .filter(([, name]) => name !== undefined)
     .map(([kind, name]) => ({ kind, from: path.join(source, built && kind === 'transcript' && scriptFrom ? scriptFrom : name), to: name }));
@@ -193,7 +201,7 @@ export function installTutorial(opts) {
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging);
   try {
-    for (const c of copies) fs.copyFileSync(c.from, path.join(staging, c.to));
+    for (const c of copies) fs.copyFileSync(c.from, path.join(staging, c.to), fs.constants.COPYFILE_FICLONE);
     fs.writeFileSync(path.join(staging, 'tutorial.json'), manifestText);
     if (previous) fs.renameSync(dest, previous);
     try {
@@ -210,7 +218,7 @@ export function installTutorial(opts) {
   return result;
 }
 
-const VALUE_FLAGS = { '--data-root': 'dataRoot', '--id': 'id', '--title': 'title', '--description': 'description', '--video': 'video' };
+const VALUE_FLAGS = { '--data-root': 'dataRoot', '--id': 'id', '--title': 'title', '--description': 'description', '--video': 'video', '--video-light': 'videoLight' };
 
 function parseArgs(argv) {
   const opts = {};

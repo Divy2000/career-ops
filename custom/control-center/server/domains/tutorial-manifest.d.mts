@@ -3,8 +3,10 @@ export interface TutorialManifest {
   title: string;
   description: string;
   video: string;
+  videoLight?: string;
   subtitles?: string;
   poster?: string;
+  posterLight?: string;
   transcript?: string;
   guide?: string;
   chapters: Array<{ title: string; start: number }>;

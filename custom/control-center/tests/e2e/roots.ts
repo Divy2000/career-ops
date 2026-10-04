@@ -59,7 +59,7 @@ export function writeStressRoot(dir: string, fixtureRoot: string): void {
 
 const MEDIA_FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'media');
 
-/** Writes a 2 second H.264 clip with ffmpeg when it is installed; otherwise copies the committed fixture of the same clip. */
+/** Writes a 2 second H.264 clip (or one JPEG frame) with ffmpeg when it is installed; otherwise copies the committed fixture of the same clip. */
 function writeClip(dest: string, ffmpegArgs: string[], fixture: string): void {
   const run = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...ffmpegArgs, dest], { stdio: 'ignore' });
   if (run.status !== 0 || !fs.existsSync(dest)) fs.copyFileSync(path.join(MEDIA_FIXTURES, fixture), dest);
@@ -150,7 +150,9 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
   const demo = path.join(root, 'demo-tour');
   fs.mkdirSync(demo, { recursive: true });
   writeClip(path.join(demo, 'demo-tour.mp4'), ['-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '5', '-movflags', '+faststart'], 'tiny-tutorial.mp4');
+  writeClip(path.join(demo, 'demo-tour-light.mp4'), ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10:duration=2', '-c:v', 'libx264', '-crf', '34', '-pix_fmt', 'yuv420p', '-g', '5', '-movflags', '+faststart'], 'tiny-tutorial-light.mp4');
   writeClip(path.join(demo, 'poster.jpg'), ['-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=1:duration=1', '-frames:v', '1', '-q:v', '5'], 'poster.jpg');
+  writeClip(path.join(demo, 'poster-light.jpg'), ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=1:duration=1', '-frames:v', '1', '-q:v', '5'], 'poster-light.jpg');
   fs.writeFileSync(path.join(demo, 'demo-tour.srt'), DEMO_SRT);
   fs.writeFileSync(path.join(demo, 'script.md'), DEMO_SCRIPT);
   fs.writeFileSync(path.join(demo, 'guide.json'), JSON.stringify(DEMO_GUIDE));
@@ -172,8 +174,10 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
       title: opts.long ? longTitle : 'Demo tour',
       description: opts.long ? `${longTitle}. ${longTitle}.` : 'A two second synthetic clip.',
       video: 'demo-tour.mp4',
+      videoLight: 'demo-tour-light.mp4',
       subtitles: 'demo-tour.srt',
       poster: 'poster.jpg',
+      posterLight: 'poster-light.jpg',
       transcript: 'script.md',
       guide: 'guide.json',
       chapters,

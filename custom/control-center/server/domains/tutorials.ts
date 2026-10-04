@@ -90,8 +90,11 @@ export interface Tutorial {
   title: string;
   description: string;
   video: TutorialFile & { bytes: number };
+  /** The recording rendered for the light theme (same timeline as `video`), or null when there is none or it was dropped. */
+  videoLight: (TutorialFile & { bytes: number }) | null;
   subtitles: (TutorialFile & { format: 'srt' | 'vtt' }) | null;
   poster: TutorialFile | null;
+  posterLight: TutorialFile | null;
   transcript: TutorialFile | null;
   chapters: Array<{ title: string; start: number }>;
   /** The quick guide, or null when none is named or it is invalid (the reason is then in `warnings`). */
@@ -223,13 +226,15 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       continue;
     }
     const warnings: string[] = [];
-    const optional = (kind: string, name: string | undefined): TutorialFile | null => {
+    const optional = (kind: string, name: string | undefined): (TutorialFile & { bytes: number }) | null => {
       if (name === undefined) return null;
       const r = resolveFile(dir, name);
-      if (r.ok) return { file: name, url: mediaUrl(folder, name) };
+      if (r.ok) return { file: name, url: mediaUrl(folder, name), bytes: r.size };
       warnings.push(`${kind} file "${name}" ${r.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}, so it is ignored`);
       return null;
     };
+    const plain = (f: (TutorialFile & { bytes: number }) | null): TutorialFile | null => f && { file: f.file, url: f.url };
+    const videoLight = optional('light video', m.videoLight);
     const subtitles = optional('subtitles', m.subtitles);
     let guide: TutorialGuide | null = null;
     if (m.guide !== undefined) {
@@ -242,9 +247,11 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       title: m.title,
       description: m.description,
       video: { file: m.video, url: mediaUrl(folder, m.video), bytes: video.size },
-      subtitles: subtitles && { ...subtitles, format: extOf(subtitles.file) === '.srt' ? 'srt' : 'vtt' },
-      poster: optional('poster', m.poster),
-      transcript: optional('transcript', m.transcript),
+      videoLight,
+      subtitles: subtitles && { ...plain(subtitles)!, format: extOf(subtitles.file) === '.srt' ? 'srt' : 'vtt' },
+      poster: plain(optional('poster', m.poster)),
+      posterLight: plain(optional('light poster', m.posterLight)),
+      transcript: plain(optional('transcript', m.transcript)),
       chapters: m.chapters,
       guide,
       warnings,
