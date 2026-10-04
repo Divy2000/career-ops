@@ -247,6 +247,10 @@ input[type='checkbox'] {
   flex-direction: column;
   gap: var(--space-4);
 }
+/* Boxed blocks placed one after another directly in a page keep one spacing step between them (inside a .stack the gap does it). */
+.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) + :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) {
+  margin-top: var(--space-4);
+}
 .row {
   display: flex;
   align-items: center;
