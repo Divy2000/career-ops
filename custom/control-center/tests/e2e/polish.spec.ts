@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
 const WRITE_HEADERS = { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}`, 'content-type': 'application/json' };
@@ -11,7 +11,7 @@ async function login(page: Page) {
 
 async function axeClean(page: Page) {
   // Toasts fade out while axe runs; their mid-animation blend is not a page color.
-  const axe = await new AxeBuilder({ page }).exclude('[data-sonner-toaster]').analyze();
+  const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
   const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 }

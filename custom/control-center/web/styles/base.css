@@ -20,6 +20,9 @@ body {
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
 }
+::selection {
+  background: var(--selection);
+}
 
 h1,
 h2,
@@ -60,7 +63,8 @@ pre,
 }
 pre {
   overflow: auto;
-  background: var(--surface-2);
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
   padding: var(--space-3);
   border-radius: var(--radius-sm);
 }
@@ -76,14 +80,21 @@ input,
 select {
   font: inherit;
   color: inherit;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--input-bg);
+  border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   min-height: var(--target-min);
   padding: 0 var(--space-3);
 }
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
 button,
 .button-link {
+  background: var(--button-bg);
+  border-color: var(--button-border);
   min-width: var(--target-min);
   cursor: pointer;
   display: inline-flex;
@@ -95,7 +106,7 @@ button,
 }
 .button-link:hover,
 button:hover {
-  background: var(--surface-3);
+  background: var(--button-bg-hover);
   text-decoration: none;
 }
 button:active {
@@ -136,7 +147,7 @@ input[type='checkbox'] {
 }
 .shell__side {
   grid-area: side;
-  background: var(--surface-1);
+  background: var(--chrome);
   border-right: 1px solid var(--border);
   padding: var(--space-3);
   overflow-y: auto;
@@ -148,17 +159,23 @@ input[type='checkbox'] {
   gap: var(--space-3);
   padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-1);
+  background: var(--chrome);
 }
 .shell__main {
   grid-area: main;
   position: relative;
   overflow: auto;
   padding: var(--space-6);
+  background: var(--canvas-glow);
 }
 .menu-toggle,
 .shell__scrim {
   display: none;
+}
+.menu-toggle {
+  width: var(--target-min);
+  padding: 0;
+  justify-content: center;
 }
 .brand {
   display: flex;
@@ -171,7 +188,8 @@ input[type='checkbox'] {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--brand-gradient);
+  box-shadow: var(--brand-glow);
 }
 .nav-group {
   margin-bottom: var(--space-4);
@@ -206,7 +224,8 @@ input[type='checkbox'] {
 }
 .nav-link[aria-current='page'] {
   background: var(--accent-soft);
-  color: var(--text);
+  color: var(--nav-active-fg);
+  font-weight: 500;
   border-left-color: var(--accent);
 }
 
@@ -227,6 +246,10 @@ input[type='checkbox'] {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+/* Boxed blocks placed one after another directly in a page keep one spacing step between them (inside a .stack the gap does it). */
+.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) + :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) {
+  margin-top: var(--space-4);
 }
 .row {
   display: flex;
@@ -258,6 +281,7 @@ input[type='checkbox'] {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  box-shadow: var(--inner-highlight), var(--shadow-1);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -277,6 +301,7 @@ input[type='checkbox'] {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  box-shadow: var(--inner-highlight), var(--shadow-1);
   padding: var(--space-4);
 }
 .card--danger {
@@ -335,6 +360,7 @@ input[type='checkbox'] {
   color: var(--text-muted);
   font-size: var(--fs-12);
   white-space: nowrap;
+  text-decoration: none;
 }
 .chip--neutral {
   color: var(--text-muted);
@@ -429,13 +455,28 @@ input[type='checkbox'] {
   color: var(--text-muted);
   padding: 0 var(--space-3);
 }
+.tab {
+  position: relative;
+}
+.tab::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  background: var(--brand-gradient);
+  opacity: 0;
+}
 .tab:hover {
   background: var(--surface-3);
   color: var(--text);
 }
 .tab--active {
   color: var(--text);
-  border-bottom-color: var(--accent);
+}
+.tab--active::after {
+  opacity: 1;
 }
 .tab__count {
   margin-left: var(--space-1);
@@ -477,7 +518,7 @@ input[type='checkbox'] {
   cursor: pointer;
 }
 .table--interactive tbody tr:hover {
-  background: var(--surface-3);
+  background: var(--row-hover);
 }
 .table tbody tr.is-selected {
   background: var(--accent-soft);
@@ -497,6 +538,7 @@ input[type='checkbox'] {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-1);
+  box-shadow: var(--inner-highlight), var(--shadow-1);
 }
 .table-scroll {
   overflow-x: auto;
@@ -524,15 +566,15 @@ input[type='checkbox'] {
   display: inline-flex;
   align-items: center;
   padding: 0 var(--space-3);
-  border: 1px solid var(--border);
+  border: 1px solid var(--button-border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--button-bg);
 }
 .menu__body {
   position: absolute;
   z-index: 5;
   margin-top: var(--space-1);
-  background: var(--surface-2);
+  background: var(--surface-overlay);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
@@ -614,26 +656,26 @@ input[type='checkbox'] {
 }
 .bar__track {
   height: 10px;
-  background: var(--surface-3);
+  background: var(--chart-track);
   border-radius: 999px;
   overflow: hidden;
 }
 .bar__fill {
   display: block;
   height: 100%;
-  background: var(--accent);
+  background: var(--chart-1);
 }
 .bar__fill--info {
-  background: var(--info);
+  background: var(--chart-2);
 }
 .bar__fill--warn {
-  background: var(--warning);
+  background: var(--chart-3);
 }
 .skeleton__line {
   height: 12px;
   margin: var(--space-2) 0;
   border-radius: 6px;
-  background: var(--surface-3);
+  background: var(--skeleton-base);
 }
 .skeleton__line.short {
   width: 40%;
@@ -669,9 +711,9 @@ input[type='checkbox'] {
 textarea {
   width: 100%;
   font: inherit;
-  background: var(--surface-2);
+  background: var(--input-bg);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: 6px;
   padding: 8px;
 }
@@ -786,7 +828,7 @@ textarea {
     position: fixed;
     inset: 48px 0 0;
     z-index: 19;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--scrim);
   }
   .menu-toggle {
     display: inline-flex;

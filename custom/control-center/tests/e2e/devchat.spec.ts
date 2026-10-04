@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
 test.describe('Dev Chat', () => {
@@ -18,7 +18,7 @@ test.describe('Dev Chat', () => {
     await expect(page.getByText('data/notes/devchat.md').first()).toBeVisible();
     const custom = await (await page.request.get('/api/files/user/customMd')).json();
     expect(custom.text).toContain('Added by Dev Chat');
-    const axe = await new AxeBuilder({ page }).analyze();
+    const axe = await (await axeBuilder(page)).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
     // An edit made after the turn blocks the revert, and the page says why.
     const write = (text: string, etag: string) => page.request.put('/api/files/user/customMd', { data: { text }, headers: { 'if-match': etag, 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
@@ -51,7 +51,7 @@ test.describe('Dev Chat', () => {
     await expect(transcript).toBeFocused();
     await page.keyboard.press('PageDown');
     await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-    const axe = await new AxeBuilder({ page }).analyze();
+    const axe = await (await axeBuilder(page)).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 

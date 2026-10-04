@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import type { ServerConfig } from '../config.js';
+import { PAGE_THEME_CSS } from '../../shared/page-theme.js';
 
 export const SESSION_COOKIE = 'cc_session';
 
@@ -27,10 +28,13 @@ export function isApiPath(url: string): boolean {
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-const LOCKED_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center locked</title>
-<style>body{background:#0b0d12;color:#e7eaf0;font:14px/1.5 system-ui;display:grid;place-items:center;height:100vh;margin:0}main{max-width:28rem;padding:24px;border:1px solid #262c38;border-radius:14px;background:#11141a}code{font-family:ui-monospace,monospace;color:#8b9dff}</style></head>
+const LOCKED_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><title>Control Center locked</title>
+<style>${PAGE_THEME_CSS}body{background:var(--bg);color:var(--text);font:14px/1.5 system-ui;display:grid;place-items:center;height:100vh;margin:0}main{max-width:28rem;padding:24px;border:1px solid var(--border);border-radius:14px;background:var(--surface-1);box-shadow:0 12px 32px -16px rgba(16,24,40,.35)}code{font-family:ui-monospace,monospace;color:var(--accent)}</style></head>
 <body><main><h1 style="font-size:18px;margin:0 0 8px">Open the link from your terminal</h1>
 <p>This Control Center is bound to a one-time token. Use the <code>/auth?t=...</code> URL that <code>npm start</code> printed.</p></main></body></html>`;
+
+/** The locked page has no script and one inline style block; the app's default-src 'self' policy would block that style in built mode. */
+const LOCKED_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'";
 
 export function hasSession(req: FastifyRequest, cfg: ServerConfig): boolean {
   const cookies = (req as FastifyRequest & { cookies?: Record<string, string | undefined> }).cookies ?? {};
@@ -70,7 +74,7 @@ export async function authPlugin(app: FastifyInstance, cfg: ServerConfig): Promi
     if (isApiPath(url)) {
       return reply.code(401).send({ error: 'unauthenticated', hint: 'open the /auth?t= link printed by npm start' });
     }
-    return reply.code(401).type('text/html').send(LOCKED_HTML);
+    return reply.code(401).type('text/html').header('content-security-policy', LOCKED_CSP).send(LOCKED_HTML);
   });
 
   app.addHook('onSend', async (_req, reply, payload) => {

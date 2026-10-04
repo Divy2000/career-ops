@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import http from 'node:http';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
@@ -41,7 +41,7 @@ test('the token URL sets the cookie and the shell renders without serious axe vi
   await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
   await expect(page.getByText(/Setup OK|Setup needs attention/)).toBeVisible();
 
-  const axe = await new AxeBuilder({ page }).analyze();
+  const axe = await (await axeBuilder(page)).analyze();
   const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 });

@@ -1,0 +1,196 @@
+/*
+ * Motion. Imported last so these transitions sit on top of the component styles. Rules of the house:
+ *  - only transform, opacity and colors animate; never layout, never `all`
+ *  - overlays animate IN only: an exit animation would race the Shell's focus restore after a dialog closes
+ *  - reduced motion zeroes the duration tokens (the global kill rule in base.css is the backstop)
+ */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017 19.4%, 1.077 22.4%, 1.121 25.8%, 1.149 29.5%, 1.159 34%, 1.143 38.4%, 1.099 44.6%, 1.019 52.2%, 0.99 57.5%, 0.986 61%, 0.993 66.2%, 1.002 75.3%, 1);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.97);
+  }
+}
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px) scale(0.98);
+  }
+}
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+@keyframes icon-morph {
+  from {
+    opacity: 0;
+    transform: rotate(-70deg) scale(0.6);
+  }
+}
+
+/* Theme change: the circular reveal is driven from theme-transition.ts, so the browser's own crossfade is switched off. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+/* OS-driven flips and browsers without View Transitions: one 200ms color fade. */
+.theme-fading,
+.theme-fading *,
+.theme-fading *::before,
+.theme-fading *::after {
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease,
+    fill 200ms ease,
+    stroke 200ms ease,
+    box-shadow 200ms ease !important;
+}
+
+/* Page enter, then a short stagger on the first cards of a view. */
+.shell__main > section {
+  animation: rise var(--dur-3) var(--ease-out) backwards;
+}
+:is(.tiles, .tut-list, .grid-2) > :nth-child(-n + 6),
+.stack > .card:nth-child(-n + 6) {
+  animation: rise var(--dur-3) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+:is(.tiles, .tut-list, .grid-2, .stack) > :nth-child(2) {
+  --i: 1;
+}
+:is(.tiles, .tut-list, .grid-2, .stack) > :nth-child(3) {
+  --i: 2;
+}
+:is(.tiles, .tut-list, .grid-2, .stack) > :nth-child(4) {
+  --i: 3;
+}
+:is(.tiles, .tut-list, .grid-2, .stack) > :nth-child(5) {
+  --i: 4;
+}
+:is(.tiles, .tut-list, .grid-2, .stack) > :nth-child(6) {
+  --i: 5;
+}
+
+/* Hover and press. */
+button,
+.button-link,
+a,
+.nav-link,
+.chip,
+.menu summary,
+.tut-card,
+.theme-card {
+  transition:
+    background-color var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out),
+    color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    text-decoration-color var(--dur-2) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+.table--interactive tbody tr {
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+button:active:not(:disabled),
+.button-link:active {
+  transform: scale(0.98);
+}
+.tab:active:not(:disabled),
+.th-button:active:not(:disabled),
+.theme-menu__item:active:not(:disabled) {
+  transform: none;
+}
+.tut-card:hover,
+.theme-card:hover:not([aria-checked='true']) {
+  transform: translateY(var(--lift));
+  box-shadow: var(--shadow-2);
+}
+.tab::after {
+  transform: scaleX(0);
+  opacity: 1;
+  transition: transform var(--dur-3) var(--ease-out);
+}
+.tab--active::after {
+  transform: scaleX(1);
+}
+
+/* Overlays enter; they never animate out. */
+.dialog__overlay[data-state='open'] {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+.dialog[data-state='open'] {
+  animation: dialog-in var(--dur-2) var(--ease-out);
+}
+.palette[data-state='open'] {
+  animation: palette-in var(--dur-2) var(--ease-out);
+}
+.drawer {
+  animation: drawer-in var(--dur-3) var(--ease-out);
+}
+@media (max-width: 767px) {
+  .shell--nav-open .shell__side {
+    animation: drawer-in var(--dur-3) var(--ease-out);
+  }
+  .shell--nav-open .shell__scrim {
+    animation: fade-in var(--dur-3) var(--ease-out);
+  }
+}
+.theme-menu {
+  animation: menu-in var(--dur-2) var(--ease-out);
+  transform-origin: top right;
+}
+
+.theme-switch__icon {
+  animation: icon-morph var(--dur-3) var(--ease-spring);
+}
+
+.skeleton__line {
+  background-image: linear-gradient(90deg, transparent 0%, var(--skeleton-shine) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* Last, so it wins over the rules above. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+    --dur-3: 0ms;
+    --dur-4: 0ms;
+    --dur-theme: 0ms;
+  }
+  .skeleton__line {
+    background-image: none;
+  }
+}

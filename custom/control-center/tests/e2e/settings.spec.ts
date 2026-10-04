@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { AxeBuilder } from '@axe-core/playwright';
+import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
 
 test.describe('Settings', () => {
@@ -26,7 +26,7 @@ test.describe('Settings', () => {
     await page.getByRole('tab', { name: 'Updates' }).click();
     await expect(page.getByRole('link', { name: 'Latest upstream-sync PR' })).toHaveAttribute('href', /Divy2000\/career-ops\/pulls/);
     // The rejected save's error toast may still be fading out; its mid-animation blend is not a page color (as in polish.spec.ts).
-    const axe = await new AxeBuilder({ page }).exclude('[data-sonner-toaster]').analyze();
+    const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 });

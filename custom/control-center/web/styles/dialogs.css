@@ -3,7 +3,7 @@
 .dialog__overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   z-index: 40;
 }
 .dialog {
@@ -14,11 +14,11 @@
   width: min(520px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
   overflow: auto;
-  background: var(--surface-2);
+  background: var(--surface-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-14, 14px);
   padding: var(--space-5, 20px);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-dialog);
   z-index: 41;
   display: flex;
   flex-direction: column;
@@ -47,14 +47,18 @@ button.button--primary:active {
   color: var(--accent-fg);
   border-color: var(--accent);
 }
+button.button--primary {
+  box-shadow: var(--primary-shadow);
+}
 button.button--primary:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 button.button--danger,
 button.button--danger:hover,
 button.button--danger:active {
   background: var(--danger);
-  color: var(--accent-fg);
+  color: var(--on-danger);
   border-color: var(--danger);
 }
 .button--ghost {
@@ -67,10 +71,10 @@ button.button--danger:active {
   left: 50%;
   transform: translateX(-50%);
   width: min(640px, calc(100vw - 32px));
-  background: var(--surface-2);
+  background: var(--surface-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-14, 14px);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-dialog);
   z-index: 41;
   overflow: hidden;
 }

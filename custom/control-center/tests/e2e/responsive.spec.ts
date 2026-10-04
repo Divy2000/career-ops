@@ -372,6 +372,8 @@ test.describe('overlay hotkeys stay out of a parameter dialog', () => {
       await page.keyboard.press('Control+k');
       const input = page.getByPlaceholder('Go to a page, run an action or start a mode');
       await input.fill('tracker.delete');
+      // The action list loads after the page does; Enter before the match exists would be swallowed.
+      await expect(page.locator('[cmdk-item]', { hasText: 'tracker.delete' })).toBeVisible();
       await page.keyboard.press('Enter');
       const dialog = page.locator('[role="dialog"].dialog');
       await expect(dialog).toBeVisible();
@@ -382,6 +384,53 @@ test.describe('overlay hotkeys stay out of a parameter dialog', () => {
       expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"].dialog'))).toBe(true);
       await page.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
+    });
+  }
+});
+
+test.describe('theme switcher at 390px', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('the hamburger is an icon that keeps the accessible name Menu', async ({ page }) => {
+    const menu = menuButton(page);
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAccessibleName('Menu');
+    expect(await menu.evaluate((el) => el.querySelector('svg') !== null && (el.textContent ?? '').trim())).toBe('Menu');
+  });
+
+  test('the theme menu opens fully inside the viewport and every item is a 32px target', async ({ page }) => {
+    await page.getByRole('button', { name: /^Theme:/ }).click();
+    const menu = page.getByRole('menu', { name: 'Theme' });
+    await expect(menu).toBeVisible();
+    const box = (await menu.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    for (const item of await menu.getByRole('menuitemradio').all()) expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+  });
+});
+
+test.describe('narrow window in the light theme (390x844)', () => {
+  test.use({ viewport: { width: 390, height: 844 }, colorScheme: 'light' });
+  test.beforeEach(async ({ page }) => login(page));
+
+  for (const url of ROUTES) {
+    test(`${url} fits the viewport with the top bar on one line`, async ({ page }) => {
+      await page.goto(url);
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await expect(page.locator('.skeleton')).toHaveCount(0);
+      const m = await page.evaluate(() => {
+        const top = document.querySelector('.shell__top') as HTMLElement;
+        const main = document.querySelector('.shell__main') as HTMLElement;
+        return { theme: document.documentElement.dataset.theme, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth, mainScroll: main.scrollWidth, mainClient: main.clientWidth, topScroll: top.scrollWidth, topClient: top.clientWidth, topHeight: top.getBoundingClientRect().height };
+      });
+      expect(m.theme).toBe('light');
+      expect(m.scrollWidth).toBeLessThanOrEqual(m.innerWidth);
+      expect(m.mainScroll).toBeLessThanOrEqual(m.mainClient);
+      expect(m.topScroll).toBeLessThanOrEqual(m.topClient);
+      expect(m.topHeight).toBe(48);
     });
   }
 });
