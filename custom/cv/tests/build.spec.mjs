@@ -53,8 +53,20 @@ test('given cv.md, when reading Recent Achievements, then each entry carries its
 });
 
 test('given a project whose title is listed in Recent Achievements, when checked, then it is an error', () => {
-  const r = checkPayload({ projects: [{ name: 'Material Search Engine', bullets: ['x'] }] }, { cvText: PAPER_CV, libraryText: null });
-  assert.match(r.errors.join('\n'), /"Material Search Engine".*Recent Achievements/);
+  const r = checkPayload({ projects: [{ name: 'artificial intelligence powered material-search engine', bullets: ['x'] }] }, { cvText: PAPER_CV, libraryText: null });
+  assert.match(r.errors.join('\n'), /"artificial intelligence powered material-search engine".*Recent Achievements/);
+});
+
+test('given a distinct project whose title is only part of a paper title, when checked, then it is not rejected', () => {
+  const cv = [
+    '## Projects', '', '- **Material Search Engine** -- Built a search engine for materials data.', '',
+    '## Recent Achievements', '', '- **High-Performance Search Engine for Medical Literature** -- Example Journal, 2024', '',
+  ].join('\n');
+  const library = '## Search Engine -- https://github.com/example-dev/search\n- Built a search engine.\n';
+  for (const name of ['Search Engine', 'Material Search Engine']) {
+    const r = checkPayload({ projects: [{ name, bullets: ['x'] }] }, { cvText: cv, libraryText: library });
+    assert.deepEqual(r.errors, [], name);
+  }
 });
 
 test('given a project whose URL matches a Recent Achievements link, when checked, then it is an error', () => {
@@ -91,7 +103,7 @@ test('given a project linking to a publisher host, when checked, then it is a wa
 
 test('given a project whose title is listed in Recent Achievements, when built, then the command fails and no HTML is written', () => {
   const root = dataRoot({ cv: PAPER_CV });
-  const payload = { ...loadFixture(), projects: [{ name: 'Material Search Engine', bullets: ['Built a search engine for materials data.'] }] };
+  const payload = { ...loadFixture(), projects: [{ name: 'Artificial Intelligence Powered Material Search Engine', bullets: ['Built a search engine for materials data.'] }] };
   const r = build(root, payload);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /Recent Achievements/);

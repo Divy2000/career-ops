@@ -6,9 +6,6 @@ import { parseLibrary, findCvEntry, titleKey } from '../projects/lib.mjs';
 
 export const AWARDS_TITLE = 'Recent Achievements';
 const PUBLISHER_HOSTS = ['doi.org', 'sciencedirect.com', 'wiley.com', 'arxiv.org'];
-// A shorter name only matches a longer title it is part of when it is at least
-// this long, so a short project name cannot collide with a paper title by accident.
-const MIN_CONTAINED_KEY = 10;
 
 const URL_RE = /https?:\/\/[^\s<>()[\]]+/gi;
 const urlKey = (u) => String(u ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/.,;]+$/, '');
@@ -30,14 +27,11 @@ export function recentAchievements(cvText) {
   return out;
 }
 
+// Same work: equal normalized titles, or the same canonical link. A title that
+// is merely part of a paper's title is a different work.
 function sameWork(name, url, entry) {
   const a = titleKey(name);
-  const b = titleKey(entry.title);
-  if (a && b) {
-    if (a === b) return true;
-    const [short, long] = a.length <= b.length ? [a, b] : [b, a];
-    if (short.length >= MIN_CONTAINED_KEY && long.includes(short)) return true;
-  }
+  if (a && a === titleKey(entry.title)) return true;
   return Boolean(url) && entry.urls.some((u) => urlKey(u) === urlKey(url));
 }
 
