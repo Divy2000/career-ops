@@ -26,9 +26,9 @@
   right: 0;
   bottom: 0;
   width: min(560px, 100vw);
-  background: var(--surface-2);
+  background: var(--surface-overlay);
   border-left: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-popover, 0 12px 40px rgba(0, 0, 0, 0.5));
+  box-shadow: var(--shadow-popover);
   padding: var(--space-4);
   overflow: auto;
   z-index: 20;
