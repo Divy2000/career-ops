@@ -190,6 +190,7 @@ else
 fi
 if [ -n "$DATA_ROOT_ARG" ]; then DATA_REQ="$(abspath "$DATA_ROOT_ARG")"; else DATA_REQ="$DIR"; fi
 DATA="$DATA_REQ"
+QDIR="$(shell_quote "$DIR")" # for printed commands: the directory may contain spaces
 
 # The terminal: fd 3 reads answers, fd 4 receives what interactive tools print. Never opened with --non-interactive.
 if [ "$NON_INTERACTIVE" = 0 ] && { : <"$TTY_DEV" >>"$TTY_DEV"; } 2>/dev/null; then
@@ -324,7 +325,7 @@ update_checkout() {
   if [ -n "$REF" ]; then
     if [ -n "$dirty" ]; then
       say "  Not switching to $REF: the working tree has local changes."
-      pending "Commit or stash your changes in $DIR, then run: git -C $DIR checkout $REF"
+      pending "Commit or stash your changes in $QDIR, then run: git -C $QDIR checkout $(shell_quote "$REF")"
     elif [ "$DRY_RUN" = 1 ]; then
       dry "fetch tags and check out $REF"
     else
@@ -338,7 +339,7 @@ update_checkout() {
   if [ -n "$dirty" ]; then
     say "  Not pulling: the working tree has local changes."
   elif [ "$branch" = HEAD ]; then
-    say "  Not pulling: detached HEAD (a tag checkout). To follow updates run: git switch main (in $DIR), then re-run this script."
+    say "  Not pulling: detached HEAD (a tag checkout). To follow updates run: git switch main (in $QDIR), then re-run this script."
   elif [ "$branch" != main ]; then
     say "  Not pulling: on branch $branch, not main."
   elif [ "$DRY_RUN" = 1 ]; then
@@ -346,7 +347,7 @@ update_checkout() {
   elif git -C "$DIR" pull --ff-only; then
     say "  up to date with origin/main"
   else
-    pending "git pull --ff-only failed in $DIR; resolve it by hand."
+    pending "git pull --ff-only failed in $QDIR; resolve it by hand."
   fi
 }
 
@@ -368,8 +369,19 @@ else
   ensure_upstream
 fi
 
+# The data root the tools will actually use: a pending --data-root request (marker not written yet), else the
+# environment variable or the checkout's .career-ops-data marker, resolved by path-resolver.mjs.
+effective_data_root() {
+  if [ -n "$DATA_ROOT_ARG" ] && [ ! -f "$DIR/.career-ops-data" ] && [ -z "${CAREER_OPS_ROOT:-}${CAREER_OPS_DATA_DIR:-}" ]; then
+    printf '%s' "$DATA_REQ"
+  else
+    (cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")
+  fi
+}
+
 if [ "$DRY_RUN" = 0 ]; then
-  LOG_FILE="$DATA_REQ/data/install/install-$(date +%Y-%m-%d).log"
+  DATA="$(effective_data_root)"
+  LOG_FILE="$DATA/data/install/install-$(date +%Y-%m-%d).log"
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '%s' "$LOG_BUF" >> "$LOG_FILE"
   LOG_BUF=""
@@ -433,7 +445,7 @@ else
     *) say "  modes/_custom.md already exists; left as is" ;;
   esac
   if ! (cd "$DIR" && node doctor.mjs --json --init-templates >/dev/null); then
-    pending "node doctor.mjs --json --init-templates failed in $DIR; run it and read the error."
+    pending "node doctor.mjs --json --init-templates failed in $QDIR; run it and read the error."
   fi
 fi
 
@@ -528,7 +540,7 @@ fi
 
 step "8/11 H-1B sponsor index"
 H1B_INDEX="${H1B_INDEX_PATH:-$DIR/data/h1b/index.ndjson.gz}"
-H1B_CMD="cd $DIR && node plugins.mjs enable h1b-sponsor --confirm && node plugins/h1b-sponsor/install-h1b-index.mjs"
+H1B_CMD="cd $QDIR && node plugins.mjs enable h1b-sponsor --confirm && node plugins/h1b-sponsor/install-h1b-index.mjs"
 if [ "$NO_H1B" = 1 ]; then
   say "  skipped (--no-h1b-index); install later: $H1B_CMD"
 elif [ -f "$H1B_INDEX" ]; then
@@ -560,7 +572,7 @@ onboard_inputs() {
 print_onboard_command() {
   local prompt="$1"
   say "  To personalize career-ops from your documents, run:"
-  say "    cd $DIR && claude $(shell_quote "$prompt")"
+  say "    cd $QDIR && claude $(shell_quote "$prompt")"
 }
 
 step "9/11 Onboarding"
@@ -601,7 +613,7 @@ else
         pending "Install Claude Code, then re-run with --onboard headless (or run the interactive command)."
       elif [ "$KEYCHAIN_OK" = 0 ]; then
         say "  Headless onboarding needs the Keychain item $KEYCHAIN_SERVICE."
-        pending "Store the Keychain token, then re-run with --onboard headless. Without it, run: cd $DIR && claude $(shell_quote "$prompt")"
+        pending "Store the Keychain token, then re-run with --onboard headless. Without it, run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
         mkdir -p "$draft"
         inputs=()
@@ -623,7 +635,7 @@ else
           warn "  The headless run did not finish cleanly; review any drafts in $draft."
         fi
         say "  Review the drafts, then finish interactively (nothing live was written):"
-        say "    cd $DIR && claude $(shell_quote 'Read custom/install/ONBOARDING.md and follow it.')"
+        say "    cd $QDIR && claude $(shell_quote 'Read custom/install/ONBOARDING.md and follow it.')"
       fi
       ;;
   esac
@@ -632,7 +644,7 @@ fi
 # ---------------------------------------------------------------- launchd
 
 step "10/11 Daily job (launchd)"
-DAILY_CMD="bash $DIR/custom/launchd/install.sh --jobs daily"
+DAILY_CMD="bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs daily"
 if [ "$MAC_FEATURES" = 0 ]; then
   say "  skipped (core-only)"
 elif [ "$NO_LAUNCHD" = 1 ]; then
@@ -655,7 +667,7 @@ else
     if [ "$PROMPT_OK" = 1 ] && ! ask "Install the daily job now?" y; then
       say "  skipped; install later: $DAILY_CMD"
     elif ! run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs"; then
-      pending "The launchd install failed. Retry: bash $DIR/custom/launchd/install.sh --jobs $jobs"
+      pending "The launchd install failed. Retry: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
     fi
   fi
 fi
@@ -667,19 +679,19 @@ if [ "$DRY_RUN" = 1 ]; then
   dry "run node doctor.mjs, the custom/*/tests specs and the Control Center preflight"
 else
   if ! (cd "$DIR" && run_logged node doctor.mjs); then
-    pending "node doctor.mjs reported problems; run it in $DIR and read the output."
+    pending "node doctor.mjs reported problems; run it in $QDIR and read the output."
   fi
   specs=("$DIR"/custom/*/tests/*.spec.mjs)
   if [ -e "${specs[0]}" ]; then
     if ! (cd "$DIR" && run_logged node --test custom/*/tests/*.spec.mjs); then
-      pending "The fork self-tests failed (node --test custom/*/tests/*.spec.mjs in $DIR); see $LOG_FILE."
+      pending "The fork self-tests failed (node --test custom/*/tests/*.spec.mjs in $QDIR); see $LOG_FILE."
     fi
   else
     say "  no custom/*/tests specs in this checkout; skipping the self-tests"
   fi
   if [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ]; then
     if ! (cd "$DIR" && run_logged npm --prefix custom/control-center run preflight); then
-      pending "The Control Center preflight failed; run: npm --prefix $DIR/custom/control-center run preflight"
+      pending "The Control Center preflight failed; run: npm --prefix $(shell_quote "$DIR/custom/control-center") run preflight"
     fi
   elif [ "$MAC_FEATURES" = 1 ]; then
     say "  Control Center preflight skipped until the Keychain item exists"

@@ -604,7 +604,7 @@ test('launchd is skipped while onboarding is incomplete and the follow-up comman
   const { w, D } = fresh({ keychain: true });
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
   assert.equal(w.calls('launchd-install').length, 0);
-  assert.match(r.out, /custom\/launchd\/install\.sh --jobs daily/);
+  assert.match(r.out, /custom\/launchd\/install\.sh' --jobs daily/);
   assert.equal(r.status, 3);
 });
 
@@ -701,6 +701,46 @@ test('a detached HEAD (a tag clone) is not pulled and the message says how to fo
   assert.ok(!w.log().some((l) => l.includes('pull')));
   assert.match(r.out, /detached/i);
   assert.match(r.out, /git switch main/);
+});
+
+test('the install log goes under the data root an existing .career-ops-data marker points at, not under the checkout', () => {
+  const { w, D, args } = fresh();
+  const data = path.join(w.T, 'markerdata');
+  w.makeCheckout(D, { files: { '.career-ops-data': `${data}\n` } });
+  w.run(args());
+  assert.equal(installLogs(data).length, 1);
+  assert.equal(installLogs(D).length, 0);
+});
+
+test('the install log follows CAREER_OPS_ROOT from the environment', () => {
+  const { w, D, args } = fresh();
+  const data = path.join(w.T, 'envdata');
+  w.makeCheckout(D);
+  w.run(args(), { env: { CAREER_OPS_ROOT: data } });
+  assert.equal(installLogs(data).length, 1);
+  assert.equal(installLogs(D).length, 0);
+});
+
+test('printed commands shell-quote every path, so a checkout directory with a space is copy-pasteable', () => {
+  const w = makeWorld({ keychain: true });
+  const D = path.join(w.T, 'my checkout');
+  const q = (p) => `'${p}'`;
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+  assert.match(r.out, new RegExp(`cd ${q(D).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} && node plugins\\.mjs enable`));
+  assert.ok(r.out.includes(`cd ${q(D)} && claude 'Read custom/install/ONBOARDING.md`), r.out);
+  assert.ok(r.out.includes(`bash ${q(`${D}/custom/launchd/install.sh`)} --jobs daily`), r.out);
+  const unquoted = r.out.split('\n').filter((l) => /(cd|bash|-C|--prefix) /.test(l) && l.includes(D) && !l.includes(q(D)) && !l.includes(q(`${D}/`).slice(0, -1)));
+  assert.deepEqual(unquoted.filter((l) => /^\s*(cd|bash|\d+\.)/.test(l) || /Retry|run:|Without it/.test(l)), []);
+});
+
+test('the pending text for a dirty checkout and for a failed doctor quotes the directory too', () => {
+  const w = makeWorld({ keychain: true });
+  const D = path.join(w.T, 'my checkout');
+  w.makeCheckout(D, { files: READY_FILES });
+  fs.writeFileSync(path.join(D, '.git', 'dirty'), ' M x\n');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none', '--ref', 'v1'], { env: { FAKE_DOCTOR_EXIT: '1' } });
+  assert.ok(r.out.includes(`git -C '${D}' checkout 'v1'`), r.out);
+  assert.ok(r.out.includes(`run it in '${D}'`), r.out);
 });
 
 test('INSTALL_SH exists and is executable bash', () => {
