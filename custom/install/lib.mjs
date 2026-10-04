@@ -197,6 +197,17 @@ function main(argv) {
       return versionAtLeast(rest[0], rest[1]) ? 0 : 1;
     case 'same-repo':
       return sameRepo(rest[0], rest[1]) ? 0 : 1;
+    case 'same-path': {
+      const canon = (p) => {
+        const abs = path.resolve(p);
+        try {
+          return fs.realpathSync(abs);
+        } catch {
+          return abs;
+        }
+      };
+      return canon(rest[0]) === canon(rest[1]) ? 0 : 1;
+    }
     case 'doctor-state': {
       const s = parseDoctorState(fs.readFileSync(0, 'utf8'));
       process.stdout.write(`${s.ready ? 'ready' : 'incomplete'}\t${[...s.missing, ...s.unpersonalized].join(',')}\n`);
@@ -213,7 +224,7 @@ function main(argv) {
       return 0;
     }
     default:
-      process.stderr.write('usage: lib.mjs version-ge|same-repo|doctor-state|onboard-prompt|render-headless ...\n');
+      process.stderr.write('usage: lib.mjs version-ge|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
       return 2;
   }
 }

@@ -217,14 +217,53 @@ find_claude() {
 
 keychain_present() { security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; }
 
+trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
+
+# CAREER_OPS_ROOT, else CAREER_OPS_DATA_DIR, each trimmed like path-resolver.mjs does; empty when neither is set.
+env_data_root() {
+  local v
+  v="$(trim "${CAREER_OPS_ROOT:-}")"
+  if [ -z "$v" ]; then v="$(trim "${CAREER_OPS_DATA_DIR:-}")"; fi
+  case "$v" in "" | /*) printf '%s' "$v" ;; *) printf '%s' "$DIR/$v" ;; esac
+}
+
+# The data root the tools will actually use: the environment first, then the checkout's .career-ops-data marker (read by
+# path-resolver.mjs itself), else the requested --data-root or the checkout.
+effective_data_root() {
+  local env_root
+  env_root="$(env_data_root)"
+  if [ -n "$env_root" ]; then
+    printf '%s' "$env_root"
+  elif [ -f "$DIR/.career-ops-data" ] && [ -f "$DIR/path-resolver.mjs" ] && have node; then
+    (cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")
+  else
+    printf '%s' "$DATA_REQ"
+  fi
+}
+
+# --data-root must be the root the tools will use. Checked before anything is created, so no directory or log appears
+# in the other root.
+check_data_root_conflict() {
+  [ -n "$DATA_ROOT_ARG" ] || return 0
+  have node || return 0
+  local eff
+  eff="$(effective_data_root)"
+  if lib same-path "$eff" "$DATA_REQ"; then return 0; fi
+  if [ -n "$(env_data_root)" ]; then
+    die 1 "CAREER_OPS_ROOT or CAREER_OPS_DATA_DIR in your environment makes the data root $eff, not the requested $DATA_REQ. Unset it and re-run."
+  fi
+  die 1 "$DIR/.career-ops-data already points at $eff, not the requested $DATA_REQ. Remove the marker or drop --data-root."
+}
+
 validate_inputs() {
   [ "$VALIDATED" = 1 ] && return 0
   if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ]; then VALIDATED=1; return 0; fi
   have node || return 0 # checked again once the prerequisites are in place
+  DATA="$(effective_data_root)"
   local vargs=() rc=0
   if [ -n "$RESUME" ]; then vargs+=(--resume "$RESUME"); fi
   if [ "${#DOCS[@]}" -gt 0 ]; then vargs+=(--docs "${DOCS[@]}"); fi
-  vargs+=(--cv "$DATA_REQ/cv.md")
+  vargs+=(--cv "$DATA/cv.md")
   node "$SCRIPT_DIR/validate-md.mjs" "${vargs[@]}" >/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'No changes were made. Fix the input above, or use option 1 (Claude Code prompt) for other formats.\n' >&2
@@ -236,11 +275,13 @@ validate_inputs() {
 
 # ---------------------------------------------------------------- intro and platform
 
+check_data_root_conflict
+if have node; then DATA="$(effective_data_root)"; fi
 validate_inputs
 
 say "career-ops (H-1B-aware fork) installer"
 say "  checkout:  $DIR"
-say "  data root: $DATA_REQ"
+say "  data root: $DATA"
 if [ -n "$RESUME" ]; then say "  resume:    $RESUME"; fi
 if [ "${#DOCS[@]}" -gt 0 ]; then say "  docs:      ${DOCS[*]}"; fi
 if [ "$DRY_RUN" = 1 ]; then say "  Dry run: nothing will be changed."; fi
@@ -293,6 +334,7 @@ if ! lib version-ge "$NODE_VERSION" "$NODE_FLOOR"; then
   die 1 "Node $NODE_VERSION is older than the required $NODE_FLOOR. Install a newer Node (brew install node, or https://nodejs.org) and re-run."
 fi
 say "  git, node $NODE_VERSION, npm: ok"
+check_data_root_conflict
 validate_inputs
 
 for entry in "gh|gh|brew install gh|the sponsorship digest PR links" "pdftotext|poppler|brew install poppler|reading PDF resumes in intake" "go|go|brew install go|the optional Go dashboard"; do
@@ -368,16 +410,6 @@ else
   if [ -n "$REF" ]; then git -C "$DIR" checkout "$REF"; fi
   ensure_upstream
 fi
-
-# The data root the tools will actually use: a pending --data-root request (marker not written yet), else the
-# environment variable or the checkout's .career-ops-data marker, resolved by path-resolver.mjs.
-effective_data_root() {
-  if [ -n "$DATA_ROOT_ARG" ] && [ ! -f "$DIR/.career-ops-data" ] && [ -z "${CAREER_OPS_ROOT:-}${CAREER_OPS_DATA_DIR:-}" ]; then
-    printf '%s' "$DATA_REQ"
-  else
-    (cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")
-  fi
-}
 
 if [ "$DRY_RUN" = 0 ]; then
   DATA="$(effective_data_root)"

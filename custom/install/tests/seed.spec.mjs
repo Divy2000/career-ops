@@ -191,3 +191,13 @@ test('lib.mjs version-ge exits 0 when the version meets the floor and 1 otherwis
   assert.equal(run(LIB, ['version-ge', 'v22.6.0', '22.6.0']).status, 0);
   assert.equal(run(LIB, ['version-ge', 'v20.19.0', '22.6.0']).status, 1);
 });
+
+test('lib.mjs same-path compares normalized and real paths, existing or not', () => {
+  const d = tmp();
+  fs.mkdirSync(path.join(d, 'a'));
+  fs.symlinkSync(path.join(d, 'a'), path.join(d, 'link'));
+  assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'x', '..', 'a')]).status, 0);
+  assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'link')]).status, 0);
+  assert.equal(run(LIB, ['same-path', path.join(d, 'nope'), path.join(d, 'nope')]).status, 0);
+  assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'b')]).status, 1);
+});

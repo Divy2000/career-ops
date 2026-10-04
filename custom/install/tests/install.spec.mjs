@@ -721,6 +721,76 @@ test('the install log follows CAREER_OPS_ROOT from the environment', () => {
   assert.equal(installLogs(D).length, 0);
 });
 
+test('the intro and the --resume same-file guard use the effective data root of an existing checkout with a marker', () => {
+  const { w, D, args } = fresh();
+  const data = path.join(w.T, 'markerdata');
+  w.makeCheckout(D, { files: { '.career-ops-data': `${data}\n` } });
+  fs.mkdirSync(data, { recursive: true });
+  const cv = path.join(data, 'cv.md');
+  fs.writeFileSync(cv, '# Mine\n');
+  const ok = w.run(args('--dry-run'));
+  assert.ok(ok.out.includes(`data root: ${data}`), ok.out);
+  const before = w.snapshot();
+  const r = w.run(args('--resume', cv, '--dry-run'));
+  assert.equal(r.status, 2, r.out);
+  assert.match(r.out, /target cv\.md/);
+  assert.deepEqual(w.snapshot(), before);
+});
+
+test('the intro shows CAREER_OPS_ROOT as the data root when the environment sets it', () => {
+  const { w, D, args } = fresh();
+  const data = path.join(w.T, 'envdata');
+  w.makeCheckout(D);
+  const r = w.run(args('--dry-run'), { env: { CAREER_OPS_ROOT: data } });
+  assert.ok(r.out.includes(`data root: ${data}`), r.out);
+});
+
+test('--data-root that conflicts with the environment fails first: nothing is created in either root', () => {
+  const { w, D, args } = fresh();
+  const wanted = path.join(w.T, 'wanted');
+  const other = path.join(w.T, 'other');
+  w.makeCheckout(D);
+  const before = w.snapshot();
+  const r = w.run(args('--data-root', wanted), { env: { CAREER_OPS_ROOT: other } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /CAREER_OPS_ROOT/);
+  assert.deepEqual(w.snapshot(), before);
+  assert.equal(exists(wanted), false);
+  assert.equal(exists(other), false);
+  assert.equal(w.calls('npm').length, 0);
+});
+
+test('--data-root that conflicts with an existing marker fails first with no log or directory in the marker root', () => {
+  const { w, D, args } = fresh();
+  const wanted = path.join(w.T, 'wanted');
+  const other = path.join(w.T, 'other');
+  w.makeCheckout(D, { files: { '.career-ops-data': `${other}\n` } });
+  const before = w.snapshot();
+  const r = w.run(args('--data-root', wanted));
+  assert.equal(r.status, 1);
+  assert.match(r.out, /\.career-ops-data/);
+  assert.deepEqual(w.snapshot(), before);
+  assert.equal(exists(wanted), false);
+  assert.equal(exists(other), false);
+});
+
+test('a conflict with the environment is detected before a fresh clone too', () => {
+  const { w, D, args } = fresh();
+  const r = w.run(args('--data-root', path.join(w.T, 'wanted')), { env: { CAREER_OPS_ROOT: path.join(w.T, 'other') } });
+  assert.equal(r.status, 1);
+  assert.equal(exists(D), false);
+  assert.equal(w.calls('git').filter((l) => l.startsWith('git clone')).length, 0);
+});
+
+test('blank CAREER_OPS_ROOT and CAREER_OPS_DATA_DIR are not overrides: --data-root wins and the log lands there', () => {
+  const { w, D, args } = fresh();
+  const data = path.join(w.T, 'mydata');
+  const r = w.run(args('--data-root', data), { env: { CAREER_OPS_ROOT: '   ', CAREER_OPS_DATA_DIR: ' ' } });
+  assert.notEqual(r.status, 1, r.out);
+  assert.equal(installLogs(data).length, 1);
+  assert.equal(read(D, '.career-ops-data').trim(), data);
+});
+
 test('printed commands shell-quote every path, so a checkout directory with a space is copy-pasteable', () => {
   const w = makeWorld({ keychain: true });
   const D = path.join(w.T, 'my checkout');
