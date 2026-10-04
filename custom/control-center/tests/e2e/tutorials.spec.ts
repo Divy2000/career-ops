@@ -20,6 +20,8 @@ const state = (page: Page) =>
   video(page).evaluate((v: HTMLVideoElement) => ({ paused: v.paused, time: v.currentTime, duration: v.duration, track: v.textTracks[0]?.mode ?? null, cues: v.textTracks[0]?.cues?.length ?? 0, ready: v.readyState }));
 
 test.describe('Tutorials', () => {
+  // The dark recording and poster are the ones under test here; tutorial-theme.spec.ts covers the light ones.
+  test.use({ colorScheme: 'dark' });
   test.beforeEach(async ({ page }) => {
     await login(page);
     await page.goto('/tutorials');

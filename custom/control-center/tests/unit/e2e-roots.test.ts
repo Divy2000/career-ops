@@ -57,7 +57,7 @@ describe('writeDemoTutorials, the documentation guide fixture', () => {
     expect(docs.guide).toBeNull();
     expect(docs.guideDocs).toMatchObject({ version: 2, legacy: false });
     const media = docs.guideDocs!.sections.flatMap((s) => s.subsections.flatMap((u) => u.blocks)).filter((b) => b.type === 'media');
-    expect(media.map((b) => b.type === 'media' && b.kind).sort()).toEqual(['gif', 'image']);
+    expect(media.map((b) => b.type === 'media' && b.kind).sort()).toEqual(['gif', 'image', 'image']);
     for (const b of media) {
       if (b.type !== 'media') continue;
       const name = (u: string | null) => decodeURIComponent(u!.split('/').pop()!);

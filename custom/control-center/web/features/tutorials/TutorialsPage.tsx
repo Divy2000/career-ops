@@ -5,8 +5,11 @@ import { Md } from '../../components/Md';
 import { DataState, Empty, Tabs } from '../../components/ui';
 import { apiGetText } from '../../lib/api';
 import { useTutorials } from '../../lib/queries';
+import { useTheme } from '../../lib/theme';
 import { chapterIndexAt, filterTranscript, formatTimestamp, keyAction, type KeyTarget } from '../../lib/tutorials';
-import { QuickGuide } from './QuickGuide';
+import { GuideDocs } from './guide/GuideDocs';
+import type { GuideLocation, GuideSearchParams } from '../../lib/guide';
+import { useThemedVideo } from './useThemedVideo';
 import type { Tutorial, TutorialsRead } from '@shared/api';
 
 const route = getRouteApi('/tutorials');
@@ -71,7 +74,7 @@ function EmptyState({ directory }: { directory: string }) {
           <code className="mono">chapters</code> are <code className="mono">{'{ title, start }'}</code> with start in seconds.
         </li>
         <li>
-          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab, one section per feature with a .gif or .webp, steps and a link into the app.
+          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab: a documentation-style guide of sections and subsections with text, steps, tips, and images or clips in a dark and a light version.
         </li>
         <li>
           To install one from a recording folder: <code className="mono">node custom/control-center/scripts/install-tutorial.mjs &lt;folder&gt;</code>
@@ -82,7 +85,9 @@ function EmptyState({ directory }: { directory: string }) {
 }
 
 function Thumb({ tutorial }: { tutorial: Tutorial }) {
-  return tutorial.poster ? <img className="tut-card__thumb" src={tutorial.poster.url} alt="" loading="lazy" /> : <span className="tut-card__thumb tut-card__thumb--none" aria-hidden="true" />;
+  const { resolved } = useTheme();
+  const poster = resolved === 'light' && tutorial.posterLight ? tutorial.posterLight : tutorial.poster;
+  return poster ? <img className="tut-card__thumb" src={poster.url} alt="" loading="lazy" /> : <span className="tut-card__thumb tut-card__thumb--none" aria-hidden="true" />;
 }
 
 function Transcript({ url }: { url: string }) {
@@ -127,6 +132,8 @@ function Transcript({ url }: { url: string }) {
 
 function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; startAt: number | null; onStartApplied: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
+  const cover = useRef<HTMLCanvasElement>(null);
+  const themed = useThemedVideo(video, cover, tutorial, startAt);
   const [current, setCurrent] = useState(-1);
   const [captions, setCaptions] = useState(readCaptionsPref);
   const [osd, setOsd] = useState('');
@@ -246,10 +253,10 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
       <div className="tut">
         <div className="stack">
           <div className="tut__stage">
-            <video ref={video} controls preload="metadata" poster={tutorial.poster?.url} aria-label={tutorial.title} onTimeUpdate={update} onSeeked={update} onLoadedMetadata={update}>
-              <source src={tutorial.video.url} type="video/mp4" />
+            <video ref={video} controls preload="metadata" src={themed.initialSrc} poster={themed.poster} aria-label={tutorial.title} onTimeUpdate={update} onSeeked={update} onLoadedMetadata={update}>
               {tutorial.subtitles && <track kind="subtitles" srcLang="en" label="English" src={tutorial.subtitles.url} />}
             </video>
+            <canvas ref={cover} className="tut__freeze" data-state="off" aria-hidden="true" />
             {osd && (
               <p className="tut__osd" aria-hidden="true">
                 {osd}
@@ -273,6 +280,12 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
               )}
             </div>
             {tutorial.description && <p className="muted" style={{ margin: 0 }}>{tutorial.description}</p>}
+            {themed.lightMissing && <p className="faint small tut__note" style={{ margin: 0 }}>No light version; showing the dark video</p>}
+            {themed.warning && (
+              <p className="small tut__note" role="status" style={{ margin: 0, color: 'var(--warning)' }}>
+                {themed.warning}
+              </p>
+            )}
             <p className="faint small tut__keys" style={{ margin: 0 }}>
               <kbd>Space</kbd> or <kbd>K</kbd> play or pause, <kbd>J</kbd> back 10s, <kbd>L</kbd> forward 10s, <kbd>C</kbd> captions, <kbd>Up</kbd> and <kbd>Down</kbd> previous and next chapter
             </p>
@@ -310,16 +323,17 @@ const VIEWS = [
 ] as const;
 
 function Loaded({ data }: { data: TutorialsRead }) {
-  const { t, view, section } = route.useSearch();
+  const { t, view, section, sub } = route.useSearch();
   const navigate = useNavigate({ from: '/tutorials' });
   // The chapter time "Watch this part" asked for, tied to the tutorial it was asked on.
   const [seek, setSeek] = useState<{ id: string; at: number } | null>(null);
   const selected = data.tutorials.find((x) => x.id === t) ?? data.tutorials[0];
-  const guide = selected?.guide ?? null;
+  const guide = selected?.guideDocs ?? null;
   const startAt = seek !== null && seek.id === selected?.id ? seek.at : null;
   const showGuide = guide !== null && view === 'guide';
   // The URL carries the tutorial, the view and the section, so every state of the page is a shareable link.
-  const go = (to: { view?: 'guide'; section?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
+  const go = (to: { view?: 'guide'; section?: string; sub?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
+  const searchFor = (loc: GuideLocation): GuideSearchParams => ({ ...(t ? { t } : {}), view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) });
   const setView = (next: 'video' | 'guide') => {
     setSeek(null);
     go(next === 'guide' ? { view: 'guide' } : {});
@@ -362,13 +376,15 @@ function Loaded({ data }: { data: TutorialsRead }) {
           ))}
           {selected && guide && <Tabs label="Tutorial view" tabs={[...VIEWS]} value={showGuide ? 'guide' : 'video'} onChange={setView} />}
           {selected && guide && showGuide && (
-            <QuickGuide
+            <GuideDocs
               key={selected.id}
               tutorialId={selected.id}
-              guide={guide}
+              docs={guide}
               chapters={selected.chapters}
-              sectionId={section}
-              onSelect={(id, replace) => go({ view: 'guide', section: id }, replace)}
+              section={section}
+              sub={sub}
+              searchFor={searchFor}
+              onNavigate={(loc, replace) => go({ view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) }, replace)}
               onWatch={(start) => {
                 setSeek({ id: selected.id, at: start });
                 go({});
