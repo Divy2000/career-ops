@@ -91,3 +91,21 @@ describe('safeEqual', () => {
     expect(safeEqual('same-token', 'same-token')).toBe(true);
   });
 });
+
+describe('the locked page (built mode CSP)', () => {
+  it('carries its own CSP so its inline style is not blocked by default-src self, and it stays script-free', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/tracker', headers: { host: TEST_HOST } });
+    const csp = String(res.headers['content-security-policy']);
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).not.toMatch(/script-src/);
+    expect(csp).toContain("default-src 'none'");
+  });
+
+  it('follows the system theme, dark by default', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/', headers: { host: TEST_HOST } });
+    expect(res.body).toContain('<meta name="color-scheme" content="dark light">');
+    expect(res.body).toContain('prefers-color-scheme:light');
+    expect(res.body).toMatch(/background:var\(--bg\)/);
+  });
+});
