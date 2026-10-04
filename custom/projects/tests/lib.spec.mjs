@@ -10,6 +10,7 @@ import {
   serializeLibrary,
   replaceEntry,
   appendEntry,
+  removeEntry,
   convertJsonProjects,
 } from '../lib.mjs';
 
@@ -231,6 +232,29 @@ test('given a CRLF library, when an entry is replaced or appended, then every li
   const appended = appendEntry(crlf, { title: 'New Thing', bullets: ['Did it.'] });
   assert.equal(lone(appended), false);
   assert.ok(appended.endsWith('\r\n---\r\n\r\n## New Thing\r\n- Did it.\r\n'));
+});
+
+test('given a middle entry, when removed, then it and its separator go and every other byte stays', () => {
+  const target = byId(LIBRARY, 'weather-dashboard');
+  const next = byId(LIBRARY, 'inventory-forecaster');
+  const out = removeEntry(LIBRARY, 'weather-dashboard');
+  assert.equal(out, LIBRARY.slice(0, target.start) + LIBRARY.slice(next.start));
+  assert.equal(parseLibrary(out).entries.length, 4);
+  assert.equal(validateLibrary(out).ok, true);
+});
+
+test('given the last entry, when removed, then the separator before it goes and the file still ends with one newline', () => {
+  const prev = byId(LIBRARY, 'graph-search-library');
+  const out = removeEntry(LIBRARY, 'retrieval-benchmark-study');
+  assert.equal(out, `${LIBRARY.slice(0, prev.end)}\n`);
+});
+
+test('given the only entry, when removed, then the preamble is kept', () => {
+  assert.equal(removeEntry('# Projects library\n\nIntro.\n\n## Only\n- One.\n', 'only'), '# Projects library\n\nIntro.\n');
+});
+
+test('given an unknown id, when removed, then it throws', () => {
+  assert.throws(() => removeEntry(LIBRARY, 'nope'), /nope/);
 });
 
 test('given an existing library, when an entry is appended, then it follows a --- separator and the old text is untouched', () => {

@@ -249,6 +249,18 @@ export function replaceEntry(text, id, entry) {
   return text.slice(0, target.start) + withNewline(block, newlineOf(text)) + text.slice(target.end);
 }
 
+// Removes one entry with its separator; every other byte stays. A middle
+// entry takes the separator after it, the last one the separator before it.
+export function removeEntry(text, id) {
+  const { entries } = parseLibrary(text);
+  const i = entries.findIndex((e) => e.id === id);
+  if (i === -1) throw new Error(`no entry with id "${id}"`);
+  const target = entries[i];
+  if (i + 1 < entries.length) return text.slice(0, target.start) + text.slice(entries[i + 1].start);
+  const keep = i > 0 ? text.slice(0, entries[i - 1].end) : text.slice(0, target.start).replace(/\s+$/, '');
+  return `${keep}${newlineOf(text)}`;
+}
+
 // Appends a ready-made markdown block (already validated by the caller).
 export function appendBlock(text, block) {
   const nl = newlineOf(text);
