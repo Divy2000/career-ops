@@ -5,6 +5,7 @@ import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
 import { afterFocusSettles, isRendered } from '../lib/focus';
 import { useLiveInvalidation } from '../lib/sse';
+import { useTheme } from '../lib/theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AskDrawer, useAskHotkey } from './AskDrawer';
 import { CommandPalette } from './CommandPalette';
@@ -111,6 +112,7 @@ function usePaletteHotkey(toggle: () => void) {
 
 export function Shell() {
   useLiveInvalidation();
+  const { resolved: theme } = useTheme();
   const [ask, setAsk] = useState(false);
   const [palette, setPalette] = useState(false);
   // Below the md breakpoint the sidebar is a drawer. It is open for the one path it was opened on, so any navigation closes it.
@@ -274,7 +276,7 @@ export function Shell() {
         </main>
         <AskDrawer open={ask} onClose={() => setAsk(false)} />
         <CommandPalette open={palette} onOpenChange={setPalette} />
-        <Toaster theme="dark" position="bottom-right" closeButton />
+        <Toaster theme={theme} position="bottom-right" closeButton />
       </div>
     </ConfirmProvider>
   );
