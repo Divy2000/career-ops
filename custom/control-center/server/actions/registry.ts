@@ -7,6 +7,8 @@ import { z } from 'zod';
 import YAML from 'yaml';
 import type { Cost } from '../runner/store.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
+import { resolveOutputFile } from '../domains/documents.js';
+import { prefillUrlProblem } from '../../shared/prefill.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
 
@@ -34,6 +36,8 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   /** Sync actions run inline under a 30 s timeout and return their output. */
   sync: boolean;
   params: S;
+  /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
+  check?: (params: z.infer<S>, ctx: ActionContext) => string | null;
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
@@ -60,6 +64,13 @@ const dryRun = z.object({ dryRun: z.boolean().default(false) });
 const positive = z.number().int().positive();
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
+const outputPath = (ext: RegExp, what: string) =>
+  z
+    .string()
+    .max(512)
+    .regex(/^output\/(?:[\w.-]+\/)*[\w.-]+$/, 'a file under output/')
+    .refine((p) => !p.split('/').includes('..'), 'no .. segments')
+    .refine((p) => ext.test(p), what);
 const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) only').max(2048);
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 
@@ -285,7 +296,24 @@ export const ACTIONS: ActionDef[] = [
   define({ id: 'docs.archivePosting', label: 'Archive posting', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ n: positive, url: httpUrl }), build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.n)]) }),
   define({ id: 'docs.liveness', label: 'Check posting liveness', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ urls: z.array(httpUrl).min(1).max(200) }), build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]) }),
   define({ id: 'docs.fetchJd', label: 'Fetch job description', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'fetchJd', [p.url]) }),
-  define({ id: 'docs.prepareApplication', label: 'Prepare application (zero-token prefill)', cost: 'network', resources: [], claude: false, sync: true, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'prepareApplication', ['--url', p.url]) }),
+  define({
+    id: 'docs.prepareApplication',
+    label: 'Prepare application (zero-token prefill)',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: true,
+    params: z.object({ url: httpUrl, pdf: outputPath(/\.pdf$/i, 'a .pdf file'), cover: outputPath(/\.(txt|md)$/i, 'a .txt or .md file').optional() }),
+    check: (p, ctx) => {
+      const problem = prefillUrlProblem(p.url);
+      if (problem) return problem;
+      if (!resolveOutputFile(ctx.dataRoot, p.pdf)) return `The CV PDF ${p.pdf} does not exist. Generate the tailored CV first or choose another PDF.`;
+      if (p.cover && !resolveOutputFile(ctx.dataRoot, p.cover)) return `The cover letter ${p.cover} does not exist. Choose another or leave it out.`;
+      return null;
+    },
+    // The script resolves both paths against CAREER_OPS_ROOT and requires the PDF under output/.
+    build: (p, ctx) => node(ctx, 'prepareApplication', ['--url', p.url, '--pdf', p.pdf, ...opt(p.cover, '--cover')]),
+  }),
   define({ id: 'docs.appArtifactsInit', label: 'Initialize application artifacts', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive }), build: (p, ctx) => node(ctx, 'applicationArtifacts', ['--init', '--report', String(p.n)]) }),
   define({ id: 'docs.imgToPdf', label: 'Image to PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ file: relOutput }), build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file)]) }),
   // ---- insights ----

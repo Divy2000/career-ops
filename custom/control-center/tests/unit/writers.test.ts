@@ -134,6 +134,9 @@ describe('action registry covers section 3.3', () => {
     expect(batch.bin).toBe('/bin/bash');
     expect(batch.args[0]).toMatch(/batch-runner\.sh$/);
     expect(batch.args).toContain('--parallel');
+    const prefill = findAction('docs.prepareApplication')!;
+    expect(prefill.build({ url: 'https://jobs.lever.co/acme/1', pdf: 'output/a.pdf' }, ctx).args.slice(1)).toEqual(['--url', 'https://jobs.lever.co/acme/1', '--pdf', 'output/a.pdf']);
+    expect(prefill.build({ url: 'https://jobs.lever.co/acme/1', pdf: 'output/a.pdf', cover: 'output/a-cover.txt' }, ctx).args.slice(1)).toEqual(['--url', 'https://jobs.lever.co/acme/1', '--pdf', 'output/a.pdf', '--cover', 'output/a-cover.txt']);
   });
   it('scan.network writes an ephemeral portals file from the filters and points CAREER_OPS_PORTALS at it', () => {
     const dataRoot = copyFixtureRoot();
@@ -167,7 +170,7 @@ function sampleParams(id: string): Record<string, unknown> {
     'docs.archivePosting': { n: 1, url: 'https://x.example/1' },
     'docs.liveness': { urls: ['https://x.example/1'] },
     'docs.fetchJd': { url: 'https://x.example/1' },
-    'docs.prepareApplication': { url: 'https://x.example/1' },
+    'docs.prepareApplication': { url: 'https://x.example/1', pdf: 'output/a.pdf' },
     'docs.appArtifactsInit': { n: 1 },
     'docs.imgToPdf': { file: 'output/a.png' },
     'followups.replyPaste': { subject: 's', from: 'f', body: 'b' },

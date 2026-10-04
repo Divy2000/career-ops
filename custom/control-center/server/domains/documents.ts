@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { inside } from '../lib/paths.js';
 
 export interface DocumentFile {
   /** Path relative to the data root (servable through /api/files/serve). */
@@ -88,4 +89,59 @@ export function readDocuments(dataRoot: string, n: number, company: string): Doc
   const prefix = String(n).padStart(3, '0');
   const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter((f) => f.startsWith(`${prefix}-`) || (slug && f.toLowerCase().includes(slug))).map((f) => `jds/${f}`) : [];
   return { files, jds, indexPresent };
+}
+
+/** Absolute real path of a regular file under the data root's output/ (symlinks resolved), or null. */
+export function resolveOutputFile(dataRoot: string, rel: string): string | null {
+  try {
+    const outDir = fs.realpathSync(path.join(dataRoot, 'output'));
+    const real = fs.realpathSync(path.resolve(dataRoot, rel));
+    return inside(outDir, real) && fs.statSync(real).isFile() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ApplyDocuments {
+  /** CV PDFs under output/ (cover-letter PDFs excluded), newest first. */
+  pdfs: string[];
+  /** Plain-text cover letters under output/; prepare-application.mjs reads --cover as text, so a cover PDF never qualifies. */
+  covers: string[];
+  suggestedPdf: string | null;
+  suggestedCover: string | null;
+}
+
+const COVER_NAME = /cover/i;
+const COVER_TEXT = /\.(txt|md)$/i;
+
+function walkOutput(dataRoot: string): string[] {
+  const out: string[] = [];
+  const visit = (rel: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(dataRoot, rel), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const child = `${rel}/${e.name}`;
+      if (e.isDirectory()) visit(child);
+      else if (resolveOutputFile(dataRoot, child)) out.push(child);
+    }
+  };
+  visit('output');
+  return out;
+}
+
+/** What the Apply page can attach: every CV PDF and text cover under output/, plus the tailored CV for tracker row n when one is known. */
+export function readApplyDocuments(dataRoot: string, row: { num: number; company: string } | null): ApplyDocuments {
+  const files = walkOutput(dataRoot).sort((a, b) => mtime(dataRoot, b) - mtime(dataRoot, a));
+  const pdfs = files.filter((f) => f.toLowerCase().endsWith('.pdf') && !COVER_NAME.test(path.basename(f)));
+  const covers = files.filter((f) => COVER_TEXT.test(f) && COVER_NAME.test(path.basename(f)));
+  if (!row) return { pdfs, covers, suggestedPdf: null, suggestedCover: null };
+  const cvs = readDocuments(dataRoot, row.num, row.company).files.filter((f) => f.kind === 'cv' && pdfs.includes(f.path));
+  const suggestedPdf = (cvs.find((f) => f.source === 'index') ?? cvs[0])?.path ?? null;
+  const slug = companySlug(row.company);
+  const suggestedCover = (slug && covers.find((c) => path.basename(c).toLowerCase().includes(slug))) || null;
+  return { pdfs, covers, suggestedPdf, suggestedCover };
 }

@@ -10,7 +10,7 @@ export type { FollowupEntry, NextOverride } from '../server/domains/followups.js
 export type { ModePolicy } from '../server/claude/modes.js';
 export type { SystemStatus } from './types.js';
 export type { RunMeta, RawLine, RunStatus } from '../server/runner/store.js';
-export type { DocumentsRead, DocumentFile } from '../server/domains/documents.js';
+export type { DocumentsRead, DocumentFile, ApplyDocuments } from '../server/domains/documents.js';
 export type { DailyStatus } from '../server/system/daily.js';
 export type { SessionEvent } from '../server/claude/stream-parse.js';
 export type { SessionMeta, SessionTurn, SessionStatus, StoredEvent } from '../server/claude/sessions.js';

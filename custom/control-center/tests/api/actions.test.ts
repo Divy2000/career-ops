@@ -81,3 +81,109 @@ describe('action registry', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe('docs.prepareApplication (zero-token prefill)', () => {
+  const GREENHOUSE = 'https://boards.greenhouse.io/acmerobotics/jobs/12345';
+
+  it('the Apply page request with only a posting URL is refused with a readable reason, never the script usage text', async () => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: 'https://www.builtinaustin.com/job/associate-software-engineer-python-ai/10931484' } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.body).not.toMatch(/Usage:/);
+  });
+
+  it('runs the script with --url and --pdf and returns the prefill summary inline', async () => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/acme-robotics-cv.pdf' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().result).toContain('Greenhouse');
+    expect(res.json().result).toMatch(/resume\s+acme-robotics-cv\.pdf/);
+  });
+
+  it('passes a cover letter text file with --cover when one is chosen', async () => {
+    fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'acme-robotics-cover.txt'), 'Dear team, three short words.\n');
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/acme-robotics-cv.pdf', cover: 'output/acme-robotics-cover.txt' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().result).toMatch(/Cover\s+output\/acme-robotics-cover\.txt \(5 words\)/);
+  });
+
+  it('accepts a tailored CV inside an application bundle under output/', async () => {
+    const dir = path.join(t.cfg.dataRoot, 'output', '001-acme-robotics-senior-backend-engineer', 'cv', 'tailored', 'v001');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'cv.pdf'), '%PDF-1.4\n');
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/001-acme-robotics-senior-backend-engineer/cv/tailored/v001/cv.pdf' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().result).toMatch(/resume\s+cv\.pdf/);
+  });
+
+  it('explains that a job-board listing is not an ATS apply link before running anything', async () => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: 'https://www.builtinaustin.com/job/associate-software-engineer-python-ai/10931484', pdf: 'output/acme-robotics-cv.pdf' } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toMatch(/Greenhouse, Ashby and Lever/);
+    expect(res.json().error).toContain('www.builtinaustin.com');
+  });
+
+  it('refuses a CV PDF that does not exist with a readable reason', async () => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/nope.pdf' } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toBe('The CV PDF output/nope.pdf does not exist. Generate the tailored CV first or choose another PDF.');
+  });
+
+  it('refuses a missing cover letter file with a readable reason', async () => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/acme-robotics-cv.pdf', cover: 'output/missing-cover.txt' } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toBe('The cover letter output/missing-cover.txt does not exist. Choose another or leave it out.');
+  });
+
+  it.each([
+    ['a file outside output/', 'cv.md'],
+    ['a parent-directory escape', 'output/../cv.md'],
+    ['a non-PDF file', 'output/acme-robotics-cv.html'],
+    ['an absolute path', '/etc/hosts.pdf'],
+  ])('rejects %s as the CV', async (_label, pdf) => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf } });
+    expect(res.statusCode, res.body).toBe(400);
+  });
+
+  it('rejects a PDF symlinked from output/ to a file outside it', async () => {
+    const outside = path.join(t.cfg.dataRoot, 'outside.pdf');
+    fs.writeFileSync(outside, '%PDF-1.4\n');
+    fs.symlinkSync(outside, path.join(t.cfg.dataRoot, 'output', 'linked.pdf'));
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/linked.pdf' } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toMatch(/does not exist/);
+  });
+
+  it('rejects a cover letter that is not a text file', async () => {
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE, pdf: 'output/acme-robotics-cv.pdf', cover: 'output/globex-payments-cv.pdf' } });
+    expect(res.statusCode, res.body).toBe(400);
+  });
+});
+
+describe('Apply documents', () => {
+  it('suggests the indexed tailored CV for a tracker row and lists every CV PDF and text cover letter under output/', async () => {
+    fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'acme-robotics-cover.txt'), 'Dear team.\n');
+    fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'acme-robotics-cover.pdf'), '%PDF-1.4\n');
+    const res = await get('/api/apply/documents?n=1');
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+    expect(body.suggestedPdf).toBe('output/acme-robotics-cv.pdf');
+    expect(body.suggestedCover).toBe('output/acme-robotics-cover.txt');
+    expect(body.pdfs).toEqual(expect.arrayContaining(['output/acme-robotics-cv.pdf', 'output/acme-robotics-extra.pdf', 'output/globex-payments-cv.pdf']));
+    expect(body.pdfs).not.toContain('output/acme-robotics-cover.pdf');
+    expect(body.covers).toEqual(['output/acme-robotics-cover.txt']);
+  });
+
+  it('suggests nothing for a row without a tailored CV', async () => {
+    const body = (await get('/api/apply/documents?n=2')).json();
+    expect(body.suggestedPdf).toBeNull();
+    expect(body.suggestedCover).toBeNull();
+    expect(body.pdfs.length).toBeGreaterThan(0);
+  });
+
+  it('suggests nothing without a row and rejects a bad row number', async () => {
+    const body = (await get('/api/apply/documents')).json();
+    expect(body.suggestedPdf).toBeNull();
+    expect(body.pdfs).toContain('output/globex-payments-cv.pdf');
+    expect((await get('/api/apply/documents?n=abc')).statusCode).toBe(400);
+    expect((await get('/api/apply/documents?n=99')).statusCode).toBe(404);
+  });
+});

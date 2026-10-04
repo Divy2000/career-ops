@@ -388,7 +388,9 @@
       "helpArgs": [],
       "expectExit": null,
       "flags": [
-        "--url"
+        "--url",
+        "--pdf",
+        "--cover"
       ],
       "probe": false
     },
