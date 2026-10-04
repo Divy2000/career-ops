@@ -288,29 +288,46 @@ validate_inputs() {
   VALIDATED=1
 }
 
-# The projects parser (custom/projects/lib.mjs): next to this script in a checkout, else in the
-# target checkout once it is cloned. A standalone copy of custom/install validates after the clone.
+# The projects parser (custom/projects/lib.mjs): next to this script in a checkout, else in an existing
+# target checkout. A standalone copy of custom/install has neither before the clone. Prints nothing then;
+# it always succeeds, because the ERR trap would report a nonzero status from inside $(...).
 projects_lib() {
   local c
   for c in "$SCRIPT_DIR/../projects/lib.mjs" "$DIR/custom/projects/lib.mjs"; do
     if [ -f "$c" ]; then printf '%s' "$c"; return 0; fi
   done
-  return 1
 }
 
+PROJECTS_NO_CHANGE="No changes were made to the checkout or the user layer."
+
+# Validates --projects before anything is cloned or written. `local` only uses a parser already on
+# disk; `fetch` (once git is known to be there, after "Proceed?") may shallow-clone the fork into a
+# throwaway temp dir for its parser, and stops the install if that fails.
 check_projects() {
+  local mode="$1" lib="" rc=0 scratch=""
   [ -n "$PROJECTS" ] || return 0
   [ "$PROJECTS_CHECKED" = 1 ] && return 0
   have node || return 0 # checked again once the prerequisites are in place
-  local lib rc=0
-  lib="$(projects_lib)" || return 0 # checked again once the checkout is in place
   if [ ! -f "$PROJECTS" ]; then
-    printf 'error: --projects file not found: %s\nNo changes were made.\n' "$PROJECTS" >&2
+    printf 'error: --projects file not found: %s\n%s\n' "$PROJECTS" "$PROJECTS_NO_CHANGE" >&2
     exit 2
   fi
+  lib="$(projects_lib)"
+  if [ -z "$lib" ]; then
+    if [ "$mode" != fetch ] || ! have git; then return 0; fi
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-validator.XXXXXX")"
+    if git clone --quiet --depth 1 ${REF:+--branch "$REF"} "$FORK_URL" "$scratch/repo" >/dev/null 2>&1 && [ -f "$scratch/repo/custom/projects/lib.mjs" ]; then
+      lib="$scratch/repo/custom/projects/lib.mjs"
+    else
+      rm -rf "$scratch"
+      printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$FORK_URL" "$PROJECTS_NO_CHANGE" >&2
+      exit 1
+    fi
+  fi
   node "$SCRIPT_DIR/seed.mjs" projects-check --lib "$lib" --file "$PROJECTS" >/dev/null || rc=$?
+  if [ -n "$scratch" ]; then rm -rf "$scratch"; fi
   if [ "$rc" -ne 0 ]; then
-    printf 'No changes were made. Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' >&2
+    printf '%s Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' "$PROJECTS_NO_CHANGE" >&2
     exit 2
   fi
   PROJECTS_CHECKED=1
@@ -321,7 +338,7 @@ check_projects() {
 check_data_root_conflict
 DATA="$(effective_data_root)"
 validate_inputs
-check_projects
+check_projects local
 
 say "career-ops (H-1B-aware fork) installer"
 say "  checkout:  $DIR"
@@ -381,7 +398,7 @@ fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
 validate_inputs
-check_projects
+check_projects fetch
 
 for entry in "gh|gh|brew install gh|the sponsorship digest PR links" "pdftotext|poppler|brew install poppler|reading PDF resumes in intake" "go|go|brew install go|the optional Go dashboard"; do
   tool="${entry%%|*}"; rest="${entry#*|}"; formula="${rest%%|*}"; rest="${rest#*|}"; fix="${rest%%|*}"; why="${rest#*|}"
@@ -596,9 +613,10 @@ if [ -n "$PROJECTS" ]; then
   if [ "$DRY_RUN" = 1 ]; then
     dry "copy $PROJECTS to documents/projects/ and create article-digest.md from it when absent"
   else
-    check_projects
-    lib_path="$(projects_lib)" || die 1 "cannot validate --projects: custom/projects/lib.mjs is missing from $DIR"
-    proj_out="$(seed projects-seed --lib "$lib_path" --data "$DATA" --file "$PROJECTS")" || die 1 "could not seed the projects library from $PROJECTS"
+    # Already validated in step 2; projects-seed checks again with this checkout's parser.
+    lib_path="$(projects_lib)"
+    [ -n "$lib_path" ] || die 1 "custom/projects/lib.mjs is missing from $DIR; the checkout is set up but article-digest.md was not created from $PROJECTS"
+    proj_out="$(seed projects-seed --lib "$lib_path" --data "$DATA" --file "$PROJECTS")" || die 1 "article-digest.md was not created from $PROJECTS (see the error above); the checkout and the user layer are already set up"
     proj_copy=""
     while IFS=$'\t' read -r kind what dest; do
       case "$kind" in

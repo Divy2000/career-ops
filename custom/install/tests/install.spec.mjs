@@ -479,6 +479,60 @@ test('--dry-run with --projects says what it would do and writes nothing', () =>
   assert.equal(exists(D, 'article-digest.md'), false);
 });
 
+// A copy of custom/install outside any checkout (downloaded on its own): the projects parser is not next to it.
+function standalone(w, { parser = true } = {}) {
+  const dl = path.join(w.T, 'dl', 'custom', 'install');
+  fs.cpSync(INSTALL_DIR, dl, { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
+  if (parser) {
+    const repo = path.resolve(INSTALL_DIR, '..', '..');
+    for (const rel of ['custom/projects/lib.mjs', 'tracker-parse.mjs', 'tracker-aliases.json', 'skill-extract.mjs']) {
+      fs.mkdirSync(path.dirname(path.join(w.fakeSrc, rel)), { recursive: true });
+      fs.copyFileSync(path.join(repo, rel), path.join(w.fakeSrc, rel));
+    }
+  }
+  return path.join(dl, 'install.sh');
+}
+const cloneTargets = (w) => w.calls('git').filter((l) => l.startsWith('git clone')).map((l) => l.split(' ').at(-1));
+
+test('standalone: an invalid --projects file is refused before the checkout or the user layer exists', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w);
+  const bad = md(w, 'bad.md', '## Empty\nTags: go\n');
+  const r = w.run(args('--projects', bad), { script });
+  assert.equal(r.status, 2, r.out);
+  assert.match(r.out, /"Empty".*no copy-paste points/);
+  assert.match(r.out, /No changes were made to the checkout or the user layer/);
+  assert.doesNotMatch(r.out, /unexpected failure/);
+  assert.equal(exists(D), false);
+  // Only the throwaway validator clone ran, and it is gone.
+  const targets = cloneTargets(w);
+  assert.equal(targets.length, 1, w.calls('git').join('\n'));
+  assert.notEqual(targets[0], D);
+  assert.equal(fs.existsSync(targets[0]), false);
+});
+
+test('standalone: a valid --projects file is checked first, then seeds article-digest.md after the checkout', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w);
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib), { script });
+  assert.equal(read(D, 'article-digest.md'), LIBRARY, r.out);
+  const targets = cloneTargets(w);
+  assert.deepEqual(targets.slice(-1), [D]);
+  assert.equal(targets.length, 2);
+  assert.equal(fs.existsSync(targets[0]), false);
+});
+
+test('standalone: when the validator cannot be fetched, the install stops before any change and says so', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w, { parser: false });
+  const r = w.run(args('--projects', md(w, 'projects.md', LIBRARY)), { script });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /could not fetch the projects validator/);
+  assert.match(r.out, /No changes were made to the checkout or the user layer/);
+  assert.equal(exists(D), false);
+});
+
 // ---------------------------------------------------------------- Keychain
 
 test('without a TTY a missing Keychain item is a pending action (exit 3) and the token flow never starts', () => {
