@@ -32,6 +32,7 @@ BRANCH="sync/upstream-$TODAY"
 FORK="Divy2000/career-ops"
 MODEL="claude-opus-5-5[1m]"
 AUTO_MERGE=1
+KEPT_README=0
 [ "${1:-}" = "--no-merge" ] && AUTO_MERGE=0
 
 mkdir -p "$STATE_DIR"
@@ -96,6 +97,13 @@ CONFLICTS=""
 if ! git merge --no-ff --no-edit -m "chore(sync): merge upstream main $TODAY" upstream/main; then
   CONFLICTS="$(git diff --name-only --diff-filter=U)"
   echo "conflicts:"; echo "$CONFLICTS"
+  # The fork's .github/README.md always wins; a human compares upstream's copy.
+  bash "$LIVE/custom/upstream-sync/keep-fork-readme.sh" "$STATE_DIR" "$TODAY"
+  case $? in
+    0) ;;
+    10) KEPT_README=1; CONFLICTS="$(git diff --name-only --diff-filter=U)" ;;
+    *) fail "keep-fork-readme.sh failed" ;;
+  esac
 fi
 
 echo "--- headless Claude ($MODEL)"
@@ -121,7 +129,7 @@ echo "--- verifying"
 git merge-base --is-ancestor upstream/main HEAD || fail "upstream/main is not merged into $BRANCH"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || fail "uncommitted changes left in the sync worktree"
 
-CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**')"
+CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then
   echo "NOTE: files outside custom/ differ from upstream/main (expected only for conflict resolutions):"
   echo "$CHANGED_UPSTREAM"
@@ -145,6 +153,9 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo "- custom/ tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
+  if [ $KEPT_README = 1 ]; then
+    echo "- .github/README.md conflicted with upstream: the fork's version was kept. Upstream's copy: data/upstream-sync/$TODAY.upstream-github-readme.md (not auto-merged; compare, then merge by hand)."
+  fi
   echo
   echo "## Claude report"
   cat "$STATE_DIR/$TODAY.report.md" 2>/dev/null || echo "(no report written)"
@@ -158,7 +169,7 @@ else
 fi
 echo "PR: $PR_URL"
 
-if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ]; then
+if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEPT_README = 0 ]; then
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
@@ -174,7 +185,7 @@ if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ]; then
   fi
   git worktree remove --force "$WT" >/dev/null 2>&1
 else
-  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}." >/dev/null || true
+  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}; fork README kept over an upstream .github/README.md: $([ $KEPT_README = 1 ] && echo yes || echo no)." >/dev/null || true
   notify "Upstream sync PR needs review: $PR_URL"
 fi
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') done"

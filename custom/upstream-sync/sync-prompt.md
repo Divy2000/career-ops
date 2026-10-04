@@ -1,7 +1,7 @@
 You are maintaining Divy2000/career-ops, a personal fork of career-ops-hq/career-ops. Today is {{TODAY}}. Your working directory is a git worktree on branch `sync/upstream-{{TODAY}}`, created from the fork's main, where `git merge upstream/main` ({{BEHIND}} upstream commits) has just been attempted.
 
 ## Rules
-- The fork's own additions live only under `custom/` (and `.gitignore`d user data that is not in this worktree). Every other file belongs to upstream.
+- The fork's own additions live only under `custom/` (and `.gitignore`d user data that is not in this worktree), plus one file outside it: `.github/README.md`, the fork's landing page. Every other file belongs to upstream. On any conflict in `.github/README.md`, always keep the fork's version (the calling script already does this and saves upstream's copy for a human); never merge upstream's text into it.
 - Never edit an upstream file except to resolve a merge conflict. When resolving, prefer upstream's version unless the fork's side is needed for something under `custom/` to keep working; explain every such choice in the report.
 - Never weaken, skip or delete a test to make it pass. Never change upstream code to make a fork test pass; fix the code under `custom/` instead.
 - Do not run `git push`, `git reset --hard`, `git rebase`, or anything that rewrites history. The calling script pushes and opens the PR.
