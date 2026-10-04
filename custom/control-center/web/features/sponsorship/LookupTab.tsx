@@ -3,6 +3,7 @@ import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../../lib/api';
 import { describeError } from '../../lib/actions';
+import { formatCount } from '../../lib/format';
 import { formatLocalMinute } from '../../lib/time';
 import { Md } from '../../components/Md';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -54,10 +55,10 @@ function Totals({ check }: { check: H1bCheck }) {
   const t = check.totals;
   const years = t.first_year && t.last_year ? `${t.first_year} to ${t.last_year}` : (t.last_year ?? t.first_year ?? 'n/a');
   const tiles: Array<[string, string, string?]> = [
-    ['LCAs filed', String(t.n_lca)],
-    ['Certified', t.n_certified === null ? 'not reported' : String(t.n_certified), t.n_certified === null ? 'The source did not report certifications; that is not zero.' : 'Of the LCAs filed. A denial is not evidence the employer will not sponsor.'],
-    ['PWD filings', String(t.n_pwd)],
-    ['PERM filings', String(t.n_perm)],
+    ['LCAs filed', formatCount(t.n_lca)],
+    ['Certified', t.n_certified === null ? 'not reported' : formatCount(t.n_certified), t.n_certified === null ? 'The source did not report certifications; that is not zero.' : 'Of the LCAs filed. A denial is not evidence the employer will not sponsor.'],
+    ['PWD filings', formatCount(t.n_pwd)],
+    ['PERM filings', formatCount(t.n_perm)],
     ['Active years', String(years)],
     ['Green cards', t.does_gc ? 'yes' : 'no'],
   ];
@@ -239,7 +240,7 @@ function LookupView({ query }: { query: string }) {
           {staffing?.value && (
             <p className="card card--danger" role="status" style={{ margin: 0 }}>
               <strong>Staffing-shop red flag.</strong> {staffing.share !== null ? `${Math.round(staffing.share * 100)}% of filings are at secondary worksites` : 'Most filings are at secondary worksites'}
-              {staffing.n_secondary != null && staffing.n_total != null ? ` (${staffing.n_secondary} of ${staffing.n_total})` : ''}. Roles may be placements at client sites.
+              {staffing.n_secondary != null && staffing.n_total != null ? ` (${formatCount(staffing.n_secondary)} of ${formatCount(staffing.n_total)})` : ''}. Roles may be placements at client sites.
             </p>
           )}
           <Totals check={check} />
@@ -274,7 +275,7 @@ function SearchView({ query }: { query: string }) {
   return (
     <div className="card" aria-labelledby="search-results">
       <h2 id="search-results">
-        {r.shown === 0 ? `No DOL entities match "${r.query}"` : r.total > r.shown ? `${r.shown} of ${r.total} entities match "${r.query}"` : `${r.total} ${r.total === 1 ? 'entity matches' : 'entities match'} "${r.query}"`}
+        {r.shown === 0 ? `No DOL entities match "${r.query}"` : r.total > r.shown ? `${formatCount(r.shown)} of ${formatCount(r.total)} entities match "${r.query}"` : `${formatCount(r.total)} ${r.total === 1 ? 'entity matches' : 'entities match'} "${r.query}"`}
       </h2>
       {r.shown === 0 ? (
         <Empty>Try a shorter query (at least 2 characters) or the legal name without punctuation.</Empty>

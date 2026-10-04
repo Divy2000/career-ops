@@ -39,6 +39,19 @@ test.describe('Sponsorship > Lookup', () => {
     await expect(page.getByRole('link', { name: 'Sessions', exact: true }).last()).toHaveAttribute('href', '/sessions');
   });
 
+  test('DOL stat cards group thousands with commas', async ({ page }) => {
+    await page.goto('/sponsorship?tab=lookup&q=JPMorgan%20Chase%20%26%20Co.');
+    await expect(page.getByRole('heading', { name: 'JPMorgan Chase & Co.', level: 2 })).toBeVisible();
+    await expect(page.getByText('LCAs filed').locator('..').getByText('5,210', { exact: true })).toBeVisible();
+    await expect(page.getByText('Certified', { exact: true }).locator('..').getByText('5,101', { exact: true })).toBeVisible();
+    await expect(page.getByText('PWD filings').locator('..').getByText('640', { exact: true })).toBeVisible();
+  });
+
+  test('a truncated name search groups the match total with commas', async ({ page }) => {
+    await page.goto('/sponsorship?tab=lookup&q=Mega%20Holdings&mode=search');
+    await expect(page.getByRole('heading', { name: '2 of 12,345 entities match "Mega Holdings"' })).toBeVisible();
+  });
+
   test('shows the staffing-shop red flag with its share and the matching company alerts', async ({ page }) => {
     await page.goto('/sponsorship?tab=lookup&q=Vandelay%20Staffing%20Solutions%20LLC');
     await expect(page.getByText('sponsor: staffing-shop')).toBeVisible();
