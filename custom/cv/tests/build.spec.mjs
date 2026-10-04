@@ -93,12 +93,46 @@ test('given projects found in the library or in cv.md, when checked, then there 
 });
 
 test('given a project linking to a publisher host, when checked, then it is a warning, not an error', () => {
-  const cv = '## Projects\n\n- **Graph Tool** -- x\n';
   for (const url of ['https://doi.org/10.1/x', 'https://www.sciencedirect.com/science/article/x', 'https://onlinelibrary.wiley.com/doi/x', 'https://arxiv.org/abs/2401.00001']) {
+    const cv = `## Projects\n\n- **Graph Tool** (${url}) -- x\n`;
     const r = checkPayload({ projects: [{ name: 'Graph Tool', url, bullets: ['x'] }] }, { cvText: cv, libraryText: null });
     assert.deepEqual(r.errors, [], url);
     assert.match(r.warnings.join('\n'), /"Graph Tool".*publisher/, url);
   }
+});
+
+test('given a payload URL that differs from the library entry, when checked, then it is an error naming both', () => {
+  const r = checkPayload({ projects: [{ name: 'Ticket Triage Bot', url: 'https://github.com/someone-else/triage', bullets: ['x'] }] }, { cvText: '', libraryText: LIBRARY });
+  assert.match(r.errors.join('\n'), /"Ticket Triage Bot".*someone-else\/triage.*github\.com\/example-dev\/ticket-triage/);
+});
+
+test('given a payload URL for a source that has no link, when checked, then it is an error (a link cannot be invented)', () => {
+  const library = '## Quiet Project\n- Did it.\n';
+  const fromLibrary = checkPayload({ projects: [{ name: 'Quiet Project', url: 'https://example.org/q', bullets: ['x'] }] }, { cvText: '', libraryText: library });
+  assert.match(fromLibrary.errors.join('\n'), /"Quiet Project".*no link/);
+  const fromCv = checkPayload({ projects: [{ name: 'Graph Tool', url: 'https://example.org/g', bullets: ['x'] }] }, { cvText: '## Projects\n\n- **Graph Tool** -- x\n', libraryText: null });
+  assert.match(fromCv.errors.join('\n'), /"Graph Tool".*no link/);
+});
+
+test('given the same link spelled differently, or no payload link, when checked, then there is no error', () => {
+  for (const url of ['https://github.com/example-dev/ticket-triage', 'http://www.github.com/example-dev/ticket-triage/', undefined]) {
+    const r = checkPayload({ projects: [{ name: 'Ticket Triage Bot', url, bullets: ['x'] }] }, { cvText: '', libraryText: LIBRARY });
+    assert.deepEqual(r.errors, [], String(url));
+  }
+});
+
+test('given a cv.md project whose link is written without a scheme, when the payload uses the full URL, then it matches', () => {
+  const cv = '## Projects\n\n- **Graph Tool** (github.com/example-dev/graph-tool) -- x\n';
+  const ok = checkPayload({ projects: [{ name: 'Graph Tool', url: 'https://github.com/example-dev/graph-tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+  assert.deepEqual(ok.errors, []);
+  const bad = checkPayload({ projects: [{ name: 'Graph Tool', url: 'https://github.com/example-dev/other', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+  assert.match(bad.errors.join('\n'), /"Graph Tool".*does not match/);
+});
+
+test('given a project in both the library and cv.md, when checked, then the library link is authoritative', () => {
+  const cv = '## Projects\n\n- **Ticket Triage Bot** (github.com/old/triage) -- x\n';
+  const r = checkPayload({ projects: [{ name: 'Ticket Triage Bot', url: 'https://github.com/old/triage', bullets: ['x'] }] }, { cvText: cv, libraryText: LIBRARY });
+  assert.match(r.errors.join('\n'), /"Ticket Triage Bot".*does not match.*article-digest\.md/);
 });
 
 test('given a project whose title is listed in Recent Achievements, when built, then the command fails and no HTML is written', () => {

@@ -8,6 +8,13 @@ export const AWARDS_TITLE = 'Recent Achievements';
 const PUBLISHER_HOSTS = ['doi.org', 'sciencedirect.com', 'wiley.com', 'arxiv.org'];
 
 const URL_RE = /https?:\/\/[^\s<>()[\]]+/gi;
+// Bare links need a path ("github.com/me/repo") so "Node.js" or "e.g." never count.
+const BARE_LINK_RE = /(?<![\w@/])(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+\/[^\s<>()[\]]*/gi;
+const linksIn = (text) => {
+  const full = (text.match(URL_RE) ?? []).map((u) => u.replace(/[.,;]+$/, ''));
+  const rest = text.replace(URL_RE, ' ');
+  return [...full, ...(rest.match(BARE_LINK_RE) ?? []).map((u) => u.replace(/[.,;]+$/, ''))];
+};
 const urlKey = (u) => String(u ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/.,;]+$/, '');
 
 // Entries of cv.md's `## Recent Achievements` section: { line, title, urls }.
@@ -46,12 +53,14 @@ function publisherHost(url) {
 }
 
 // Papers belong in awards[] (Recent Achievements), never in projects[]; every
-// project must come from the library (kind project) or cv.md.
+// project must come from the library (kind project) or cv.md, and its link must
+// be that source's link (the library wins when both list the project).
 export function checkPayload(payload, { cvText = '', libraryText = null } = {}) {
   const errors = [];
   const warnings = [];
   const achievements = recentAchievements(cvText);
   const library = libraryText === null ? [] : parseLibrary(libraryText).entries;
+  const cvLines = String(cvText ?? '').split('\n');
   for (const p of Array.isArray(payload?.projects) ? payload.projects : []) {
     const name = typeof p?.name === 'string' ? p.name.trim() : '';
     if (!name) continue;
@@ -63,8 +72,19 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
     if (entry && entry.kind !== 'project') {
       errors.push(`project "${name}" is a ${entry.kind} in article-digest.md (line ${entry.line}); only kind project can be listed under Projects`);
     }
-    if (!entry && !findCvEntry(cvText, name)) {
+    const inCv = entry ? null : findCvEntry(cvText, name);
+    if (!entry && !inCv) {
       errors.push(`project "${name}" is in neither article-digest.md nor cv.md; take projects from node custom/projects/rank.mjs output`);
+    }
+    const url = typeof p.url === 'string' ? p.url.trim() : '';
+    if (url && (entry || inCv)) {
+      const source = entry ? 'article-digest.md' : 'cv.md';
+      const known = entry ? (entry.url ? [entry.url] : []) : linksIn(cvLines[inCv.line - 1] ?? '');
+      if (!known.length) {
+        errors.push(`project "${name}" has link ${url} but ${source} has no link for it; a link cannot be invented`);
+      } else if (!known.some((k) => urlKey(k) === urlKey(url))) {
+        errors.push(`project "${name}" link ${url} does not match ${source} (${known.join(', ')})`);
+      }
     }
     const host = p.url ? publisherHost(p.url) : null;
     if (host) warnings.push(`project "${name}" links to a publisher (${host}); if it is a paper, list it under Recent Achievements instead`);
