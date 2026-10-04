@@ -364,13 +364,15 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
             <Pill tone={fresh ? 'ok' : 'neutral'}>{fresh} new</Pill>
             {preview.duplicates.length > 0 && <Pill tone="warn">{preview.duplicates.length} already in the library</Pill>}
           </div>
-          {[...preview.errors, ...preview.warnings, ...preview.duplicates.map((d) => `Skipped "${d}": already in the library`)].length > 0 && (
-            <ul className="projects-preview__notes small">
+          {preview.errors.length > 0 && (
+            <ul className="form-errors small" role="alert" aria-label="Import errors">
               {preview.errors.map((m) => (
-                <li key={m} className="danger-text">
-                  {m}
-                </li>
+                <li key={m}>{m}</li>
               ))}
+            </ul>
+          )}
+          {preview.warnings.length + preview.duplicates.length > 0 && (
+            <ul className="projects-preview__notes small">
               {preview.warnings.map((m) => (
                 <li key={m}>{m}</li>
               ))}

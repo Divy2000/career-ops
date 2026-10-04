@@ -21,6 +21,7 @@ const READ: ProjectsRead = {
 type Call = { method: string; url: string; body: unknown; headers: Record<string, string> };
 let calls: Call[];
 let putResponse: { status: number; body: unknown };
+let convertResponse: { status: number; body: unknown };
 let host: HTMLElement;
 let root: Root;
 
@@ -38,6 +39,7 @@ async function mount() {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null, headers: (init?.headers ?? {}) as Record<string, string> });
       if (url === '/api/projects' && method === 'GET') return json(200, READ);
       if (url.startsWith('/api/projects/') && method === 'PUT') return json(putResponse.status, putResponse.body);
+      if (url === '/api/projects/convert') return json(convertResponse.status, convertResponse.body);
       if (url.startsWith('/api/files/user/')) return json(200, { key: 'cv', path: 'cv.md', kind: 'ok', text: '# CV\n', etag: 'c1' });
       return json(404, { error: 'not stubbed' });
     }),
@@ -73,6 +75,7 @@ const type = (el: HTMLInputElement, value: string) =>
 beforeEach(() => {
   document.body.innerHTML = '';
   putResponse = { status: 200, body: { ok: true, etag: 'e2', id: 'event-router', warnings: [] } };
+  convertResponse = { status: 200, body: { markdown: '', entries: [], duplicates: [], warnings: [], errors: [] } };
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -119,5 +122,21 @@ describe('Projects library tab', () => {
     expect(put.url).toBe('/api/projects/event-router');
     expect(put.headers['If-Match']).toBe('e1');
     expect(put.body).toMatchObject({ title: 'Ranking Notes', bullets: ['One.', 'Two.'] });
+  });
+
+  it('shows the errors a converted import would cause and keeps Append disabled', async () => {
+    convertResponse = { status: 200, body: { markdown: '## Empty\n', entries: [{ title: 'Empty' }], duplicates: [], warnings: [], errors: ['"Empty" (line 1) has no copy-paste points'] } };
+    await mount();
+    await click(byRole('tab', 'Projects')!);
+    const area = await until(() => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Projects to import"]'), 'the import box');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, '[{"name":"Empty"}]');
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click(byRole('button', 'Preview')!);
+    const preview = await until(() => labelled<HTMLElement>('Import preview'), 'the preview');
+    expect(preview.querySelector('[role="alert"]')?.textContent).toContain('no copy-paste points');
+    const append = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Append'))!;
+    expect(append.disabled).toBe(true);
   });
 });

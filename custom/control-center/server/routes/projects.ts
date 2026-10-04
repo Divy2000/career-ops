@@ -102,7 +102,6 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const l = await lib();
     let entries: Array<{ title: string; block: string }>;
     let warnings: string[];
-    let errors: string[] = [];
     if (body.data.format === 'json') {
       let data: unknown;
       try {
@@ -118,15 +117,21 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
         return reply.code(422).send({ error: (err as Error).message });
       }
     } else {
-      const check = l.validateLibrary(body.data.text);
-      errors = check.errors;
-      warnings = check.warnings;
+      warnings = l.validateLibrary(body.data.text).warnings;
       entries = l.parseLibrary(body.data.text).entries.map((e) => ({ title: e.title, block: body.data.text.slice(e.start, e.end) }));
     }
-    const have = new Set(l.parseLibrary(readUserFile(cfg.dataRoot, 'articleDigest').text).entries.map((e) => l.titleKey(e.title)));
+    const current = readUserFile(cfg.dataRoot, 'articleDigest').text;
+    const have = new Set(l.parseLibrary(current).entries.map((e) => l.titleKey(e.title)));
     const fresh = entries.filter((e) => !have.has(l.titleKey(e.title)));
+    const markdown = fresh.length ? `${fresh.map((e) => e.block).join('\n\n---\n\n')}\n` : '';
+    // The preview's own errors carry its line numbers; the merged check catches what only the append would break.
+    let errors = markdown ? l.validateLibrary(markdown).errors : [];
+    if (markdown && errors.length === 0) {
+      const merged = l.validateLibrary(l.appendBlock(current, markdown));
+      if (!merged.ok) errors = merged.errors.map((e) => `after the append, article-digest.md: ${e}`);
+    }
     return {
-      markdown: fresh.length ? `${fresh.map((e) => e.block).join('\n\n---\n\n')}\n` : '',
+      markdown,
       entries: entries.map((e) => ({ title: e.title })),
       duplicates: entries.filter((e) => have.has(l.titleKey(e.title))).map((e) => e.title),
       warnings,

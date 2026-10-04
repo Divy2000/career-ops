@@ -155,6 +155,27 @@ describe('POST /api/projects/validate and /convert', () => {
     expect(read()).toBe(text);
   });
 
+  it('reports the errors the merged library would have, for an entry with no bullets or names repeated in the import', async () => {
+    const empty = await send('POST', '/api/projects/convert', { format: 'json', text: '[{"name":"Empty","highlights":[]}]' });
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json().errors.join('\n')).toMatch(/"Empty".*no copy-paste points/);
+    const twice = await send('POST', '/api/projects/convert', { format: 'json', text: JSON.stringify([{ name: 'Kite Tracker', description: 'One.' }, { name: 'kite tracker', description: 'Two.' }]) });
+    expect(twice.json().errors.join('\n')).toMatch(/duplicate/);
+    const md = await send('POST', '/api/projects/convert', { format: 'markdown', text: '## Kite Tracker\n- One.\n\n## Kite  Tracker\n- Two.\n' });
+    expect(md.json().errors.join('\n')).toMatch(/duplicate/);
+    // What /convert calls clean, /append accepts.
+    const clean = await send('POST', '/api/projects/convert', { format: 'json', text: JSON.stringify([{ name: 'Kite Tracker', description: 'One.' }]) });
+    expect(clean.json().errors).toEqual([]);
+    const before = await current();
+    expect((await send('POST', '/api/projects/append', { markdown: clean.json().markdown }, before.etag)).statusCode).toBe(200);
+  });
+
+  it('reports errors only the append would cause, against the current library', async () => {
+    fs.writeFileSync(file(), '## Broken\nTags: go\n');
+    const res = await send('POST', '/api/projects/convert', { format: 'json', text: JSON.stringify([{ name: 'Kite Tracker', description: 'One.' }]) });
+    expect(res.json().errors.join('\n')).toMatch(/after the append, article-digest\.md: .*"Broken"/);
+  });
+
   it('converts pasted library markdown and gives 422 for JSON that is not a projects list', async () => {
     const md = await send('POST', '/api/projects/convert', { format: 'markdown', text: '## Chess Engine\n- Wrote it.\n' });
     expect(md.statusCode).toBe(200);
