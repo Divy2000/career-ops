@@ -20,18 +20,24 @@ done
 case "$JOBS" in daily | all) ;; *) echo "error: --jobs must be daily or all (got $JOBS)" >&2; exit 2 ;; esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENTS="$HOME/Library/LaunchAgents"
-# The data root, resolved exactly as the jobs resolve it (CAREER_OPS_ROOT, else the .career-ops-data marker, else the checkout),
-# and written into each plist so launchd runs see the same data this shell sees.
+# The data root, resolved exactly as the jobs resolve it (CAREER_OPS_ROOT, else the .career-ops-data marker, else the checkout).
+# It fixes the launchd log paths now. It is written into the plist only when it came from the environment, which launchd
+# would not otherwise see; a marker is read by the job itself at run time, so changing the marker later still works.
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 mkdir -p "$AGENTS" "$DATA/data/immigration/logs"
 if [ "$JOBS" = all ]; then mkdir -p "$DATA/data/upstream-sync"; fi
+trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
+ENV_ROOT=0
+if [ -n "$(trim "${CAREER_OPS_ROOT:-}")" ] || [ -n "$(trim "${CAREER_OPS_DATA_DIR:-}")" ]; then ENV_ROOT=1; fi
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd="" xdata xroot
+  local wd="" envxml="" xdata xroot
   xdata="$(xml_escape "$DATA")"
   xroot="$(xml_escape "$ROOT")"
+  if [ "$ENV_ROOT" = 1 ]; then envxml="<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>$xdata</string></dict>"; fi
   [ -n "$weekday" ] && wd="<key>Weekday</key><integer>$weekday</integer>"
   cat > "$AGENTS/$label.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -42,7 +48,7 @@ write_plist() { # label script hour minute weekday(or empty) logdir
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$xroot/$script</string></array>
   <key>WorkingDirectory</key><string>$xroot</string>
-  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>$xdata</string></dict>
+  $envxml
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>$hour</integer><key>Minute</key><integer>$minute</integer>$wd</dict>
   <key>StandardOutPath</key><string>$xdata/$logdir/launchd.out.log</string>
@@ -62,5 +68,5 @@ if [ "$JOBS" = all ]; then
 elif [ -f "$AGENTS/com.career-ops.upstream-sync.plist" ]; then
   # The maintainer reruns this script; an installed sync job is theirs, so it is left alone.
   echo "note: the weekly sync job (com.career-ops.upstream-sync) is still installed; --jobs daily does not touch it."
-  echo "      To remove it: launchctl bootout gui/$(id -u)/com.career-ops.upstream-sync; rm '$AGENTS/com.career-ops.upstream-sync.plist'"
+  echo "      To remove it: launchctl bootout gui/$(id -u)/com.career-ops.upstream-sync; rm $(shell_quote "$AGENTS/com.career-ops.upstream-sync.plist")"
 fi
