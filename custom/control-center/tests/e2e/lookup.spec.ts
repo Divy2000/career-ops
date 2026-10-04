@@ -63,6 +63,19 @@ test.describe('Sponsorship > Lookup', () => {
     await expect(page.getByText('sponsor: strong')).toBeVisible();
   });
 
+  test('opening a search result moves the typed name to that entity, so Look up does not resubmit the old query', async ({ page }) => {
+    await page.goto('/sponsorship?tab=lookup');
+    await page.getByLabel('Company name').fill('JPMorgan');
+    await page.getByRole('button', { name: 'Search names' }).click();
+    await expect(page.getByRole('heading', { name: '2 entities match "JPMorgan"' })).toBeVisible();
+    await page.getByRole('link', { name: 'JPMorgan Chase & Co.' }).click();
+    await expect(page.getByRole('heading', { name: 'JPMorgan Chase & Co.', level: 2 })).toBeVisible();
+    await expect(page.getByLabel('Company name')).toHaveValue('JPMorgan Chase & Co.');
+    await page.getByRole('button', { name: 'Look up' }).click();
+    await expect(page).toHaveURL(/q=JPMorgan(\+|%20)Chase(\+|%20)(%26|&)(\+|%20)Co\./);
+    await expect(page.getByRole('heading', { name: 'JPMorgan Chase & Co.', level: 2 })).toBeVisible();
+  });
+
   test('not found offers a name search; an unknown name still shows no fake data', async ({ page }) => {
     await page.goto('/sponsorship?tab=lookup&q=Zzz%20Nonexistent%20Holdings');
     await expect(page.getByText('No DOL sponsor record for "Zzz Nonexistent Holdings".')).toBeVisible();

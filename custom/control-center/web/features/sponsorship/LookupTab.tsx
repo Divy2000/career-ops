@@ -314,6 +314,12 @@ export function LookupTab() {
   const navigate = useNavigate({ from: '/sponsorship' });
   const [draft, setDraft] = useState(q ?? '');
   const [error, setError] = useState<string | null>(null);
+  const [seenQ, setSeenQ] = useState(q);
+  if (q !== seenQ) {
+    setSeenQ(q);
+    setDraft(q ?? '');
+    setError(null);
+  }
   const submit = (next: 'lookup' | 'search') => {
     const parsed = parseCompanyQuery(draft);
     if (!parsed.ok) {
