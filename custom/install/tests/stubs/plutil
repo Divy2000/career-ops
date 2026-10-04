@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "plutil $*" >> "$STUB_LOG"
+exit 0

@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "pdftotext $*" >> "$STUB_LOG"
+exit 0

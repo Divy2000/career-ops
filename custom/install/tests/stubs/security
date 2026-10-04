@@ -1,0 +1,14 @@
+#!/bin/bash
+# Test stub: the real Keychain is never touched. Presence is the file $STUB_KEYCHAIN.
+echo "security $*" >> "$STUB_LOG"
+case "${1:-}" in
+  find-generic-password)
+    [ -f "$STUB_KEYCHAIN" ] || exit 44
+    case " $* " in *" -w "*) echo "FAKE-SECRET-123" ;; esac
+    ;;
+  add-generic-password)
+    cat >/dev/null 2>&1 || true
+    : > "$STUB_KEYCHAIN"
+    ;;
+esac
+exit 0
