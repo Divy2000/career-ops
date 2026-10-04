@@ -69,6 +69,78 @@ const DEMO_SRT = '1\n00:00:00,100 --> 00:00:00,900\nHello, this is the first cue
 const DEMO_SCRIPT = '# Demo tour script\n\n## 1. Intro [intro]\n\n<!-- title card -->\nWelcome to the demo. The shortlist lives on Today.\n\n## 2. Middle [middle]\n\nThe tracker holds every application.\n\nFollow-ups keep the cadence.\n';
 
 /**
+ * A small valid animated GIF (every frame one flat colour from a 4 colour palette), built byte by byte so no binary is committed.
+ * The LZW stream emits a clear code every second pixel, which keeps the code size at 3 bits for any decoder.
+ */
+export function tinyGif(frameColours: number[], width = 32, height = 18): Buffer {
+  const palette = [0x8b, 0x9d, 0xff, 0x3e, 0xcf, 0x8e, 0xf5, 0xb9, 0x4a, 0x5a, 0xb8, 0xf0];
+  const parts: number[][] = [
+    [...Buffer.from('GIF89a'), width & 255, width >> 8, height & 255, height >> 8, 0x81, 0, 0, ...palette],
+    [0x21, 0xff, 0x0b, ...Buffer.from('NETSCAPE2.0'), 0x03, 0x01, 0, 0, 0],
+  ];
+  for (const colour of frameColours) {
+    const codes: number[] = [];
+    for (let i = 0; i < width * height; i++) {
+      if (i % 2 === 0) codes.push(4);
+      codes.push(colour);
+    }
+    codes.push(5);
+    const bytes: number[] = [];
+    let bits = 0;
+    let have = 0;
+    for (const code of codes) {
+      bits |= code << have;
+      have += 3;
+      while (have >= 8) {
+        bytes.push(bits & 255);
+        bits >>= 8;
+        have -= 8;
+      }
+    }
+    if (have > 0) bytes.push(bits & 255);
+    const blocks: number[] = [];
+    for (let i = 0; i < bytes.length; i += 255) blocks.push(Math.min(255, bytes.length - i), ...bytes.slice(i, i + 255));
+    parts.push([0x21, 0xf9, 0x04, 0x04, 25, 0, 0, 0], [0x2c, 0, 0, 0, 0, width & 255, width >> 8, height & 255, height >> 8, 0, 2, ...blocks, 0]);
+  }
+  parts.push([0x3b]);
+  return Buffer.from(parts.flat());
+}
+
+const DEMO_GUIDE = {
+  sections: [
+    {
+      id: 'today',
+      title: 'Today',
+      summary: 'The daily shortlist, ranked, with the one next action.',
+      route: '/today',
+      gif: 'today.gif',
+      poster: 'poster.jpg',
+      steps: ['Open Today to see the ranked shortlist.', 'Pick a row to open its report.'],
+      tips: ['Rows refresh whenever the scan finishes.'],
+      chapter: 0,
+    },
+    {
+      id: 'tracker',
+      title: 'Tracker',
+      summary: 'Every application in one table, filterable by status.',
+      route: '/tracker',
+      gif: 'tracker.gif',
+      steps: ['Filter by status.', 'Open a row for its timeline.', 'Change a status from the action bar.'],
+      chapter: 1,
+    },
+    {
+      id: 'followups',
+      title: 'Follow-ups',
+      summary: 'Who to nudge next, and when.',
+      route: '/followups',
+      gif: 'followups.gif',
+      steps: ['Log a follow-up.'],
+      tips: ['Cadence comes from your profile.', 'Overdue ones sort first.'],
+    },
+  ],
+};
+
+/**
  * A tutorial folder like the ones the Tutorials page reads (plus one broken folder, which must show up as a warning).
  * `long` swaps in a title, description and chapter names of real-world length for the layout checks.
  * `padding` adds a large sparse .mp4 that no manifest names, for tests that abort a long download.
@@ -81,6 +153,10 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
   writeClip(path.join(demo, 'poster.jpg'), ['-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=1:duration=1', '-frames:v', '1', '-q:v', '5'], 'poster.jpg');
   fs.writeFileSync(path.join(demo, 'demo-tour.srt'), DEMO_SRT);
   fs.writeFileSync(path.join(demo, 'script.md'), DEMO_SCRIPT);
+  fs.writeFileSync(path.join(demo, 'guide.json'), JSON.stringify(DEMO_GUIDE));
+  fs.writeFileSync(path.join(demo, 'today.gif'), tinyGif([0, 1]));
+  fs.writeFileSync(path.join(demo, 'tracker.gif'), tinyGif([1, 2]));
+  fs.writeFileSync(path.join(demo, 'followups.gif'), tinyGif([2, 3]));
   const longTitle = 'Control Center end to end: from the first launch and login token to sponsorship intelligence, insights, scheduled jobs and Dev Chat';
   const chapters = opts.long
     ? [
@@ -99,6 +175,7 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
       subtitles: 'demo-tour.srt',
       poster: 'poster.jpg',
       transcript: 'script.md',
+      guide: 'guide.json',
       chapters,
     }),
   );

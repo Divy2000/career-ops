@@ -131,13 +131,38 @@ Tutorials are user data: each is a folder `data/control-center/tutorials/<id>/` 
   "subtitles": "tour.vtt",
   "poster": "poster.jpg",
   "transcript": "script.md",
+  "guide": "guide.json",
   "chapters": [{ "title": "Intro", "start": 0 }, { "title": "Launching", "start": 130.2 }]
 }
 ```
 
 `video` is required (.mp4); `subtitles` is `.vtt` (served as-is) or `.srt` (converted to WebVTT on the fly for the `<track>`), `poster` is `.jpg`, `.jpeg` or `.png` (the video poster and the list thumbnail), `transcript` is `.md`, and `chapters` are `{ title, start }` with `start` in seconds. Every file is a plain name inside the folder. `GET /api/tutorials` validates each manifest with zod and lists the valid ones; an invalid folder is skipped with a visible warning on the page (bad JSON, missing video, path in a file name, id different from the folder). A missing optional file is dropped with a warning on that tutorial.
 
-`GET /api/tutorials/:id/media/:file` streams one file with HTTP Range support (206, `Accept-Ranges`, `Content-Range`, 416 for an unsatisfiable range) and the same session cookie as every other route. Only `.mp4`, `.vtt`, `.srt`, `.md`, `.jpg`, `.jpeg` and `.png` are served, `file` must be a plain name, and the real path (after symlinks) must stay inside that tutorial's own folder, which in turn must stay inside the tutorials folder, so `..`, absolute paths and symlinks that point out are refused.
+`guide` (optional, `.json`) adds a **Quick guide** tab next to **Video** for fast review of every feature. `guide.json`:
+
+```json
+{
+  "sections": [
+    {
+      "id": "today",
+      "title": "Today",
+      "summary": "One or two sentences.",
+      "route": "/today",
+      "gif": "today.gif",
+      "poster": "today.jpg",
+      "steps": ["Open Today.", "Pick a row."],
+      "tips": ["Optional hints."],
+      "chapter": 2
+    }
+  ]
+}
+```
+
+`sections` has 1 to 60 entries. Per section: `id` (unique, 1 to 64 letters, digits, `-` or `_`), `title` (up to 120 characters), `summary` (up to 600), `gif` (plain file name ending `.gif` or `.webp`), `steps` (1 to 12 strings, up to 500 characters each) are required; `route` (an app path such as `/tracker?status=Applied`: one leading `/`, no scheme, `//`, backslash, spaces or `..`), `poster` (`.jpg`, `.jpeg` or `.png`), `tips` (up to 6 strings) and `chapter` (0-based index into the tutorial's chapters, which must exist) are optional. The guide is all or nothing: if `guide.json` is missing, too large (over 1 MB), not valid JSON, fails validation or names a file that is missing or outside the folder, the tutorial still lists, the Quick guide tab is hidden and a warning naming the problem shows on the tutorial. `GET /api/tutorials` returns the parsed guide as `guide` (`null` when absent or invalid) with `gif` and `poster` as media urls.
+
+In the Quick guide (`/tutorials?t=<id>&view=guide&section=<section id>`, so every state is a shareable link and back and forward work): a section list with a search box (title, summary, steps), the animation (click to pause on the poster, or on the current frame when there is no poster; with reduced motion it starts paused behind a play button), numbered steps, tips, **Open this page** (goes to `route` inside the app), **Watch this part** (switches to Video at the start of `chapter`), **Mark reviewed** with an "N of M reviewed" bar and Reset (kept in this browser's localStorage; the guide works when storage is blocked), and Previous and Next. `j` and `k` or Up and Down move between sections (not while typing in a field). On a phone the list becomes a select above the content.
+
+`GET /api/tutorials/:id/media/:file` streams one file with HTTP Range support (206, `Accept-Ranges`, `Content-Range`, 416 for an unsatisfiable range) and the same session cookie as every other route. Only `.mp4`, `.vtt`, `.srt`, `.md`, `.jpg`, `.jpeg`, `.png`, `.gif` and `.webp` are served, `file` must be a plain name, and the real path (after symlinks) must stay inside that tutorial's own folder, which in turn must stay inside the tutorials folder, so `..`, absolute paths and symlinks that point out are refused.
 
 Player keys (not while typing in a field): Space or `k` play/pause, `j` back 10 s, `l` forward 10 s, `c` captions, Up and Down previous and next chapter. Clicking a chapter seeks to it; the chapter that is playing is highlighted. The transcript is collapsible and searchable (rendered with the sanitizing markdown renderer, authoring comments hidden). Captions default to on and the choice is remembered in the browser.
 
@@ -147,7 +172,7 @@ To install a recording folder (or any folder that already has a `tutorial.json`)
 node custom/control-center/scripts/install-tutorial.mjs <source-folder> [--data-root <dir>] [--id <id>] [--title <text>] [--description <text>] [--video <file>] [--force] [--dry-run]
 ```
 
-With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[{ number, id, title, start, duration }]`), the single `.mp4` at the root, a `.vtt` (preferred) or `.srt`, an optional `poster.jpg` and `tutorial/script.md` (installed as `script.md`). With a `tutorial.json` it validates it and copies it unchanged (so `--id`, `--title`, `--description` and `--video` are refused). Only `tutorial.json` and the files it names are copied, into a staging folder that replaces the destination in one rename; an installed tutorial is replaced only with `--force`, and `--dry-run` writes nothing. The data root defaults to `CC_DATA_ROOT`, then the career-ops data root. Example for the recording folder: `node custom/control-center/scripts/install-tutorial.mjs ~/Desktop/Divy/career-ops-tutorial --id control-center-tour --title "career-ops Control Center tour" --description "A narrated walk through every page."`.
+With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[{ number, id, title, start, duration }]`), the single `.mp4` at the root, a `.vtt` (preferred) or `.srt`, an optional `poster.jpg`, `tutorial/script.md` (installed as `script.md`) and an optional `guide/guide.json` with the gifs and posters it names next to it in `guide/` (the manifest then gets `"guide": "guide.json"`). With a `tutorial.json` it validates it and copies it unchanged (so `--id`, `--title`, `--description` and `--video` are refused). A guide is validated like the server does (schema, every named file present, `chapter` within the chapters) before anything is copied, and two different source files that would land on the same name are refused. Only `tutorial.json`, the files it names and, for a guide, the files `guide.json` names are copied, into a staging folder that replaces the destination in one rename; an installed tutorial is replaced only with `--force`, and `--dry-run` writes nothing. The data root defaults to `CC_DATA_ROOT`, then the career-ops data root. Example for the recording folder: `node custom/control-center/scripts/install-tutorial.mjs ~/Desktop/Divy/career-ops-tutorial --id control-center-tour --title "career-ops Control Center tour" --description "A narrated walk through every page."`.
 
 ## 12. Known limitations
 
