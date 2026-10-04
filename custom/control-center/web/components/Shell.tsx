@@ -1,6 +1,7 @@
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
+import { Menu } from 'lucide-react';
 import { NAV_GROUPS } from '../nav';
 import { apiGet } from '../lib/api';
 import { afterFocusSettles, isRendered } from '../lib/focus';
@@ -9,6 +10,7 @@ import { useTheme } from '../lib/theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AskDrawer, useAskHotkey } from './AskDrawer';
 import { CommandPalette } from './CommandPalette';
+import { ThemeSwitcher } from './ThemeSwitcher';
 import { ConfirmProvider } from './ConfirmDialog';
 import { UsageMeter } from '../features/settings/UsageMeter';
 import { useReloadStatus } from '../features/dev/DevChatPage';
@@ -254,7 +256,8 @@ export function Shell() {
         <div className="shell__scrim" onClick={closeNav} aria-hidden="true" />
         <header className="shell__top">
           <button ref={menuRef} type="button" className="menu-toggle" onClick={() => setNavOpenOn(navOpen ? null : pathname)} aria-expanded={navOpen} aria-controls="primary-nav">
-            Menu
+            <Menu size={18} aria-hidden="true" />
+            <span className="sr-only">Menu</span>
           </button>
           <button type="button" className="palette-trigger" onClick={togglePalette} aria-label="Open command palette" title="Command palette (Cmd+K)">
             <span className="palette-trigger__long">Search or run</span>
@@ -265,6 +268,7 @@ export function Shell() {
           <DailyJobChip />
           <ActivityChip />
           <HealthChip />
+          <ThemeSwitcher />
           <button type="button" onClick={toggleAsk} aria-expanded={ask} aria-label="Open Ask drawer" title="Ask the advisor (Cmd+J)">
             Ask
           </button>

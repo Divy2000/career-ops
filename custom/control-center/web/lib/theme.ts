@@ -123,8 +123,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return createElement(Fragment, null, children);
 }
 
-export function useTheme(): ThemeState & { setMode: (mode: ThemeMode) => void } {
+/** `origin` is where the change was asked for (a control or a point); the reveal animation grows from there. */
+export function useTheme(): ThemeState & { setMode: (mode: ThemeMode, origin?: Element) => void } {
   const snapshot = useSyncExternalStore(subscribeTheme, getThemeState, getThemeState);
-  const setMode = useCallback((mode: ThemeMode) => setThemeMode(mode), []);
+  const setMode = useCallback((mode: ThemeMode, _origin?: Element) => setThemeMode(mode), []);
   return { mode: snapshot.mode, resolved: snapshot.resolved, setMode };
 }

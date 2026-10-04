@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { apiGet, apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { DataState } from '../../components/ui';
+import { AppearanceSetting } from '../../components/AppearanceSetting';
 import type { AppSettings, AppSettingsRead } from '@shared/api';
 
 export const useAppSettings = () => useQuery({ queryKey: ['system', 'settings'], queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
@@ -44,6 +45,7 @@ export function AppTab() {
                 {s.problem} Defaults are in effect until the next save.
               </p>
             )}
+            <AppearanceSetting />
             <div className="fields__row">
               <label className="fields__label" htmlFor="setting-logos">
                 Company logos

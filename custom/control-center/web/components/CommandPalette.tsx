@@ -11,6 +11,8 @@ import { startSession } from '../lib/sessions';
 import { targetFor } from '../features/sessions/SessionsPage';
 import { useConfirm } from './ConfirmDialog';
 import { CostPill } from './ActionBar';
+import { THEME_OPTIONS } from './ThemeSwitcher';
+import { THEME_MODES, useTheme } from '../lib/theme';
 import type { ActionMeta, ModePolicy } from '@shared/api';
 
 interface JsonProp {
@@ -186,6 +188,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const modes = useQuery({ queryKey: ['modes'], queryFn: () => apiGet<ModePolicy[]>('/api/modes'), staleTime: 60_000, enabled: open });
   const confirm = useConfirm();
   const { run } = useRunAction();
+  const { setMode } = useTheme();
   const [launch, setLaunch] = useState<string | null>(null);
   const [withParams, setWithParams] = useState<ActionMeta | null>(null);
   const go = (to: string) => {
@@ -218,6 +221,20 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             <Command.Item value="evaluate url quick evaluate" onSelect={() => go('/')}>
               Evaluate a URL (Today)
             </Command.Item>
+          </Command.Group>
+          <Command.Group heading="Appearance">
+            {THEME_MODES.map((m) => (
+              <Command.Item
+                key={m}
+                value={`Theme: ${THEME_OPTIONS[m].label} appearance`}
+                onSelect={() => {
+                  onOpenChange(false);
+                  setMode(m);
+                }}
+              >
+                Theme: {THEME_OPTIONS[m].label} <span className="faint small">{THEME_OPTIONS[m].hint}</span>
+              </Command.Item>
+            ))}
           </Command.Group>
           <Command.Group heading="Actions">
             {(actions.data ?? []).map((a) => (

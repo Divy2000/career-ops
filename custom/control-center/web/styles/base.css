@@ -172,6 +172,11 @@ input[type='checkbox'] {
 .shell__scrim {
   display: none;
 }
+.menu-toggle {
+  width: var(--target-min);
+  padding: 0;
+  justify-content: center;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -351,6 +356,7 @@ input[type='checkbox'] {
   color: var(--text-muted);
   font-size: var(--fs-12);
   white-space: nowrap;
+  text-decoration: none;
 }
 .chip--neutral {
   color: var(--text-muted);
