@@ -155,17 +155,24 @@ export function installTutorial(opts) {
 
   fs.mkdirSync(tutorialsDir, { recursive: true });
   const staging = path.join(tutorialsDir, `.${manifest.id}.tmp-${process.pid}`);
+  const previous = fs.existsSync(dest) ? path.join(tutorialsDir, `.${manifest.id}.old-${process.pid}-${Date.now()}`) : null;
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging);
   try {
     for (const c of copies) fs.copyFileSync(c.from, path.join(staging, c.to));
     fs.writeFileSync(path.join(staging, 'tutorial.json'), manifestText);
-    fs.rmSync(dest, { recursive: true, force: true });
-    fs.renameSync(staging, dest);
+    if (previous) fs.renameSync(dest, previous);
+    try {
+      fs.renameSync(staging, dest);
+    } catch (err) {
+      if (previous) fs.renameSync(previous, dest);
+      throw err;
+    }
   } catch (err) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw err;
   }
+  if (previous) fs.rmSync(previous, { recursive: true, force: true });
   return result;
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,7 +37,10 @@ beforeEach(() => {
   dataRoot = path.join(work, 'data-root');
   fs.mkdirSync(dataRoot, { recursive: true });
 });
-afterEach(() => fs.rmSync(work, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  fs.rmSync(work, { recursive: true, force: true });
+});
 
 describe('installTutorial from a recording folder (toc.json, srt, script.md)', () => {
   it('writes tutorial.json with the chapters and copies only the files it names', () => {
@@ -165,6 +168,21 @@ describe('installTutorial safety', () => {
     installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'Second', force: true });
     expect(JSON.parse(fs.readFileSync(path.join(dest('my-tour'), 'tutorial.json'), 'utf8')).title).toBe('Second');
     expect(fs.readdirSync(path.join(dataRoot, 'data', 'control-center', 'tutorials')).filter((n) => n.startsWith('.'))).toEqual([]);
+  });
+
+  it('keeps the installed tutorial intact when promoting the new one fails with force', () => {
+    recordingFolder();
+    installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'First' });
+    const tutorialsDir = path.dirname(dest('my-tour'));
+    const realRename = fs.renameSync;
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (to === dest('my-tour') && path.basename(String(from)).includes('.tmp-')) throw new Error('disk exploded');
+      return realRename(from, to);
+    });
+    expect(() => installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'Second', force: true })).toThrow(/disk exploded/);
+    expect(JSON.parse(fs.readFileSync(path.join(dest('my-tour'), 'tutorial.json'), 'utf8')).title).toBe('First');
+    expect(fs.readFileSync(path.join(dest('my-tour'), 'my-recording.mp4'), 'utf8')).toBe('VIDEO-BYTES');
+    expect(fs.readdirSync(tutorialsDir)).toEqual(['my-tour']);
   });
 
   it('a dry run reports the plan and writes nothing', () => {
