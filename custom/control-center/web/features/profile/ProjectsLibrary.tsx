@@ -1,7 +1,7 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
 // parser session for PDF/DOCX) and a rank preview against a pasted JD.
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -271,16 +271,27 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const [preview, setPreview] = useState<ConvertResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
-  const onEnvelope = useCallback((kind: string, payload: unknown) => {
-    if (kind !== 'projects') return;
-    setFormat('markdown');
-    setText((payload as { markdown: string }).markdown);
-    setPreview(null);
-  }, []);
+  // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
+  const currentUpload = useRef<string | null>(null);
+  const showUpload = (p: string | null) => {
+    currentUpload.current = p;
+    setUploadPath(p);
+  };
+  const envelopeFor = useCallback(
+    (forPath: string) => (kind: string, payload: unknown) => {
+      if (kind !== 'projects' || currentUpload.current !== forPath) return;
+      setFormat('markdown');
+      setText((payload as { markdown: string }).markdown);
+      setPreview(null);
+    },
+    [],
+  );
+  const onUploadEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
 
   const onFile = async (file: File) => {
     setError(null);
     setPreview(null);
+    showUpload(null);
     if (/\.json$/i.test(file.name)) {
       setFormat('json');
       setText(await file.text());
@@ -297,7 +308,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       setError(`Upload failed (${res.status}). JSON, Markdown, PDF or DOCX only.`);
       return;
     }
-    setUploadPath(((await res.json()) as { path: string }).path);
+    showUpload(((await res.json()) as { path: string }).path);
   };
 
   const convert = async () => {
@@ -340,7 +351,16 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
         <input type="file" aria-label="Projects file" accept=".json,.md,.markdown,.txt,.pdf,.docx" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
       </div>
       {uploadPath && (
-        <SessionPanel mode="projects-ingest" title="Parse the uploaded document" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the document at ${uploadPath} and emit its projects in the projects envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />
+        <SessionPanel
+          key={uploadPath}
+          mode="projects-ingest"
+          title="Parse the uploaded document"
+          target={{ type: 'text', value: uploadPath }}
+          initialPrompt={`Read the document at ${uploadPath} and emit its projects in the projects envelope.`}
+          autoStart
+          onEnvelope={onUploadEnvelope}
+          startLabel="Parse"
+        />
       )}
       <textarea aria-label="Projects to import" className="mono editor" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreview(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
       <div className="row gap">
