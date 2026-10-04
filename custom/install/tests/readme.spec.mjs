@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,6 +64,9 @@ function existsExactCase(rel) {
   }
   return existsSync(dir);
 }
+
+// Anchored to the checkout by an absolute path: the agent's working directory is not necessarily the checkout.
+const RESOLVER_ONE_LINER = `node --input-type=module -e "import(process.argv[1]).then((m) => console.log(m.getCareerOpsRoot()))" "<checkout>/path-resolver.mjs"`;
 
 function section(markdown, titlePattern) {
   const lines = markdown.split('\n');
@@ -469,7 +473,7 @@ test('ONBOARDING.md records the pre-existing set before Step 1, and pre-existing
 test('the pre-existing set is snapshotted as absolute paths under the effective data root, and installer-copied files count as pre-existing', () => {
   const rec = section(onboarding, /^#{2,3}\s+Before Step 1: record the pre-existing set$/);
   assert.match(rec, /effective data root/i);
-  assert.ok(rec.includes("import('./path-resolver.mjs').then((m) => console.log(m.getCareerOpsRoot()))") && onboarding.indexOf("import('./path-resolver.mjs').then((m) => console.log(m.getCareerOpsRoot()))") < onboarding.indexOf('## Before Step 1'), 'uses the same path-resolver one-liner as the rest of the doc');
+  assert.ok(rec.includes(RESOLVER_ONE_LINER) && onboarding.indexOf(RESOLVER_ONE_LINER) < onboarding.indexOf('## Before Step 1'), 'uses the same checkout-anchored path-resolver one-liner as the rest of the doc');
   assert.match(rec, /absolute paths/i);
   assert.match(rec, /resolve[^.]*data root[^.]*first|first[^.]*resolve[^.]*data root/i);
   assert.match(rec, /--resume/);
@@ -477,4 +481,40 @@ test('the pre-existing set is snapshotted as absolute paths under the effective 
   assert.match(rec, /before this session[^.]*pre-existing|pre-existing[^.]*before this session/i);
   assert.match(rec, /kept on decline/i);
   assert.match(rec, /delete them (by hand|manually)/i);
+});
+
+test('every path-resolver command in ONBOARDING.md is anchored to the checkout, never to the current directory', () => {
+  const commands = onboarding.match(/node[^`]*path-resolver\.mjs[^`]*/g) ?? [];
+  assert.ok(commands.length >= 3, `expected the one-liner in the intro, the pre-existing set step and the image row, found ${commands.length}`);
+  for (const cmd of commands) {
+    assert.ok(!cmd.includes("import('./path-resolver.mjs')"), `relative import breaks outside the checkout: ${cmd}`);
+    assert.match(cmd, /--input-type=module/, cmd);
+    assert.ok(cmd.includes('import(process.argv[1])') && cmd.includes('"<checkout>/path-resolver.mjs"'), `not anchored to <checkout>: ${cmd}`);
+  }
+  assert.match(onboarding, /`<checkout>`[^.\n]*absolute path/i, 'the doc says what <checkout> means');
+});
+
+test('the documented path-resolver commands print the data root when run from a directory outside the checkout', () => {
+  const tmp = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'readme-resolver-')));
+  const checkout = path.join(tmp, 'my checkout');
+  const elsewhere = path.join(tmp, 'elsewhere');
+  mkdirSync(checkout);
+  mkdirSync(elsewhere);
+  copyFileSync(path.join(ROOT, 'path-resolver.mjs'), path.join(checkout, 'path-resolver.mjs'));
+  const env = { ...process.env };
+  delete env.CAREER_OPS_ROOT;
+  delete env.CAREER_OPS_DATA_DIR;
+  const run = (command) => {
+    const r = spawnSync('bash', ['-c', command], { cwd: elsewhere, env, encoding: 'utf8' });
+    assert.equal(r.status, 0, `${command}\n${r.stderr}`);
+    return r.stdout.trim();
+  };
+  const anchored = (cmd) => cmd.replaceAll('<checkout>', checkout);
+
+  assert.equal(run(anchored(RESOLVER_ONE_LINER)), checkout);
+
+  const imageRow = onboarding.split('\n').find((l) => l.startsWith('| Images'));
+  const assignment = imageRow.match(/DATA="\$\(.*?path-resolver\.mjs"\)"/)?.[0];
+  assert.ok(assignment, 'the images row assigns DATA from the resolver');
+  assert.equal(run(`${anchored(assignment)}; printf %s "$DATA"`), checkout);
 });
