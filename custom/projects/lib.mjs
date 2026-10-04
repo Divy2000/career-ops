@@ -412,6 +412,9 @@ export function rankProjects(entries, { jdText, cvText = '' }) {
 }
 
 const DIFF_CONTEXT = 3;
+// Per side, after trimming the common prefix and suffix: bounds the LCS table
+// at about a million cells however long the two texts are.
+const DIFF_MAX_WORDS = 1000;
 
 // Word-level diff in git's plain word-diff style ([-old-]{+new+}), showing
 // changed words with a few words of context. null when the words are equal.
@@ -419,20 +422,33 @@ export function wordDiff(oldText, newText) {
   const words = (s) => String(s ?? '').replace(/\*\*/g, '').split(/\s+/).filter(Boolean);
   const a = words(oldText);
   const b = words(newText);
-  const lcs = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+  let x = a.slice(pre, a.length - suf);
+  let y = b.slice(pre, b.length - suf);
+  const truncated = x.length > DIFF_MAX_WORDS || y.length > DIFF_MAX_WORDS;
+  if (truncated) {
+    x = x.slice(0, DIFF_MAX_WORDS);
+    y = y.slice(0, DIFF_MAX_WORDS);
+  }
+  const w = y.length + 1;
+  const lcs = new Uint16Array((x.length + 1) * w);
+  for (let i = x.length - 1; i >= 0; i--) {
+    for (let j = y.length - 1; j >= 0; j--) {
+      lcs[i * w + j] = x[i] === y[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
     }
   }
-  const ops = [];
+  const ops = a.slice(0, pre).map((word) => ({ t: '=', w: word }));
   let i = 0;
   let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) { ops.push({ t: '=', w: a[i] }); i++; j++; }
-    else if (j < b.length && (i === a.length || lcs[i][j + 1] >= lcs[i + 1][j])) ops.push({ t: '+', w: b[j++] });
-    else ops.push({ t: '-', w: a[i++] });
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) { ops.push({ t: '=', w: x[i] }); i++; j++; }
+    else if (j < y.length && (i === x.length || lcs[i * w + j + 1] >= lcs[(i + 1) * w + j])) ops.push({ t: '+', w: y[j++] });
+    else ops.push({ t: '-', w: x[i++] });
   }
+  if (!truncated) for (const word of a.slice(a.length - suf)) ops.push({ t: '=', w: word });
   if (ops.every((o) => o.t === '=')) return null;
   // Group runs of changes so a replacement reads [-old words-]{+new words+}.
   const parts = [];
@@ -457,5 +473,6 @@ export function wordDiff(oldText, newText) {
     }
   });
   if (gap) out.push('...');
+  if (truncated) out.push(`(diff truncated: compared the first ${DIFF_MAX_WORDS} differing words of each text)`);
   return out.join(' ');
 }

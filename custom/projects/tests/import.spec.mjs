@@ -39,6 +39,25 @@ test('wordDiff marks changed words with a little context and returns null for eq
   assert.equal(wordDiff('alpha beta', 'alpha beta gamma'), 'alpha beta {+gamma+}');
 });
 
+test('given long texts differing in one word, when diffed, then the diff is exact and quick', () => {
+  const words = Array.from({ length: 20000 }, (_, i) => `w${i}`);
+  const changed = [...words];
+  changed[10000] = 'CHANGED';
+  const t0 = Date.now();
+  assert.equal(wordDiff(words.join(' '), changed.join(' ')), '... w9997 w9998 w9999 [-w10000-]{+CHANGED+} w10001 w10002 w10003 ...');
+  assert.ok(Date.now() - t0 < 1000);
+});
+
+test('given long texts with no words in common, when diffed, then the work is capped and the output says it was truncated', () => {
+  const a = Array.from({ length: 6000 }, (_, i) => `a${i}`).join(' ');
+  const b = Array.from({ length: 6000 }, (_, i) => `b${i}`).join(' ');
+  const t0 = Date.now();
+  const out = wordDiff(a, b);
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+  assert.match(out, /^\[-a0 a1 /);
+  assert.match(out, /\(diff truncated: compared the first \d+ differing words of each text\)$/);
+});
+
 test('findCvEntry finds a bold list item or a heading and returns its text without the title', () => {
   const cv = read('cv-sample.md');
   assert.equal(findCvEntry(cv, 'Graph Search Library').text, 'Implemented Dijkstra and A* search.');
