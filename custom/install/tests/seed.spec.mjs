@@ -217,3 +217,63 @@ test('cli.mjs same-path resolves symlinks in the deepest existing ancestor of a 
   assert.equal(run(CLI, ['same-path', path.join(d, 'link', 'new'), path.join(d, 'real', 'other')]).status, 1);
   assert.equal(run(CLI, ['same-path', path.join(d, 'link', 'a', '..', 'new'), path.join(d, 'real', 'new')]).status, 0);
 });
+
+const PROJECTS_LIB = path.join(HERE, '..', '..', 'projects', 'lib.mjs');
+const RULE_TEMPLATE = path.join(HERE, '..', 'templates', '_custom-projects.md');
+const CUSTOM_TEMPLATE = path.join(HERE, '..', 'templates', '_custom.md');
+
+test('projects-rule appends the shipped projects block to modes/_custom.md exactly once', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  assert.equal(seed(['projects-rule', '--data', data, '--template', RULE_TEMPLATE]).stdout.trim(), 'absent');
+  assert.equal(seed(['custom-template', '--data', data, '--template', CUSTOM_TEMPLATE]).stdout.trim(), 'created');
+  assert.equal(seed(['projects-rule', '--data', data, '--template', RULE_TEMPLATE]).stdout.trim(), 'added');
+  const file = path.join(data, 'modes', '_custom.md');
+  const text = fs.readFileSync(file, 'utf8');
+  const rule = fs.readFileSync(RULE_TEMPLATE, 'utf8').trimEnd();
+  assert.equal(text.split(rule).length - 1, 1, 'the block appears once, verbatim');
+  assert.ok(!text.includes('(none yet -- add yours above)\n\n## Custom Workflows'), 'the placeholder line was replaced');
+  assert.ok(text.indexOf(rule) > text.indexOf('## House Rules') && text.indexOf(rule) < text.indexOf('## Custom Workflows'));
+  assert.equal(seed(['projects-rule', '--data', data, '--template', RULE_TEMPLATE]).stdout.trim(), 'present');
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+});
+
+test('projects-check accepts a valid library or projects JSON and rejects an invalid one with exit 2', () => {
+  const d = tmp();
+  const good = put(path.join(d, 'lib.md'), '# Projects library\n\n## Kite Tracker -- https://example.org/kites\n- Tracked kites.\n');
+  const json = put(path.join(d, 'projects.json'), JSON.stringify([{ name: 'Kite Tracker', description: 'Tracked kites.', highlights: [] }]));
+  const bad = put(path.join(d, 'bad.md'), '## Empty\nTags: go\n');
+  const notList = put(path.join(d, 'bad.json'), '{"basics":{}}');
+  for (const f of [good, json]) {
+    const r = seed(['projects-check', '--lib', PROJECTS_LIB, '--file', f]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), 'ok\t1');
+  }
+  const r = seed(['projects-check', '--lib', PROJECTS_LIB, '--file', bad]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /"Empty".*no copy-paste points/);
+  assert.equal(seed(['projects-check', '--lib', PROJECTS_LIB, '--file', notList]).status, 2);
+});
+
+test('projects-seed copies the file to documents/projects and creates article-digest.md only when absent', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const json = put(path.join(d, 'src', 'projects.json'), JSON.stringify([{ name: 'Kite Tracker', url: 'https://example.org/kites', description: 'Tracked kites.', highlights: ['Plotted paths.'], keywords: ['python'] }]));
+  const r = seed(['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', json]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split('\n'), [`copied\tprojects\t${path.join(data, 'documents/projects/projects.json')}`, 'created']);
+  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), '# Projects library\n\n## Kite Tracker -- https://example.org/kites\nTags: python\n- Tracked kites.\n- Plotted paths.\n');
+  fs.writeFileSync(path.join(data, 'article-digest.md'), 'MINE\n');
+  const again = seed(['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', json]);
+  assert.equal(again.stdout.trim().split('\n').at(-1), 'exists');
+  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), 'MINE\n');
+});
+
+test('projects-seed writes a markdown library byte for byte', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const text = '# My projects\n\n## Kite Tracker\n\n**Hero metrics:** 40 kites\n\n**Proof points:**\n- Tracked kites.\n';
+  const lib = put(path.join(d, 'src', 'lib.md'), text);
+  assert.equal(seed(['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', lib]).status, 0);
+  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), text);
+});

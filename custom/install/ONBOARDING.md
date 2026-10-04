@@ -26,6 +26,7 @@ Draft mode is for a headless pass that has no Bash tool and no permission to tou
 - Never write a live file (`cv.md`, `config/profile.yml`, `modes/*`, `portals.yml`, `article-digest.md`, `data/*`).
 - You cannot ask the user anything. Every unknown goes into `questions.md`, one numbered question per line, each with the field it will fill. Draft each file from what the documents say and leave unknowns as the example's placeholder text wrapped in `TODO(question N)`.
 - Do not draft `data/blacklist.md` or the sponsorship rule; list them as questions.
+- Draft `article-digest.md` in the projects-library format of Step 4, and papers as `## Recent Achievements` entries in the drafted cv.md (or as questions when cv.md already exists).
 - Follow the same mapping rules below. Use the Read tool for documents (PDFs and images are readable); skip any format you cannot read and list it in `questions.md`.
 - Finish by writing `questions.md` last, then stop.
 
@@ -95,6 +96,7 @@ Ask everything that the documents did not settle in **one** message, and for wha
 6. **Model spend and language.** `spend_tier`: `economy`, `standard` (default) or `premium`. Output language for reports and documents (`language.output`, default `en`).
 7. **Blocklist.** Any company they never want to apply to? Suggest their current employer. It is opt-in; "no" is a normal answer.
 8. **Daily job.** Install the 8am daily job? (Its time can be changed later in the Control Center under Runs & Schedule.) It spends the user's Claude subscription usage.
+9. **Projects in the CV.** Only when the documents name more than three projects: which 2 or 3 stay in cv.md's Projects section? The rest live only in the projects library (`article-digest.md`), where tailoring picks per job. Propose the ones that best fit the target roles.
 
 Do not ask about anything the documents already answer. Do not ask the user to type their CV again.
 
@@ -102,7 +104,7 @@ Do not ask about anything the documents already answer. Do not ask the user to t
 
 Read the current contents of every target first. Write nothing yet; Step 5 shows everything.
 
-**`cv.md`.** Required. The installer may already have created it from the user's Markdown resume; if it exists, do not replace it (propose edits as a diff). If it is absent, build it as clean markdown with the sections Summary, Experience, Projects, Education, Skills, shaped like `examples/cv-example.md` (a title line, a contact block, then the sections). Use the source's facts and wording; never add.
+**`cv.md`.** Required. The installer may already have created it from the user's Markdown resume; if it exists, do not replace it (propose edits as a diff). If it is absent, build it as clean markdown with the sections Summary, Experience, Projects, Education, Recent Achievements (only when there are papers or awards), Skills, shaped like `examples/cv-example.md` (a title line, a contact block, then the sections). Use the source's facts and wording; never add. Projects holds only the 2 or 3 projects from question 9 (all of them when there are three or fewer). Research papers and publications go under `## Recent Achievements`, placed after Education, newest first, one line each with title, journal and year (awards go there too); never under Projects.
 
 **`config/profile.yml`.** Start from the structure of `config/profile.example.yml` and keep its comments. Fill:
 
@@ -119,7 +121,7 @@ Remove or comment out every example block you have no data for (the sample `cove
 
 **`modes/_brief.md`.** Fill every section of `modes/_brief.template.md` (Identity, Target Archetypes, Proof Points, Comp Strategy, Location Scoring, Hard DQ Criteria, Quick Scoring Guide, Soft Red Flags, Priority Override List). No `{placeholder}` may remain; the file is read on every triage, so keep it short (about 1.5 to 2K tokens).
 
-**`article-digest.md`.** One block per project document the user gave, shaped like `examples/article-digest-example.md`: a `## Project -- Title` heading, then `**Hero metrics:**`, `**Architecture:**`, `**Key decisions:**` and `**Proof points:**`. Facts only from the documents; omit a line you cannot support.
+**`article-digest.md`.** The projects library: every project the documents name (the resume's Projects section, `--docs` files, LinkedIn `Projects.csv`, a JSON Resume `projects` array), one block each: a `## Title -- link` heading, an optional `Tags: python, fastapi` line, then `- ` bullets, one copy-paste point each in the source's own words. Leave out ` -- link` when the source gives none, and the `Tags:` line when it names no tools; a `Dates:` line is optional. Give each project 1 to 6 bullets, facts only from the documents. A paper or publication that also reads like a project gets a `Kind: publication` line under its heading, so it is never offered as a project. A projects JSON (AutoJobApply or JSON Resume) converts deterministically: `node custom/projects/import.mjs documents/projects/<file>.json` prints the blocks (a dry run) and lists where each project's text differs from cv.md. Upstream digest blocks (`**Hero metrics:**`, `**Proof points:**`) are also accepted.
 
 **`portals.yml`.** Copy `templates/portals.example.yml` and edit it:
 
@@ -128,6 +130,8 @@ Remove or comment out every example block you have no data for (the sample `cove
 - Leave `tracked_companies` as shipped unless the user asks for changes.
 
 **`modes/_custom.md`.** The installer places a generic version. If `needs_sponsorship` is true and the file has no `### Sponsorship check` heading, append the exact content of `custom/install/templates/_custom-sponsorship.md` (it starts with `### Sponsorship check`) under `## House Rules`, in place of the `(none yet -- add yours above)` line only if that is the sole content there, and show it at the gate like any other change. Do not retype or paraphrase it; the file is the source. If the heading already exists, change nothing. If `needs_sponsorship` is false, add nothing.
+
+Then, on every install whatever the sponsorship answer, add the projects-library rule: the exact content of `custom/install/templates/_custom-projects.md` (it starts with `### Projects library`) under `## House Rules`, shown at the gate like any other change. After the yes, write it with `node custom/install/seed.mjs projects-rule --data <data-root> --template custom/install/templates/_custom-projects.md`, which inserts it only when the heading is absent (it prints `added` or `present`), so it is safe to run on every onboarding. Do not retype it.
 
 **`data/applications.md`.** Only if it does not exist. Exactly this skeleton:
 
@@ -178,6 +182,7 @@ After the yes, write exactly what was approved, to user-layer paths only.
    ```bash
    node validate-profile.mjs
    node validate-portals.mjs
+   node custom/projects/rank.mjs --check
    node doctor.mjs --json
    ```
 

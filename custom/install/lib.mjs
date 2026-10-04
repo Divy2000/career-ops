@@ -109,6 +109,36 @@ export function renderHeadlessPrompt(template, { draftDir, inputs }) {
 }
 
 /** `--flag value` pairs; the flags named in `listFlags` take every value up to the next `--flag`. Returns Map(flag -> string | string[]). */
+const PLACEHOLDER = '(none yet -- add yours above)';
+
+/**
+ * Add a shipped house-rule block (it starts with its own `### Title (...)` heading) to the
+ * `## House Rules` section of modes/_custom.md. Null when the heading is already there.
+ * It replaces the template's placeholder line when that is all the section holds, else it
+ * goes after the section's last line; every other byte stays.
+ */
+export function insertHouseRule(text, block) {
+  const body = block.replace(/\s+$/, '');
+  const title = body.split('\n')[0].replace(/\s*\(.*$/, '').trim();
+  const lines = text.split('\n');
+  if (lines.some((l) => l.trim() === title || l.startsWith(`${title} `) || l.startsWith(`${title}(`))) return null;
+  const start = lines.findIndex((l) => /^## House Rules\s*$/.test(l));
+  if (start === -1) return `${text.replace(/\s+$/, '')}\n\n## House Rules\n\n${body}\n`;
+  let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  if (end === -1) end = lines.length;
+  const section = lines.slice(start + 1, end).join('\n');
+  const content = section.replace(/<!--[\s\S]*?-->/g, '').split('\n').map((l) => l.trim()).filter((l) => l && l !== PLACEHOLDER);
+  const placeholder = lines.findIndex((l, i) => i > start && i < end && l.trim() === PLACEHOLDER);
+  if (content.length === 0 && placeholder !== -1) {
+    lines.splice(placeholder, 1, ...body.split('\n'));
+    return lines.join('\n');
+  }
+  let last = end - 1;
+  while (last > start && !lines[last].trim()) last--;
+  lines.splice(last + 1, 0, '', ...body.split('\n'));
+  return lines.join('\n');
+}
+
 export function parseFlags(argv, listFlags = []) {
   const out = new Map();
   for (let i = 0; i < argv.length; i++) {

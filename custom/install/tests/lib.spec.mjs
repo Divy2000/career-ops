@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
-  validateMarkdownInput, validateInputs, LIMITS,
+  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule,
 } from '../lib.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ci-lib-'));
@@ -186,4 +186,26 @@ test('validateInputs names the failing file and caps the doc count and total siz
 
 test('validateInputs passes with no inputs at all', () => {
   assert.deepEqual(validateInputs({}), { ok: true, errors: [], warnings: [] });
+});
+
+const RULE = '### Projects library (every item)\n\n- Pick from article-digest.md.\n';
+const TEMPLATE = '# Custom\n\n## House Rules\n\n<!-- comment\n     more -->\n\n(none yet -- add yours above)\n\n## Custom Workflows\n\nwork\n';
+
+test('insertHouseRule puts the rule in place of the "none yet" line when that is all the section holds', () => {
+  assert.equal(insertHouseRule(TEMPLATE, RULE), '# Custom\n\n## House Rules\n\n<!-- comment\n     more -->\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n\n## Custom Workflows\n\nwork\n');
+});
+
+test('insertHouseRule appends after the existing rules of the section and keeps them byte for byte', () => {
+  const mine = '# Custom\n\n## House Rules\n\n### Sponsorship check\n\n1. Check.\n\n## Custom Workflows\n';
+  assert.equal(insertHouseRule(mine, RULE), '# Custom\n\n## House Rules\n\n### Sponsorship check\n\n1. Check.\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n\n## Custom Workflows\n');
+});
+
+test('insertHouseRule is idempotent: a file that already has the heading is left alone (null)', () => {
+  const once = insertHouseRule(TEMPLATE, RULE);
+  assert.equal(insertHouseRule(once, RULE), null);
+  assert.equal(insertHouseRule('## House Rules\n\n### Projects library (edited by me)\n- mine\n', RULE), null);
+});
+
+test('insertHouseRule adds a House Rules section at the end when the file has none', () => {
+  assert.equal(insertHouseRule('# Custom\n\nnotes\n', RULE), '# Custom\n\nnotes\n\n## House Rules\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n');
 });

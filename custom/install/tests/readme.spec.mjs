@@ -518,3 +518,32 @@ test('the documented path-resolver commands print the data root when run from a 
   assert.ok(assignment, 'the images row assigns DATA from the resolver');
   assert.equal(run(`${anchored(assignment)}; printf %s "$DATA"`), checkout);
 });
+
+// ---------------------------------------------------------------- projects library (S10)
+
+test('ONBOARDING.md always adds the shipped projects-library rule with the idempotent helper, never a retyped copy', () => {
+  const custom = onboarding.split('**`modes/_custom.md`.**')[1].split('\n\n**')[0];
+  assert.ok(onboarding.includes('custom/install/templates/_custom-projects.md'));
+  assert.match(onboarding, /node custom\/install\/seed\.mjs projects-rule --data <data-root> --template custom\/install\/templates\/_custom-projects\.md/);
+  assert.match(custom, /whatever the sponsorship answer/i);
+  assert.equal(/^### Projects library/m.test(onboarding), false, 'ONBOARDING.md must not embed its own copy of the rule');
+});
+
+test('ONBOARDING.md maps project documents into the library format and papers into Recent Achievements', () => {
+  const step4 = section(onboarding, /^#{2,3}\s+Step 4\b/);
+  assert.match(step4, /## Title -- link/);
+  assert.match(step4, /Kind: publication/);
+  assert.match(step4, /## Recent Achievements/);
+  assert.match(step4, /Projects\.csv/);
+  assert.match(step4, /node custom\/projects\/import\.mjs/);
+});
+
+test('the questionnaire asks which 2 or 3 projects stay in cv.md, and Step 6 checks the library', () => {
+  assert.match(section(onboarding, /^#{2,3}\s+Step 3\b/), /which 2 or 3 .*cv\.md/i);
+  assert.match(section(onboarding, /^#{2,3}\s+Step 6\b/), /node custom\/projects\/rank\.mjs --check/);
+});
+
+test('the headless draft prompt asks for article-digest.md in the projects-library format', () => {
+  const prompt = readFileSync(path.join(ROOT, 'custom/install/onboard-headless-prompt.md'), 'utf8');
+  assert.match(prompt, /article-digest\.md in the projects-library format/);
+});

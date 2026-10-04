@@ -37,6 +37,8 @@ Options:
   --resume <file.md>        Your resume as Markdown (.md or .markdown); copied to documents/cv/, seeds cv.md when absent
   --docs <a.md> [b.md ...]  Project docs as Markdown; values run until the next --flag; copied to documents/projects/
   --replace-cv              Allow replacing an existing, different cv.md with --resume (the old one is backed up first)
+  --projects <file>         Your projects library (.md) or a projects JSON (AutoJobApply or JSON Resume); validated,
+                            copied to documents/projects/, creates article-digest.md when absent (never replaces it)
   --onboard <mode>          interactive | headless | none
                             default: interactive when a terminal and claude are available, else none (prints the command)
   --install-missing         Offer to brew install missing prerequisites (asks y/N each time, never with --yes)
@@ -64,6 +66,8 @@ NO_START=0
 NO_H1B=0
 RESUME=""
 DOCS=()
+PROJECTS=""
+PROJECTS_CHECKED=0
 REPLACE_CV=0
 ONBOARD_MODE=""
 INSTALL_MISSING=0
@@ -165,6 +169,7 @@ while [ "$#" -gt 0 ]; do
       continue
       ;;
     --replace-cv) REPLACE_CV=1 ;;
+    --projects) value_of "$@"; PROJECTS="$2"; shift ;;
     --onboard)
       value_of "$@"
       case "$2" in
@@ -189,6 +194,7 @@ else
   DIR="$HOME/career-ops"
 fi
 if [ -n "$DATA_ROOT_ARG" ]; then DATA_REQ="$(abspath "$DATA_ROOT_ARG")"; else DATA_REQ="$DIR"; fi
+if [ -n "$PROJECTS" ]; then PROJECTS="$(abspath "$PROJECTS")"; fi
 DATA="$DATA_REQ"
 QDIR="$(shell_quote "$DIR")" # for printed commands: the directory may contain spaces
 
@@ -282,17 +288,47 @@ validate_inputs() {
   VALIDATED=1
 }
 
+# The projects parser (custom/projects/lib.mjs): next to this script in a checkout, else in the
+# target checkout once it is cloned. A standalone copy of custom/install validates after the clone.
+projects_lib() {
+  local c
+  for c in "$SCRIPT_DIR/../projects/lib.mjs" "$DIR/custom/projects/lib.mjs"; do
+    if [ -f "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+
+check_projects() {
+  [ -n "$PROJECTS" ] || return 0
+  [ "$PROJECTS_CHECKED" = 1 ] && return 0
+  have node || return 0 # checked again once the prerequisites are in place
+  local lib rc=0
+  lib="$(projects_lib)" || return 0 # checked again once the checkout is in place
+  if [ ! -f "$PROJECTS" ]; then
+    printf 'error: --projects file not found: %s\nNo changes were made.\n' "$PROJECTS" >&2
+    exit 2
+  fi
+  node "$SCRIPT_DIR/seed.mjs" projects-check --lib "$lib" --file "$PROJECTS" >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'No changes were made. Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' >&2
+    exit 2
+  fi
+  PROJECTS_CHECKED=1
+}
+
 # ---------------------------------------------------------------- intro and platform
 
 check_data_root_conflict
 DATA="$(effective_data_root)"
 validate_inputs
+check_projects
 
 say "career-ops (H-1B-aware fork) installer"
 say "  checkout:  $DIR"
 say "  data root: $DATA"
 if [ -n "$RESUME" ]; then say "  resume:    $RESUME"; fi
 if [ "${#DOCS[@]}" -gt 0 ]; then say "  docs:      ${DOCS[*]}"; fi
+if [ -n "$PROJECTS" ]; then say "  projects:  $PROJECTS"; fi
 if [ "$DRY_RUN" = 1 ]; then say "  Dry run: nothing will be changed."; fi
 
 step "1/11 Platform"
@@ -345,6 +381,7 @@ fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
 validate_inputs
+check_projects
 
 for entry in "gh|gh|brew install gh|the sponsorship digest PR links" "pdftotext|poppler|brew install poppler|reading PDF resumes in intake" "go|go|brew install go|the optional Go dashboard"; do
   tool="${entry%%|*}"; rest="${entry#*|}"; formula="${rest%%|*}"; rest="${rest#*|}"; fix="${rest%%|*}"; why="${rest#*|}"
@@ -457,7 +494,7 @@ step "5/11 User layer"
 if [ "$DRY_RUN" = 1 ]; then
   dry "declare custom/ in config/local-paths.txt"
   if [ -n "$DATA_ROOT_ARG" ]; then dry "write $DIR/.career-ops-data pointing at $DATA_REQ"; fi
-  dry "create modes/_custom.md from the template if absent, then run doctor.mjs --json --init-templates"
+  dry "create modes/_custom.md from the template if absent (with the projects-library house rule), then run doctor.mjs --json --init-templates"
   dry "NOT create config/profile.yml or portals.yml: onboarding writes them from your documents"
 else
   case "$(seed local-paths --dir "$DIR")" in
@@ -484,8 +521,18 @@ else
   fi
   say "  data root: $DATA"
   case "$(seed custom-template --data "$DATA" --template "$SCRIPT_DIR/templates/_custom.md")" in
-    created) say "  created modes/_custom.md from the fork template" ;;
-    *) say "  modes/_custom.md already exists; left as is" ;;
+    created)
+      say "  created modes/_custom.md from the fork template"
+      if [ "$(seed projects-rule --data "$DATA" --template "$SCRIPT_DIR/templates/_custom-projects.md")" = added ]; then
+        say "  added the projects-library house rule to modes/_custom.md"
+      fi
+      ;;
+    *)
+      say "  modes/_custom.md already exists; left as is"
+      if ! grep -q '^### Projects library' "$DATA/modes/_custom.md"; then
+        say "  it has no projects-library house rule yet; the onboarding adds it after your yes"
+      fi
+      ;;
   esac
   if ! (cd "$DIR" && node doctor.mjs --json --init-templates >/dev/null); then
     pending "node doctor.mjs --json --init-templates failed in $QDIR; run it and read the error."
@@ -542,6 +589,28 @@ else
         ;;
       *) die 1 "could not compare cv.md with the resume: $cv_out" ;;
     esac
+  fi
+fi
+
+if [ -n "$PROJECTS" ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    dry "copy $PROJECTS to documents/projects/ and create article-digest.md from it when absent"
+  else
+    check_projects
+    lib_path="$(projects_lib)" || die 1 "cannot validate --projects: custom/projects/lib.mjs is missing from $DIR"
+    proj_out="$(seed projects-seed --lib "$lib_path" --data "$DATA" --file "$PROJECTS")" || die 1 "could not seed the projects library from $PROJECTS"
+    proj_copy=""
+    while IFS=$'\t' read -r kind what dest; do
+      case "$kind" in
+        copied) proj_copy="$dest"; say "  copied $dest" ;;
+        present) proj_copy="$dest"; say "  already present: $dest" ;;
+        created) say "  created article-digest.md from $PROJECTS (your projects library)" ;;
+        exists)
+          say "  article-digest.md already exists; left as is"
+          pending "article-digest.md exists, so --projects did not replace it. To add only the new projects: cd $QDIR && node custom/projects/import.mjs $(shell_quote "$proj_copy") --merge --write (run it without --write first to preview)."
+          ;;
+      esac
+    done <<< "$proj_out"
   fi
 fi
 

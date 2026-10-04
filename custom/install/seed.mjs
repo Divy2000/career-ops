@@ -7,11 +7,15 @@
 //   copy-documents  --data <root> [--resume f.md] [--docs a.md ...]
 //   cv-status       --data <root> --resume f.md
 //   cv-write        --data <root> --resume f.md [--replace]
+//   projects-rule   --data <root> --template <_custom-projects.md>
+//   projects-check  --lib <custom/projects/lib.mjs> --file <library.md|projects.json>
+//   projects-seed   --lib <custom/projects/lib.mjs> --data <root> --file <library.md|projects.json>
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { mergeLocalPaths, normalizeMarkdown, parseFlags, summarizeUnifiedDiff, uniqueDestName } from './lib.mjs';
+import { pathToFileURL } from 'node:url';
+import { insertHouseRule, mergeLocalPaths, normalizeMarkdown, parseFlags, summarizeUnifiedDiff, uniqueDestName } from './lib.mjs';
 
 const out = (...cols) => process.stdout.write(`${cols.join('\t')}\n`);
 const exists = (f) => fs.existsSync(f);
@@ -123,6 +127,73 @@ function cvWrite(data, resume, replace) {
   out('replaced', backup);
 }
 
+function writeAtomic(file, text) {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
+  fs.writeFileSync(tmp, text, { flag: 'wx' });
+  fs.renameSync(tmp, file);
+}
+
+// Unconditional and idempotent: adds the projects-library house rule when its heading is absent.
+function projectsRule(data, template) {
+  const target = path.join(data, 'modes', '_custom.md');
+  if (!exists(target)) return out('absent');
+  const next = insertHouseRule(fs.readFileSync(target, 'utf8'), fs.readFileSync(template, 'utf8'));
+  if (next === null) return out('present');
+  writeAtomic(target, next);
+  out('added');
+}
+
+// The projects parser lives in the checkout (custom/projects/lib.mjs); install.sh passes its path,
+// because this script may run from a standalone copy of custom/install.
+async function libraryFrom(lib, file) {
+  const projects = await import(pathToFileURL(path.resolve(lib)).href);
+  const raw = fs.readFileSync(file, 'utf8');
+  if (/\.(md|markdown)$/i.test(file)) {
+    const check = projects.validateLibrary(raw);
+    return { text: raw, errors: check.errors, count: projects.parseLibrary(raw).entries.length };
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    return { errors: [`${file} is not valid JSON: ${err.message}`] };
+  }
+  let entries;
+  try {
+    entries = projects.convertJsonProjects(data).entries;
+  } catch (err) {
+    return { errors: [`${file}: ${err.message}`] };
+  }
+  const text = projects.serializeLibrary(entries);
+  return { text, errors: projects.validateLibrary(text).errors, count: entries.length };
+}
+
+async function projectsCheck(lib, file) {
+  const r = await libraryFrom(lib, file);
+  if (r.errors.length || !r.count) {
+    for (const e of r.errors.length ? r.errors : [`${file} has no projects`]) process.stderr.write(`error: ${e}\n`);
+    process.exit(2);
+  }
+  out('ok', r.count);
+}
+
+async function projectsSeed(lib, data, file) {
+  const r = await libraryFrom(lib, file);
+  if (r.errors.length || !r.count) {
+    for (const e of r.errors.length ? r.errors : [`${file} has no projects`]) process.stderr.write(`error: ${e}\n`);
+    process.exit(2);
+  }
+  copyOne('projects', file, path.join(data, 'documents', 'projects'));
+  const target = path.join(data, 'article-digest.md');
+  try {
+    fs.writeFileSync(target, r.text, { flag: 'wx' });
+  } catch (err) {
+    if (err.code === 'EEXIST') return out('exists');
+    throw err;
+  }
+  out('created');
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 try {
   const f = parseFlags(rest, ['--docs']);
@@ -137,7 +208,10 @@ try {
   else if (cmd === 'copy-documents') copyDocuments(need('--data'), opt('--resume'), f.get('--docs') ?? []);
   else if (cmd === 'cv-status') cvStatus(need('--data'), need('--resume'));
   else if (cmd === 'cv-write') cvWrite(need('--data'), need('--resume'), f.get('--replace') === true);
-  else throw new Error('usage: seed.mjs local-paths|custom-template|copy-documents|cv-status|cv-write ...');
+  else if (cmd === 'projects-rule') projectsRule(need('--data'), need('--template'));
+  else if (cmd === 'projects-check') await projectsCheck(need('--lib'), need('--file'));
+  else if (cmd === 'projects-seed') await projectsSeed(need('--lib'), need('--data'), need('--file'));
+  else throw new Error('usage: seed.mjs local-paths|custom-template|copy-documents|cv-status|cv-write|projects-rule|projects-check|projects-seed ...');
 } catch (err) {
   process.stderr.write(`error: ${err.message}\n`);
   process.exit(2);

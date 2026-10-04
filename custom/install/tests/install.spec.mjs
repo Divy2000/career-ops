@@ -22,6 +22,8 @@ const READY_FILES = {
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 const exists = (...p) => fs.existsSync(path.join(...p));
 const md = (w, name, data) => w.write(`src/${name}`, data);
+// A freshly seeded modes/_custom.md: the template with the projects-library rule in place of its first "none yet" line.
+const seededCustom = () => read(INSTALL_DIR, 'templates', '_custom.md').replace('(none yet -- add yours above)', read(INSTALL_DIR, 'templates', '_custom-projects.md').trimEnd());
 
 // ---------------------------------------------------------------- usage and contract
 
@@ -32,6 +34,7 @@ test('--help prints every flag of the contract and the exit codes, exit 0, and t
   for (const flag of ['--yes', '-y', '--non-interactive', '--dir', '--data-root', '--ref', '--no-launchd', '--with-upstream-sync', '--no-start', '--no-h1b-index', '--resume', '--docs', '--replace-cv', '--onboard', '--install-missing', '--core-only', '--dry-run', '--help']) {
     assert.ok(r.stdout.includes(flag), `help mentions ${flag}`);
   }
+  assert.ok(r.stdout.includes('--projects'), 'help mentions --projects');
   assert.match(r.stdout, /interactive \| headless \| none/);
   assert.match(r.stdout, /Markdown/);
   assert.match(r.stdout, /0 done, 1 failure, 2 usage error, 3 done with pending actions/);
@@ -39,7 +42,7 @@ test('--help prints every flag of the contract and the exit codes, exit 0, and t
 });
 
 test('unknown flags, missing values and bad --onboard modes are usage errors (exit 2) that change nothing', () => {
-  for (const args of [['--bogus'], ['--dir'], ['--resume'], ['--docs'], ['--onboard', 'sometimes'], ['--ref'], ['--data-root']]) {
+  for (const args of [['--bogus'], ['--dir'], ['--resume'], ['--docs'], ['--onboard', 'sometimes'], ['--ref'], ['--data-root'], ['--projects']]) {
     const { w, D } = fresh();
     const before = w.snapshot();
     const r = w.run(['--dir', D, ...args]);
@@ -259,7 +262,7 @@ test('a fresh install seeds modes/_custom.md from the template and declares cust
   const { w, D, args } = fresh();
   w.run(args());
   w.run(args());
-  assert.equal(read(D, 'modes', '_custom.md'), read(INSTALL_DIR, 'templates', '_custom.md'));
+  assert.equal(read(D, 'modes', '_custom.md'), seededCustom());
   assert.equal(read(D, 'config', 'local-paths.txt').split('\n').filter((l) => l === 'custom/').length, 1);
   assert.ok(w.log().some((l) => l === 'doctor --json --init-templates'));
 });
@@ -423,6 +426,57 @@ test('docs go to documents/projects, a different file of the same name gets a -1
   assert.equal(exists(D, 'article-digest.md'), false);
   w.run(args('--docs', doc));
   assert.deepEqual(fs.readdirSync(path.join(D, 'documents', 'projects')).sort(), ['proj-1.md', 'proj.md']);
+});
+
+// ---------------------------------------------------------------- projects library (--projects)
+
+const LIBRARY = '# Projects library\n\n## Kite Tracker -- https://example.org/kites\nTags: python\n- Tracked 40 kites.\n';
+
+test('--projects with a library .md and no article-digest.md creates it and keeps a copy in documents/projects', () => {
+  const { w, D, args } = fresh();
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib));
+  assert.equal(read(D, 'article-digest.md'), LIBRARY, r.out);
+  assert.equal(read(D, 'documents', 'projects', 'projects.md'), LIBRARY);
+  assert.match(r.out, /created article-digest\.md/);
+});
+
+test('--projects with a projects JSON converts it into the library format', () => {
+  const { w, D, args } = fresh();
+  const json = md(w, 'projects.json', JSON.stringify([{ id: 'k', name: 'Kite Tracker', url: 'https://example.org/kites', description: 'Tracked 40 kites.', highlights: [], keywords: ['python'] }]));
+  w.run(args('--projects', json));
+  assert.equal(read(D, 'article-digest.md'), LIBRARY);
+});
+
+test('an invalid --projects library exits 2 and changes nothing', () => {
+  const { w, D, args } = fresh();
+  const bad = md(w, 'bad.md', '## Empty\nTags: go\n');
+  const before = w.snapshot();
+  const r = w.run(args('--projects', bad));
+  assert.equal(r.status, 2, r.out);
+  assert.match(r.out, /"Empty".*no copy-paste points/);
+  assert.deepEqual(w.snapshot(), before);
+  assert.equal(exists(D), false);
+  assert.equal(w.calls('git').length, 0);
+});
+
+test('an existing article-digest.md is never overwritten by --projects; a pending action says how to merge', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'article-digest.md': 'MINE\n' } });
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib));
+  assert.equal(read(D, 'article-digest.md'), 'MINE\n');
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /custom\/projects\/import\.mjs .*--merge --write/);
+});
+
+test('--dry-run with --projects says what it would do and writes nothing', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D);
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib, '--dry-run'));
+  assert.match(r.out, /create article-digest\.md from/);
+  assert.equal(exists(D, 'article-digest.md'), false);
 });
 
 // ---------------------------------------------------------------- Keychain
@@ -813,7 +867,7 @@ test('a marker that spells the same --data-root differently (trailing slash, rel
     const r = w.run(args('--data-root', d));
     assert.notEqual(r.status, 1, `${marker}: ${r.out}`);
     assert.equal(read(D, '.career-ops-data'), marker);
-    assert.equal(read(d, 'modes', '_custom.md'), read(INSTALL_DIR, 'templates', '_custom.md'));
+    assert.equal(read(d, 'modes', '_custom.md'), seededCustom());
   }
 });
 
