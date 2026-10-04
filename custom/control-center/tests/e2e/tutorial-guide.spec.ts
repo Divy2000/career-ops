@@ -171,6 +171,30 @@ test.describe('Tutorials quick guide', () => {
     await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
   });
 
+  test('the chapter "Watch this part" seeks to does not carry over to another tutorial', async ({ page }) => {
+    await openGuide(page, 'tracker');
+    await page.getByRole('button', { name: 'Watch this part' }).click();
+    await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBeCloseTo(0.5, 1);
+    await page.getByRole('navigation', { name: 'Tutorials' }).getByRole('link', { name: /Second tour/ }).click();
+    await expect(page).toHaveURL(/t=second-tour/);
+    await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(1);
+    await page.waitForTimeout(300);
+    expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
+  });
+
+  test('a tutorial warning shows in the Video view and in the Quick guide view', async ({ page }) => {
+    const warning = page.getByText(/transcript file "missing\.md" not found/);
+    await page.goto('/tutorials?t=warn-tour');
+    await expect(page.locator('video')).toBeVisible();
+    await expect(warning).toBeVisible();
+    await page.getByRole('tab', { name: 'Quick guide' }).click();
+    await expect(heading(page, 'Today')).toBeVisible();
+    await expect(warning).toBeVisible();
+    await page.goto('/tutorials?t=demo-tour&view=guide');
+    await expect(heading(page, 'Today')).toBeVisible();
+    await expect(page.getByText(/not found, so it is ignored/)).toHaveCount(0);
+  });
+
   test('a section without a chapter has no "Watch this part" button', async ({ page }) => {
     await openGuide(page, 'followups');
     await expect(page.getByRole('button', { name: 'Watch this part' })).toHaveCount(0);

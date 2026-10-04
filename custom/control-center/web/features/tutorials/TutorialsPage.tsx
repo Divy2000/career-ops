@@ -278,11 +278,6 @@ function Player({ tutorial, startAt }: { tutorial: Tutorial; startAt: number | n
             <p className="sr-only" role="status" aria-live="polite">
               {osd}
             </p>
-            {tutorial.warnings.map((w) => (
-              <p key={w} className="small" style={{ margin: 0, color: 'var(--warning)' }}>
-                {w}
-              </p>
-            ))}
           </div>
         </div>
         <aside className="card tut__chapters" aria-labelledby="tut-chapters-title">
@@ -316,14 +311,16 @@ const VIEWS = [
 function Loaded({ data }: { data: TutorialsRead }) {
   const { t, view, section } = route.useSearch();
   const navigate = useNavigate({ from: '/tutorials' });
-  const [startAt, setStartAt] = useState<number | null>(null);
+  // The chapter time "Watch this part" asked for, tied to the tutorial it was asked on.
+  const [seek, setSeek] = useState<{ id: string; at: number } | null>(null);
   const selected = data.tutorials.find((x) => x.id === t) ?? data.tutorials[0];
   const guide = selected?.guide ?? null;
+  const startAt = seek !== null && seek.id === selected?.id ? seek.at : null;
   const showGuide = guide !== null && view === 'guide';
   // The URL carries the tutorial, the view and the section, so every state of the page is a shareable link.
   const go = (to: { view?: 'guide'; section?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
   const setView = (next: 'video' | 'guide') => {
-    setStartAt(null);
+    setSeek(null);
     go(next === 'guide' ? { view: 'guide' } : {});
   };
   return (
@@ -357,6 +354,11 @@ function Loaded({ data }: { data: TutorialsRead }) {
               </Link>
             ))}
           </nav>
+          {selected?.warnings.map((message) => (
+            <p key={message} className="small" style={{ margin: 0, color: 'var(--warning)' }}>
+              {message}
+            </p>
+          ))}
           {selected && guide && <Tabs label="Tutorial view" tabs={[...VIEWS]} value={showGuide ? 'guide' : 'video'} onChange={setView} />}
           {selected && guide && showGuide && (
             <QuickGuide
@@ -367,7 +369,7 @@ function Loaded({ data }: { data: TutorialsRead }) {
               sectionId={section}
               onSelect={(id, replace) => go({ view: 'guide', section: id }, replace)}
               onWatch={(start) => {
-                setStartAt(start);
+                setSeek({ id: selected.id, at: start });
                 go({});
               }}
             />

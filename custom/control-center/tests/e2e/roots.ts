@@ -187,6 +187,13 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
   fs.mkdirSync(second, { recursive: true });
   fs.copyFileSync(path.join(demo, 'demo-tour.mp4'), path.join(second, 'second.mp4'));
   fs.writeFileSync(path.join(second, 'tutorial.json'), JSON.stringify({ id: 'second-tour', title: 'Second tour', video: 'second.mp4' }));
+  // A tutorial with a guide whose optional transcript is missing: the page must say so in every view.
+  const warn = path.join(root, 'warn-tour');
+  fs.mkdirSync(warn, { recursive: true });
+  fs.copyFileSync(path.join(demo, 'demo-tour.mp4'), path.join(warn, 'warn.mp4'));
+  fs.copyFileSync(path.join(demo, 'today.gif'), path.join(warn, 'today.gif'));
+  fs.writeFileSync(path.join(warn, 'guide.json'), JSON.stringify({ sections: [{ ...DEMO_GUIDE.sections[0], poster: undefined, chapter: undefined }] }));
+  fs.writeFileSync(path.join(warn, 'tutorial.json'), JSON.stringify({ id: 'warn-tour', title: 'Warning tour', video: 'warn.mp4', transcript: 'missing.md', guide: 'guide.json' }));
   const broken = path.join(root, 'broken-demo');
   fs.mkdirSync(broken, { recursive: true });
   fs.writeFileSync(path.join(broken, 'tutorial.json'), '{ "id": "broken-demo", ');
