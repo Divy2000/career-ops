@@ -134,6 +134,24 @@ test('given generate-pdf.mjs failing the fact check, when run, then it stops aft
   assert.equal(fs.existsSync(path.join(root, 'output', 'cv-test.pdf')), false);
 });
 
+test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format', 'letter', '--max-pages', '1'], {
+    cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000,
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Format: LETTER/);
+  assert.match(r.stdout, /, 1 page \(budget 1;/);
+});
+
+test('given a value flag with no value, when run, then it exits non-zero naming the flag', () => {
+  const root = dataRoot({ cv: '' });
+  const r = spawnSync(process.execPath, [RENDER, 'a.html', 'b.pdf', '--max-pages'], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /--max-pages requires a value/);
+});
+
 test('given a bad --max-pages or missing arguments, when run, then it exits non-zero with usage', () => {
   const root = dataRoot({ cv: '' });
   assert.notEqual(spawnSync(process.execPath, [RENDER], { cwd: REPO, encoding: 'utf8' }).status, 0);

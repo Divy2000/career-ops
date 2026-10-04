@@ -18,10 +18,11 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fitToPages, countPdfPages } from './lib.mjs';
-import { validateFlags } from '../../lib/cli-flags.mjs';
+import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const CODE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const GENERATE = path.join(CODE, 'generate-pdf.mjs');
+const VALUE_FLAGS = ['--max-pages', '--format', '--report', '--kind'];
 const PASS_THROUGH = ['--format', '--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check'];
 const USAGE = `Usage: node custom/cv/render-pdf.mjs <input.html> <output.pdf> [--max-pages=N] [--strict-pages] [${PASS_THROUGH.join('] [')}]`;
 
@@ -40,16 +41,21 @@ const print = (attempt) => {
 async function main() {
   const args = process.argv.slice(2);
   validateFlags(args, ['--max-pages', '--strict-pages', ...PASS_THROUGH, '--help', '-h'], USAGE, {
-    valueFlags: ['--max-pages', '--format', '--report', '--kind'],
+    valueFlags: VALUE_FLAGS,
+    requireOperand: true,
   });
-  const operands = args.filter((a) => !a.startsWith('-'));
+  // A value flag may be written `--flag value`; that value is not a file operand.
+  const values = new Set(args.flatMap((a, i) => (VALUE_FLAGS.includes(a) ? [i + 1] : [])));
+  const operands = args.filter((a, i) => !a.startsWith('-') && !values.has(i));
   if (operands.length !== 2) throw new Error(`expected an input HTML and an output PDF\n${USAGE}`);
   const [input, output] = operands.map((p) => path.resolve(p));
-  const maxArg = args.find((a) => a.startsWith('--max-pages='));
-  const maxPages = maxArg ? Number(maxArg.slice('--max-pages='.length)) : 2;
-  if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error(`invalid --max-pages "${maxArg?.slice(12)}"; use a positive integer`);
+  const maxRaw = flagValue(args, '--max-pages');
+  const maxPages = maxRaw === undefined ? 2 : Number(maxRaw);
+  if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error(`invalid --max-pages "${maxRaw}"; use a positive integer`);
   const strict = args.includes('--strict-pages');
-  const forwarded = args.filter((a) => PASS_THROUGH.includes(a.split('=')[0]));
+  // generate-pdf.mjs reads only the --flag=value form.
+  const forwarded = PASS_THROUGH.filter((f) => hasFlag(args, f))
+    .map((f) => (VALUE_FLAGS.includes(f) ? `${f}=${flagValue(args, f)}` : f));
 
   const html = readFileSync(input, 'utf8');
   let lastAttempt = null;
