@@ -182,7 +182,8 @@ test('the README uses only flags from the frozen installer contract on install.s
   }
 });
 
-test('every flag the README mentions exists in install.sh --help', { skip: existsSync(INSTALL_SH) ? false : 'custom/install/install.sh is not in this tree yet (Builder A lands it); re-run once it exists' }, () => {
+test('every flag the README mentions exists in install.sh --help', () => {
+  assert.ok(existsSync(INSTALL_SH), 'custom/install/install.sh must exist');
   const help = spawnSync('bash', [INSTALL_SH, '--help'], { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] });
   assert.equal(help.status, 0, help.stderr);
   const text = help.stdout + help.stderr;
@@ -297,4 +298,30 @@ test('the Control Center README describes the theme as light, dark or auto, not 
   const cc = readFileSync(path.join(ROOT, 'custom/control-center/README.md'), 'utf8');
   assert.equal(/dark-mode web app/i.test(cc), false);
   assert.match(cc, /light, dark or auto/i);
+});
+
+test('Option 1 tells users that exit 3 with pending actions is expected until onboarding finishes', () => {
+  const opt1 = section(readme, /^#{2,3}\s+Option 1\b/);
+  assert.match(opt1, /exit(s|ed)? (code )?3/i);
+  assert.match(opt1, /onboarding/i);
+  assert.match(opt1, /Keychain/);
+});
+
+test('the README says what a missing Keychain item skips and how --resume and --docs paths resolve', () => {
+  const opt2 = section(readme, /^#{2,3}\s+Option 2\b/);
+  assert.match(opt2, /current (working )?directory/i);
+  assert.match(readme, /Keychain[^\n]*(daily job|launchd)[^\n]*Control Center|Control Center[^\n]*daily job[^\n]*Keychain/i);
+});
+
+test('the README does not claim a --ref default and describes --dir as the installer does', () => {
+  assert.equal(/--ref[^\n]*default/i.test(readme), false);
+  assert.match(readme, /`--dir <path>`[^\n]*the checkout the script is in/i);
+});
+
+test('ONBOARDING.md appends the shipped sponsorship template file instead of embedding a copy', () => {
+  const tpl = path.join(ROOT, 'custom/install/templates/_custom-sponsorship.md');
+  assert.ok(existsSync(tpl), 'template file missing');
+  assert.ok(readFileSync(tpl, 'utf8').startsWith('### Sponsorship check'));
+  assert.ok(onboarding.includes('custom/install/templates/_custom-sponsorship.md'));
+  assert.equal(/^### Sponsorship check/m.test(onboarding), false, 'ONBOARDING.md must not embed its own copy of the section');
 });

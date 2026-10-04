@@ -39,7 +39,7 @@ My documents: <PASTE THE PATHS OF YOUR RESUME AND PROJECT DOCUMENTS HERE>
 7. Read custom/install/ONBOARDING.md in the clone and follow it: extract my documents, ask me the questionnaire once, show me every file you will write, and write nothing until I say an explicit yes. Then verify with the doctor and offer the daily job and the Control Center.
 ```
 
-Claude shows its plan, asks before each change, and stops at the one step it cannot do for you: storing your Claude token in the macOS Keychain (see [First run](#first-run)). The full procedure it follows is [custom/install/ONBOARDING.md](/custom/install/ONBOARDING.md).
+Claude shows its plan, asks before each change, and stops at the one step it cannot do for you: storing your Claude token in the macOS Keychain (see [First run](#first-run)). Until the Keychain item exists and onboarding has finished, the installer exits with code 3 and a list of pending actions. That is expected, not a failure: while the Keychain item is missing it skips the daily job and the Control Center start, and Claude relays each pending action to you. The full procedure it follows is [custom/install/ONBOARDING.md](/custom/install/ONBOARDING.md).
 
 ### Option 2: install script
 
@@ -51,13 +51,14 @@ cd ~/Documents/job-search   # the folder that holds resume.md and your project .
 ~/career-ops/custom/install/install.sh --resume resume.md --docs project-a.md project-b.md
 ```
 
-`--docs` is optional. Run `install.sh --help` for the full list.
+`--docs` is optional. Relative `--resume` and `--docs` paths resolve against the current directory you run the script from. Commands the script prints for you to run later are shell-quoted, so they are safe to paste even when a path contains spaces. Run `install.sh --help` for the full list.
 
 What the script does with your Markdown files:
 
 - Limits: the resume is at most 1 MiB, each project document at most 2 MiB, at most 20 documents. Files must be UTF-8 text. Every file is checked before anything is written; one bad file means nothing is copied (exit 2, with the file and the reason).
 - Originals are copied into `documents/cv/` and `documents/projects/` (a name that already exists gets a `-1` suffix; nothing is overwritten).
 - `cv.md` is created from your resume when it does not exist. If a different `cv.md` already exists, it is **never replaced** without your confirmation (a diff summary and a y/N prompt) or `--replace-cv`, and a `cv.md.bak-<timestamp>` backup is kept before any replacement.
+- Without the Keychain item (see [First run](#first-run)) it still installs, but skips the daily job and the Control Center start and lists them as pending actions (exit 3).
 - After the install it offers to start Claude Code with the onboarding procedure, which turns your documents into `config/profile.yml`, `modes/_profile.md`, `portals.yml` and the rest after showing you every change.
 
 | Flag | Meaning |
@@ -66,17 +67,17 @@ What the script does with your Markdown files:
 | `--docs <a.md> [b.md ...]` | Project documents in Markdown (values run until the next flag). |
 | `--replace-cv` | Allow replacing an existing, different `cv.md` (a backup is written first). |
 | `--onboard interactive\|headless\|none` | After install: start Claude Code with the onboarding prompt (default when a terminal and `claude` are present), draft the files headlessly from the Keychain token (drafts only, never live files), or only print the command. |
-| `--yes` | Accept the default answer to every question. |
-| `--non-interactive` | Never prompt; pending actions are printed and the exit code is 3. |
-| `--dir <path>` | Checkout location (default `~/career-ops`; an existing checkout is reused). |
+| `--yes` | Do not ask for confirmation; take the default answer. |
+| `--non-interactive` | Never prompt or read the terminal; unfinished steps become pending actions (exit code 3). |
+| `--dir <path>` | Checkout location (default: the checkout the script is in, otherwise `~/career-ops`; an existing checkout is reused). |
 | `--data-root <path>` | Keep your personal files outside the checkout. Writes a git-ignored `.career-ops-data` marker. |
-| `--ref <tag>` | Fork tag or branch to install (default `fork-install-v1`). |
+| `--ref <tag>` | Check out this tag or branch of the fork. |
 | `--no-launchd` | Do not install the 8am daily job. |
 | `--with-upstream-sync` | Also install the weekly upstream-merge job. Maintainer only; see [Safety model](#safety-model). |
 | `--no-start` | Do not start the Control Center at the end. |
 | `--no-h1b-index` | Skip the optional ~8 MiB DOL H-1B index download. |
-| `--install-missing` | Offer to install missing tools with Homebrew (asks y/N for each). |
-| `--core-only` | Linux or no launchd: clone, dependencies, personal-file layer and onboarding only. |
+| `--install-missing` | Offer to `brew install` missing prerequisites (asks y/N each time, never with `--yes`). |
+| `--core-only` | Skip the macOS-only parts (Keychain, launchd, Control Center); for Linux. |
 | `--dry-run` | Validate inputs and print the plan; change nothing. |
 | `--help` | Print the flags. |
 
