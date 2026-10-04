@@ -43,6 +43,7 @@ export function containedPath(dataRoot: string, requested: string): { abs: strin
   } catch {
     return null;
   }
+  if (realRoot === path.parse(realRoot).root) return null;
   if (realFile !== realRoot && !inside(realRoot, realFile)) return null;
   return { abs: realFile, root };
 }

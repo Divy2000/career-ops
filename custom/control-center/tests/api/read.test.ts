@@ -218,13 +218,13 @@ describe('file serving', () => {
     expect(containedPath(t.cfg.dataRoot, 'reports/001-acme-robotics.md')?.root).toBe('reports');
   });
 
-  it('containedPath serves files when a serve root resolves to the filesystem root', () => {
+  it('containedPath refuses every file when a serve root is symlinked to the filesystem root', () => {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-slash-root-'));
     try {
       fs.symlinkSync('/', path.join(dataRoot, 'output'));
       const file = path.join(fs.realpathSync(dataRoot), 'target.md');
       fs.writeFileSync(file, 'hi');
-      expect(containedPath(dataRoot, `output${file}`)?.abs).toBe(file);
+      expect(containedPath(dataRoot, `output${file}`)).toBeNull();
     } finally {
       fs.rmSync(dataRoot, { recursive: true, force: true });
     }
