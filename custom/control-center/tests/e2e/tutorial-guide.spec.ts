@@ -182,6 +182,20 @@ test.describe('Tutorials quick guide', () => {
     expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
   });
 
+  test('the chapter "Watch this part" seeked to is used once: returning to that tutorial starts at 0', async ({ page }) => {
+    await openGuide(page, 'tracker');
+    await page.getByRole('button', { name: 'Watch this part' }).click();
+    await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBeCloseTo(0.5, 1);
+    const list = page.getByRole('navigation', { name: 'Tutorials' });
+    await list.getByRole('link', { name: /Second tour/ }).click();
+    await expect(page).toHaveURL(/t=second-tour/);
+    await list.getByRole('link', { name: /Demo tour/ }).click();
+    await expect(page).toHaveURL(/t=demo-tour/);
+    await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(1);
+    await page.waitForTimeout(300);
+    expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
+  });
+
   test('a tutorial warning shows in the Video view and in the Quick guide view', async ({ page }) => {
     const warning = page.getByText(/transcript file "missing\.md" not found/);
     await page.goto('/tutorials?t=warn-tour');
@@ -305,8 +319,14 @@ test.describe('Tutorials quick guide', () => {
   test.describe('on a phone', () => {
     test.use({ viewport: { width: 390, height: 844 } });
 
-    // The app shell (top bar, sidebar) sets the page width; the guide must add no horizontal overflow of its own.
-    const pageOverflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    // The app shell (top bar, sidebar) sets the page width, and its async chips make that width vary; the guide must fit the main
+    // column it is given, so it adds no horizontal overflow of its own whatever the shell does.
+    const fitsMain = (page: Page) =>
+      page.evaluate(() => {
+        const main = document.querySelector('.shell__main') as HTMLElement;
+        const guide = document.querySelector('.guide') as HTMLElement;
+        return { mainOverflow: main.scrollWidth - main.clientWidth, guideBeyondMain: Math.round(guide.getBoundingClientRect().right - main.getBoundingClientRect().right) };
+      });
     const guideSpill = (page: Page) =>
       page.evaluate(() => {
         const root = document.querySelector('.guide') as HTMLElement;
@@ -322,12 +342,10 @@ test.describe('Tutorials quick guide', () => {
       });
 
     test('adds no horizontal scroll of its own, swaps the section list for a select, and stays usable', async ({ page }) => {
-      await page.goto('/tutorials?t=demo-tour');
-      await expect(page.locator('video')).toBeVisible();
-      const baseline = await pageOverflow(page);
       await page.goto(`${GUIDE_URL}&section=today`);
       await expect(heading(page, 'Today')).toBeVisible();
-      expect(await pageOverflow(page)).toBeLessThanOrEqual(baseline);
+      expect((await fitsMain(page)).mainOverflow).toBe(0);
+      expect((await fitsMain(page)).guideBeyondMain).toBeLessThanOrEqual(0);
       expect(await guideSpill(page)).toEqual([]);
       await expect(sectionList(page)).toBeHidden();
       const select = page.getByRole('combobox', { name: 'Section' });
@@ -346,7 +364,8 @@ test.describe('Tutorials quick guide', () => {
       await expect(select.locator('option', { hasText: 'Tracker' })).toHaveText(/reviewed/);
       for (const name of ['Mark reviewed', 'Watch this part']) await expect(page.getByRole('button', { name })).toBeVisible();
       await expect(page.getByRole('link', { name: 'Open this page' })).toBeVisible();
-      expect(await pageOverflow(page)).toBeLessThanOrEqual(baseline);
+      expect((await fitsMain(page)).mainOverflow).toBe(0);
+      expect((await fitsMain(page)).guideBeyondMain).toBeLessThanOrEqual(0);
       expect(await guideSpill(page)).toEqual([]);
       await axeClean(page);
     });

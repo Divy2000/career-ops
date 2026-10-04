@@ -125,7 +125,7 @@ function Transcript({ url }: { url: string }) {
   );
 }
 
-function Player({ tutorial, startAt }: { tutorial: Tutorial; startAt: number | null }) {
+function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; startAt: number | null; onStartApplied: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [current, setCurrent] = useState(-1);
   const [captions, setCaptions] = useState(readCaptionsPref);
@@ -176,6 +176,7 @@ function Player({ tutorial, startAt }: { tutorial: Tutorial; startAt: number | n
     const go = () => {
       v.currentTime = startAt;
       setCurrent(chapterIndexAt(chapters, startAt));
+      onStartApplied();
     };
     if (v.readyState >= 1) {
       go();
@@ -374,7 +375,7 @@ function Loaded({ data }: { data: TutorialsRead }) {
               }}
             />
           )}
-          {selected && !showGuide && <Player key={selected.id} tutorial={selected} startAt={startAt} />}
+          {selected && !showGuide && <Player key={selected.id} tutorial={selected} startAt={startAt} onStartApplied={() => setSeek(null)} />}
         </>
       )}
     </div>
