@@ -201,7 +201,7 @@ fi
 
 # ---------------------------------------------------------------- helpers
 
-lib() { node "$SCRIPT_DIR/lib.mjs" "$@"; }
+lib() { node "$SCRIPT_DIR/cli.mjs" "$@"; }
 seed() { node "$SCRIPT_DIR/seed.mjs" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 

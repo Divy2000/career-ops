@@ -66,7 +66,7 @@ function existsExactCase(rel) {
 }
 
 // Anchored to the checkout by an absolute path: the agent's working directory is not necessarily the checkout.
-const RESOLVER_ONE_LINER = `node --input-type=module -e "import(process.argv[1]).then((m) => console.log(m.getCareerOpsRoot()))" "<checkout>/path-resolver.mjs"`;
+const RESOLVER_ONE_LINER = `node --input-type=module -e "import(process.argv.at(-1)).then((m) => console.log(m.getCareerOpsRoot()))" "<checkout>/path-resolver.mjs"`;
 
 function section(markdown, titlePattern) {
   const lines = markdown.split('\n');
@@ -489,7 +489,7 @@ test('every path-resolver command in ONBOARDING.md is anchored to the checkout, 
   for (const cmd of commands) {
     assert.ok(!cmd.includes("import('./path-resolver.mjs')"), `relative import breaks outside the checkout: ${cmd}`);
     assert.match(cmd, /--input-type=module/, cmd);
-    assert.ok(cmd.includes('import(process.argv[1])') && cmd.includes('"<checkout>/path-resolver.mjs"'), `not anchored to <checkout>: ${cmd}`);
+    assert.ok(cmd.includes('import(process.argv.at(-1))') && cmd.includes('"<checkout>/path-resolver.mjs"'), `not anchored to <checkout>: ${cmd}`);
   }
   assert.match(onboarding, /`<checkout>`[^.\n]*absolute path/i, 'the doc says what <checkout> means');
 });

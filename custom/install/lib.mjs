@@ -2,7 +2,6 @@
 // older Node the installer is about to complain about.
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const MiB = 1024 * 1024;
 export const LIMITS = {
@@ -209,8 +208,8 @@ export function validateInputs({ resume, docs = [], targetCv } = {}) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-// Small CLI used by install.sh: node lib.mjs <command> [args]
-function main(argv) {
+// Small CLI used by install.sh through cli.mjs: node cli.mjs <command> [args]
+export function main(argv) {
   const [cmd, ...rest] = argv;
   switch (cmd) {
     case 'version-ge':
@@ -235,9 +234,7 @@ function main(argv) {
       return 0;
     }
     default:
-      process.stderr.write('usage: lib.mjs version-ge|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
+      process.stderr.write('usage: cli.mjs version-ge|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
       return 2;
   }
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) process.exitCode = main(process.argv.slice(2));

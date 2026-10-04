@@ -10,6 +10,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEED = path.join(HERE, '..', 'seed.mjs');
 const VALIDATE = path.join(HERE, '..', 'validate-md.mjs');
 const LIB = path.join(HERE, '..', 'lib.mjs');
+const CLI = path.join(HERE, '..', 'cli.mjs');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ci-seed-'));
 const run = (script, args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -180,33 +181,39 @@ test('cv-write --replace on an identical cv.md is a no-op with no backup', () =>
   assert.deepEqual(fs.readdirSync(data), ['cv.md']);
 });
 
-test('lib.mjs doctor-state reads stdin and prints a ready or incomplete line', () => {
-  const ready = spawnSync(process.execPath, [LIB, 'doctor-state'], { input: '{"onboardingNeeded":false,"missing":[],"unpersonalized":[]}', encoding: 'utf8' });
+test('lib.mjs is a library: running it directly executes no command (cli.mjs is the entry point)', () => {
+  const r = run(LIB, ['version-ge', 'v20.0.0', '22.6.0']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout + r.stderr, '');
+});
+
+test('cli.mjs doctor-state reads stdin and prints a ready or incomplete line', () => {
+  const ready = spawnSync(process.execPath, [CLI, 'doctor-state'], { input: '{"onboardingNeeded":false,"missing":[],"unpersonalized":[]}', encoding: 'utf8' });
   assert.equal(ready.stdout, 'ready\t\n');
-  const late = spawnSync(process.execPath, [LIB, 'doctor-state'], { input: '{"onboardingNeeded":true,"missing":["cv.md"],"unpersonalized":[]}', encoding: 'utf8' });
+  const late = spawnSync(process.execPath, [CLI, 'doctor-state'], { input: '{"onboardingNeeded":true,"missing":["cv.md"],"unpersonalized":[]}', encoding: 'utf8' });
   assert.equal(late.stdout.trim(), 'incomplete\tcv.md');
 });
 
-test('lib.mjs version-ge exits 0 when the version meets the floor and 1 otherwise', () => {
-  assert.equal(run(LIB, ['version-ge', 'v22.6.0', '22.6.0']).status, 0);
-  assert.equal(run(LIB, ['version-ge', 'v20.19.0', '22.6.0']).status, 1);
+test('cli.mjs version-ge exits 0 when the version meets the floor and 1 otherwise', () => {
+  assert.equal(run(CLI, ['version-ge', 'v22.6.0', '22.6.0']).status, 0);
+  assert.equal(run(CLI, ['version-ge', 'v20.19.0', '22.6.0']).status, 1);
 });
 
-test('lib.mjs same-path compares normalized and real paths, existing or not', () => {
+test('cli.mjs same-path compares normalized and real paths, existing or not', () => {
   const d = tmp();
   fs.mkdirSync(path.join(d, 'a'));
   fs.symlinkSync(path.join(d, 'a'), path.join(d, 'link'));
-  assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'x', '..', 'a')]).status, 0);
-  assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'link')]).status, 0);
-  assert.equal(run(LIB, ['same-path', path.join(d, 'nope'), path.join(d, 'nope')]).status, 0);
-  assert.equal(run(LIB, ['same-path', path.join(d, 'a'), path.join(d, 'b')]).status, 1);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'a'), path.join(d, 'x', '..', 'a')]).status, 0);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'a'), path.join(d, 'link')]).status, 0);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'nope'), path.join(d, 'nope')]).status, 0);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'a'), path.join(d, 'b')]).status, 1);
 });
 
-test('lib.mjs same-path resolves symlinks in the deepest existing ancestor of a path that does not exist yet', () => {
+test('cli.mjs same-path resolves symlinks in the deepest existing ancestor of a path that does not exist yet', () => {
   const d = tmp();
   fs.mkdirSync(path.join(d, 'real'));
   fs.symlinkSync(path.join(d, 'real'), path.join(d, 'link'));
-  assert.equal(run(LIB, ['same-path', path.join(d, 'link', 'new', 'deeper'), path.join(d, 'real', 'new', 'deeper')]).status, 0);
-  assert.equal(run(LIB, ['same-path', path.join(d, 'link', 'new'), path.join(d, 'real', 'other')]).status, 1);
-  assert.equal(run(LIB, ['same-path', path.join(d, 'link', 'a', '..', 'new'), path.join(d, 'real', 'new')]).status, 0);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'link', 'new', 'deeper'), path.join(d, 'real', 'new', 'deeper')]).status, 0);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'link', 'new'), path.join(d, 'real', 'other')]).status, 1);
+  assert.equal(run(CLI, ['same-path', path.join(d, 'link', 'a', '..', 'new'), path.join(d, 'real', 'new')]).status, 0);
 });
