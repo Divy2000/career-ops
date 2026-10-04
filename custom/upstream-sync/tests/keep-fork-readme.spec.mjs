@@ -165,6 +165,36 @@ test('Given upstream deleted README while the fork kept it, when the script runs
   }
 });
 
+test('Given the fork deleted README while upstream edited it, when the script runs, then the deletion is kept and upstream copy is saved', () => {
+  const repo = mkdtempSync(path.join(tmpdir(), 'keep-readme-'));
+  const state = mkdtempSync(path.join(tmpdir(), 'keep-readme-state-'));
+  try {
+    git(repo, 'init', '-q', '-b', 'main');
+    write(repo, README, 'v1\n');
+    commit(repo, 'base');
+    git(repo, 'branch', 'upstream');
+    git(repo, 'rm', '-q', README);
+    commit(repo, 'fork delete');
+    git(repo, 'checkout', '-q', 'upstream');
+    write(repo, README, 'UPSTREAM README v2\n');
+    commit(repo, 'upstream edit');
+    git(repo, 'checkout', '-q', 'main');
+    merge(repo);
+    assert.deepEqual(unmerged(repo), [README]);
+
+    const res = runScript(repo, state);
+
+    assert.equal(res.status, 10, res.stderr + res.stdout);
+    assert.equal(existsSync(path.join(repo, README)), false);
+    assert.equal(git(repo, 'ls-files', '--', README).trim(), '');
+    assert.deepEqual(unmerged(repo), []);
+    assert.equal(readFileSync(path.join(state, '2026-10-04.upstream-github-readme.md'), 'utf8'), 'UPSTREAM README v2\n');
+    assert.equal(git(repo, 'log', '-1', '--format=%P').trim().split(' ').length, 2, 'merge commit finished');
+  } finally {
+    cleanup(repo, state);
+  }
+});
+
 test('Given README does not conflict, when the script runs, then it does nothing and exits 0', () => {
   const repo = makeRepo({
     forkFiles: { [README]: 'FORK README\n' },
