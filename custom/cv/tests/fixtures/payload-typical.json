@@ -1,0 +1,127 @@
+{
+  "lang": "en",
+  "page_format": "letter",
+  "candidate": {
+    "name": "Jordan Rivera",
+    "email": "jordan.rivera@example.com",
+    "phone": "(555) 010-0199",
+    "location": "Austin, TX",
+    "github": { "url": "https://github.com/jordan-rivera-example", "display": "github.com/jordan-rivera-example" },
+    "portfolio": { "url": "https://jordan-rivera.example.org", "display": "jordan-rivera.example.org" }
+  },
+  "summary": "Software engineer with a Master's in Computer Science and hands-on experience across backend APIs, device integration, data pipelines and applied ML work. Currently building Python services and hardware-abstraction layers for a smart-display platform at Northwind Devices.",
+  "experience": [
+    {
+      "company": "Northwind Devices",
+      "role": "Software Engineer",
+      "location": "Austin, Texas",
+      "dates": "2024-10 - Present",
+      "bullets": [
+        "Developed Python/Django APIs that let phones, remotes and smart-home hubs control 4 display product lines.",
+        "Integrated a new hardware abstraction layer into existing display OS components by refactoring legacy interfaces, removing a vendor library dependency across 3 chipsets.",
+        "Designed integration test interfaces for system-level validation using BDD with Behave and Python unit tests.",
+        "Diagnosed and resolved defects across multiple OS components to support QA and production releases.",
+        "Built an automated defect-tracking report that saves the team lead about 5 hours every week.",
+        "Consolidated four release branches into one stable branch, cutting cherry-pick overhead and fix divergence between releases."
+      ]
+    },
+    {
+      "company": "Lakeside University",
+      "role": "Systems Engineer",
+      "location": "Tempe, Arizona",
+      "dates": "2024-07 - 2024-12",
+      "bullets": [
+        "Configured Linux servers and installed dependencies for the lab website, database and ML workloads.",
+        "Assessed team requirements and recommended hardware for better performance and cost-efficiency.",
+        "Contributed to an LLM assistant that drafts daily practice plans for music students from long-term goals."
+      ]
+    },
+    {
+      "company": "Pitchside Media",
+      "role": "Software Engineer",
+      "location": "Remote (Los Angeles, CA)",
+      "dates": "2024-04 - 2024-07",
+      "bullets": [
+        "Built a sports-history chatbot with LangChain, an open-weights 7B model and RAG retrieval over 20 years of match reports.",
+        "Evaluated four open models and reached 96% accuracy on a 300-question club-history benchmark.",
+        "Designed and developed a Flutter front end for a fan community website."
+      ]
+    },
+    {
+      "company": "Lakeside University",
+      "role": "Research Technician",
+      "location": "Glendale, Arizona",
+      "dates": "2023-09 - 2024-04",
+      "bullets": [
+        "Wrote Python programs that analyze genome sequencing data to the lab's requirements under a principal investigator.",
+        "Contributed to a project measuring genetic diversity across five research colonies."
+      ]
+    },
+    {
+      "company": "Gridline Analytics",
+      "role": "Data Engineer",
+      "location": "Remote",
+      "dates": "2021-07 - 2022-06",
+      "bullets": [
+        "Implemented a pipeline that pre-processes live sensor feeds with Python, GraphQL and Redis, with CI/CD integration.",
+        "Optimized the pipeline to support predictive analytics and real-time risk monitoring.",
+        "Built a live risk dashboard with Grafana and React."
+      ]
+    },
+    {
+      "company": "Harbor Health Labs",
+      "role": "Machine Learning Intern",
+      "location": "Pune, India",
+      "dates": "2021-01 - 2021-06",
+      "bullets": [
+        "Reached 84% accuracy on mobile skin-condition screening with OpenCV, TensorFlow and CNNs.",
+        "Developed a noise-reduction step in Python that helps detect heart conditions from phone-recorded stethoscope audio."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "Document Question Answering with LLMs",
+      "url": "https://github.com/jordan-rivera-example/doc-qa",
+      "description": "Built a RAG question-answering service over PDF, CSV and JSON files that answers 95% of a 200-question test set correctly.",
+      "bullets": [
+        "Used LangChain for retrieval and storage, with prompt templates tuned per file type.",
+        "Benchmarked chat quality on diverse and complex queries before each release."
+      ]
+    },
+    {
+      "name": "Rooftop Antenna Counter",
+      "bullets": [
+        "Built a multimodal LLM pipeline that combines street-level images and text to count rooftop antennas at given addresses.",
+        "Pulled multi-angle images from a street imagery API for each address.",
+        "Extended the LLM with LangChain tools for computer-vision tasks."
+      ]
+    },
+    {
+      "name": "Plant Disease Detector App",
+      "url": "https://github.com/jordan-rivera-example/plant-doctor",
+      "bullets": [
+        "Led a 24-hour hackathon team building a plant-disease detector with TensorFlow Lite for on-device classification.",
+        "Preprocessed and augmented 9,000 public leaf images with OpenCV and tuned the model to 81% accuracy.",
+        "Shipped an Android app that classifies leaves from the camera and points to the nearest garden center."
+      ]
+    }
+  ],
+  "education": [
+    { "title": "Master of Science, Computer Science", "org": "Lakeside University", "location": "Tempe, AZ", "year": "2022-08 - 2023-12", "description": "GPA 3.9" },
+    { "title": "B.Tech, Information and Communication Technology", "org": "Coastal Institute of Technology", "location": "Pune, India", "year": "2018-07 - 2022-05", "description": "GPA 3.7" }
+  ],
+  "awards": [
+    { "title": "Genomic Sequencing Reveals Diversity Shifts Across Five Long-Running Research Colonies and Their Founding Populations", "org": "Journal of Comparative Genetics", "year": "2026" },
+    { "title": "Retrieval-Augmented Search Engine for Materials Data", "org": "Materials Computing Letters", "year": "2022" },
+    { "title": "First Place, Campus AI Hackathon", "org": "Lakeside University", "year": "2023" },
+    { "title": "Runner-up, Smart City Challenge", "org": "Coastal Institute of Technology", "year": "2021" }
+  ],
+  "skills": [
+    { "category": "Languages", "items": ["Python", "Java", "C++", "SQL", "JavaScript", "TypeScript", "Dart"] },
+    { "category": "Backend", "items": ["Django", "FastAPI", "Flask", "REST", "GraphQL", "Redis", "PostgreSQL", "MongoDB"] },
+    { "category": "AI/ML", "items": ["PyTorch", "TensorFlow", "scikit-learn", "LangChain", "RAG", "OpenCV", "Hugging Face"] },
+    { "category": "Infrastructure", "items": ["Docker", "Linux", "Git", "GitHub Actions", "CI/CD", "AWS", "Grafana"] },
+    { "category": "Testing", "items": ["pytest", "Behave", "BDD", "unittest"] }
+  ]
+}

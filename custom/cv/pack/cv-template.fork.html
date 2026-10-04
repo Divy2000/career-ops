@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{NAME}} - CV</title>
+<style>
+  /* Fork template (custom/cv/pack): upstream templates/cv-template.html with the
+     same placeholders, section markers, fonts, colors and ligature fix, plus a
+     one-line role row, projects as linked title + bullets, one-line education
+     and Recent Achievements rows, and four density levels. custom/cv/render-pdf.mjs
+     sets html[data-density] to the first level that fits the page budget; every
+     size below derives from the density tokens. */
+  :root {
+    --accent-color: hsl(187 74% 32%);
+    --secondary-color: hsl(270, 70%, 45%);
+    --font-family: "Liberation Sans", 'Helvetica Neue', Arial, 'DejaVu Sans', sans-serif;
+    --font-size: 13.33px;
+    --page-margin: 0.5in;
+    --line-height: 1.4;
+    --section-gap: 12px;
+    --entry-gap: 7px;
+    --job-break-inside: auto;
+  }
+  /* html[attr] outranks the :root block the PDF pipeline injects for profile
+     style tokens, so the fitted density always wins. */
+  html[data-density="0"] { --font-size: 13.33px; --page-margin: 0.5in; --line-height: 1.4; --section-gap: 12px; --entry-gap: 7px; }
+  html[data-density="1"] { --font-size: 12.67px; --page-margin: 0.45in; --line-height: 1.36; --section-gap: 10px; --entry-gap: 6px; }
+  html[data-density="2"] { --font-size: 12px; --page-margin: 0.4in; --line-height: 1.33; --section-gap: 9px; --entry-gap: 5px; }
+  html[data-density="3"] { --font-size: 11.33px; --page-margin: 0.3in; --line-height: 1.25; --section-gap: 8px; --entry-gap: 4px; }
+  @page { margin: var(--page-margin); }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    /* Chromium would emit fi/fl ligature glyphs that ATS text extraction reads
+       back as U+FB01/FB02, breaking keyword search. */
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
+  }
+
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body {
+    font-family: var(--font-family);
+    font-size: var(--font-size);
+    line-height: var(--line-height);
+    color: #1a1a2e;
+    background: #ffffff;
+    padding: 0;
+    margin: 0;
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
+  }
+
+  .page {
+    width: 100%;
+    max-width: {{PAGE_WIDTH}};
+    margin: 0 auto;
+    padding: 2px 0;
+  }
+
+  /* === HEADER === */
+  .header {
+    margin-bottom: var(--section-gap);
+  }
+
+  .header h1 {
+    font-family: var(--font-family);
+    font-size: calc(var(--font-size) * 2);
+    font-weight: 700;
+    color: #1a1a2e;
+    letter-spacing: 0;
+    margin-bottom: calc(var(--entry-gap) * 0.8);
+    line-height: 1.1;
+  }
+
+  .header-title {
+    font-size: calc(var(--font-size) * 1.15);
+    font-weight: 600;
+    color: var(--accent-color);
+    letter-spacing: 0;
+    margin-bottom: calc(var(--entry-gap) * 0.8);
+    line-height: 1.2;
+  }
+
+  .header-gradient {
+    height: 2px;
+    background: linear-gradient(to right, var(--accent-color), var(--secondary-color));
+    border-radius: 1px;
+    margin-bottom: calc(var(--entry-gap) * 0.9);
+  }
+
+  .contact-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-size: calc(var(--font-size) * 0.92);
+    line-height: 1.35;
+    color: #555;
+  }
+
+  .contact-row a {
+    color: #555;
+    text-decoration: none;
+  }
+
+  .contact-row .separator {
+    color: #ccc;
+  }
+
+  .cv-photo {
+    float: right;
+    width: 80px;
+    height: 100px;
+    object-fit: cover;
+    margin: 0 0 8px 14px;
+    border-radius: 3px;
+    border: 1px solid #e2e2e2;
+  }
+
+  .cv-photo--rounded { border-radius: 8px; }
+  .cv-photo--circle { border-radius: 50%; aspect-ratio: 1; height: 80px; }
+  .cv-photo--square { border-radius: 0; aspect-ratio: 1; height: 80px; }
+
+  /* === SECTIONS === */
+  .section {
+    margin-bottom: var(--section-gap);
+  }
+
+  .section:last-of-type {
+    margin-bottom: 0;
+  }
+
+  .section-title {
+    font-size: calc(var(--font-size) * 1.02);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0;
+    color: var(--accent-color);
+    border-bottom: 1.5px solid #e2e2e2;
+    padding-bottom: 2px;
+    margin-bottom: calc(var(--entry-gap) * 0.6);
+    line-height: 1.2;
+  }
+
+  .summary-text {
+    line-height: var(--line-height);
+    color: #2f2f2f;
+  }
+
+  .summary-text strong {
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+
+  a {
+    white-space: nowrap;
+  }
+
+  /* === CORE COMPETENCIES === */
+  .competencies-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .competency-tag {
+    font-size: calc(var(--font-size) * 0.88);
+    font-weight: 500;
+    color: hsl(187, 74%, 28%);
+    background: hsl(187, 40%, 95%);
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid hsl(187, 40%, 88%);
+  }
+
+  /* === Shared one-line row: main text left, dates right === */
+  .job-header,
+  .edu-header,
+  .award-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .job-period,
+  .edu-year,
+  .award-year {
+    flex: none;
+    font-size: calc(var(--font-size) * 0.92);
+    color: #666;
+    white-space: nowrap;
+  }
+
+  .job-sep,
+  .edu-sep,
+  .award-sep {
+    color: #888;
+  }
+
+  /* A separator and the value after it wrap together, so a long row never
+     leaves a dangling "-" or "|" at a line end or splits "Pune, India". */
+  .row-tail {
+    white-space: nowrap;
+  }
+
+  .job-location,
+  .edu-location,
+  .edu-desc {
+    font-size: calc(var(--font-size) * 0.92);
+    color: #777;
+  }
+
+  /* === WORK EXPERIENCE === */
+  .job {
+    margin-bottom: var(--entry-gap);
+  }
+
+  .job:last-child {
+    margin-bottom: 0;
+  }
+
+  .job-role {
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .job-company {
+    font-weight: 600;
+    color: var(--secondary-color);
+  }
+
+  .job-context {
+    font-style: italic;
+    font-size: calc(var(--font-size) * 0.95);
+    color: #555;
+    margin-top: 1px;
+  }
+
+  .job ul,
+  .project-bullets {
+    padding-left: 1.3em;
+    margin-top: 1px;
+  }
+
+  .job li,
+  .project-bullets li {
+    line-height: var(--line-height);
+    color: #333;
+    margin-bottom: 0;
+  }
+
+  .job li strong {
+    font-weight: 600;
+  }
+
+  /* === PROJECTS === */
+  .project {
+    margin-bottom: var(--entry-gap);
+  }
+
+  .project:last-child {
+    margin-bottom: 0;
+  }
+
+  .project-title {
+    font-weight: 700;
+    color: var(--secondary-color);
+  }
+
+  .project-title a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .project-badge {
+    font-size: calc(var(--font-size) * 0.8);
+    font-weight: 500;
+    color: var(--accent-color);
+    background: hsl(187, 40%, 95%);
+    padding: 1px 6px;
+    border-radius: 2px;
+    margin-left: 6px;
+  }
+
+  .project-tech {
+    font-size: calc(var(--font-size) * 0.92);
+    font-weight: 400;
+    color: #777;
+  }
+
+  .project-bullets:empty {
+    display: none;
+  }
+
+  /* === EDUCATION === */
+  .edu-item {
+    margin-bottom: calc(var(--entry-gap) * 0.5);
+  }
+
+  .edu-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .edu-title {
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .edu-org {
+    font-weight: 600;
+    color: var(--secondary-color);
+  }
+
+  /* === CERTIFICATIONS === */
+  .cert-table {
+    display: table;
+    width: 100%;
+  }
+
+  .cert-item {
+    display: table-row;
+  }
+
+  .cert-item > * {
+    display: table-cell;
+    vertical-align: baseline;
+    padding-bottom: 3px;
+  }
+
+  .cert-title {
+    font-weight: 500;
+    color: #333;
+  }
+
+  .cert-org {
+    color: var(--secondary-color);
+    white-space: nowrap;
+  }
+
+  .cert-year {
+    font-size: calc(var(--font-size) * 0.92);
+    color: #666;
+    white-space: nowrap;
+    text-align: right;
+    width: 44px;
+  }
+
+  /* === RECENT ACHIEVEMENTS (awards) === */
+  .award-item {
+    margin-bottom: calc(var(--entry-gap) * 0.5);
+  }
+
+  .award-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .award-title {
+    font-weight: 600;
+    color: #1a1a2e;
+  }
+
+  .award-org {
+    color: var(--secondary-color);
+  }
+
+
+
+  /* === INTERESTS === */
+  .interests-line {
+    color: #444;
+  }
+
+  /* === SKILLS === */
+  .skills-grid {
+    display: block;
+  }
+
+  .skill-item {
+    color: #333;
+    margin-bottom: 1px;
+  }
+
+  .skill-category {
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  /* === PRINT === */
+  @media print {
+    body {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* A few px of right gutter so the last glyph of right-aligned dates is not
+       clipped by Chromium's print clip (upstream #1341 uses 0.18in, which left
+       the right margin visibly wider than the left). */
+    .page {
+      padding: 0 0.04in 0 0;
+    }
+  }
+
+  /* === PAGE BREAK CONTROL === */
+  .header,
+  .job-header,
+  .edu-item,
+  .edu-header,
+  .cert-item,
+  .award-item,
+  .project-title,
+  .competency-tag,
+  .skill-item,
+  .job li,
+  .project-bullets li {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .job {
+    page-break-inside: var(--job-break-inside, auto);
+    break-inside: var(--job-break-inside, auto);
+  }
+
+  /* A heading or entry header never ends a page: it moves with what follows. */
+  .section-title,
+  .job-header,
+  .job-context,
+  .project-title {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* === Language-specific fonts and direction (verbatim from upstream) === */
+  html[lang="ar"] body {
+    direction: rtl;
+    text-align: right;
+    font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+  }
+
+  html[lang="ar"] .header h1,
+  html[lang="ar"] .header-title,
+  html[lang="ar"] .section-title,
+  html[lang="ar"] .job-company,
+  html[lang="ar"] .project-title,
+  html[lang="ar"] .competency-tag,
+  html[lang="ar"] .skill-category {
+    font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+  }
+
+  html[lang="ar"] .header-gradient {
+    background: linear-gradient(to left, var(--accent-color), var(--secondary-color));
+  }
+
+  html[lang="ar"] .job ul {
+    padding-right: 18px;
+    padding-left: 0;
+  }
+
+  html[lang="ar"] .project-badge {
+    margin-right: 6px;
+    margin-left: 0;
+  }
+
+  html[lang="ar"] .cert-year {
+    text-align: left;
+  }
+
+  html[lang="ar"] .cert-table {
+    direction: rtl;
+  }
+
+  html[lang="ar"] .cv-photo {
+    float: left;
+    margin: 0 14px 8px 0;
+  }
+
+  html[lang="ja"] body {
+    font-family: var(--font-family), 'Hiragino Sans',
+      'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'YuGothic', 'Noto Sans CJK JP',
+      'Noto Sans JP', Meiryo, 'MS PGothic', sans-serif;
+  }
+
+  html[lang="ja"] .header h1,
+  html[lang="ja"] .header-title,
+  html[lang="ja"] .section-title,
+  html[lang="ja"] .job-company,
+  html[lang="ja"] .project-title,
+  html[lang="ja"] .competency-tag,
+  html[lang="ja"] .skill-category {
+   font-family: var(--font-family), 'Hiragino Sans', 'Hiragino Kaku Gothic ProN',
+      'Yu Gothic', 'YuGothic', 'Noto Sans CJK JP', 'Noto Sans JP',
+      Meiryo, 'MS PGothic', sans-serif;
+  }
+
+  html[lang="zh-CN"] body,
+  html[lang="zh"] body {
+    font-family: var(--font-family), 'PingFang SC',
+      'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
+      'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+    line-break: strict;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  html[lang="zh-CN"] .header h1,
+  html[lang="zh-CN"] .header-title,
+  html[lang="zh-CN"] .section-title,
+  html[lang="zh-CN"] .job-company,
+  html[lang="zh-CN"] .project-title,
+  html[lang="zh-CN"] .contact-row,
+  html[lang="zh-CN"] .competency-tag,
+  html[lang="zh-CN"] .skill-category,
+  html[lang="zh"] .header h1,
+  html[lang="zh"] .header-title,
+  html[lang="zh"] .section-title,
+  html[lang="zh"] .job-company,
+  html[lang="zh"] .project-title,
+  html[lang="zh"] .contact-row,
+  html[lang="zh"] .competency-tag,
+  html[lang="zh"] .skill-category {
+    font-family: var(--font-family), 'PingFang SC',
+      'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
+      'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  }
+
+  html[lang="ko"] body {
+    font-family: var(--font-family), 'Apple SD Gothic Neo',
+      'Malgun Gothic', 'Noto Sans CJK KR',
+      'Noto Sans KR', 'Nanum Gothic', sans-serif;
+    line-break: strict;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  html[lang="ko"] .header h1,
+  html[lang="ko"] .header-title,
+  html[lang="ko"] .section-title,
+  html[lang="ko"] .job-company,
+  html[lang="ko"] .project-title,
+  html[lang="ko"] .contact-row,
+  html[lang="ko"] .competency-tag,
+  html[lang="ko"] .skill-category {
+    font-family: var(--font-family), 'Apple SD Gothic Neo',
+      'Malgun Gothic', 'Noto Sans CJK KR',
+      'Noto Sans KR', 'Nanum Gothic', sans-serif;
+  }
+
+  html[lang="zh-TW"] body {
+    font-family: var(--font-family), 'PingFang TC',
+      'Microsoft JhengHei', 'Noto Sans CJK TC',
+      'Noto Sans TC', 'Source Han Sans TC', sans-serif;
+    line-break: strict;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  html[lang="zh-TW"] .header h1,
+  html[lang="zh-TW"] .header-title,
+  html[lang="zh-TW"] .section-title,
+  html[lang="zh-TW"] .job-company,
+  html[lang="zh-TW"] .project-title,
+  html[lang="zh-TW"] .contact-row,
+  html[lang="zh-TW"] .competency-tag,
+  html[lang="zh-TW"] .skill-category {
+    font-family: var(--font-family), 'PingFang TC',
+      'Microsoft JhengHei', 'Noto Sans CJK TC',
+      'Noto Sans TC', 'Source Han Sans TC', sans-serif;
+  }
+
+  html[lang="zh-CN"] .summary-text,
+  html[lang="zh"] .summary-text,
+  html[lang="zh-CN"] .job li,
+  html[lang="zh"] .job li {
+    line-height: 1.7;
+  }
+
+</style>
+</head>
+<body>
+<div class="page">
+
+  {{PHOTO}}
+  <!-- HEADER -->
+  <div class="header">
+    <h1>{{NAME}}</h1>
+    {{TITLE_BLOCK}}
+    <div class="header-gradient"></div>
+    <div class="contact-row">
+      <a href="tel:{{PHONE}}">{{PHONE}}</a>
+      <span class="separator">|</span>
+      <a href="mailto:{{EMAIL}}">{{EMAIL}}</a>
+      <span class="separator">|</span>
+      <a href="{{LINKEDIN_URL}}">{{LINKEDIN_DISPLAY}}</a>
+      <span class="separator">|</span>
+      <a href="{{PORTFOLIO_URL}}">{{PORTFOLIO_DISPLAY}}</a>
+      <span class="separator">|</span>
+      <span>{{LOCATION}}</span>
+    </div>
+  </div>
+
+  <!-- PROFESSIONAL SUMMARY -->
+  <div class="section">
+    <div class="section-title">{{SECTION_SUMMARY}}</div>
+    <div class="summary-text">{{SUMMARY_TEXT}}</div>
+  </div>
+
+  <!-- CORE COMPETENCIES -->
+  <div class="section">
+    <div class="section-title">{{SECTION_COMPETENCIES}}</div>
+    <div class="competencies-grid">
+      {{COMPETENCIES}}
+    </div>
+  </div>
+
+  <!-- WORK EXPERIENCE -->
+  <div class="section">
+    <div class="section-title">{{SECTION_EXPERIENCE}}</div>
+    {{EXPERIENCE}}
+  </div>
+
+  <!-- PROJECTS -->
+  <div class="section">
+    <div class="section-title">{{SECTION_PROJECTS}}</div>
+    {{PROJECTS}}
+  </div>
+
+  <!-- EDUCATION -->
+  <div class="section">
+    <div class="section-title">{{SECTION_EDUCATION}}</div>
+    {{EDUCATION}}
+  </div>
+
+  <!-- CERTIFICATIONS -->
+  <div class="section">
+    <div class="section-title">{{SECTION_CERTIFICATIONS}}</div>
+    <div class="cert-table">{{CERTIFICATIONS}}</div>
+  </div>
+
+  <!-- AWARDS -->
+  <div class="section">
+    <div class="section-title">{{SECTION_AWARDS}}</div>
+    <div class="award-table">{{AWARDS}}</div>
+  </div>
+
+  <!-- INTERESTS -->
+  <div class="section">
+    <div class="section-title">{{SECTION_INTERESTS}}</div>
+    <div class="interests-line">{{INTERESTS}}</div>
+  </div>
+
+  <!-- SKILLS -->
+  <div class="section">
+    <div class="section-title">{{SECTION_SKILLS}}</div>
+    {{SKILLS}}
+  </div>
+
+  <!-- END -->
+
+</div>
+</body>
+</html>
