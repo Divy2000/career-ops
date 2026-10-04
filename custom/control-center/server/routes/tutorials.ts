@@ -11,13 +11,13 @@ export async function tutorialRoutes(app: FastifyInstance, opts: { cfg: ServerCo
   app.get<{ Params: { id: string; file: string } }>('/api/tutorials/:id/media/:file', async (req, reply) => {
     const media = openMedia(cfg.dataRoot, req.params.id, req.params.file);
     if (!media.ok) return reply.code(media.status).send({ error: media.error });
-    reply.header('accept-ranges', 'bytes');
     reply.header('cache-control', 'private, no-cache');
     if (media.convertSrt) {
       const text = readSubtitleText(media.abs, media.size);
       if (text === null) return reply.code(413).send({ error: 'subtitle file is too large' });
       return reply.type(media.type).send(srtToVtt(text));
     }
+    reply.header('accept-ranges', 'bytes');
     const range = parseRange(req.headers.range, media.size);
     if (range.kind === 'unsatisfiable') return reply.code(416).header('content-range', `bytes */${media.size}`).send({ error: 'range not satisfiable' });
     reply.type(media.type);

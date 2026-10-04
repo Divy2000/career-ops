@@ -104,6 +104,47 @@ describe('GET /api/tutorials', () => {
     await t2.close();
   });
 
+  it('lists nothing when the tutorials folder is a symlink out of the data root', async () => {
+    const t3 = await makeTestApp();
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-linked-root-'));
+    try {
+      fs.mkdirSync(path.join(target, 'demo'));
+      fs.writeFileSync(path.join(target, 'demo', 'demo.mp4'), SECRET);
+      fs.writeFileSync(path.join(target, 'demo', 'tutorial.json'), JSON.stringify({ id: 'demo', title: 'Demo', video: 'demo.mp4' }));
+      const dir = path.join(t3.cfg.dataRoot, 'data', 'control-center', 'tutorials');
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      fs.symlinkSync(target, dir);
+      const body = (await t3.app.inject({ method: 'GET', url: '/api/tutorials', headers: t3.authed })).json();
+      expect(body.tutorials).toEqual([]);
+      const res = await t3.app.inject({ method: 'GET', url: '/api/tutorials/demo/media/demo.mp4', headers: t3.authed });
+      expect(res.statusCode).toBe(404);
+      expect(res.body).not.toContain(SECRET);
+    } finally {
+      await t3.close();
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('still serves when the data root itself is reached through a symlink', async () => {
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-real-root-'));
+    const link = path.join(os.tmpdir(), `cc-tut-link-root-${path.basename(real)}`);
+    fs.symlinkSync(real, link);
+    const t4 = await makeTestApp({ dataRoot: link });
+    try {
+      const dir = path.join(real, 'data', 'control-center', 'tutorials', 'demo');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'demo.mp4'), 'x');
+      fs.writeFileSync(path.join(dir, 'tutorial.json'), JSON.stringify({ id: 'demo', title: 'Demo', video: 'demo.mp4' }));
+      const body = (await t4.app.inject({ method: 'GET', url: '/api/tutorials', headers: t4.authed })).json();
+      expect(body.tutorials.map((x: { id: string }) => x.id)).toEqual(['demo']);
+      expect((await t4.app.inject({ method: 'GET', url: '/api/tutorials/demo/media/demo.mp4', headers: t4.authed })).statusCode).toBe(200);
+    } finally {
+      await t4.close();
+      fs.rmSync(link, { force: true });
+      fs.rmSync(real, { recursive: true, force: true });
+    }
+  });
+
   it('requires the session cookie', async () => {
     expect([401, 403]).toContain((await t.app.inject({ method: 'GET', url: '/api/tutorials', headers: { host: t.authed.host } })).statusCode);
     expect([401, 403]).toContain((await t.app.inject({ method: 'GET', url: '/api/tutorials/demo/media/demo.mp4', headers: { host: t.authed.host } })).statusCode);
@@ -171,6 +212,14 @@ describe('GET /api/tutorials/:id/media/:file', () => {
     expect(res.headers['content-type']).toMatch(/^text\/vtt/);
     expect(res.body).toBe('WEBVTT\n\n00:00:04.962 --> 00:00:09.880\nHello, world.\n\n00:00:10.000 --> 00:00:12.000\nSecond cue.\n');
     expect(fs.readFileSync(path.join(tutorialsDir(), 'demo', 'demo.srt'), 'utf8')).toBe(SRT);
+  });
+
+  it('serves a converted srt whole and does not advertise ranges it ignores', async () => {
+    const res = await media('demo', 'demo.srt', { range: 'bytes=0-9' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['accept-ranges']).not.toBe('bytes');
+    expect(res.headers['content-range']).toBeUndefined();
+    expect(res.body).toBe('WEBVTT\n\n00:00:04.962 --> 00:00:09.880\nHello, world.\n\n00:00:10.000 --> 00:00:12.000\nSecond cue.\n');
   });
 
   it('answers 404 for a missing file and for an unknown tutorial', async () => {

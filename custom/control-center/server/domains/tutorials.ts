@@ -111,12 +111,19 @@ export function tutorialsDir(dataRoot: string): string {
   return path.join(dataRoot, TUTORIALS_REL);
 }
 
+/** The tutorials folder as a realpath, or null when it is missing or resolves outside the (canonical) data root. */
+function realTutorialsRoot(dataRoot: string): string | null {
+  const base = realOrNull(dataRoot);
+  const root = realOrNull(tutorialsDir(dataRoot));
+  return base === null || root === null || !inside(base, root) ? null : root;
+}
+
 const mediaUrl = (id: string, file: string) => `/api/tutorials/${id}/media/${encodeURIComponent(file)}`;
 
 export function listTutorials(dataRoot: string): TutorialsRead {
   const directory = tutorialsDir(dataRoot);
   const result: TutorialsRead = { directory, tutorials: [], warnings: [] };
-  const root = realOrNull(directory);
+  const root = realTutorialsRoot(dataRoot);
   if (root === null) return result;
   const skip = (folder: string, message: string) => result.warnings.push({ folder, message });
   for (const folder of fs.readdirSync(root).filter((n) => !n.startsWith('.')).sort()) {
@@ -185,7 +192,7 @@ export function openMedia(dataRoot: string, id: string, file: string): MediaOpen
   if (!file || file === '.' || file === '..' || /[/\\\0]/.test(file)) return { ok: false, status: 400, error: 'the file must be a plain file name' };
   const type = MEDIA_TYPES[extOf(file)];
   if (!type) return { ok: false, status: 415, error: 'unsupported file type' };
-  const root = realOrNull(tutorialsDir(dataRoot));
+  const root = realTutorialsRoot(dataRoot);
   const folder = root === null ? null : realOrNull(path.join(root, id));
   if (root === null || folder === null || !inside(root, folder)) return { ok: false, status: 404, error: 'no such tutorial' };
   const found = resolveFile(folder, file);
