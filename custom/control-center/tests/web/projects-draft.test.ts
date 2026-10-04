@@ -7,6 +7,7 @@ const entry: ProjectView = {
   title: 'Event Router',
   url: 'https://github.com/alex-example/event-router',
   tagline: 'Streaming backbone',
+  source: null,
   tags: ['python', 'kafka'],
   kind: 'project',
   dates: '2024',
@@ -16,15 +17,15 @@ const entry: ProjectView = {
 };
 
 describe('project drafts', () => {
-  it('round-trips an entry through the form draft, keeping the tagline the form does not edit', () => {
+  it('round-trips an entry through the form draft, keeping the tagline and source the form does not edit', () => {
     const draft = draftFromEntry(entry);
     expect(draft).toEqual({ title: 'Event Router', url: 'https://github.com/alex-example/event-router', tags: 'python, kafka', kind: 'project', dates: '2024', bullets: ['One.', 'Two.'] });
-    expect(entryFromDraft(draft, entry.tagline)).toEqual({ title: 'Event Router', url: 'https://github.com/alex-example/event-router', tagline: 'Streaming backbone', tags: ['python', 'kafka'], kind: 'project', dates: '2024', bullets: ['One.', 'Two.'] });
+    expect(entryFromDraft(draft, { tagline: entry.tagline, source: 'documents/projects/router.pdf' })).toEqual({ title: 'Event Router', url: 'https://github.com/alex-example/event-router', tagline: 'Streaming backbone', source: 'documents/projects/router.pdf', tags: ['python', 'kafka'], kind: 'project', dates: '2024', bullets: ['One.', 'Two.'] });
   });
 
   it('trims fields, drops empty tags and bullets, and sends an empty link or date as null', () => {
     const input = entryFromDraft({ title: '  Kite Tracker ', url: ' ', tags: ' rust, , go ,', kind: 'project', dates: '', bullets: [' Tracked kites. ', '   '] });
-    expect(input).toEqual({ title: 'Kite Tracker', url: null, tagline: null, tags: ['rust', 'go'], kind: 'project', dates: null, bullets: ['Tracked kites.'] });
+    expect(input).toEqual({ title: 'Kite Tracker', url: null, tagline: null, source: null, tags: ['rust', 'go'], kind: 'project', dates: null, bullets: ['Tracked kites.'] });
   });
 
   it('flags a missing title, a non-http(s) link and a project with no bullet before anything is sent', () => {

@@ -75,6 +75,13 @@ describe('mode registry', () => {
     expect(ENVELOPE_MODES.has('projects-ingest')).toBe(true);
   });
 
+  it('projects-ingest reads its document through intake.mjs, like the intake mode; other read-only sessions do not get it', () => {
+    expect(getModePolicy('projects-ingest')?.scripts).toEqual(['intake.mjs']);
+    expect(getModePolicy('projects-ingest')?.bashRules).toEqual(['Bash(node intake.mjs:*)']);
+    expect(getModePolicy('advisor')?.scripts).toEqual([]);
+    expect(getModePolicy('cv-ingest')?.scripts).toEqual([]);
+  });
+
   it('no class ever grants the always-denied files', () => {
     for (const [name, def] of Object.entries(POLICY_CLASSES)) {
       for (const denied of ALWAYS_DENIED_WRITES) {

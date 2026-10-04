@@ -23,7 +23,8 @@ const HEADING_SEP_AT_START = /^\s*(?:--|\u2014|\u2013)\s+/;
 const HTTP_URL = /^https?:\/\/\S+$/i;
 const FENCE = /^\s*(```|~~~)/;
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
-const META = /^(tags|kind|dates)\s*:\s*(.*?)\s*$/i;
+// `Source:` is provenance: the documents/ file an imported entry came from (see intake).
+const META = /^(tags|kind|dates|source)\s*:\s*(.*?)\s*$/i;
 const BULLET = /^[-*]\s+(.*\S)\s*$/;
 const LABEL = /^\*\*([^*]+?):?\*\*:?/;
 
@@ -100,7 +101,7 @@ function parseHeading(raw) {
 }
 
 function parseBody(lines) {
-  const meta = { tags: [], kind: 'project', dates: null };
+  const meta = { tags: [], kind: 'project', dates: null, source: null };
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -110,6 +111,7 @@ function parseBody(lines) {
     const key = m[1].toLowerCase();
     if (key === 'tags') meta.tags = m[2].split(',').map((t) => t.trim()).filter(Boolean);
     else if (key === 'kind') meta.kind = m[2].toLowerCase();
+    else if (key === 'source') meta.source = m[2] || null;
     else meta.dates = m[2] || null;
     i++;
   }
@@ -221,6 +223,8 @@ export function serializeEntry(entry) {
   if (kind && kind !== 'project') out.push(`Kind: ${kind}`);
   const dates = oneLine(entry.dates);
   if (dates) out.push(`Dates: ${dates}`);
+  const source = oneLine(entry.source);
+  if (source) out.push(`Source: ${source}`);
   for (const b of entry.bullets ?? []) {
     const line = oneLine(b);
     if (line) out.push(`- ${line}`);

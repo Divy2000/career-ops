@@ -55,6 +55,13 @@ describe('invocation builder', () => {
     expect(buildArgv({ ...base, policy: getModePolicy('oferta')! }).join(' ')).not.toContain('tok-secret');
     expect(redact('stderr says tok-secret twice tok-secret', 'tok-secret')).toBe('stderr says [redacted] twice [redacted]');
   });
+  it('tells projects-ingest to read the document only through intake.mjs --text and to emit library blocks', () => {
+    const text = buildPreamble({ policy: getModePolicy('projects-ingest')!, outputLanguage: 'en' });
+    expect(text).toMatch(/node intake\.mjs --text <path>/);
+    expect(text).toMatch(/<<cc:projects \{"markdown":"\.\.\."\}>>/);
+    expect(text).toMatch(/Do not run --commit/);
+  });
+
   it('writes a preamble that names the scope, the router context and the envelope contract, with no em dash', () => {
     const text = buildPreamble({ policy: getModePolicy('apply')!, outputLanguage: 'en', reportNum: 12 });
     expect(text).toContain('headless');
@@ -504,6 +511,12 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(oferta, 'node custom/projects/rank.mjs jds/acme.md --json');
     ok(oferta, 'node custom/projects/rank.mjs --check');
     no(oferta, 'node custom/projects/rank.mjs /etc/passwd --json');
+  });
+
+  it('projects-ingest: intake.mjs may only extract text (--text <path>); recording sources is the app\'s job after the user confirms', () => {
+    const ingest = policyFor('projects-ingest', [...ALWAYS_DENIED_WRITES]);
+    ok(ingest, 'node intake.mjs --text projects/kites.pdf');
+    for (const cmd of ['node intake.mjs --commit projects/kites.pdf', 'node intake.mjs --commit --all', 'node intake.mjs --text', 'node intake.mjs --text projects/kites.pdf --commit', 'node intake.mjs --self-test', 'node rank-pipeline.mjs']) no(ingest, cmd);
   });
 
   it('refuses Bash when the session is not running from the repo root', () => {

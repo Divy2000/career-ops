@@ -11,6 +11,8 @@ export interface ProjectInput {
   tags?: string[];
   kind?: ProjectKind;
   dates?: string | null;
+  /** Provenance: the documents/ file an imported entry came from. */
+  source?: string | null;
   bullets: string[];
 }
 
@@ -22,6 +24,7 @@ export interface LibraryEntry {
   tags: string[];
   kind: string;
   dates: string | null;
+  source: string | null;
   bullets: string[];
   line: number;
   /** Character offsets of the entry block in the file (heading through last content line). */
@@ -62,6 +65,7 @@ export interface ProjectView {
   tags: string[];
   kind: string;
   dates: string | null;
+  source: string | null;
   bullets: string[];
   line: number;
   inCv: boolean;

@@ -23,6 +23,7 @@ vi.mock('@web/components/SessionPanel', () => ({
 
 let host: HTMLElement;
 let root: Root;
+let sent: Array<{ url: string; body: unknown }>;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -33,8 +34,12 @@ async function mount() {
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (typeof init?.body === 'string') sent.push({ url, body: JSON.parse(init.body) });
+      if (url === '/api/projects/convert') return json(200, { markdown: '## From Second\nSource: documents/projects/second.pdf\n- fresh.\n', entries: [{ title: 'From Second' }], duplicates: [], warnings: [], errors: [] });
+      if (url === '/api/projects/append') return json(200, { ok: true, etag: 'e2', recorded: true });
       if (url === '/api/projects' && (init?.method ?? 'GET') === 'GET') return json(200, { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [] });
-      const upload = url.match(/^\/api\/(?:cv|projects)\/upload\?name=(.+)$/);
+      const upload = url.match(/^\/api\/projects\/upload\?name=(.+)$/);
+      if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'intake reads PDF, Markdown and text: export to PDF or .md/.txt first' });
       if (upload) return json(200, { path: `projects/${decodeURIComponent(upload[1]!)}`, bytes: 3 });
       return json(404, { error: 'not stubbed' });
     }),
@@ -66,6 +71,7 @@ beforeEach(() => {
   panels.mounts.length = 0;
   panels.unmounts.length = 0;
   panels.onEnvelope.clear();
+  sent = [];
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -99,6 +105,28 @@ describe('Import projects: parser sessions per uploaded document', () => {
     await mount();
     await choose('first.pdf', 'application/pdf');
     await choose('projects.json', 'application/json');
+    expect(panelsShown()).toEqual([]);
+  });
+
+  it('names the upload as a documents/ source: the session reads it through intake, and preview and append carry the source', async () => {
+    await mount();
+    await choose('second.pdf', 'application/pdf');
+    expect(host.querySelector('[data-testid="session-panel"]')?.textContent).toBe('projects/second.pdf');
+    await act(async () => panels.onEnvelope.get('projects/second.pdf')!('projects', { markdown: '## From Second\n- fresh.' }, 1));
+    expect(host.querySelector('[aria-label="Import source"]')?.textContent).toContain('documents/projects/second.pdf');
+    const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(label))!;
+    await act(async () => button('Preview').click());
+    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(sent.find((c) => c.url === '/api/projects/convert')?.body).toEqual({ format: 'markdown', text: '## From Second\n- fresh.', source: 'projects/second.pdf' });
+    await act(async () => button('Append').click());
+    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(sent.find((c) => c.url === '/api/projects/append')?.body).toEqual({ markdown: '## From Second\nSource: documents/projects/second.pdf\n- fresh.\n', source: 'projects/second.pdf' });
+  });
+
+  it('shows intake\'s reason when the server refuses a DOCX, and starts no parser', async () => {
+    await mount();
+    await choose('notes.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('export to PDF or .md/.txt first');
     expect(panelsShown()).toEqual([]);
   });
 });

@@ -191,6 +191,17 @@
       ]
     },
     {
+      "id": "intake",
+      "script": "intake.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--text",
+        "--commit"
+      ],
+      "probe": false
+    },
+    {
       "id": "normalizeStatuses",
       "script": "normalize-statuses.mjs",
       "helpArgs": [

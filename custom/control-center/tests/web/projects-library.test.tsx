@@ -13,8 +13,8 @@ const READ: ProjectsRead = {
   etag: 'e1',
   validation: { ok: true, errors: [], warnings: [] },
   entries: [
-    { id: 'event-router', title: 'Event Router', url: 'https://github.com/alex-example/event-router', tagline: null, tags: ['python', 'kafka'], kind: 'project', dates: null, bullets: ['One.', 'Two.'], line: 5, inCv: true },
-    { id: 'ranking-notes', title: 'Ranking Notes', url: null, tagline: null, tags: [], kind: 'article', dates: null, bullets: ['Wrote it.'], line: 12, inCv: false },
+    { id: 'event-router', title: 'Event Router', url: 'https://github.com/alex-example/event-router', tagline: null, tags: ['python', 'kafka'], kind: 'project', dates: null, source: 'documents/projects/router.pdf', bullets: ['One.', 'Two.'], line: 5, inCv: true },
+    { id: 'ranking-notes', title: 'Ranking Notes', url: null, tagline: null, tags: [], kind: 'article', dates: null, source: null, bullets: ['Wrote it.'], line: 12, inCv: false },
   ],
 };
 
@@ -102,6 +102,7 @@ describe('Projects library tab', () => {
     expect(router).toContain('In CV');
     expect(router).toContain('2 bullets');
     expect(router).toContain('github.com');
+    expect(router).toContain('from router.pdf');
     expect(notes).toContain('Article');
     expect(notes).toContain('1 bullet');
   });
@@ -121,7 +122,7 @@ describe('Projects library tab', () => {
     const put = calls.find((c) => c.method === 'PUT')!;
     expect(put.url).toBe('/api/projects/event-router');
     expect(put.headers['If-Match']).toBe('e1');
-    expect(put.body).toMatchObject({ title: 'Ranking Notes', bullets: ['One.', 'Two.'] });
+    expect(put.body).toMatchObject({ title: 'Ranking Notes', bullets: ['One.', 'Two.'], source: 'documents/projects/router.pdf' });
   });
 
   it('shows the errors a converted import would cause and keeps Append disabled', async () => {

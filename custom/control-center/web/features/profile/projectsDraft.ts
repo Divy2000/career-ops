@@ -24,12 +24,18 @@ export function draftFromEntry(e: ProjectView): ProjectDraft {
   return { title: e.title, url: e.url ?? '', tags: e.tags.join(', '), kind, dates: e.dates ?? '', bullets: e.bullets.length ? [...e.bullets] : [''] };
 }
 
-/** The tagline is not edited in the form; pass the entry's own so an edit keeps it. */
-export function entryFromDraft(d: ProjectDraft, tagline: string | null = null): ProjectInput {
+/** Fields the form does not edit; pass the entry's own so an edit keeps its tagline and provenance. */
+export interface KeptFields {
+  tagline?: string | null;
+  source?: string | null;
+}
+
+export function entryFromDraft(d: ProjectDraft, kept: KeptFields = {}): ProjectInput {
   return {
     title: d.title.trim(),
     url: d.url.trim() || null,
-    tagline,
+    tagline: kept.tagline ?? null,
+    source: kept.source ?? null,
     tags: d.tags.split(',').map((t) => t.trim()).filter(Boolean),
     kind: d.kind,
     dates: d.dates.trim() || null,

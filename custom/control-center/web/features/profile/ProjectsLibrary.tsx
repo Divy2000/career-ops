@@ -22,6 +22,7 @@ interface Editing {
   id: string | null;
   draft: ProjectDraft;
   tagline: string | null;
+  source: string | null;
 }
 
 export function ProjectsLibrary() {
@@ -58,7 +59,7 @@ export function ProjectsLibrary() {
               <span className="mono">article-digest.md</span>: every project with copy-paste bullets. Tailored CVs pick 2 to 4 from here.
             </p>
           </div>
-          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null })}>
+          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null, source: null })}>
             <Plus size={16} aria-hidden="true" /> Add project
           </button>
         </div>
@@ -83,7 +84,7 @@ export function ProjectsLibrary() {
                     <ProjectForm editing={editing} etag={data.etag} onChange={setEditing} onDone={() => setEditing(null)} />
                   </li>
                 ) : (
-                  <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline })} onDelete={() => void remove(entry)} />
+                  <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline, source: entry.source })} onDelete={() => void remove(entry)} />
                 ),
               )}
             </ul>
@@ -124,6 +125,7 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
           {entry.kind !== 'project' && <Pill tone="info">{KIND_OPTIONS.find((k) => k.value === entry.kind)?.label ?? entry.kind}</Pill>}
           <Pill>{plural(entry.bullets.length, 'bullet')}</Pill>
           {host && <Pill title={entry.url ?? undefined}>{host}</Pill>}
+          {entry.source && <Pill title={`Imported from ${entry.source}`}>from {entry.source.split('/').pop()}</Pill>}
           {entry.dates && <span className="faint small">{entry.dates}</span>}
         </div>
         {entry.bullets.length > 0 && (
@@ -171,7 +173,7 @@ function ProjectForm({ editing, etag, onChange, onDone }: { editing: Editing; et
     if (problems.length) return;
     setSaving(true);
     try {
-      const body = entryFromDraft(draft, editing.tagline);
+      const body = entryFromDraft(draft, { tagline: editing.tagline, source: editing.source });
       if (editing.id === null) await apiSend('POST', '/api/projects', body, ifMatch(etag));
       else await apiSend('PUT', `/api/projects/${editing.id}`, body, ifMatch(etag));
       toast.success(`Saved ${body.title}`);
@@ -271,6 +273,8 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const [preview, setPreview] = useState<ConvertResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
+  // The documents/ source the draft came from (intake's path, e.g. projects/x.pdf); sent with preview and append.
+  const [source, setSource] = useState<string | null>(null);
   // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
   const currentUpload = useRef<string | null>(null);
   const showUpload = (p: string | null) => {
@@ -280,6 +284,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
       if (kind !== 'projects' || currentUpload.current !== forPath) return;
+      setSource(forPath);
       setFormat('markdown');
       setText((payload as { markdown: string }).markdown);
       setPreview(null);
@@ -291,6 +296,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const onFile = async (file: File) => {
     setError(null);
     setPreview(null);
+    setSource(null);
     showUpload(null);
     if (/\.json$/i.test(file.name)) {
       setFormat('json');
@@ -302,10 +308,12 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       setText(await file.text());
       return;
     }
-    const type = file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    const res = await fetch(`/api/cv/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
+    // A PDF is kept under documents/projects/ as an intake source; the server refuses what intake cannot read.
+    const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
+    const res = await fetch(`/api/projects/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
     if (!res.ok) {
-      setError(`Upload failed (${res.status}). JSON, Markdown, PDF or DOCX only.`);
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      setError(body?.error ?? `Upload failed (${res.status}). JSON, Markdown or PDF only.`);
       return;
     }
     showUpload(((await res.json()) as { path: string }).path);
@@ -314,7 +322,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const convert = async () => {
     setError(null);
     try {
-      setPreview(await apiSend<ConvertResult>('POST', '/api/projects/convert', { format, text }));
+      setPreview(await apiSend<ConvertResult>('POST', '/api/projects/convert', { format, text, ...(source ? { source } : {}) }));
     } catch (err) {
       setPreview(null);
       setError(describeError(err));
@@ -324,10 +332,12 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const append = async () => {
     if (!preview?.markdown) return;
     try {
-      await apiSend('POST', '/api/projects/append', { markdown: preview.markdown }, ifMatch(etag));
-      toast.success('Imported into article-digest.md');
+      const out = await apiSend<{ recorded?: boolean; warning?: string }>('POST', '/api/projects/append', { markdown: preview.markdown, ...(source ? { source } : {}) }, ifMatch(etag));
+      toast.success(out.recorded ? `Imported into article-digest.md; documents/${source} is recorded as ingested` : 'Imported into article-digest.md');
+      if (out.warning) toast.warning(out.warning);
       setPreview(null);
       setText('');
+      setSource(null);
       onAppended();
     } catch (err) {
       const body = err instanceof ApiError ? (err.body as { errors?: string[] }) : null;
@@ -339,7 +349,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   return (
     <div className="card projects-card">
       <h2>Import projects</h2>
-      <p className="muted small">Paste a projects JSON (AutoJobApply or JSON Resume) or library markdown, or pick a file. A PDF or DOCX goes to a read-only parser session (uses tokens). Nothing is written until you append.</p>
+      <p className="muted small">Paste a projects JSON (AutoJobApply or JSON Resume) or library markdown, or pick a file. A PDF is kept in documents/projects/ and read by a read-only parser session through intake (uses tokens). Nothing is written to the library until you append.</p>
       <div className="row gap projects-import__controls">
         <label className="project-field project-field--inline">
           <span className="project-field__label">Format</span>
@@ -348,7 +358,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
             <option value="markdown">Library markdown</option>
           </select>
         </label>
-        <input type="file" aria-label="Projects file" accept=".json,.md,.markdown,.txt,.pdf,.docx" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
+        <input type="file" aria-label="Projects file" accept=".json,.md,.markdown,.txt,.pdf" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
       </div>
       {uploadPath && (
         <SessionPanel
@@ -356,11 +366,17 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           mode="projects-ingest"
           title="Parse the uploaded document"
           target={{ type: 'text', value: uploadPath }}
-          initialPrompt={`Read the document at ${uploadPath} and emit its projects in the projects envelope.`}
+          initialPrompt={`Extract the projects from documents/${uploadPath}: read it with node intake.mjs --text ${uploadPath}, then emit them in the projects envelope.`}
           autoStart
           onEnvelope={onUploadEnvelope}
           startLabel="Parse"
         />
+      )}
+      {source && (
+        <p className="row gap small projects-source" aria-label="Import source">
+          <Pill tone="info">Source: documents/{source}</Pill>
+          <span className="muted">Each block gets a Source line; Append records the document as ingested, as intake does.</span>
+        </p>
       )}
       <textarea aria-label="Projects to import" className="mono editor" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreview(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
       <div className="row gap">

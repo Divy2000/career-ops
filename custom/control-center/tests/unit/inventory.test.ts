@@ -115,6 +115,7 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['projects.validate', { api: '/api/projects/validate' }],
   ['projects.convert', { api: '/api/projects/convert' }],
   ['projects.append', { api: '/api/projects/append' }],
+  ['projects.upload-source', { api: '/api/projects/upload' }],
   ['projects.rank', { action: 'projects.rank' }],
   ['projects.ingest-session', { web: 'projects-ingest' }],
   ['projects.tab', { web: 'ProjectsLibrary', e2e: 'Profile > Projects library' }],

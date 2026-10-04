@@ -221,6 +221,67 @@ describe('POST /api/projects/append', () => {
   });
 });
 
+describe('PDF uploads enter as intake sources under documents/projects', () => {
+  const upload = (name: string, body: Buffer, type = 'application/pdf') =>
+    t.app.inject({ method: 'POST', url: `/api/projects/upload?name=${encodeURIComponent(name)}`, headers: { ...t.authedWrite, 'content-type': type }, payload: body });
+  const docs = (...p: string[]) => path.join(t.cfg.dataRoot, 'documents', ...p);
+
+  it('stores the PDF under documents/projects, reuses an identical copy and never overwrites a different one', async () => {
+    const res = await upload('My Projects.pdf', Buffer.from('%PDF-1 a'));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ path: 'projects/My_Projects.pdf', file: 'documents/projects/My_Projects.pdf', bytes: 8 });
+    expect(fs.readFileSync(docs('projects', 'My_Projects.pdf'), 'utf8')).toBe('%PDF-1 a');
+    expect((await upload('My Projects.pdf', Buffer.from('%PDF-1 a'))).json().path).toBe('projects/My_Projects.pdf');
+    expect((await upload('My Projects.pdf', Buffer.from('%PDF-1 b'))).json().path).toBe('projects/My_Projects-1.pdf');
+    expect(fs.readFileSync(docs('projects', 'My_Projects.pdf'), 'utf8')).toBe('%PDF-1 a');
+    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'data', 'control-center', 'uploads'))).toBe(false);
+  });
+
+  it('refuses DOCX with the reason intake gives, writing nothing', async () => {
+    const res = await upload('p.docx', Buffer.from('PK'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(res.statusCode).toBe(415);
+    expect(res.json().error).toMatch(/export to PDF or \.md\/\.txt first/);
+    expect(fs.existsSync(docs('projects'))).toBe(false);
+  });
+
+  it('stamps every proposed block with a Source line naming the document, replacing one the parser wrote', async () => {
+    fs.mkdirSync(docs('projects'), { recursive: true });
+    fs.writeFileSync(docs('projects', 'notes.md'), 'Kite Tracker: tracked kites.\n');
+    const text = '## Kite Tracker\nSource: somewhere/else.pdf\nTags: python\n- Tracked kites.\n\n## Chess Engine -- https://example.org/chess\n- Wrote it.\n';
+    const res = await send('POST', '/api/projects/convert', { format: 'markdown', text, source: 'projects/notes.md' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().markdown).toBe('## Kite Tracker\nSource: documents/projects/notes.md\nTags: python\n- Tracked kites.\n\n---\n\n## Chess Engine -- https://example.org/chess\nSource: documents/projects/notes.md\n- Wrote it.\n');
+    expect(res.json().errors).toEqual([]);
+  });
+
+  it('refuses a source that is not a file under documents/', async () => {
+    for (const source of ['../cv.md', 'projects/missing.pdf', '/etc/passwd']) {
+      expect((await send('POST', '/api/projects/convert', { format: 'markdown', text: '## A\n- b.\n', source })).statusCode, source).toBe(400);
+      expect((await send('POST', '/api/projects/append', { markdown: '## A\n- b.\n', source }, (await current()).etag)).statusCode, source).toBe(400);
+    }
+  });
+
+  it('records the source as ingested with intake.mjs only after the append is written', async () => {
+    fs.mkdirSync(docs('projects'), { recursive: true });
+    fs.writeFileSync(docs('projects', 'notes.md'), 'Kite Tracker: tracked kites.\n');
+    const state = path.join(t.cfg.dataRoot, 'data', 'intake-state.json');
+    const ingested = () => (fs.existsSync(state) ? Object.keys(JSON.parse(fs.readFileSync(state, 'utf8')).ingested ?? {}) : []);
+    const refused = await send('POST', '/api/projects/append', { markdown: '## Event Router\n- Again.\n', source: 'projects/notes.md' }, (await current()).etag);
+    expect(refused.statusCode).toBe(422);
+    expect(ingested()).toEqual([]);
+    const res = await send('POST', '/api/projects/append', { markdown: '## Kite Tracker\nSource: documents/projects/notes.md\n- Tracked kites.\n', source: 'projects/notes.md' }, (await current()).etag);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, recorded: true });
+    expect(ingested()).toEqual(['projects/notes.md']);
+  });
+
+  it('records nothing for an append without a source', async () => {
+    const res = await send('POST', '/api/projects/append', { markdown: '## Kite Tracker\n- Tracked kites.\n' }, (await current()).etag);
+    expect(res.json().recorded).toBeUndefined();
+    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'data', 'intake-state.json'))).toBe(false);
+  });
+});
+
 describe('projects.rank action', () => {
   it('ranks the library against pasted JD text', async () => {
     const res = await send('POST', '/api/actions/projects.rank', { params: { text: 'We need Python and Kafka experience.' } });

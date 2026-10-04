@@ -165,6 +165,20 @@ test('given an unknown kind, when validated, then an error lists the allowed kin
   assert.match(v.errors.join('\n'), /"Thing".*hobby.*project, publication, article/);
 });
 
+test('given a "Source:" line, when parsed, then the source document is kept as provenance with the other meta lines', () => {
+  const [e] = parseLibrary('## Kite Tracker\nSource: documents/projects/kites.pdf\nTags: python\n- Tracked kites.\n').entries;
+  assert.equal(e.source, 'documents/projects/kites.pdf');
+  assert.deepEqual(e.tags, ['python']);
+  assert.deepEqual(e.bullets, ['Tracked kites.']);
+  assert.equal(parseLibrary('## Plain\n- One.\n').entries[0].source, null);
+});
+
+test('given an entry with a source, when serialized, then a Source line follows the other meta lines and survives a round trip', () => {
+  const md = serializeEntry({ title: 'Kite Tracker', tags: ['python'], source: 'documents/projects/kites.pdf', bullets: ['Tracked kites.'] });
+  assert.equal(md, '## Kite Tracker\nTags: python\nSource: documents/projects/kites.pdf\n- Tracked kites.');
+  assert.equal(parseLibrary(md).entries[0].source, 'documents/projects/kites.pdf');
+});
+
 test('given an entry, when serialized and parsed back, then every field survives', () => {
   const entry = {
     title: 'Ticket Triage Bot',
