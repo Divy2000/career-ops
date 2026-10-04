@@ -64,6 +64,10 @@ test('given the fork pack, when checked, then no heading is letter-spaced and no
   for (const f of files) assert.ok(!/[\u2013\u2014]/.test(fs.readFileSync(f, 'utf8')), f);
 });
 
+test('given the fork template, when checked, then it hides nothing (verify-ats penalises display:none as keyword stuffing)', () => {
+  assert.equal(/display:\s*none|visibility:\s*hidden/.test(fork), false);
+});
+
 test('given the fork template, when checked, then densities 0 to 3 shrink the font and the margins', () => {
   const levels = [0, 1, 2, 3].map((n) => {
     const body = rule(`html[data-density="${n}"]`);

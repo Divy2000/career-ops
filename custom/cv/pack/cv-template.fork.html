@@ -295,8 +295,11 @@
     color: #777;
   }
 
+  /* A project with no bullets leaves an empty list; collapse it without
+     hiding it, which verify-ats reads as hidden keyword stuffing. */
   .project-bullets:empty {
-    display: none;
+    margin: 0;
+    padding: 0;
   }
 
   /* === EDUCATION === */
