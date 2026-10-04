@@ -3,7 +3,7 @@
 // that must resolve, after symlinks, to a regular file inside its own tutorial folder.
 import fs from 'node:fs';
 import path from 'node:path';
-import { ID_RE, extOf, guideFileNames, parseGuide, parseManifest, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
+import { ID_RE, MAX_GUIDE_BYTES, extOf, guideFileNames, parseGuide, parseManifest, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
 import { inside } from '../lib/paths.js';
 
 export const TUTORIALS_REL = path.join('data', 'control-center', 'tutorials');
@@ -21,7 +21,6 @@ export const MEDIA_TYPES: Record<string, string> = {
 };
 
 const MAX_SUBTITLE_BYTES = 5 * 1024 * 1024;
-const MAX_GUIDE_BYTES = 1024 * 1024;
 
 export { parseManifest };
 export type { ManifestResult, TutorialManifest };

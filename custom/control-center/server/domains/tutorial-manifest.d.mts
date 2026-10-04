@@ -29,5 +29,6 @@ export interface TutorialGuideFile {
 }
 export type GuideResult = { ok: true; guide: TutorialGuideFile } | { ok: false; error: string };
 export const MAX_GUIDE_SECTIONS: number;
+export const MAX_GUIDE_BYTES: number;
 export function parseGuide(value: unknown, opts: { chapterCount: number }): GuideResult;
 export function guideFileNames(guide: TutorialGuideFile): string[];

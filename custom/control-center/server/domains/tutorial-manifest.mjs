@@ -30,16 +30,37 @@ const manifestSchema = z.object({
 });
 
 export const MAX_GUIDE_SECTIONS = 60;
+/** guide.json larger than this is refused by the server, so the installer refuses it too. */
+export const MAX_GUIDE_BYTES = 1024 * 1024;
 const MAX_STEPS = 12;
 const MAX_TIPS = 6;
 
-// An app-internal path: one leading slash, no scheme or host, no backslash, no whitespace or control characters, no parent segments.
+// An app-internal path: one leading slash, no scheme or host, no backslash, no whitespace or control characters, and no
+// "." or ".." segments, also when written percent-encoded (%2e). The path is checked after decoding so an encoded slash or dot cannot hide one.
+const hasControl = (r) => [...r].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
+
+function routeProblem(r) {
+  if (!r.startsWith('/') || r.includes('//') || /[\\\s]/.test(r) || hasControl(r)) return 'must be an app path that starts with a single "/" (no scheme, host, backslash, "//" or spaces)';
+  if (/%(?![0-9A-Fa-f]{2})/.test(r)) return 'has an invalid percent escape';
+  let path;
+  try {
+    path = decodeURIComponent(r.split(/[?#]/)[0]);
+  } catch {
+    return 'has an invalid percent escape';
+  }
+  if (path.includes('//') || path.includes('\\') || hasControl(path)) return 'must not hide a "//", backslash or control character behind a percent escape';
+  if (path.split('/').some((seg) => seg === '.' || seg === '..')) return 'must not contain "." or ".." segments';
+  return null;
+}
+
 const internalRoute = z
   .string()
   .min(1)
   .max(200)
-  .refine((r) => r.startsWith('/') && !r.includes('//') && !/[\\\s]/.test(r) && ![...r].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f), 'must be an app path that starts with a single "/" (no scheme, host, backslash, "//" or spaces)')
-  .refine((r) => !r.split(/[?#]/)[0].split('/').includes('..'), 'must not contain ".." segments');
+  .superRefine((r, ctx) => {
+    const problem = routeProblem(r);
+    if (problem) ctx.addIssue({ code: 'custom', message: problem });
+  });
 
 const text = (max) => z.string().min(1).max(max);
 

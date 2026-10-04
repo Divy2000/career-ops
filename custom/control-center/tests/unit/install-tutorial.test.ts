@@ -267,6 +267,17 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.existsSync(path.join(dataRoot, 'data', 'control-center', 'tutorials', 'guided'))).toBe(false);
   });
 
+  it('refuses a guide.json over the 1 MB cap that the server would reject, before copying anything', () => {
+    folder({ guide: JSON.stringify({ ...GUIDE, ignoredByTheSchema: 'x'.repeat(1024 * 1024) }) });
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/guide\.json is too large.*1 MB/);
+    expect(fs.existsSync(path.join(dataRoot, 'data', 'control-center', 'tutorials', 'guided'))).toBe(false);
+  });
+
+  it('accepts a guide.json just under the cap', () => {
+    folder({ guide: JSON.stringify({ ...GUIDE, pad: 'x'.repeat(1024 * 1024 - 2000) }) });
+    expect(installTutorial({ source: src(), dataRoot }).files).toContain('guide.json');
+  });
+
   it('refuses a bad guide in a recording folder, naming the chapters from toc.json', () => {
     recording(JSON.stringify({ sections: [{ ...GUIDE.sections[0], chapter: 5 }] }));
     expect(() => installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' })).toThrow(/chapter 5.*2 chapters/);

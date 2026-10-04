@@ -130,6 +130,14 @@ describe('parseGuide', () => {
     expect(parseGuide(guide(minimal), { chapterCount: 0 })).toEqual({ ok: true, guide: { sections: [minimal] } });
   });
 
+  it('allows ordinary percent-encoding in a route, and dots that are not whole segments', () => {
+    expect(parseGuide(guide({ ...section, route: '/application/a%20b/v1.2/..x' }), { chapterCount: 0 }).ok).toBe(true);
+  });
+
+  it('does not read an encoded dot segment in the query as a path segment', () => {
+    expect(parseGuide(guide({ ...section, route: '/tracker?back=%2e%2e' }), { chapterCount: 0 }).ok).toBe(true);
+  });
+
   it('allows a query string and a hash on the route', () => {
     expect(parseGuide(guide({ ...section, route: '/tracker?status=Applied#top' }), { chapterCount: 0 }).ok).toBe(true);
   });
@@ -162,6 +170,16 @@ describe('parseGuide', () => {
     ['a route with a backslash', guide({ ...section, route: '/\\evil.example' }), /route/],
     ['a route with a double slash inside', guide({ ...section, route: '/a//b' }), /route/],
     ['a route with a parent segment', guide({ ...section, route: '/a/../b' }), /route/],
+    ['a route with an encoded parent segment', guide({ ...section, route: '/today/%2e%2e/settings' }), /route/],
+    ['a route with an upper-case encoded parent segment', guide({ ...section, route: '/today/%2E%2E/settings' }), /route/],
+    ['a route with a mixed-case encoded parent segment', guide({ ...section, route: '/today/%2e./settings' }), /route/],
+    ['a route with an encoded current-directory segment', guide({ ...section, route: '/today/%2e/settings' }), /route/],
+    ['a route with a plain current-directory segment', guide({ ...section, route: '/today/./settings' }), /route/],
+    ['a route with an encoded slash', guide({ ...section, route: '/a%2f%2fb' }), /route/],
+    ['a route with an encoded backslash', guide({ ...section, route: '/a%5Cb' }), /route/],
+    ['a route with a bad percent escape', guide({ ...section, route: '/a%zz' }), /route/],
+    ['a route with a truncated percent escape', guide({ ...section, route: '/a%2' }), /route/],
+    ['a route that decodes to invalid UTF-8', guide({ ...section, route: '/a%ff' }), /route/],
     ['a route with whitespace', guide({ ...section, route: '/a b' }), /route/],
     ['a route with a control character', guide({ ...section, route: '/a\u0000b' }), /route/],
     ['a route that is too long', guide({ ...section, route: `/${'a'.repeat(250)}` }), /route/],

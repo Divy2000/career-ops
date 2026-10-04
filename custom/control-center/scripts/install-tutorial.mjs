@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from '../../../lib/is-main-module.mjs';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
-import { ID_RE, extOf, guideFileNames, parseGuide, parseManifest } from '../server/domains/tutorial-manifest.mjs';
+import { ID_RE, MAX_GUIDE_BYTES, extOf, guideFileNames, parseGuide, parseManifest } from '../server/domains/tutorial-manifest.mjs';
 
 const USAGE = `Usage: node custom/control-center/scripts/install-tutorial.mjs <source-folder> [options]
 
@@ -112,6 +112,7 @@ function buildManifest(source, opts) {
 function planGuide(guideRoot, name, chapterCount) {
   const guideFrom = path.join(guideRoot, name);
   if (!isFile(guideFrom)) throw new Error(`guide file "${name}" not found in the source folder`);
+  if (fs.statSync(guideFrom).size > MAX_GUIDE_BYTES) throw new Error(`${name} is too large (over ${MAX_GUIDE_BYTES / 1024 / 1024} MB), so the Control Center would not show the guide`);
   let json;
   try {
     json = JSON.parse(fs.readFileSync(guideFrom, 'utf8'));
