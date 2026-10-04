@@ -20,12 +20,18 @@ done
 case "$JOBS" in daily | all) ;; *) echo "error: --jobs must be daily or all (got $JOBS)" >&2; exit 2 ;; esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENTS="$HOME/Library/LaunchAgents"
-mkdir -p "$AGENTS" "$ROOT/data/immigration/logs"
-if [ "$JOBS" = all ]; then mkdir -p "$ROOT/data/upstream-sync"; fi
+# The data root, resolved exactly as the jobs resolve it (CAREER_OPS_ROOT, else the .career-ops-data marker, else the checkout),
+# and written into each plist so launchd runs see the same data this shell sees.
+DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+mkdir -p "$AGENTS" "$DATA/data/immigration/logs"
+if [ "$JOBS" = all ]; then mkdir -p "$DATA/data/upstream-sync"; fi
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd=""
+  local wd="" xdata xroot
+  xdata="$(xml_escape "$DATA")"
+  xroot="$(xml_escape "$ROOT")"
   [ -n "$weekday" ] && wd="<key>Weekday</key><integer>$weekday</integer>"
   cat > "$AGENTS/$label.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -34,12 +40,13 @@ write_plist() { # label script hour minute weekday(or empty) logdir
 <dict>
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key>
-  <array><string>/bin/bash</string><string>$ROOT/$script</string></array>
-  <key>WorkingDirectory</key><string>$ROOT</string>
+  <array><string>/bin/bash</string><string>$xroot/$script</string></array>
+  <key>WorkingDirectory</key><string>$xroot</string>
+  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>$xdata</string></dict>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>$hour</integer><key>Minute</key><integer>$minute</integer>$wd</dict>
-  <key>StandardOutPath</key><string>$ROOT/$logdir/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>$ROOT/$logdir/launchd.err.log</string>
+  <key>StandardOutPath</key><string>$xdata/$logdir/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>$xdata/$logdir/launchd.err.log</string>
 </dict>
 </plist>
 PLIST
@@ -52,4 +59,8 @@ PLIST
 write_plist com.career-ops.immigration-watch custom/immigration/run-daily.sh 8 0 "" data/immigration/logs
 if [ "$JOBS" = all ]; then
   write_plist com.career-ops.upstream-sync custom/upstream-sync/sync.sh 3 0 0 data/upstream-sync
+elif [ -f "$AGENTS/com.career-ops.upstream-sync.plist" ]; then
+  # The maintainer reruns this script; an installed sync job is theirs, so it is left alone.
+  echo "note: the weekly sync job (com.career-ops.upstream-sync) is still installed; --jobs daily does not touch it."
+  echo "      To remove it: launchctl bootout gui/$(id -u)/com.career-ops.upstream-sync; rm '$AGENTS/com.career-ops.upstream-sync.plist'"
 fi
