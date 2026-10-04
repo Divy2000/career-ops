@@ -3,7 +3,7 @@
 // that must resolve, after symlinks, to a regular file inside its own tutorial folder.
 import fs from 'node:fs';
 import path from 'node:path';
-import { ID_RE, MAX_GUIDE_BYTES, extOf, guideFileNames, parseGuide, parseManifest, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
+import { ID_RE, MAX_GUIDE_BYTES, extOf, guideDocs, guideFileRefs, isGuideV2, parseGuide, parseManifest, type GuideBlockDoc, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
 import { inside } from '../lib/paths.js';
 
 export const TUTORIALS_REL = path.join('data', 'control-center', 'tutorials');
@@ -81,8 +81,54 @@ export interface GuideSectionView {
   chapter: number | null;
 }
 
+/** The legacy quick guide (a guide.json without `version`), as the current Quick guide tab reads it. */
 export interface TutorialGuide {
   sections: GuideSectionView[];
+}
+
+export type GuideBlockView =
+  | { type: 'text'; text: string }
+  | { type: 'steps'; items: string[] }
+  | { type: 'tips'; items: string[] }
+  | {
+      type: 'media';
+      kind: 'image' | 'gif';
+      alt: string;
+      caption: string | null;
+      /** Declared size; null for an adapted legacy guide, which does not declare one. */
+      width: number | null;
+      height: number | null;
+      url: string;
+      /** The light-theme file; null when there is none (always null for an adapted legacy guide), so the dark file is shown. */
+      urlLight: string | null;
+      posterUrl: string | null;
+      posterLightUrl: string | null;
+    };
+
+export interface GuideSubsectionView {
+  id: string;
+  title: string;
+  /** Empty for an adapted legacy section, whose summary is the first text block. */
+  summary: string;
+  route: string | null;
+  chapter: number | null;
+  blocks: GuideBlockView[];
+}
+
+export interface GuideDocsSectionView {
+  id: string;
+  title: string;
+  summary: string;
+  subsections: GuideSubsectionView[];
+}
+
+/** The documentation view of a guide of either format. */
+export interface GuideDocs {
+  /** The version of the guide.json this was read from. */
+  version: 1 | 2;
+  /** True for a legacy (version 1) guide that was adapted: one subsection per section, no light media. */
+  legacy: boolean;
+  sections: GuideDocsSectionView[];
 }
 
 export interface Tutorial {
@@ -97,8 +143,10 @@ export interface Tutorial {
   posterLight: TutorialFile | null;
   transcript: TutorialFile | null;
   chapters: Array<{ title: string; start: number }>;
-  /** The quick guide, or null when none is named or it is invalid (the reason is then in `warnings`). */
+  /** The legacy quick guide, or null when none is named, it is invalid (the reason is then in `warnings`) or it is a version 2 guide (see `guideDocs`). */
   guide: TutorialGuide | null;
+  /** The guide as documentation, for a version 1 (adapted) or version 2 guide; null when none is named or it is invalid. */
+  guideDocs: GuideDocs | null;
   /** Optional files that were dropped because they were missing or outside the folder. */
   warnings: string[];
 }
@@ -142,7 +190,7 @@ function realTutorialsRoot(dataRoot: string): string | null {
 
 const mediaUrl = (id: string, file: string) => `/api/tutorials/${id}/media/${encodeURIComponent(file)}`;
 
-type GuideLoad = { ok: true; guide: TutorialGuide } | { ok: false; error: string };
+type GuideLoad = { ok: true; guide: TutorialGuide | null; docs: GuideDocs } | { ok: false; error: string };
 
 const refusal = (name: string, r: Extract<Resolved, { ok: false }>) => `"${name}" ${r.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}`;
 
@@ -159,16 +207,37 @@ function loadGuide(folder: string, dir: string, manifest: TutorialManifest & { g
   }
   const parsed = parseGuide(json, { chapterCount: manifest.chapters.length });
   if (!parsed.ok) return { ok: false, error: `guide file "${manifest.guide}" is invalid: ${parsed.error}` };
-  for (const name of guideFileNames(parsed.guide)) {
+  for (const { name, kind } of guideFileRefs(parsed.guide)) {
     const r = resolveFile(dir, name);
-    if (!r.ok) {
-      const kind = parsed.guide.sections.some((s) => s.gif === name) ? 'gif' : 'poster';
-      return { ok: false, error: `guide ${kind} file ${refusal(name, r)}` };
-    }
+    if (!r.ok) return { ok: false, error: `guide ${kind} file ${refusal(name, r)}` };
   }
-  const view = (name: string): TutorialFile => ({ file: name, url: mediaUrl(folder, name) });
+  const url = (name: string) => mediaUrl(folder, name);
+  const view = (name: string): TutorialFile => ({ file: name, url: url(name) });
+  const block = (b: GuideBlockDoc): GuideBlockView =>
+    b.type !== 'media'
+      ? b
+      : {
+          type: 'media',
+          kind: b.kind,
+          alt: b.alt,
+          caption: b.caption,
+          width: b.width,
+          height: b.height,
+          url: url(b.file),
+          urlLight: b.fileLight && url(b.fileLight),
+          posterUrl: b.poster && url(b.poster),
+          posterLightUrl: b.posterLight && url(b.posterLight),
+        };
+  const docs = guideDocs(parsed.guide);
+  const docsView: GuideDocs = {
+    version: docs.version,
+    legacy: docs.legacy,
+    sections: docs.sections.map((s) => ({ ...s, subsections: s.subsections.map((u) => ({ ...u, blocks: u.blocks.map(block) })) })),
+  };
+  if (isGuideV2(parsed.guide)) return { ok: true, guide: null, docs: docsView };
   return {
     ok: true,
+    docs: docsView,
     guide: {
       sections: parsed.guide.sections.map((s) => ({
         id: s.id,
@@ -237,9 +306,13 @@ export function listTutorials(dataRoot: string): TutorialsRead {
     const videoLight = optional('light video', m.videoLight);
     const subtitles = optional('subtitles', m.subtitles);
     let guide: TutorialGuide | null = null;
+    let docs: GuideDocs | null = null;
     if (m.guide !== undefined) {
       const loaded = loadGuide(folder, dir, { ...m, guide: m.guide });
-      if (loaded.ok) guide = loaded.guide;
+      if (loaded.ok) {
+        guide = loaded.guide;
+        docs = loaded.docs;
+      }
       else warnings.push(`${loaded.error}, so the quick guide is hidden`);
     }
     result.tutorials.push({
@@ -254,6 +327,7 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       transcript: plain(optional('transcript', m.transcript)),
       chapters: m.chapters,
       guide,
+      guideDocs: docs,
       warnings,
     });
   }
