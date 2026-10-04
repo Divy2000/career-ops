@@ -36,6 +36,25 @@ test.describe('Dev Chat', () => {
     expect(restored.text).not.toContain('Added by Dev Chat');
   });
 
+  test('a transcript taller than its box scrolls with the keyboard (axe: scrollable-region-focusable)', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 420 });
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/dev');
+    await page.getByLabel('Prompt for devchat').fill('Add a scoring rule for a short window');
+    await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+    await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
+    const transcript = page.getByLabel('Transcript for devchat');
+    await expect.poll(() => transcript.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    await expect(transcript).toHaveAttribute('tabindex', '0');
+    expect(await transcript.evaluate((el) => el.scrollTop)).toBe(0);
+    await transcript.focus();
+    await expect(transcript).toBeFocused();
+    await page.keyboard.press('PageDown');
+    await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+  });
+
   test('the supervisor serves the reload status and the recovery page behind the session cookie', async ({ page, request }) => {
     expect((await request.get('/__supervisor/status')).status()).toBe(401);
     await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -72,6 +91,10 @@ test.describe('Dev Chat', () => {
     expect((await (await page.request.get('/api/files/user/customMd')).json()).text).toContain('Added by Dev Chat');
     const sessions = (await (await page.request.get('/api/sessions')).json()) as Array<{ id: string; mode: string }>;
     const id = sessions.find((s) => s.mode === 'devchat')!.id;
+    // The transcript shows the final text a poll before the turn is finalized (post-turn hashes recorded, status settled), and the
+    // recovery page refuses a revert until then. The in-app Revert button is disabled for that window; here wait for the same thing.
+    const statusOf = async () => ((await (await page.request.get('/api/sessions')).json()) as Array<{ id: string; status: string }>).find((s) => s.id === id)?.status ?? '';
+    await expect.poll(statusOf).toMatch(/^(awaiting_user|done|error|cancelled)$/);
     const errors: string[] = [];
     page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
     await page.goto('/__recovery');

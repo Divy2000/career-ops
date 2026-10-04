@@ -19,6 +19,8 @@ export function findEmDashes(dir) {
   const hits = [];
   const walk = (d) => {
     for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      // A symlink (node_modules in a linked worktree, say) points at files this package did not write.
+      if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
         const child = path.join(d, entry.name);
         if (!SKIP_DIRS.has(entry.name) && !isNestedCheckout(child)) walk(child);

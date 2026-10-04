@@ -30,7 +30,7 @@ export function TranscriptView({ transcript, label }: { transcript: Transcript; 
     return () => clearTimeout(timer);
   }, [summary]);
   return (
-    <div className="transcript" aria-label={label}>
+    <div className="transcript" role="region" tabIndex={0} aria-label={label}>
       <span className="sr-only" aria-live="polite">
         {announce}
       </span>

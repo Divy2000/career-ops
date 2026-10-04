@@ -3,7 +3,7 @@
 // that must resolve, after symlinks, to a regular file inside its own tutorial folder.
 import fs from 'node:fs';
 import path from 'node:path';
-import { ID_RE, extOf, parseManifest, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
+import { ID_RE, MAX_GUIDE_BYTES, extOf, guideFileNames, parseGuide, parseManifest, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
 import { inside } from '../lib/paths.js';
 
 export const TUTORIALS_REL = path.join('data', 'control-center', 'tutorials');
@@ -16,6 +16,8 @@ export const MEDIA_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
 };
 
 const MAX_SUBTITLE_BYTES = 5 * 1024 * 1024;
@@ -67,6 +69,22 @@ export interface TutorialFile {
   url: string;
 }
 
+export interface GuideSectionView {
+  id: string;
+  title: string;
+  summary: string;
+  route: string | null;
+  gif: TutorialFile;
+  poster: TutorialFile | null;
+  steps: string[];
+  tips: string[];
+  chapter: number | null;
+}
+
+export interface TutorialGuide {
+  sections: GuideSectionView[];
+}
+
 export interface Tutorial {
   id: string;
   title: string;
@@ -76,6 +94,8 @@ export interface Tutorial {
   poster: TutorialFile | null;
   transcript: TutorialFile | null;
   chapters: Array<{ title: string; start: number }>;
+  /** The quick guide, or null when none is named or it is invalid (the reason is then in `warnings`). */
+  guide: TutorialGuide | null;
   /** Optional files that were dropped because they were missing or outside the folder. */
   warnings: string[];
 }
@@ -118,6 +138,49 @@ function realTutorialsRoot(dataRoot: string): string | null {
 }
 
 const mediaUrl = (id: string, file: string) => `/api/tutorials/${id}/media/${encodeURIComponent(file)}`;
+
+type GuideLoad = { ok: true; guide: TutorialGuide } | { ok: false; error: string };
+
+const refusal = (name: string, r: Extract<Resolved, { ok: false }>) => `"${name}" ${r.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}`;
+
+/** Reads and checks the guide a manifest names: every file it lists must exist inside the folder. All or nothing. */
+function loadGuide(folder: string, dir: string, manifest: TutorialManifest & { guide: string }): GuideLoad {
+  const file = resolveFile(dir, manifest.guide);
+  if (!file.ok) return { ok: false, error: `guide file ${refusal(manifest.guide, file)}` };
+  if (file.size > MAX_GUIDE_BYTES) return { ok: false, error: `guide file "${manifest.guide}" is too large (over ${MAX_GUIDE_BYTES / 1024 / 1024} MB)` };
+  let json: unknown;
+  try {
+    json = JSON.parse(fs.readFileSync(file.abs, 'utf8'));
+  } catch (err) {
+    return { ok: false, error: `guide file "${manifest.guide}" is not valid JSON (${(err as Error).message})` };
+  }
+  const parsed = parseGuide(json, { chapterCount: manifest.chapters.length });
+  if (!parsed.ok) return { ok: false, error: `guide file "${manifest.guide}" is invalid: ${parsed.error}` };
+  for (const name of guideFileNames(parsed.guide)) {
+    const r = resolveFile(dir, name);
+    if (!r.ok) {
+      const kind = parsed.guide.sections.some((s) => s.gif === name) ? 'gif' : 'poster';
+      return { ok: false, error: `guide ${kind} file ${refusal(name, r)}` };
+    }
+  }
+  const view = (name: string): TutorialFile => ({ file: name, url: mediaUrl(folder, name) });
+  return {
+    ok: true,
+    guide: {
+      sections: parsed.guide.sections.map((s) => ({
+        id: s.id,
+        title: s.title,
+        summary: s.summary,
+        route: s.route ?? null,
+        gif: view(s.gif),
+        poster: s.poster ? view(s.poster) : null,
+        steps: s.steps,
+        tips: s.tips ?? [],
+        chapter: s.chapter ?? null,
+      })),
+    },
+  };
+}
 
 export function listTutorials(dataRoot: string): TutorialsRead {
   const directory = tutorialsDir(dataRoot);
@@ -168,6 +231,12 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       return null;
     };
     const subtitles = optional('subtitles', m.subtitles);
+    let guide: TutorialGuide | null = null;
+    if (m.guide !== undefined) {
+      const loaded = loadGuide(folder, dir, { ...m, guide: m.guide });
+      if (loaded.ok) guide = loaded.guide;
+      else warnings.push(`${loaded.error}, so the quick guide is hidden`);
+    }
     result.tutorials.push({
       id: m.id,
       title: m.title,
@@ -177,6 +246,7 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       poster: optional('poster', m.poster),
       transcript: optional('transcript', m.transcript),
       chapters: m.chapters,
+      guide,
       warnings,
     });
   }

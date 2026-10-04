@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, getRouteApi } from '@tanstack/react-router';
+import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Md } from '../../components/Md';
-import { DataState, Empty } from '../../components/ui';
+import { DataState, Empty, Tabs } from '../../components/ui';
 import { apiGetText } from '../../lib/api';
 import { useTutorials } from '../../lib/queries';
 import { chapterIndexAt, filterTranscript, formatTimestamp, keyAction, type KeyTarget } from '../../lib/tutorials';
+import { QuickGuide } from './QuickGuide';
 import type { Tutorial, TutorialsRead } from '@shared/api';
 
 const route = getRouteApi('/tutorials');
@@ -70,6 +71,9 @@ function EmptyState({ directory }: { directory: string }) {
           <code className="mono">chapters</code> are <code className="mono">{'{ title, start }'}</code> with start in seconds.
         </li>
         <li>
+          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab, one section per feature with a .gif or .webp, steps and a link into the app.
+        </li>
+        <li>
           To install one from a recording folder: <code className="mono">node custom/control-center/scripts/install-tutorial.mjs &lt;folder&gt;</code>
         </li>
       </ul>
@@ -121,7 +125,7 @@ function Transcript({ url }: { url: string }) {
   );
 }
 
-function Player({ tutorial }: { tutorial: Tutorial }) {
+function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; startAt: number | null; onStartApplied: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [current, setCurrent] = useState(-1);
   const [captions, setCaptions] = useState(readCaptionsPref);
@@ -164,6 +168,24 @@ function Player({ tutorial }: { tutorial: Tutorial }) {
     v.currentTime = seconds;
     setCurrent(chapterIndexAt(chapters, seconds));
   };
+
+  // Arriving from the Quick guide: start at that chapter once the video knows its length.
+  useEffect(() => {
+    const v = video.current;
+    if (!v || startAt === null) return;
+    const go = () => {
+      v.currentTime = startAt;
+      setCurrent(chapterIndexAt(chapters, startAt));
+      onStartApplied();
+    };
+    if (v.readyState >= 1) {
+      go();
+      return;
+    }
+    v.addEventListener('loadedmetadata', go, { once: true });
+    return () => v.removeEventListener('loadedmetadata', go);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the arrival seeks; later chapter edits must not move the playhead
+  }, [startAt]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -257,11 +279,6 @@ function Player({ tutorial }: { tutorial: Tutorial }) {
             <p className="sr-only" role="status" aria-live="polite">
               {osd}
             </p>
-            {tutorial.warnings.map((w) => (
-              <p key={w} className="small" style={{ margin: 0, color: 'var(--warning)' }}>
-                {w}
-              </p>
-            ))}
           </div>
         </div>
         <aside className="card tut__chapters" aria-labelledby="tut-chapters-title">
@@ -287,9 +304,26 @@ function Player({ tutorial }: { tutorial: Tutorial }) {
   );
 }
 
+const VIEWS = [
+  { id: 'video', label: 'Video' },
+  { id: 'guide', label: 'Quick guide' },
+] as const;
+
 function Loaded({ data }: { data: TutorialsRead }) {
-  const { t } = route.useSearch();
+  const { t, view, section } = route.useSearch();
+  const navigate = useNavigate({ from: '/tutorials' });
+  // The chapter time "Watch this part" asked for, tied to the tutorial it was asked on.
+  const [seek, setSeek] = useState<{ id: string; at: number } | null>(null);
   const selected = data.tutorials.find((x) => x.id === t) ?? data.tutorials[0];
+  const guide = selected?.guide ?? null;
+  const startAt = seek !== null && seek.id === selected?.id ? seek.at : null;
+  const showGuide = guide !== null && view === 'guide';
+  // The URL carries the tutorial, the view and the section, so every state of the page is a shareable link.
+  const go = (to: { view?: 'guide'; section?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
+  const setView = (next: 'video' | 'guide') => {
+    setSeek(null);
+    go(next === 'guide' ? { view: 'guide' } : {});
+  };
   return (
     <div className="stack">
       {data.warnings.length > 0 && (
@@ -321,7 +355,27 @@ function Loaded({ data }: { data: TutorialsRead }) {
               </Link>
             ))}
           </nav>
-          {selected && <Player key={selected.id} tutorial={selected} />}
+          {selected?.warnings.map((message) => (
+            <p key={message} className="small" style={{ margin: 0, color: 'var(--warning)' }}>
+              {message}
+            </p>
+          ))}
+          {selected && guide && <Tabs label="Tutorial view" tabs={[...VIEWS]} value={showGuide ? 'guide' : 'video'} onChange={setView} />}
+          {selected && guide && showGuide && (
+            <QuickGuide
+              key={selected.id}
+              tutorialId={selected.id}
+              guide={guide}
+              chapters={selected.chapters}
+              sectionId={section}
+              onSelect={(id, replace) => go({ view: 'guide', section: id }, replace)}
+              onWatch={(start) => {
+                setSeek({ id: selected.id, at: start });
+                go({});
+              }}
+            />
+          )}
+          {selected && !showGuide && <Player key={selected.id} tutorial={selected} startAt={startAt} onStartApplied={() => setSeek(null)} />}
         </>
       )}
     </div>
