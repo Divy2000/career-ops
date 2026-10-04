@@ -42,7 +42,7 @@ If the directory does not exist, run the full procedure from step 1.
 
 ## Before Step 1: record the pre-existing set
 
-Before you run any command, copy, extract or write anything, list every file that already exists under `documents/`, `data/install/tmp/` and `data/install/onboarding-draft/` (under the data root). Keep that list for the whole session: it is the pre-existing set. A file is pre-existing if it is in the set, even if you later update or overwrite it. Nothing in the set is ever removed by the decline cleanup (see Rule 5 and "Step 5: The gate").
+Before you run any other command, copy, extract or write anything, resolve the effective data root first: `node -e "import('./path-resolver.mjs').then((m) => console.log(m.getCareerOpsRoot()))"`. Then snapshot, as absolute paths under that root, every file that already exists under `documents/`, `data/install/tmp/` and `data/install/onboarding-draft/`. Keep that list for the whole session: it is the pre-existing set. A file is pre-existing if it is in the set, even if you later update or overwrite it. Files the installer copied from `--resume` or `--docs` before this session count as pre-existing: they are kept on decline, and the user can delete them manually. Nothing in the set is ever removed by the decline cleanup (see Rule 5 and "Step 5: The gate").
 
 ## Step 1: State and inventory
 

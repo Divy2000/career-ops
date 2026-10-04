@@ -465,3 +465,16 @@ test('ONBOARDING.md records the pre-existing set before Step 1, and pre-existing
     assert.match(text, /per file or (per )?group/i, `${name}: per file or group`);
   }
 });
+
+test('the pre-existing set is snapshotted as absolute paths under the effective data root, and installer-copied files count as pre-existing', () => {
+  const rec = section(onboarding, /^#{2,3}\s+Before Step 1: record the pre-existing set$/);
+  assert.match(rec, /effective data root/i);
+  assert.ok(rec.includes("import('./path-resolver.mjs').then((m) => console.log(m.getCareerOpsRoot()))") && onboarding.indexOf("import('./path-resolver.mjs').then((m) => console.log(m.getCareerOpsRoot()))") < onboarding.indexOf('## Before Step 1'), 'uses the same path-resolver one-liner as the rest of the doc');
+  assert.match(rec, /absolute paths/i);
+  assert.match(rec, /resolve[^.]*data root[^.]*first|first[^.]*resolve[^.]*data root/i);
+  assert.match(rec, /--resume/);
+  assert.match(rec, /--docs/);
+  assert.match(rec, /before this session[^.]*pre-existing|pre-existing[^.]*before this session/i);
+  assert.match(rec, /kept on decline/i);
+  assert.match(rec, /delete them (by hand|manually)/i);
+});
