@@ -23,14 +23,9 @@ function DailyBanner() {
   );
 }
 
-/** Narrow windows show a chip as its colored dot; the text stays in the accessibility tree. */
-function ChipLabel({ children }: { children: string }) {
-  return (
-    <>
-      <span className="chip__dot" aria-hidden="true" />
-      <span className="chip__text">{children}</span>
-    </>
-  );
+/** Narrow windows replace a chip's text with its data-short form (not color-only); the full text stays in the accessibility tree. */
+function ChipText({ children }: { children: string }) {
+  return <span className="chip__text">{children}</span>;
 }
 
 function DailyJobChip() {
@@ -47,13 +42,23 @@ function DailyJobChip() {
 
 function HealthChip() {
   const q = useQuery({ queryKey: ['system', 'status'], queryFn: () => apiGet<SystemStatus>('/api/system/status') });
-  if (q.isPending) return <span className="chip" aria-busy="true"><ChipLabel>Checking setup</ChipLabel></span>;
-  if (q.isError) return <span className="chip chip--danger"><ChipLabel>Status unavailable</ChipLabel></span>;
+  if (q.isPending)
+    return (
+      <span className="chip" aria-busy="true" title="Checking setup" data-short="Setup ...">
+        <ChipText>Checking setup</ChipText>
+      </span>
+    );
+  if (q.isError)
+    return (
+      <span className="chip chip--danger" title="Status unavailable" data-short="Setup ?">
+        <ChipText>Status unavailable</ChipText>
+      </span>
+    );
   const s = q.data;
   const ok = Boolean(s.claude.version) && s.keychainTokenPresent;
   return (
-    <Link to="/settings" search={{ tab: 'engine' }} className={`chip ${ok ? 'chip--ok' : 'chip--warn'}`} title={ok ? 'Claude CLI and Keychain token found' : 'Setup incomplete: see Settings'}>
-      <ChipLabel>{ok ? 'Setup OK' : 'Setup needs attention'}</ChipLabel>
+    <Link to="/settings" search={{ tab: 'engine' }} className={`chip ${ok ? 'chip--ok' : 'chip--warn'}`} title={ok ? 'Claude CLI and Keychain token found' : 'Setup incomplete: see Settings'} data-short={ok ? 'Setup OK' : 'Setup !'}>
+      <ChipText>{ok ? 'Setup OK' : 'Setup needs attention'}</ChipText>
     </Link>
   );
 }
@@ -75,8 +80,8 @@ function ActivityChip() {
   const active = (sessions.data ?? []).filter((s) => s.status === 'running' || s.status === 'queued').length + (runs.data ?? []).filter((r) => (r.status === 'running' || r.status === 'queued') && !r.actionId.startsWith('session.')).length;
   const waiting = (sessions.data ?? []).filter((s) => s.status === 'awaiting_user').length;
   return (
-    <Link to="/sessions" className={`chip ${active ? 'chip--info' : waiting ? 'chip--warn' : 'chip--neutral'}`} aria-label={`Activity: ${active} running, ${waiting} waiting for you`}>
-      <ChipLabel>{active ? `${active} running` : waiting ? `${waiting} waiting for you` : 'Idle'}</ChipLabel>
+    <Link to="/sessions" className={`chip ${active ? 'chip--info' : waiting ? 'chip--warn' : 'chip--neutral'}`} aria-label={`Activity: ${active} running, ${waiting} waiting for you`} title={active ? `${active} running` : waiting ? `${waiting} waiting for you` : 'Idle'} data-short={active ? `${active} run` : waiting ? `${waiting} wait` : 'Idle'}>
+      <ChipText>{active ? `${active} running` : waiting ? `${waiting} waiting for you` : 'Idle'}</ChipText>
     </Link>
   );
 }
@@ -102,10 +107,6 @@ export function Shell() {
   useLiveInvalidation();
   const [ask, setAsk] = useState(false);
   const [palette, setPalette] = useState(false);
-  const toggleAsk = useCallback(() => setAsk((o) => !o), []);
-  const togglePalette = useCallback(() => setPalette((o) => !o), []);
-  useAskHotkey(toggleAsk);
-  usePaletteHotkey(togglePalette);
   // Below the md breakpoint the sidebar is a drawer. It is open for the one path it was opened on, so any navigation closes it.
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [navOpenOn, setNavOpenOn] = useState<string | null>(null);
@@ -114,10 +115,22 @@ export function Shell() {
   const menuRef = useRef<HTMLButtonElement>(null);
   const navRef = useRef<HTMLElement>(null);
   const wasOpen = useRef(false);
+  // Set when another overlay closes the drawer: that overlay owns focus, so it is not handed back to Menu.
+  const overlayTookFocus = useRef(false);
+  const openOverlay = useCallback((toggle: () => void) => {
+    if (wasOpen.current) overlayTookFocus.current = true;
+    setNavOpenOn(null);
+    toggle();
+  }, []);
+  const toggleAsk = useCallback(() => openOverlay(() => setAsk((o) => !o)), [openOverlay]);
+  const togglePalette = useCallback(() => openOverlay(() => setPalette((o) => !o)), [openOverlay]);
+  useAskHotkey(toggleAsk);
+  usePaletteHotkey(togglePalette);
   useEffect(() => {
     if (navOpen) navRef.current?.querySelector<HTMLElement>('a[href]')?.focus();
-    else if (wasOpen.current) menuRef.current?.focus();
+    else if (wasOpen.current && !overlayTookFocus.current && window.matchMedia(NARROW_QUERY).matches) menuRef.current?.focus();
     wasOpen.current = navOpen;
+    overlayTookFocus.current = false;
   }, [navOpen]);
   useEffect(() => {
     if (!navOpen) return;

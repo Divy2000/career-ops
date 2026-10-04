@@ -336,13 +336,6 @@ input[type='checkbox'] {
   font-size: var(--fs-12);
   white-space: nowrap;
 }
-.chip__dot {
-  display: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-}
 .chip--neutral {
   color: var(--text-muted);
 }
@@ -810,8 +803,9 @@ textarea {
     flex: none;
     padding: 0 var(--space-2);
   }
-  .shell__top .chip__dot {
-    display: block;
+  .shell__top .chip::after {
+    content: attr(data-short);
+    content: attr(data-short) / '';
   }
   .shell__top .chip__text {
     position: absolute;

@@ -62,9 +62,9 @@ test.describe('narrow window (390x844)', () => {
     expect(outline).not.toBe('none');
   });
 
-  for (const [name, status, sessions] of [
-    ['setup needs attention and a running session', { code: 200, token: false }, [{ status: 'running' }, { status: 'running' }, { status: 'running' }, { status: 'queued' }]],
-    ['status unavailable and sessions waiting for you', { code: 500, token: true }, [{ status: 'awaiting_user' }, { status: 'awaiting_user' }]],
+  for (const [name, status, sessions, shortLabels, title] of [
+    ['setup needs attention and twelve running sessions', { code: 200, token: false }, Array.from({ length: 12 }, () => ({ status: 'running' })), ['12 run', 'Setup !'], /12 running/],
+    ['status unavailable and sessions waiting for you', { code: 500, token: true }, [{ status: 'awaiting_user' }, { status: 'awaiting_user' }], ['2 wait', 'Setup ?'], /2 waiting for you/],
   ] as const) {
     test(`the top bar still fits with ${name}`, async ({ page }) => {
       await page.route('**/api/system/status', async (route) => {
@@ -77,6 +77,8 @@ test.describe('narrow window (390x844)', () => {
       await page.goto('/');
       await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
       await expect(page.getByRole('link', { name: /^Activity:/ })).toBeVisible();
+      // A failing status request is retried once before the chip settles on its error state.
+      if (status.code !== 200) await expect(page.locator('span.chip--danger[data-short="Setup ?"]')).toBeAttached();
       const m = await page.evaluate(() => {
         const top = document.querySelector('.shell__top') as HTMLElement;
         const items = [...top.children].filter((el) => (el.textContent ?? '').trim() !== '' && el.getBoundingClientRect().width > 0);
@@ -89,6 +91,9 @@ test.describe('narrow window (390x844)', () => {
       expect(m.boxes[0]!.left).toBeGreaterThanOrEqual(0);
       for (let i = 1; i < m.boxes.length; i++) expect(m.boxes[i]!.left, `${m.boxes[i]!.name} overlaps ${m.boxes[i - 1]!.name}`).toBeGreaterThanOrEqual(m.boxes[i - 1]!.right - 0.5);
       if (status.code === 200) await expect(page.getByRole('link', { name: 'Setup needs attention' })).toBeVisible();
+      const shown = await page.evaluate(() => [...document.querySelectorAll('.shell__top .chip[data-short]')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => /^"([^"]*)"/.exec(getComputedStyle(el, '::after').content)?.[1]));
+      expect(shown).toEqual([...shortLabels]);
+      await expect(page.getByRole('link', { name: /^Activity:/ })).toHaveAttribute('title', title);
     });
   }
 
@@ -108,6 +113,45 @@ test.describe('narrow window (390x844)', () => {
     await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
   });
 
+  test('opening Ask while the drawer is open closes the drawer and Tab does not return focus to it', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Open Ask drawer' }).click();
+    await expect(page.getByRole('dialog', { name: 'Ask' })).toBeVisible();
+    await expect(sidebar(page)).toBeHidden();
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.querySelector('#primary-nav')!.contains(document.activeElement))).toBe(false);
+  });
+
+  test('opening the command palette while the drawer is open closes the drawer and focus stays in the palette', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Open command palette' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.locator('.shell')).not.toHaveClass(/shell--nav-open/);
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
+  });
+
+  test('widening the window past the breakpoint does not try to move focus to the hidden menu button', async ({ page }) => {
+    await menuButton(page).click();
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
+    await page.evaluate(() => {
+      const w = window as unknown as { __menuFocusCalls: number };
+      w.__menuFocusCalls = 0;
+      const btn = document.querySelector('.menu-toggle') as HTMLElement;
+      const orig = btn.focus.bind(btn);
+      btn.focus = (...a: Parameters<HTMLElement['focus']>) => {
+        w.__menuFocusCalls++;
+        orig(...a);
+      };
+    });
+    await page.setViewportSize({ width: 1000, height: 844 });
+    await expect(menuButton(page)).toBeHidden();
+    await expect(sidebar(page).getByRole('link', { name: 'Today' })).toBeFocused();
+    expect(await page.evaluate(() => (window as unknown as { __menuFocusCalls: number }).__menuFocusCalls)).toBe(0);
+  });
+
   test('closing the menu by choosing a link returns focus to the menu button', async ({ page }) => {
     await menuButton(page).click();
     await sidebar(page).getByRole('link', { name: 'Tutorials' }).click();
@@ -119,7 +163,9 @@ test.describe('narrow window (390x844)', () => {
     await menuButton(page).click();
     await expect(sidebar(page)).toBeVisible();
     await page.setViewportSize({ width: 1000, height: 844 });
-    await expect(sidebar(page)).toBeVisible();
+    await expect(menuButton(page)).toBeHidden();
+    // The breakpoint listener fires on a rendering update; narrowing before one runs would mean the page never left the narrow range.
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(sidebar(page)).toBeHidden();
     await expect(menuButton(page)).toHaveAttribute('aria-expanded', 'false');
