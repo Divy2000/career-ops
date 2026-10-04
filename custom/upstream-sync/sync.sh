@@ -17,6 +17,8 @@
 set -uo pipefail
 
 LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=custom/upstream-sync/lib.sh
+source "$LIVE/custom/upstream-sync/lib.sh"
 WT="$HOME/.career-ops-sync"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 # Logs and reports follow career-ops' data-root contract (CAREER_OPS_ROOT /
@@ -65,8 +67,8 @@ suite_failures() {
 }
 
 cd "$LIVE" || fail "live checkout missing"
-git fetch -q upstream main || fail "git fetch upstream failed"
-git fetch -q origin main || fail "git fetch origin failed"
+fetch_main upstream || fail "cannot fetch main from the upstream remote (see the line above)"
+fetch_main origin || fail "cannot fetch main from the origin remote (see the line above)"
 
 if git merge-base --is-ancestor upstream/main origin/main; then
   echo "fork already contains upstream/main ($(git rev-parse --short upstream/main)); nothing to do"
@@ -74,6 +76,7 @@ if git merge-base --is-ancestor upstream/main origin/main; then
   exit 0
 fi
 BEHIND="$(git rev-list --count origin/main..upstream/main)"
+[[ "$BEHIND" =~ ^[0-9]+$ ]] || fail "could not count commits between origin/main and upstream/main"
 echo "fork is $BEHIND commit(s) behind upstream/main"
 
 if ! TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
@@ -85,7 +88,7 @@ rm -rf "$WT"
 git worktree prune
 git worktree add -q -B "$BRANCH" "$WT" origin/main || fail "git worktree add failed"
 cd "$WT" || fail "worktree missing"
-npm ci --ignore-scripts --silent >/dev/null 2>&1 || fail "npm ci failed on origin/main"
+install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"
 
 echo "--- baseline suite on origin/main"
 suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"
@@ -173,11 +176,13 @@ if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEP
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
-  git fetch -q origin main
+  fetch_main origin || fail "cannot refresh origin/main after the merge"
   if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-    LOCK_BEFORE="$(git rev-parse HEAD:package-lock.json)"
+    DEPS_BEFORE="$(deps_fingerprint HEAD)" || fail "cannot read the live checkout's dependency files"
     git merge -q --ff-only origin/main || fail "live checkout could not fast-forward"
-    [ "$LOCK_BEFORE" = "$(git rev-parse HEAD:package-lock.json)" ] || npm install --silent >/dev/null 2>&1
+    if [ "$DEPS_BEFORE" != "$(deps_fingerprint HEAD)" ]; then
+      install_root_deps run-scripts >/dev/null 2>&1 || notify "Merged upstream, but npm install failed in the live checkout; run it by hand"
+    fi
     echo "live checkout now at $(git rev-parse --short HEAD)"
     notify "Merged upstream ($BEHIND commits) and updated career-ops"
   else
