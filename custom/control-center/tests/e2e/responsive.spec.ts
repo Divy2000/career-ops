@@ -372,6 +372,8 @@ test.describe('overlay hotkeys stay out of a parameter dialog', () => {
       await page.keyboard.press('Control+k');
       const input = page.getByPlaceholder('Go to a page, run an action or start a mode');
       await input.fill('tracker.delete');
+      // The action list loads after the page does; Enter before the match exists would be swallowed.
+      await expect(page.locator('[cmdk-item]', { hasText: 'tracker.delete' })).toBeVisible();
       await page.keyboard.press('Enter');
       const dialog = page.locator('[role="dialog"].dialog');
       await expect(dialog).toBeVisible();

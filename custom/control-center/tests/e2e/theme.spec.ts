@@ -306,6 +306,7 @@ test.describe('accessibility in both themes (serious and critical axe violations
       test('confirm dialog open', async ({ page }) => {
         await page.keyboard.press('Control+k');
         await page.getByPlaceholder(/Go to a page/).fill('tracker.delete');
+        await expect(page.locator('[cmdk-item]', { hasText: 'tracker.delete' })).toBeVisible();
         await page.keyboard.press('Enter');
         await expect(page.locator('[role="dialog"].dialog')).toBeVisible();
         await axeSerious(page);
