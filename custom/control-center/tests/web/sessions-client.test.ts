@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sendTurn, startSession } from '@web/lib/sessions';
+import { cancelSession, sendTurn, startSession } from '@web/lib/sessions';
 
 function captureFetch() {
   const calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
@@ -27,5 +27,24 @@ describe('session client: the blacklist unlock is an explicit, per-request gate'
       [null, null],
       [null, null],
     ]);
+  });
+});
+
+describe('session client: a request without a payload', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('cancel sends no body and no JSON content-type, so the server has nothing to reject', async () => {
+    const calls: RequestInit[] = [];
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      calls.push(init);
+      return new Response(JSON.stringify({ id: 's1', status: 'cancelled' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    await cancelSession('s1');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toBeUndefined();
+    expect(Object.keys(calls[0]!.headers as Record<string, string>).map((k) => k.toLowerCase())).not.toContain('content-type');
+    expect(calls[0]!.headers).toMatchObject({ 'X-CC': '1' });
   });
 });

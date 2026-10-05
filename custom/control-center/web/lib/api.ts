@@ -26,11 +26,13 @@ export async function apiGet<T>(path: string): Promise<T> {
 
 /** Mutating requests carry the X-CC marker and a same-origin Origin header. */
 export async function apiSend<T>(method: 'POST' | 'PUT' | 'DELETE' | 'PATCH', path: string, payload?: unknown, extra: Record<string, string> = {}): Promise<T> {
+  // A JSON content-type with no body is a 400 on the server (Fastify rejects an empty JSON body), so a bodyless request names no type.
+  const hasBody = payload !== undefined;
   const res = await fetch(path, {
     method,
     credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', accept: 'application/json', 'X-CC': '1', ...extra },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
+    headers: { ...(hasBody ? { 'content-type': 'application/json' } : {}), accept: 'application/json', 'X-CC': '1', ...extra },
+    body: hasBody ? JSON.stringify(payload) : undefined,
   });
   const body = await parse(res);
   if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`, body);

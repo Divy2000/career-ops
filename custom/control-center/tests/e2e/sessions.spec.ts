@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
-import { E2E_TOKEN } from '../../playwright.config.js';
+import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
 async function login(page: Page) {
   await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -157,5 +157,62 @@ test.describe('AI sessions through the fake Claude', () => {
     const cv = await (await page.request.get('/api/files/user/cv')).json();
     expect(cv.text).toContain('Jane Candidate');
     await axeClean(page);
+  });
+});
+
+test.describe('Cancel stops a running session or run from the page', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  /** A calibrate session: the fake CLI streams once, then sleeps 15 s, so it is still running when the button is clicked. */
+  async function startSlowSession(page: Page): Promise<{ id: string; runId: string }> {
+    const res = await page.request.post('/api/sessions', { data: { mode: 'calibrate', prompt: 'Calibrate slowly' }, headers: { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}` } });
+    expect(res.status(), await res.text()).toBe(202);
+    const meta = (await res.json()) as { id: string; turns: Array<{ runId: string }> };
+    return { id: meta.id, runId: meta.turns[0]!.runId };
+  }
+  /** The Runs table names the action, not the run id; the calibrate turn is the only calibrate run still running. */
+  const runningRow = (page: Page) => page.getByRole('row').filter({ hasText: 'session.calibrate' }).filter({ has: page.getByText('running', { exact: true }) });
+  const runStatus = async (page: Page, runId: string) => ((await (await page.request.get(`/api/runs/${runId}`)).json()) as { meta: { status: string } }).meta.status;
+  const sessionStatus = async (page: Page, id: string) => ((await (await page.request.get(`/api/sessions/${id}`)).json()) as { meta: { status: string } }).meta.status;
+
+  test('Cancel on a running session page ends the session as cancelled', async ({ page }) => {
+    const { id } = await startSlowSession(page);
+    await page.goto(`/sessions/${id}`);
+    const panel = page.locator(`[data-session-id="${id}"]`);
+    await expect(panel.getByText('running', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(panel.getByText('cancelled', { exact: true })).toBeVisible({ timeout: 10_000 });
+    expect(await sessionStatus(page, id)).toBe('cancelled');
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('Cancel on a running row in Runs & Schedule ends the run as cancelled', async ({ page }) => {
+    const { id, runId } = await startSlowSession(page);
+    await page.goto('/runs');
+    const row = runningRow(page);
+    await expect(row).toHaveCount(1, { timeout: 10_000 });
+    await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(row).toHaveCount(0, { timeout: 10_000 });
+    expect(await runStatus(page, runId)).toBe('cancelled');
+    await expect.poll(() => sessionStatus(page, id), { timeout: 10_000 }).not.toBe('running');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('a Cancel the server refuses says so on the session page and on the Runs page', async ({ page }) => {
+    const { id, runId } = await startSlowSession(page);
+    try {
+      await page.route('**/api/sessions/*/cancel', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'cancel refused for the test' }) }));
+      await page.route('**/api/runs/*/cancel', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'cancel refused for the test' }) }));
+      await page.goto(`/sessions/${id}`);
+      const panel = page.locator(`[data-session-id="${id}"]`);
+      await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(panel.getByRole('alert')).toContainText('Could not cancel: cancel refused for the test');
+      await page.goto('/runs');
+      await runningRow(page).getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'Could not cancel' })).toContainText(`Could not cancel ${runId}: cancel refused for the test`);
+    } finally {
+      await page.unrouteAll();
+      await page.request.post(`/api/sessions/${id}/cancel`, { headers: { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}` } });
+    }
   });
 });

@@ -9,6 +9,7 @@ import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
+import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 
 const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
 const prompt = z.string().min(1).max(20_000);
@@ -98,7 +99,9 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return mutate(reply, async () => reply.code(202).send(await manager.fork(req.params.id, parsed.data.prompt)));
   });
 
-  app.post<{ Params: { id: string } }>('/api/sessions/:id/cancel', async (req, reply) => mutate(reply, async () => manager.cancel(req.params.id)));
+  await withEmptyJsonBody(app, (scope) => {
+    scope.post<{ Params: { id: string } }>('/api/sessions/:id/cancel', async (req, reply) => mutate(reply, async () => manager.cancel(req.params.id)));
+  });
 
   app.delete<{ Params: { id: string } }>('/api/sessions/:id', async (req, reply) =>
     mutate(reply, async () => {

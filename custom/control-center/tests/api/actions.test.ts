@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
+import { copyFixtureRoot, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import type { RunMeta } from '../../server/runner/store.js';
 
@@ -156,6 +156,19 @@ describe('action registry', () => {
       spy.mockRestore();
       await bare.close();
     }
+  });
+
+  it('cancel stops a running run when the request says JSON but carries no body, the way a browser button sends it', async () => {
+    const run = t.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    const res = await t.app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel`, headers: { ...t.authedWrite, 'content-type': 'application/json' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await waitForRun(run.id)).status).toBe('cancelled');
+  });
+
+  it('cancel still refuses a body that is not valid JSON', async () => {
+    const res = await t.app.inject({ method: 'POST', url: '/api/runs/does-not-exist/cancel', headers: t.authedWrite, payload: '{"half":' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('FST_ERR_CTP_INVALID_JSON_BODY');
   });
 
   it('actions need the write headers like every other mutation', async () => {

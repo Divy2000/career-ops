@@ -167,6 +167,19 @@ describe('Claude sessions', () => {
     expect((await get(`/api/runs/${meta.turns[0]!.runId}`)).json().meta.status).toBe('cancelled');
   });
 
+  it('cancel stops the session when the request says JSON but carries no body, the way a browser button sends it', async () => {
+    const { id } = (await post('/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json();
+    const deadline = Date.now() + 15_000;
+    while ((await get(`/api/sessions/${id}`)).json().events.length < 2) {
+      if (Date.now() > deadline) throw new Error('session never started streaming');
+      await wait(100);
+    }
+    const res = await t.app.inject({ method: 'POST', url: `/api/sessions/${id}/cancel`, headers: { ...t.authedWrite, 'content-type': 'application/json' } });
+    expect(res.statusCode, res.body).toBe(200);
+    const { meta } = await settle(id);
+    expect(meta.status).toBe('cancelled');
+  });
+
   it('fan-out reserves report numbers first, hands each session its number and no reservation is left behind', async () => {
     const res = await post('/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/9', 'https://jobs.example.com/synthetic/10'] });
     expect(res.statusCode).toBe(202);

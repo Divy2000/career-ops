@@ -185,6 +185,16 @@ export function SessionPanel(props: SessionPanelProps) {
     }
   };
 
+  const cancel = async () => {
+    if (!sessionId) return;
+    setError(null);
+    try {
+      await cancelSession(sessionId);
+    } catch (err) {
+      setError(`Could not cancel: ${describeError(err)}`);
+    }
+  };
+
   const running = transcript.status === 'running' || transcript.status === 'queued';
   return (
     <div className="card session" data-session-id={sessionId ?? undefined}>
@@ -245,7 +255,7 @@ export function SessionPanel(props: SessionPanelProps) {
               Fork
             </button>
             {running && (
-              <button type="button" onClick={() => void cancelSession(sessionId)}>
+              <button type="button" onClick={() => void cancel()}>
                 Cancel
               </button>
             )}

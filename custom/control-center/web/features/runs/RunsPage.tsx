@@ -5,6 +5,7 @@ import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
 import { LogBrowser, ScheduleCards } from './ScheduleCards';
 import { groupQuickActions } from './quickActions';
+import { describeError } from '../../lib/actions';
 
 const ANSI = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*[A-Za-z]`, 'g');
 export const stripAnsi = (s: string) => s.replace(ANSI, '');
@@ -76,7 +77,12 @@ export function RunsPage() {
     }
   };
   const cancel = async (id: string) => {
-    await apiSend('POST', `/api/runs/${id}/cancel`);
+    try {
+      await apiSend('POST', `/api/runs/${id}/cancel`);
+      setMessage(null);
+    } catch (err) {
+      setMessage(`Could not cancel ${id}: ${describeError(err)}`);
+    }
     await qc.invalidateQueries({ queryKey: ['runs'] });
   };
 
