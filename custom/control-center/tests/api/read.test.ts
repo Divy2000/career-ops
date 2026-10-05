@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { containedPath } from '../../server/routes/read.js';
 import { formatSse } from '../../server/watch/bus.js';
 import { domainFor } from '../../server/watch/watcher.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -219,7 +219,7 @@ describe('file serving', () => {
   });
 
   it('containedPath refuses every file when a serve root is symlinked to the filesystem root', () => {
-    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-slash-root-'));
+    const dataRoot = tempDir('cc-slash-root-');
     try {
       fs.symlinkSync('/', path.join(dataRoot, 'output'));
       const file = path.join(fs.realpathSync(dataRoot), 'target.md');

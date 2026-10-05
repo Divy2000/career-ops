@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { changesByTurn, diffFile, listChanges, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const sha = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
 
@@ -15,8 +15,8 @@ const sha = (text: string) => crypto.createHash('sha256').update(text).digest('h
  * policy and post-turn hashes under the guard dir, which sits outside the root.
  */
 function fakeSession() {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-')));
-  const sessionDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-guard-')));
+  const root = fs.realpathSync(tempDir('cc-recovery-'));
+  const sessionDir = fs.realpathSync(tempDir('cc-recovery-guard-'));
   const file = path.join(root, 'custom', 'notes.md');
   const created = path.join(root, 'custom', 'new.md');
   fs.mkdirSync(path.join(root, 'custom'), { recursive: true });
@@ -117,7 +117,7 @@ describe('Dev Chat change sets', () => {
 
   it('refuses (403) forged records outside the roots or outside the turn policy, and touches nothing', () => {
     const { root, sessionDir, t1, meta, ctx, rec } = fakeSession();
-    const outsideDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-victim-')));
+    const outsideDir = fs.realpathSync(tempDir('cc-recovery-victim-'));
     const victim = path.join(outsideDir, '.zshrc');
     fs.writeFileSync(victim, 'precious\n');
     fs.writeFileSync(snapshotKey(t1, victim), 'attacker bytes\n');
@@ -180,8 +180,8 @@ describe('/__recovery revert requests', () => {
 
   it('refuse while the session is running, refuse unknown files, and report conflicts as 409', () => {
     const { sessionDir: guardSession, file, created, ctx } = fakeSession();
-    const guardRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-root-')));
-    const sessionsDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-recovery-sessions-')));
+    const guardRoot = fs.realpathSync(tempDir('cc-recovery-root-'));
+    const sessionsDir = fs.realpathSync(tempDir('cc-recovery-sessions-'));
     fs.mkdirSync(path.join(guardRoot, 'sessions'));
     fs.renameSync(guardSession, path.join(guardRoot, 'sessions', 's1'));
     const writeMeta = (status: string) => {
@@ -209,7 +209,7 @@ describe('guard root (policy and revert bookkeeping outside every session write 
     expect(defaultGuardRoot('/Users/x', 'darwin', {})).toBe('/Users/x/Library/Application Support/career-ops-control-center');
     expect(defaultGuardRoot('/home/x', 'linux', {})).toBe('/home/x/.local/state/career-ops-control-center');
     expect(defaultGuardRoot('/home/x', 'linux', { XDG_STATE_HOME: '/state' })).toBe('/state/career-ops-control-center');
-    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-guard-root-')));
+    const base = fs.realpathSync(tempDir('cc-guard-root-'));
     const codeRoot = path.join(base, 'code');
     const dataRoot = path.join(base, 'data');
     fs.mkdirSync(codeRoot);
@@ -221,7 +221,7 @@ describe('guard root (policy and revert bookkeeping outside every session write 
   });
 
   it('refuses a guard root inside the code or data root and creates nothing there; a differently cased root counts only where the volume folds case', () => {
-    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-guard-root-')));
+    const base = fs.realpathSync(tempDir('cc-guard-root-'));
     const codeRoot = path.join(base, 'code');
     const dataRoot = path.join(base, 'data');
     fs.mkdirSync(codeRoot);

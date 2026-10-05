@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runPreflightCli } from '../../supervisor/preflight-cli.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 
 function fakeClaude(body: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-pfcli-'));
+  const dir = tempDir('cc-pfcli-');
   const bin = path.join(dir, 'claude');
   fs.writeFileSync(bin, `#!${process.execPath}\n${body}\n`, { mode: 0o755 });
   return bin;
@@ -43,9 +43,11 @@ describe('runPreflightCli', () => {
 
 describe('npm run preflight entry point', () => {
   const tsx = path.join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx');
+  // tsx keeps its IPC dir (tsx-<uid>) in the temp dir; give it one that is removed with the file.
+  const tmp = tempDir('cc-pfcli-tsx-');
   const run = (env: Record<string, string>) =>
     spawnSync(tsx, [path.join(PACKAGE_ROOT, 'supervisor', 'preflight-cli.ts')], {
-      env: { ...process.env, NODE_ENV: 'test', ...env },
+      env: { ...process.env, NODE_ENV: 'test', TMPDIR: tmp, TEMP: tmp, TMP: tmp, ...env },
       encoding: 'utf8',
       timeout: 60_000,
     });

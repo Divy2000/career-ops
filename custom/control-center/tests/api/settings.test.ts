@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 let fake: ReturnType<typeof fakeLaunchdExec>;
 let usageDir: string;
 beforeAll(async () => {
-  usageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-usage-api-'));
+  usageDir = tempDir('cc-usage-api-');
   fake = fakeLaunchdExec();
   t = await makeTestApp({ claudeProjectsDir: usageDir }, { exec: fake.exec });
 });

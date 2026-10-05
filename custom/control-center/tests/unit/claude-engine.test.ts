@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +10,7 @@ import { checkBash, snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const codeRoot = '/repo/career-ops';
 const base = { claudeBin: 'claude', codeRoot, dataRoot: '/data/root', sessionDir: '/data/root/data/control-center/sessions/s1', policyFile: '/data/root/data/control-center/sessions/s1/policy.json', settingsFile: '/data/root/data/control-center/sessions/s1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: '11111111-1111-4111-8111-111111111111', preamble: 'PREAMBLE', resume: false };
@@ -82,7 +82,7 @@ function hookRun(sessionDir: string, policy: { file: string; sha256: string }, p
 }
 
 describe('guard hook', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-'));
+  const root = tempDir('cc-hook-');
   const realRoot = fs.realpathSync(root);
   fs.mkdirSync(path.join(realRoot, 'reports'), { recursive: true });
   fs.mkdirSync(path.join(realRoot, 'data'), { recursive: true });
@@ -139,7 +139,7 @@ describe('guard hook', () => {
     expect(pre('mcp__playwright__browser_press_key', { key: 'Enter', element: 'Apply now' }).status).toBe(2);
   });
   it('protects Blacklist.md, APPLICATIONS.md and Supervisor/ in any case, on a case-insensitive or a case-sensitive volume', () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-case-')));
+    const root = fs.realpathSync(tempDir('cc-hook-case-'));
     const folding = foldsCase(root);
     fs.mkdirSync(path.join(root, 'data'));
     fs.writeFileSync(path.join(root, 'data', 'blacklist.md'), '# blacklist\n');
@@ -169,7 +169,7 @@ describe('guard hook', () => {
   });
 
   it('quotes the hook command so a checkout path with spaces still runs the guard, and fails closed on any hook failure', () => {
-    const spaced = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc hook space ')));
+    const spaced = fs.realpathSync(tempDir('cc hook space '));
     const nodePath = path.join(spaced, 'node bin');
     const hookPath = path.join(spaced, 'guard hook.mjs');
     fs.symlinkSync(process.execPath, nodePath);
@@ -194,8 +194,8 @@ describe('guard hook', () => {
   });
 
   it('Dev Chat cannot write session state, the guard, the supervisor, dependency manifests, build and test configs, tests or scripts', () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-devchat-')));
-    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-devchat-guard-')));
+    const root = fs.realpathSync(tempDir('cc-hook-devchat-'));
+    const dir = fs.realpathSync(tempDir('cc-hook-devchat-guard-'));
     const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
     const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' });
     const protectedPaths = [
@@ -238,7 +238,7 @@ describe('guard hook', () => {
   });
 
   it('a tampered or unverifiable policy fails closed for every tool call', () => {
-    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-tamper-')));
+    const dir = fs.realpathSync(tempDir('cc-hook-tamper-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
     expect(pf.sha256).toMatch(/^[0-9a-f]{64}$/);
     const inScope = { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '004-tamper.md'), content: 'x' }, cwd: realRoot };
@@ -272,7 +272,7 @@ describe('guard hook', () => {
 });
 
 describe('checkBash: exact per-command argument grammars', () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bash-')));
+  const root = fs.realpathSync(tempDir('cc-bash-'));
   for (const d of ['custom/immigration', 'custom/pipeline', 'custom/control-center/tests/unit', 'output', 'reports', 'data', 'jds']) fs.mkdirSync(path.join(root, d), { recursive: true });
   const policyFor = (mode: string, deny: string[]) => {
     const p = getModePolicy(mode)!;

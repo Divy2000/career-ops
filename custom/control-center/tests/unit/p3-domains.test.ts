@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
 import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
 import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings } from '../../server/domains/settings.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const PORTALS = `# Synthetic portals config for tests
 title_filter:
@@ -192,7 +192,7 @@ describe('launchd schedule helpers', () => {
 
 describe('usage meter from ~/.claude/projects jsonl', () => {
   it('sums input, output and cache-creation tokens over 5h and 7d, dedups by requestId and ignores older lines', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-usage-unit-'));
+    const dir = tempDir('cc-usage-unit-');
     fs.mkdirSync(path.join(dir, 'proj-a'));
     const now = Date.parse('2026-10-03T12:00:00Z');
     const line = (ts: number, input: number, output: number, cache: number, requestId: string) =>

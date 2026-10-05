@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { makePdf } from '../helpers/pdf.js';
 import { hasRealPdftotext, installPdftotextStub } from '../helpers/pdftotext-stub.js';
 import { extractSourceText } from '../../server/domains/projects.js';
+import { tempDir } from '../helpers/tmp.js';
 
 describe('PDF text extraction runs off the event loop and matches intake', () => {
   let t: TestApp;
@@ -56,7 +56,7 @@ describe('a slow extractor does not block other requests', () => {
   const oldPath = process.env.PATH;
   beforeAll(async () => {
     // A pdftotext that answers the version probe at once and takes 1.5 s to extract.
-    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-slow-pdftotext-'));
+    const bin = tempDir('cc-slow-pdftotext-');
     calls = path.join(bin, 'calls.log');
     fs.writeFileSync(path.join(bin, 'pdftotext'), `#!/bin/sh\necho "$1" >> '${calls}'\nif [ "$1" = "-v" ]; then echo "pdftotext version 0"; exit 0; fi\nsleep 1.5\necho "Slow Kite"\n`, { mode: 0o755 });
     process.env.PATH = `${bin}${path.delimiter}${oldPath}`;
@@ -103,7 +103,7 @@ describe('a source must really live under documents/', () => {
   });
 
   it('refuses a symlink that leads outside documents/, wherever a source path is accepted', async () => {
-    const outside = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-outside-')), 'config');
+    const outside = path.join(tempDir('cc-outside-'), 'config');
     fs.writeFileSync(outside, 'Host secret\n  IdentityFile ~/.ssh/id_ed25519\n');
     const docs = path.join(t.cfg.dataRoot, 'documents', 'projects');
     fs.mkdirSync(docs, { recursive: true });
@@ -126,7 +126,7 @@ describe('a source must really live under documents/', () => {
   });
 
   it('refuses a source swapped for a symlink, or moved under a swapped folder, after the containment check', async () => {
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-outside-'));
+    const outsideDir = tempDir('cc-outside-');
     fs.writeFileSync(path.join(outsideDir, 'race.md'), 'SECRET outside documents\n');
     const docs = path.join(t.cfg.dataRoot, 'documents');
     const projects = path.join(docs, 'projects');

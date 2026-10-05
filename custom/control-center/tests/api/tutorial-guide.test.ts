@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 let outside: string;
@@ -37,7 +37,7 @@ function writeGuided(id: string, guide: unknown | null, opts: { files?: Record<s
 
 beforeAll(async () => {
   t = await makeTestApp();
-  outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-guide-outside-'));
+  outside = tempDir('cc-guide-outside-');
   fs.writeFileSync(path.join(outside, 'secret.gif'), SECRET);
   fs.writeFileSync(path.join(outside, 'secret-guide.json'), JSON.stringify({ sections: [section()] }));
 

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { preflight, resolveClaudeBin, claudeCandidates, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const execOk = async () => 0;
 
@@ -49,7 +50,7 @@ describe('preflight', () => {
 
 /** A real executable standing in for claude, so the probe's spawn, timeout and retry paths run for real. */
 function fakeClaude(body: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-preflight-'));
+  const dir = tempDir('cc-preflight-');
   const bin = path.join(dir, 'claude');
   fs.writeFileSync(bin, `#!${process.execPath}\n${body}\n`, { mode: 0o755 });
   return bin;
@@ -78,7 +79,7 @@ describe('preflight claude probe', () => {
   });
 
   it('reports a timeout as a timeout, after retrying once', async () => {
-    const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-preflight-')), 'runs');
+    const marker = path.join(tempDir('cc-preflight-'), 'runs');
     const bin = fakeClaude(`require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'x'); setTimeout(() => {}, 10000);`);
     const r = await preflight({ ...base, claudeBin: bin, claudeTimeoutMs: 1500 });
     expect(r.ok).toBe(false);
@@ -89,7 +90,7 @@ describe('preflight claude probe', () => {
   });
 
   it('passes when the first attempt fails and the retry succeeds', async () => {
-    const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-preflight-')), 'seen');
+    const marker = path.join(tempDir('cc-preflight-'), 'seen');
     const bin = fakeClaude(`const fs = require('node:fs'); if (!fs.existsSync(${JSON.stringify(marker)})) { fs.writeFileSync(${JSON.stringify(marker)}, '1'); console.error('updating'); process.exit(3); } console.log('2.0.0');`);
     const r = await preflight({ ...base, claudeBin: bin, claudeTimeoutMs: 5000 });
     expect(r.ok).toBe(true);
@@ -124,36 +125,36 @@ describe('resolveClaudeBin', () => {
   });
 
   it('finds claude on PATH and returns an absolute path', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-path-'));
+    const dir = tempDir('cc-path-');
     const bin = touch(path.join(dir, 'bin'));
     expect(resolveClaudeBin('claude', { env: { PATH: `/nonexistent:${path.dirname(bin)}` }, home: '/h' })).toBe(bin);
   });
 
   it('falls back to the usual install locations when PATH has no claude', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const home = tempDir('cc-home-');
     const local = touch(path.join(home, '.local', 'bin'));
     expect(resolveClaudeBin('claude', { env: { PATH: '/nonexistent' }, home, candidates: ['/nonexistent/a/claude'] })).toBe(local);
   });
 
   it('prefers the native installer location over Homebrew and /usr/local when PATH has no claude', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const home = tempDir('cc-home-');
     const local = touch(path.join(home, '.local', 'bin'));
-    const brew = touch(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-brew-')));
+    const brew = touch(tempDir('cc-brew-'));
     expect(resolveClaudeBin('claude', { env: { PATH: '/nonexistent' }, home, candidates: [brew] })).toBe(local);
   });
 
   it('lists every distinct claude it can find, in the order it would pick them', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const home = tempDir('cc-home-');
     const local = touch(path.join(home, '.local', 'bin'));
-    const brew = touch(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-brew-')));
-    const onPath = touch(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-path-')));
+    const brew = touch(tempDir('cc-brew-'));
+    const onPath = touch(tempDir('cc-path-'));
     expect(claudeCandidates('claude', { env: { PATH: path.dirname(onPath) }, home, candidates: [brew, local] })).toEqual([onPath, local, brew]);
   });
 
   it('counts a symlink to the same binary once and keeps the first path listed for it', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-home-'));
+    const home = tempDir('cc-home-');
     const local = touch(path.join(home, '.local', 'bin'));
-    const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-link-'));
+    const linkDir = tempDir('cc-link-');
     const link = path.join(linkDir, 'claude');
     fs.symlinkSync(local, link);
     expect(claudeCandidates('claude', { env: { PATH: '/nonexistent' }, home, candidates: [link] })).toEqual([local]);

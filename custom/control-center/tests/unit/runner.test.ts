@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { RunStore, runsDir } from '../../server/runner/store.js';
@@ -10,9 +9,10 @@ import { execNoShell } from '../../server/routes/system.js';
 import { runModule } from '../../server/core/child.js';
 import { EventBus } from '../../server/watch/bus.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const NOISY = path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs');
-const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cc-runner-'));
+const tmpRoot = () => tempDir('cc-runner-');
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(pred: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
