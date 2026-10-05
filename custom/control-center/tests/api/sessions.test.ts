@@ -455,6 +455,15 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('answers 404, not 500, for a mode named after an Object property, on a new session and on a fan-out', async () => {
+    for (const mode of ['constructor', 'toString', '__proto__']) {
+      const one = await post('/api/sessions', { mode, prompt: 'x' });
+      expect(one.statusCode, `${mode}: ${one.body}`).toBe(404);
+      const fan = await post('/api/sessions/fanout', { mode, urls: ['https://jobs.example.com/proto/1'] });
+      expect(fan.statusCode, `${mode}: ${fan.body}`).toBe(404);
+    }
+  });
+
   it('rejects unknown modes and bad bodies, deletes finished sessions and records remembered facts', async () => {
     expect((await post('/api/sessions', { mode: 'nope', prompt: 'x' })).statusCode).toBe(404);
     expect((await post('/api/sessions', { mode: 'oferta' })).statusCode).toBe(400);

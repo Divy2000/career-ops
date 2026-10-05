@@ -289,12 +289,13 @@ const BASENAME_CLASS: Record<string, PolicyClass> = {
  * anything unmapped is read-only, which is the safe default.
  */
 export function classForMode(id: string): PolicyClass {
-  if (id in VIRTUAL_MODES) return VIRTUAL_MODES[id]!.policyClass;
+  // Own keys only, here and below: `constructor` or `__proto__` would otherwise find Object's members.
+  if (Object.hasOwn(VIRTUAL_MODES, id)) return VIRTUAL_MODES[id]!.policyClass;
   if (id === 'pdf/hm-audit') return 'documents';
   if (id.startsWith('interview/') || id.endsWith('/interview-prep')) return 'interview';
   if (id.startsWith('regional/')) return 'evaluate';
   const base = id.split('/').pop() ?? id;
-  return BASENAME_CLASS[base] ?? 'read-only';
+  return Object.hasOwn(BASENAME_CLASS, base) ? BASENAME_CLASS[base]! : 'read-only';
 }
 
 export interface ModePolicy {
@@ -328,7 +329,7 @@ function sessionRunnable(script: string): boolean {
 
 export function getModePolicy(id: string): ModePolicy | null {
   const derived = MODES.find((m) => m.id === id);
-  const virtual = VIRTUAL_MODES[id];
+  const virtual = Object.hasOwn(VIRTUAL_MODES, id) ? VIRTUAL_MODES[id] : undefined;
   if (!derived && !virtual) return null;
   const policyClass = classForMode(id);
   const def = POLICY_CLASSES[policyClass];
