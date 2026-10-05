@@ -113,25 +113,33 @@ async function main() {
     const file = path.join(DIR, name);
     if (!existsSync(file)) await writeFile(file, header);
   }
-  const seen = existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] };
-  const lastSuccess = { ...(seen.last_success ?? {}) };
+  const readSeen = async () => (existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] });
+  // Read once before the fetch for the cursors only; the merge below reads it again under the lock.
+  const cursors = await readSeen();
   // The local day, as run-daily.sh dates its log: the UTC day is already tomorrow on a US evening.
   const today = localToday();
   // Each source keeps its own last-success date, so a long outage of one source
   // is backfilled from where it stopped instead of only the default lookback.
-  const sinceFor = (source) => sinceArg ?? sinceForSource({ lastSuccess: sourceCursor(seen, source), today });
+  const sinceFor = (source) => sinceArg ?? sinceForSource({ lastSuccess: sourceCursor(cursors, source), today });
 
   const sources = { 'federal-register': federalRegister, uscis };
   const names = Object.keys(sources);
   const results = await Promise.allSettled(names.map((n) => sources[n](sinceFor(n))));
   const errors = [];
+  const succeeded = [];
   results.forEach((r, i) => {
-    if (r.status === 'fulfilled') lastSuccess[names[i]] = today;
+    if (r.status === 'fulfilled') succeeded.push(names[i]);
     else errors.push(`${names[i]}: ${r.reason.message}`);
   });
   if (errors.length === results.length) throw new Error(`every source failed: ${errors.join('; ')}`);
 
-  const { pending, known } = await withPendingLock(async () => {
+  // Queue, feed log and seen.json are one read-change-write under the lock (the fetch above stays outside it): a
+  // seen.json read before another run queued an item that a pass then acknowledged would queue it again, and its
+  // write would drop that run's seen ids and cursors.
+  const pending = await withPendingLock(async () => {
+    const seen = await readSeen();
+    const lastSuccess = { ...(seen.last_success ?? {}) };
+    for (const n of succeeded) if (!(lastSuccess[n] > today)) lastSuccess[n] = today;
     // Items still queued count as known: a crash after the queue write but
     // before seen.json must not append them to the feed log a second time.
     const queued = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
@@ -146,20 +154,20 @@ async function main() {
     // (mergePending dedupes) instead of losing the item.
     const pending = mergePending(queued, fresh);
     await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
-    return { pending, known };
+    // Audit log before seen, deduplicated by URL: a crash anywhere in this
+    // sequence can neither drop nor duplicate a feed line on the next run.
+    if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
+    const feedLines = (await readFile(FEED, 'utf8')).split('\n');
+    if (feedLines[0]?.startsWith('first_seen\t')) feedLines.shift();
+    const logged = new Set(feedLines.map((l) => l.split('\t')[4]).filter(Boolean));
+    const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
+    const toLog = pending.filter((i) => !logged.has(clean(i.url)));
+    if (toLog.length) {
+      await appendFile(FEED, toLog.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
+    }
+    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
+    return pending;
   });
-  // Audit log before seen, deduplicated by URL: a crash anywhere in this
-  // sequence can neither drop nor duplicate a feed line on the next run.
-  if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
-  const feedLines = (await readFile(FEED, 'utf8')).split('\n');
-  if (feedLines[0]?.startsWith('first_seen\t')) feedLines.shift();
-  const logged = new Set(feedLines.map((l) => l.split('\t')[4]).filter(Boolean));
-  const clean = (s) => String(s ?? '').replace(/[\t\n]/g, ' ');
-  const toLog = pending.filter((i) => !logged.has(clean(i.url)));
-  if (toLog.length) {
-    await appendFile(FEED, toLog.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
-  }
-  await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
 
   const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
   // new_items is everything not yet acknowledged, including leftovers from failed runs.

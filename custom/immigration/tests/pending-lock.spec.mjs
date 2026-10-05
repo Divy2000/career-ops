@@ -82,3 +82,35 @@ test('an ack and a watcher run started together keep the fresh item and drop onl
   assert.deepEqual(ids(w.pending), [C.id]);
   assert.ok(JSON.parse(fs.readFileSync(path.join(w.root, 'data', 'immigration', 'seen.json'), 'utf8')).ids.includes(C.id));
 });
+
+/** An offline USCIS feed that answers with `items` after `delayMs`; the Federal Register answers with nothing, at once. */
+function feed(w, name, items, delayMs = 0) {
+  const file = path.join(w.root, `${name}.mjs`);
+  const rss = `<rss><channel>${items.map((i) => `<item><title>${i.title}</title><link>${i.url}</link><pubDate>Thu, 01 Oct 2026 12:00:00 GMT</pubDate></item>`).join('')}</channel></rss>`;
+  fs.writeFileSync(file, `globalThis.fetch = async (url) => String(url).includes('federalregister') ? new Response(JSON.stringify({ results: [] }), { status: 200 }) : new Promise((r) => setTimeout(() => r(new Response(${JSON.stringify(rss)}, { status: 200 })), ${delayMs}));\n`);
+  return file;
+}
+
+test('a watcher that read seen.json before another run queued and an ack cleared an item neither re-queues it nor drops that run\'s seen ids', async () => {
+  const w = world();
+  const seenFile = path.join(w.root, 'data', 'immigration', 'seen.json');
+  fs.writeFileSync(w.pending, '[]\n');
+  const X = item('x', 'H-1B wage rule X');
+  const D = item('d', 'H-1B lottery rule D');
+  // W2 reads the stale seen.json (A only) as it starts, then its fetch is slow.
+  const w2 = run({ ...w, preload: feed(w, 'w2-feeds', [C, D], 4000) }, [], { preload: true });
+  await sleep(1500);
+  // Meanwhile W1 queues C and X and marks them seen, and a pass is given C and acknowledges it.
+  const w1 = await run({ ...w, preload: feed(w, 'w1-feeds', [C, X]) }, [], { preload: true }).done;
+  assert.equal(w1.code, 0, w1.stderr);
+  fs.writeFileSync(w.batch, JSON.stringify({ new_items: [C] }));
+  const ack = await run(w, ['--ack', w.batch]).done;
+  assert.equal(ack.code, 0, ack.stderr);
+  assert.deepEqual(ids(w.pending), [X.id]);
+  const r = await w2.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(ids(w.pending), [X.id, D.id], 'the acknowledged C was queued again');
+  const seen = JSON.parse(fs.readFileSync(seenFile, 'utf8'));
+  assert.deepEqual([...seen.ids].sort(), [A.id, C.id, D.id, X.id].sort(), 'a stale snapshot overwrote the seen ids');
+  assert.deepEqual(Object.keys(seen.last_success).sort(), ['federal-register', 'uscis']);
+});
