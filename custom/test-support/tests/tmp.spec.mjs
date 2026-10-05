@@ -25,7 +25,8 @@ test('Given the child test runner prints TAP, the guard still sees the suite run
   const dir = tempDir('tmp-guard-tap-');
   fs.writeFileSync(path.join(dir, 'a.spec.mjs'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
   const saved = process.env.NODE_OPTIONS;
-  process.env.NODE_OPTIONS = `${saved ?? ''} --test-reporter=tap`.trim();
+  // Any reporter the caller set is replaced: two reporters for one destination is an error.
+  process.env.NODE_OPTIONS = `${(saved ?? '').replace(/--test-reporter[= ]\S+/g, '')} --test-reporter=tap`.trim();
   try {
     const r = runSuiteInFreshTmp(dir, 'none');
     assert.equal(r.status, 0, r.output);
