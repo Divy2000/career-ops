@@ -136,8 +136,8 @@ describe('action registry covers section 3.3', () => {
     const rank = findAction('pipeline.rank')!.build({ limit: 20, model: 'haiku', dryRun: true }, ctx);
     expect(rank.args[0]).toMatch(/rank-pipeline\.mjs$/);
     expect(rank.args.slice(1)).toEqual(['--limit', '20', '--model', 'haiku', '--dry-run']);
-    expect(findAction('tracker.hiredShare')!.build({ report: 4, anonymity: 'role', story: 'It worked' }, ctx).args.slice(1)).toEqual(['--report', '4', '--anonymity', 'role', '--story', 'It worked']);
-    expect(findAction('tracker.hiredMark')!.build({ report: 4, mark: 'later' }, ctx).args.slice(1)).toEqual(['--report', '4', '--mark', 'later']);
+    expect(findAction('tracker.hiredShare')!.build({ report: '012', anonymity: 'role', story: 'It worked' }, ctx).args.slice(1)).toEqual(['--report', '012', '--anonymity', 'role', '--story', 'It worked']);
+    expect(findAction('tracker.hiredMark')!.build({ report: '012', mark: 'later' }, ctx).args.slice(1)).toEqual(['--report', '012', '--mark', 'later']);
     expect(findAction('pipeline.releaseReportNums')!.build({ range: '12-14' }, ctx).args.slice(1)).toEqual(['--release', '12-14']);
     expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
     expect(findAction('immigration.h1b')!.build({ company: 'Acme', mode: 'json' }, ctx).args.slice(1)).toEqual(['Acme', '--json']);
@@ -193,8 +193,8 @@ function sampleParams(id: string): Record<string, unknown> {
   const samples: Record<string, Record<string, unknown>> = {
     'tracker.setStatus': { row: 1, state: 'Applied' },
     'tracker.delete': { n: 1, dryRun: true },
-    'tracker.hiredShare': { report: 1, anonymity: 'handle' },
-    'tracker.hiredMark': { report: 1, mark: 'never' },
+    'tracker.hiredShare': { report: '001', anonymity: 'handle' },
+    'tracker.hiredMark': { report: '001', mark: 'never' },
     'pipeline.reserveReportNums': { count: 2 },
     'pipeline.releaseReportNums': { range: '1-2' },
     'scan.network': { roles: ['a'], exclude: [], locationAllow: [], block: [], sinceDays: 7, ats: ['greenhouse'], limit: 50 },

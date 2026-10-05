@@ -69,6 +69,8 @@ const opt = (value: string | number | undefined, name: string): string[] => (val
 const none = z.object({});
 const dryRun = z.object({ dryRun: z.boolean().default(false) });
 const positive = z.number().int().positive();
+/** A tracker Report label as written ("012"); hired-share.mjs compares it as text, so "12" would miss "012". */
+const reportLabel = z.string().regex(/^\d{1,6}$/);
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
 const outputPath = (ext: RegExp, what: string) =>
@@ -136,8 +138,8 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: true,
-    params: z.object({ report: positive, anonymity: z.enum(['handle', 'role', 'count']), story: z.string().max(2000).optional() }),
-    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--anonymity', p.anonymity, ...opt(p.story, '--story')]),
+    params: z.object({ report: reportLabel, anonymity: z.enum(['handle', 'role', 'count']), story: z.string().max(2000).optional() }),
+    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', p.report, '--anonymity', p.anonymity, ...opt(p.story, '--story')]),
   }),
   define({
     id: 'tracker.hiredMark',
@@ -146,8 +148,8 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: true,
-    params: z.object({ report: positive, mark: z.enum(['shared', 'later', 'never']) }),
-    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--mark', p.mark]),
+    params: z.object({ report: reportLabel, mark: z.enum(['shared', 'later', 'never']) }),
+    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', p.report, '--mark', p.mark]),
   }),
   // ---- pipeline ----
   define({ id: 'pipeline.prioritize', label: 'Prioritize pipeline', cost: 'free', resources: ['pipeline'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'prioritize', []) }),

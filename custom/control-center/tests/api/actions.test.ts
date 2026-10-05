@@ -401,3 +401,29 @@ describe('stale action inputs', () => {
     }
   });
 });
+
+describe('Hired Wall answers (R7-01)', () => {
+  // The oferta mode writes the Report cell with a zero-padded label (`[001](reports/001-...)`, modes/oferta.md);
+  // hired-share.mjs matches the cell's first digit run as text, so "006" must reach it, never 6.
+  it('records the answer and drafts the story for a row whose report label is zero-padded, using the report the tracker API gives the row', async () => {
+    const dataRoot = copyFixtureRoot();
+    const trackerFile = path.join(dataRoot, 'data', 'applications.md');
+    const text = fs.readFileSync(trackerFile, 'utf8').replace('| Responded |', '| Hired |').replace('[6](../reports/006-vandelay-systems.md)', '[006](../reports/006-vandelay-systems.md)');
+    fs.writeFileSync(trackerFile, text);
+    const app = await makeTestApp({ dataRoot });
+    try {
+      const rows = (await app.app.inject({ method: 'GET', url: '/api/tracker', headers: app.authed })).json().rows as Array<{ num: number; reportLabel: unknown }>;
+      const row = rows.find((r) => r.num === 6)!;
+      expect(row.reportLabel).toBe('006');
+      const send = (id: string, params: Record<string, unknown>) => app.app.inject({ method: 'POST', url: `/api/actions/${id}`, headers: app.authedWrite, payload: { params } });
+      const draft = await send('tracker.hiredShare', { report: row.reportLabel, anonymity: 'role' });
+      expect(draft.statusCode, draft.body).toBe(200);
+      const mark = await send('tracker.hiredMark', { report: row.reportLabel, mark: 'later' });
+      expect(mark.statusCode, mark.body).toBe(200);
+      const state = JSON.parse(fs.readFileSync(path.join(dataRoot, 'data', '.hired-share-state.json'), 'utf8'));
+      expect(state.byReport['006'].status).toBe('later');
+    } finally {
+      await app.close();
+    }
+  });
+});

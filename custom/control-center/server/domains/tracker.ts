@@ -18,6 +18,8 @@ export interface TrackerRow {
   pdf: boolean;
   pdfRaw: string;
   report: number | null;
+  /** The Report cell's first digit run as written ("012"): hired-share.mjs matches rows by this text, not the number. */
+  reportLabel: string | null;
   notes: string;
   location: string | null;
   url: string | null;
@@ -86,6 +88,7 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
       pdf: pdfPresent(raw.pdf ?? ''),
       pdfRaw: raw.pdf ?? '',
       report: reportNum,
+      reportLabel: reportNum === null ? null : (raw.report ?? '').match(/\d+/)?.[0] ?? null,
       notes: raw.notes ?? '',
       location: raw.location ?? null,
       url: raw.url ?? summary?.url ?? null,

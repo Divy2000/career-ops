@@ -81,7 +81,7 @@ export function StatusControl({ row }: { row: TrackerRow }) {
 
   const commit = async (state: string, note?: string) => {
     if (!(await setStatus(row, state, { note }))) return;
-    if (state === 'Hired' && row.report !== null) setHired(true);
+    if (state === 'Hired' && row.reportLabel !== null) setHired(true);
     setPending(null);
   };
 
@@ -109,7 +109,7 @@ export function StatusControl({ row }: { row: TrackerRow }) {
       </label>
       {pending && <DiscardReasonPicker state={pending} row={row} busy={busy} onConfirm={(note) => void commit(pending, note)} onCancel={() => setPending(null)} />}
       <StatusMessage message={message} />
-      {hired && row.report !== null && <HiredDialog report={row.report} company={row.company} onClose={() => setHired(false)} />}
+      {hired && row.reportLabel !== null && <HiredDialog report={row.reportLabel} company={row.company} onClose={() => setHired(false)} />}
     </div>
   );
 }
