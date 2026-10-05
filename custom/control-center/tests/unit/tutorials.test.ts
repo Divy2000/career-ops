@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { MEDIA_TYPES, parseManifest, parseRange, srtToVtt } from '../../server/domains/tutorials.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { MEDIA_TYPES, listTutorials, parseManifest, parseRange, srtToVtt } from '../../server/domains/tutorials.js';
 import { guideFileNames, parseGuide } from '../../server/domains/tutorial-manifest.mjs';
 
 describe('srtToVtt', () => {
@@ -395,5 +398,89 @@ describe('guideFileNames', () => {
       ],
     });
     expect(names).toEqual(['a.gif', 'p.jpg', 'b.gif']);
+  });
+});
+
+describe('listTutorials with parts', () => {
+  let root: string;
+  const folder = () => path.join(root, 'data', 'control-center', 'tutorials', 'tour');
+  const part = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    title: `Part ${id}`,
+    video: `${id}.mp4`,
+    videoLight: `${id}-light.mp4`,
+    subtitles: `${id}.srt`,
+    poster: `${id}.jpg`,
+    posterLight: `${id}-light.jpg`,
+    duration: 120,
+    chapters: [{ title: `${id} one`, start: 0 }, { title: `${id} two`, start: 60 }],
+    ...over,
+  });
+  const write = (manifest: unknown, skip: string[] = []) => {
+    fs.mkdirSync(folder(), { recursive: true });
+    fs.writeFileSync(path.join(folder(), 'tutorial.json'), JSON.stringify(manifest));
+    for (const id of ['a', 'b']) {
+      for (const name of [`${id}.mp4`, `${id}-light.mp4`, `${id}.srt`, `${id}.jpg`, `${id}-light.jpg`]) if (!skip.includes(name)) fs.writeFileSync(path.join(folder(), name), `bytes of ${name}`);
+    }
+  };
+  const manifest = { id: 'tour', title: 'Tour', parts: [part('a', { short: 'First' }), part('b')] };
+  const url = (name: string) => `/api/tutorials/tour/media/${name}`;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-parts-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('given a parts folder, when listed, then each part has its urls, label and length, and the chapters carry part ids', () => {
+    write(manifest);
+    const { tutorials, warnings } = listTutorials(root);
+    expect(warnings).toEqual([]);
+    const [tour] = tutorials;
+    expect(tour!.warnings).toEqual([]);
+    expect(tour!.parts).toEqual([
+      {
+        id: 'a',
+        title: 'Part a',
+        short: 'First',
+        duration: 120,
+        video: { file: 'a.mp4', url: url('a.mp4'), bytes: 'bytes of a.mp4'.length },
+        videoLight: { file: 'a-light.mp4', url: url('a-light.mp4'), bytes: 'bytes of a-light.mp4'.length },
+        subtitles: { file: 'a.srt', url: url('a.srt'), format: 'srt' },
+        poster: { file: 'a.jpg', url: url('a.jpg') },
+        posterLight: { file: 'a-light.jpg', url: url('a-light.jpg') },
+        chapters: [{ title: 'a one', start: 0 }, { title: 'a two', start: 60 }],
+      },
+      expect.objectContaining({ id: 'b', short: 'Part b', video: expect.objectContaining({ url: url('b.mp4') }) }),
+    ]);
+    expect(tour!.chapters).toEqual([
+      { title: 'a one', start: 0, part: 'a' },
+      { title: 'a two', start: 60, part: 'a' },
+      { title: 'b one', start: 0, part: 'b' },
+      { title: 'b two', start: 60, part: 'b' },
+    ]);
+  });
+
+  it('given a part video is missing, when listed, then the folder is skipped with a warning naming the part', () => {
+    write(manifest, ['b.mp4']);
+    const { tutorials, warnings } = listTutorials(root);
+    expect(tutorials).toEqual([]);
+    expect(warnings).toEqual([{ folder: 'tour', message: 'part "b" video file "b.mp4" not found' }]);
+  });
+
+  it("given a part's light video is missing, when listed, then that part has videoLight null and a warning naming the part", () => {
+    write(manifest, ['b-light.mp4']);
+    const [tour] = listTutorials(root).tutorials;
+    expect(tour!.parts[0]!.videoLight).not.toBeNull();
+    expect(tour!.parts[1]!.videoLight).toBeNull();
+    expect(tour!.warnings).toEqual(['part "b" light video file "b-light.mp4" not found, so it is ignored']);
+  });
+
+  it('given a single-video manifest, when listed, then it is one part "main" with no declared length', () => {
+    fs.mkdirSync(folder(), { recursive: true });
+    fs.writeFileSync(path.join(folder(), 'tutorial.json'), JSON.stringify({ id: 'tour', title: 'Tour', video: 'a.mp4', chapters: [{ title: 'Intro', start: 0 }] }));
+    fs.writeFileSync(path.join(folder(), 'a.mp4'), 'x');
+    const [tour] = listTutorials(root).tutorials;
+    expect(tour!.parts).toEqual([{ id: 'main', title: 'Tour', short: 'Tour', duration: null, video: { file: 'a.mp4', url: url('a.mp4'), bytes: 1 }, videoLight: null, subtitles: null, poster: null, posterLight: null, chapters: [{ title: 'Intro', start: 0 }] }]);
+    expect(tour!.chapters).toEqual([{ title: 'Intro', start: 0, part: 'main' }]);
   });
 });

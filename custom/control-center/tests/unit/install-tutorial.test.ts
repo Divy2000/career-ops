@@ -77,7 +77,7 @@ describe('installTutorial from a recording folder (toc.json, srt, script.md)', (
     installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'My tour' });
     const listed = listTutorials(dataRoot);
     expect(listed.warnings).toEqual([]);
-    expect(listed.tutorials.map((t) => [t.id, t.chapters.length, t.subtitles?.format])).toEqual([['my-tour', 2, 'srt']]);
+    expect(listed.tutorials.map((t) => [t.id, t.chapters.length, t.parts[0]?.subtitles?.format])).toEqual([['my-tour', 2, 'srt']]);
   });
 
   it('prefers a .vtt over an .srt and picks up a poster', () => {
@@ -317,7 +317,7 @@ describe('installTutorial with a light version of the recording', () => {
     installTutorial({ source: src(), dataRoot, id: 'themed', title: 'Themed' });
     const listed = listTutorials(dataRoot);
     expect(listed.tutorials[0]?.warnings).toEqual([]);
-    expect(listed.tutorials[0]?.videoLight).toMatchObject({ file: 'tour-light.mp4', bytes: 'LIGHT-BYTES'.length });
+    expect(listed.tutorials[0]?.parts[0]?.videoLight).toMatchObject({ file: 'tour-light.mp4', bytes: 'LIGHT-BYTES'.length });
   });
 
   it('pairs poster-light.jpg, .jpeg or .png with poster.jpg as posterLight and copies it as-is', () => {

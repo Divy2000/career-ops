@@ -86,7 +86,8 @@ function EmptyState({ directory }: { directory: string }) {
 
 function Thumb({ tutorial }: { tutorial: Tutorial }) {
   const { resolved } = useTheme();
-  const poster = resolved === 'light' && tutorial.posterLight ? tutorial.posterLight : tutorial.poster;
+  const first = tutorial.parts[0]!;
+  const poster = resolved === 'light' && first.posterLight ? first.posterLight : first.poster;
   return poster ? <img className="tut-card__thumb" src={poster.url} alt="" loading="lazy" /> : <span className="tut-card__thumb tut-card__thumb--none" aria-hidden="true" />;
 }
 
@@ -133,12 +134,13 @@ function Transcript({ url }: { url: string }) {
 function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; startAt: number | null; onStartApplied: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const cover = useRef<HTMLCanvasElement>(null);
-  const themed = useThemedVideo(video, cover, tutorial, startAt);
+  const part = tutorial.parts[0]!;
+  const themed = useThemedVideo(video, cover, part, startAt);
   const [current, setCurrent] = useState(-1);
   const [captions, setCaptions] = useState(readCaptionsPref);
   const [osd, setOsd] = useState('');
-  const chapters = tutorial.chapters;
-  const hasCaptions = tutorial.subtitles !== null;
+  const chapters = part.chapters;
+  const hasCaptions = part.subtitles !== null;
 
   useEffect(() => {
     const v = video.current;
@@ -254,7 +256,7 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
         <div className="stack">
           <div className="tut__stage">
             <video ref={video} controls preload="metadata" src={themed.initialSrc} poster={themed.poster} aria-label={tutorial.title} onTimeUpdate={update} onSeeked={update} onLoadedMetadata={update}>
-              {tutorial.subtitles && <track kind="subtitles" srcLang="en" label="English" src={tutorial.subtitles.url} />}
+              {part.subtitles && <track kind="subtitles" srcLang="en" label="English" src={part.subtitles.url} />}
             </video>
             <canvas ref={cover} className="tut__freeze" data-state="off" aria-hidden="true" />
             {osd && (

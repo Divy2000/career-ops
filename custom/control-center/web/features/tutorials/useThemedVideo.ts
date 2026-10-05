@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { createMediaSwap, drawFreezeFrame, type MediaSwap } from '../../lib/media-swap';
 import { useTheme } from '../../lib/theme';
-import type { Tutorial } from '@shared/api';
+import type { TutorialPart } from '@shared/api';
 
 /**
- * Which recording the <video> carries, decided by the resolved theme (dark when there is no light one), and the swap between
+ * Which recording of a part the <video> carries, decided by the resolved theme (dark when there is no light one), and the swap between
  * them when the theme changes. The element is never re-created: its src is only ever set here, imperatively, after the first render.
  */
-export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover: RefObject<HTMLCanvasElement | null>, tutorial: Tutorial, pendingSeek: number | null) {
+export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover: RefObject<HTMLCanvasElement | null>, part: TutorialPart, pendingSeek: number | null) {
   const { resolved } = useTheme();
-  const dark = tutorial.video.url;
-  const wanted = resolved === 'light' && tutorial.videoLight ? tutorial.videoLight.url : dark;
+  const dark = part.video.url;
+  const wanted = resolved === 'light' && part.videoLight ? part.videoLight.url : dark;
   const [initialSrc] = useState(wanted);
   const shown = useRef(initialSrc);
   const swap = useRef<MediaSwap | null>(null);
@@ -55,7 +55,7 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
   return {
     initialSrc,
     warning,
-    poster: (resolved === 'light' && tutorial.posterLight ? tutorial.posterLight : tutorial.poster)?.url,
-    lightMissing: resolved === 'light' && tutorial.videoLight === null,
+    poster: (resolved === 'light' && part.posterLight ? part.posterLight : part.poster)?.url,
+    lightMissing: resolved === 'light' && part.videoLight === null,
   };
 }

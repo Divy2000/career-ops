@@ -19,11 +19,11 @@ describe('writeDemoTutorials', () => {
     const { tutorials } = listTutorials(dir);
     const demo = tutorials.find((t) => t.id === 'demo-tour')!;
     expect(demo.warnings).toEqual([]);
-    expect(demo.videoLight).toMatchObject({ file: 'demo-tour-light.mp4' });
-    expect(demo.videoLight!.bytes).toBeGreaterThan(1000);
-    expect(demo.posterLight).toMatchObject({ file: 'poster-light.jpg' });
+    expect(demo.parts[0]!.videoLight).toMatchObject({ file: 'demo-tour-light.mp4' });
+    expect(demo.parts[0]!.videoLight!.bytes).toBeGreaterThan(1000);
+    expect(demo.parts[0]!.posterLight).toMatchObject({ file: 'poster-light.jpg' });
     const second = tutorials.find((t) => t.id === 'second-tour')!;
-    expect(second.videoLight).toBeNull();
+    expect(second.parts[0]!.videoLight).toBeNull();
   });
 
   it('makes the light video a different file from the dark one', () => {
