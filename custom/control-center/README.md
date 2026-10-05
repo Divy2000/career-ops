@@ -80,7 +80,7 @@ Every class is denied `data/blacklist.md`, direct edits to `data/applications.md
 - a read may never reach a `READ_DENY` file (compared case-insensitively);
 - Glob and Grep, which sessions already had, get the same path check, and their patterns may not contain `..`, start at `~`, or open a brace alternative on an absolute or home path;
 - WebFetch stays available for public sites: only `http` and `https`, never `localhost`, `*.local`, dotless names, or private, loopback, link-local (cloud metadata), CGNAT or multicast addresses, and every address a name resolves to must be public (Claude Code itself would fetch `127.0.0.1`);
-- script arguments get the same URL rules, and `file:`, `data:`, `view-source:` and similar schemes are refused;
+- script arguments get the same URL rules, and `file:`, `data:`, `view-source:` and similar schemes are refused. So do the URLs inside a list file a script is given (`check-liveness.mjs --file`, `verify-portals.mjs --file`, `audit-portals.mjs --file`, `discover-ats.mjs --in`): the file must be readable by the session and at most 256 KB, and every line of a `check-liveness` list must be an http or https URL. All names of one call are resolved in parallel under one 20 s budget, and a call naming more than 4 of them is refused;
 - subagents (`Agent`) run only for `pdf/hm-audit`, and PowerShell never runs.
 
 A word-initial `@` in a prompt is neutralized in the argument copy (a word joiner after it), so no prompt attaches a file; the transcript keeps your text as written. A session may read back its own oversized tool results, which Claude Code saves under `~/.claude/projects/<repo>/<session>/tool-results/`, and nothing else of Claude's own state. Restricted sessions load no `CLAUDE.md`, so the preamble tells them to read `AGENTS.md` first and, when the data root is separate, where it lives. A turn does not start when the code or data root is `/`, your home directory, or a folder that contains it (point `CAREER_OPS_ROOT` at a dedicated folder).
@@ -272,7 +272,8 @@ With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[
   - Scripts read files on their own. The allowed scripts, and Dev Chat's npm and npx commands, run code that can open any file your user can; the guard inspects only their arguments. Dev Chat can edit modules its test commands load. There is no OS sandbox.
   - HTML a session writes can pull in local files: the Playwright-based scripts (`generate-pdf.mjs`, `custom/cv/render-pdf.mjs`, `archive-posting.mjs`, `check-liveness.mjs`) can load `file://` resources referenced inside HTML the session wrote.
   - WebFetch stays open to public hosts, so personal data inside the roots (CV, tracker, contacts, immigration notes, uploads) can leave through a URL, and through WebSearch queries.
-  - DNS rebinding between the hook's lookup and Claude Code's own fetch is still possible.
+  - DNS rebinding between the hook's lookup and Claude Code's own fetch is still possible, and so is a list file changed between the hook's check and the script's read.
+  - The scan and fix-portal sessions may edit `portals.yml`, and `scan.mjs`, `verify-portals.mjs`, `audit-portals.mjs` and `discover-ats.mjs` fetch the boards it lists without being given a file, so the guard never sees those URLs.
   - A hook that times out (30 s) or is killed does not block. Only the CLI layer is a gate.
   - `READ_DENY` matches file names: a secret under an unusual name inside a root is readable. The hook over-denies case variants on purpose.
   - Server-managed settings (a Team or Enterprise policy from claude.ai) are not inspected; only the local managed-settings files and managed preferences are.

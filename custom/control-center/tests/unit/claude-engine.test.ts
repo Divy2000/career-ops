@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { checkBash, checkRead, checkSearch, locateRead, snapshotKey } from '../../server/claude/guard-policy.mjs';
+import { checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
@@ -435,6 +435,57 @@ describe('guard hook: read confinement', () => {
     const r = pre('Bash', { command: `node check-liveness.mjs ${urls}` });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/5 different hosts/);
+  });
+
+  it('names the files the audited scripts read URLs from, in both flag forms', () => {
+    expect(urlListFilesIn('node check-liveness.mjs --file output/urls.txt')).toEqual([{ file: 'output/urls.txt', format: 'lines' }]);
+    expect(urlListFilesIn('node check-liveness.mjs --file=output/urls.txt')).toEqual([{ file: 'output/urls.txt', format: 'lines' }]);
+    expect(urlListFilesIn('node verify-portals.mjs --file alt.yml --strict')).toEqual([{ file: 'alt.yml', format: 'text' }]);
+    expect(urlListFilesIn('node audit-portals.mjs --summary --file=alt.yml')).toEqual([{ file: 'alt.yml', format: 'text' }]);
+    expect(urlListFilesIn('node discover-ats.mjs --in companies.yml --summary')).toEqual([{ file: 'companies.yml', format: 'text' }]);
+    expect(urlListFilesIn('node check-liveness.mjs https://jobs.example.com/1')).toEqual([]);
+    expect(urlListFilesIn('node merge-tracker.mjs --file x')).toEqual([]);
+    expect(URL_LIST_MAX_BYTES).toBe(256 * 1024);
+  });
+
+  it('check-liveness --file: the URLs inside the list file get the same checks as URL arguments', () => {
+    const list = (name: string, text: string) => {
+      fs.writeFileSync(path.join(code, name), text);
+      return name;
+    };
+    const liveness = (file: string) => pre('Bash', { command: `node check-liveness.mjs --file ${file}` });
+    const loopback = liveness(list('loopback.txt', '# one posting\nhttps://93.184.216.34/jobs/1\nhttp://127.0.0.1/\n'));
+    expect(loopback.status).toBe(2);
+    expect(loopback.stderr).toMatch(/127\.0\.0\.1/);
+    expect(pre('Bash', { command: `node check-liveness.mjs --file=${list('inline.txt', 'http://169.254.169.254/latest\n')}` }).status).toBe(2);
+    expect(liveness(list('public.txt', '# public postings\nhttps://93.184.216.34/jobs/1\n\nhttps://93.184.216.34/jobs/2\nhttps://8.8.8.8/x\n')).status).toBe(0);
+    expect(liveness(list('scheme.txt', 'file:///etc/passwd\n')).stderr).toMatch(/not an http/);
+    expect(liveness(list('word.txt', 'https://93.184.216.34/a\nnot-a-url\n')).stderr).toMatch(/not an http/);
+    expect(liveness(list('dns.txt', 'https://nothing.invalid/x\n')).stderr).toMatch(/could not resolve/);
+    expect(liveness(list('big.txt', `https://93.184.216.34/${'x'.repeat(URL_LIST_MAX_BYTES)}\n`)).stderr).toMatch(/larger than/);
+    expect(liveness('missing.txt').stderr).toMatch(/cannot read/);
+    expect(liveness(path.join(outside, 's.txt')).status).toBe(2);
+  });
+
+  it('verify-portals --file, audit-portals --file and discover-ats --in: every URL in the YAML is checked', () => {
+    const policyFor = (mode: string) => {
+      const dir = guardDir(mode);
+      return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)! }) };
+    };
+    // Each script under the mode that runs it, so a refusal can only come from the URL check.
+    const scan = policyFor('scan');
+    const discover = policyFor('discover');
+    const yml = (name: string, text: string) => {
+      fs.writeFileSync(path.join(code, name), text);
+      return name;
+    };
+    const bad = yml('bad.yml', 'tracked_companies:\n  - name: Acme\n    careers_url: http://169.254.169.254/latest\n');
+    const good = yml('good.yml', 'tracked_companies:\n  - name: Acme\n    careers_url: https://93.184.216.34/careers\n    about: plain text\n');
+    const local = yml('local.yml', 'companies:\n  - name: Acme\n    workday: file:///etc/passwd\n');
+    const run = (cmd: string) => pre('Bash', { command: cmd }, cmd.includes('discover-ats') ? discover : scan);
+    for (const cmd of [`node verify-portals.mjs --file ${good}`, `node audit-portals.mjs --file=${good}`, `node discover-ats.mjs --in ${good}`]) expect(run(cmd).status, cmd).toBe(0);
+    for (const cmd of [`node verify-portals.mjs --file ${bad}`, `node audit-portals.mjs --file=${bad}`, `node discover-ats.mjs --in ${bad}`]) expect(run(cmd).stderr, cmd).toMatch(/169\.254\.169\.254/);
+    expect(run(`node discover-ats.mjs --in ${local}`).stderr).toMatch(/file: URLs/);
   });
 
   it('PowerShell always exits 2', () => {

@@ -586,6 +586,70 @@ export function httpUrlsIn(command) {
   return out;
 }
 
+/**
+ * Flags whose value names a file the script reads URLs from and then opens or fetches, from an audit of every
+ * script a session may run: a 'lines' file is opened line by line, each line as a URL; a 'text' file (a portals
+ * or company YAML) carries URLs among other fields. Each one gets the same URL checks as an argument.
+ */
+const URL_LIST_FLAGS = {
+  'check-liveness.mjs': { '--file': 'lines' },
+  'audit-portals.mjs': { '--file': 'text' },
+  'verify-portals.mjs': { '--file': 'text' },
+  'discover-ats.mjs': { '--in': 'text' },
+};
+/** A list file larger than this is refused rather than partly checked. */
+export const URL_LIST_MAX_BYTES = 256 * 1024;
+const URL_IN_TEXT = /https?:\/\/[^\s'"<>`)\]}]+/gi;
+// A local scheme used as a value (file:///x, about:blank), not a YAML key followed by a space.
+const LOCAL_SCHEME_IN_TEXT = /(?:^|[^A-Za-z0-9+.-])(file|view-source|chrome|chrome-extension|about|blob|filesystem|jar|ftp|ws|wss|data|javascript):(?=\S)/im;
+
+/** The URL list files a command names, with how each is read; empty for every other script. */
+export function urlListFilesIn(command) {
+  const tokens = tokenize(command) ?? [];
+  const spec = tokens[0] === 'node' ? URL_LIST_FLAGS[tokens[1]] : undefined;
+  if (!spec) return [];
+  const out = [];
+  for (let i = 2; i < tokens.length; i++) {
+    for (const [flag, format] of Object.entries(spec)) {
+      if (tokens[i] === flag && tokens[i + 1] !== undefined) out.push({ file: tokens[i + 1], format });
+      else if (tokens[i].startsWith(`${flag}=`)) out.push({ file: tokens[i].slice(flag.length + 1), format });
+    }
+  }
+  return out;
+}
+
+/**
+ * The URLs a list file holds, or the reason the call is refused: the file must pass the read checks, be a
+ * regular file no larger than URL_LIST_MAX_BYTES, and hold only web URLs (every line of a 'lines' file must be one).
+ */
+export function readUrlList(policy, file, cwd, format, label = 'Bash') {
+  const why = checkRead(policy, { file_path: file }, cwd, label);
+  if (why) return { reason: why };
+  const { abs } = locateRead(policy, file);
+  let text;
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return { reason: `${label}: ${file} is not a regular file, so its URLs cannot be checked` };
+    if (st.size > URL_LIST_MAX_BYTES) return { reason: `${label}: ${file} is larger than ${URL_LIST_MAX_BYTES} bytes, so its URLs cannot be checked` };
+    text = fs.readFileSync(abs, 'utf8');
+  } catch (err) {
+    return { reason: `${label}: cannot read ${file} to check its URLs (${(err && err.code) || (err && err.message)})` };
+  }
+  if (format === 'lines') {
+    const urls = [];
+    for (const [i, raw] of text.split('\n').entries()) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      if (!/^https?:\/\//i.test(line)) return { reason: `${label}: line ${i + 1} of ${file} is not an http or https URL (${line.slice(0, 80)})` };
+      urls.push(line);
+    }
+    return { urls };
+  }
+  const local = text.match(LOCAL_SCHEME_IN_TEXT);
+  if (local) return { reason: `${label}: ${file} holds ${local[1].toLowerCase()}: URLs, which may not reach a script` };
+  return { urls: text.match(URL_IN_TEXT) ?? [] };
+}
+
 function checkScript(policy, script, args, label) {
   const urlWhy = checkUrlArgs(args, label);
   if (urlWhy) return urlWhy;

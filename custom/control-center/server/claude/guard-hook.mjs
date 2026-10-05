@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkRead, checkSearch, httpUrlsIn, locate, matches, snapshotKey } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkRead, checkSearch, httpUrlsIn, locate, matches, readUrlList, snapshotKey, urlListFilesIn } from './guard-policy.mjs';
 
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -96,8 +96,15 @@ async function main() {
     const command = String(input.command ?? '');
     const reason = checkBash(command, policy, cwd);
     if (reason) deny(reason);
-    // checkBash already refused local schemes and literal private hosts; names are resolved here, all at once under one budget.
-    const why = await checkFetchUrls(httpUrlsIn(command), undefined, { label: 'Bash' });
+    // URLs a script reads from a list file it was given get the same checks as its URL arguments.
+    const listed = [];
+    for (const { file, format } of urlListFilesIn(command)) {
+      const got = readUrlList(policy, file, cwd, format);
+      if (got.reason) deny(got.reason);
+      listed.push(...got.urls);
+    }
+    // checkBash already refused local schemes and literal private hosts in arguments; names are resolved here, all at once under one budget.
+    const why = await checkFetchUrls([...httpUrlsIn(command), ...listed], undefined, { label: 'Bash' });
     if (why) deny(why);
     process.exit(0);
   }
