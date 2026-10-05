@@ -100,6 +100,30 @@ test.describe('deterministic writes from the pages', () => {
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
+  test('the danger zone deletes a row once the preview is confirmed, and returns to the tracker without it (SW-tests-15)', async ({ page }) => {
+    const tracker = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'applications.md');
+    const original = fs.readFileSync(tracker, 'utf8');
+    fs.writeFileSync(tracker, `${original.trimEnd()}\n| 98 | 2026-10-05 | Delete E2E Co | - | Throwaway Role | - | Evaluated | - | - | e2e |\n`);
+    try {
+      const before = ((await (await page.request.get('/api/tracker')).json()).rows as Array<{ num: number }>).map((r) => r.num);
+      expect(before).toContain(98);
+      await page.goto('/tracker/98');
+      await expect(page.getByRole('heading', { level: 1, name: 'Delete E2E Co' })).toBeVisible();
+      await page.getByRole('tab', { name: 'Documents' }).click();
+      await page.getByRole('button', { name: 'Preview delete (dry run)' }).click();
+      await expect(page.getByLabel('Delete preview')).toContainText('Would remove application 98');
+      expect(fs.readFileSync(tracker, 'utf8')).toContain('Delete E2E Co');
+      await page.getByRole('button', { name: 'Confirm delete #98' }).click();
+      await expect(page).toHaveURL(/\/tracker(\?|$)/);
+      await expect(page.getByRole('heading', { level: 1, name: 'Tracker' })).toBeVisible();
+      await expect(page.getByRole('cell', { name: 'Delete E2E Co' })).toHaveCount(0);
+      const after = ((await (await page.request.get('/api/tracker')).json()).rows as Array<{ num: number }>).map((r) => r.num);
+      expect(after).toEqual(before.filter((n) => n !== 98));
+    } finally {
+      fs.writeFileSync(tracker, original);
+    }
+  });
+
   test("a delete preview made on one row does not arm the delete of the row Back returns to", async ({ page }) => {
     // Row #1 links to #3 as another application at the same company, so the move from #1 to #3 stays inside the app.
     await page.route('**/api/tracker/1', async (route) => {

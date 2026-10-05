@@ -14,6 +14,7 @@ let host: HTMLElement;
 let root: Root;
 let posts: Array<{ url: string; body: { params: Record<string, unknown> } }>;
 let markStatus: number;
+let statusFails: boolean;
 
 const ROW: TrackerRow = {
   num: 6, date: '2026-09-30', company: 'Vandelay Systems', role: 'Senior Python Engineer', score: 4.1, scoreRaw: '4.1/5', status: 'Offer',
@@ -27,10 +28,12 @@ function json(status: number, body: unknown) {
 beforeEach(async () => {
   posts = [];
   markStatus = 200;
+  statusFails = false;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) });
+      if (url === '/api/actions/tracker.setStatus' && statusFails) return json(409, { error: 'tracker is locked by another writer' });
       if (url === '/api/actions/tracker.hiredMark') return markStatus === 200 ? json(200, { result: 'marked' }) : json(markStatus, { error: 'No tracker row with state Hired' });
       return json(200, { result: 'ok' });
     }),
@@ -71,5 +74,20 @@ describe('Hired Wall dialog', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/No tracker row/);
     await act(async () => button('Close').click());
     expect(dialog()).toBeNull();
+  });
+
+  it('does not open when the status change itself fails, and says why (SW-tests-15)', async () => {
+    statusFails = true;
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(StatusControl, { key: 'retry', row: ROW }))));
+    expect(dialog()).toBeNull();
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Change status"]')!;
+    await act(async () => {
+      select.value = 'Hired';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Could not set status: tracker is locked by another writer');
+    expect(dialog()).toBeNull();
+    expect(posts.some((p) => p.url === '/api/actions/tracker.hiredMark')).toBe(false);
   });
 });
