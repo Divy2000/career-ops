@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import YAML from 'yaml';
 import { applyInboxSkip, postingUrl } from '../../server/domains/inboxSkip.js';
 import { applyFollowupEdit } from '../../server/domains/followups-edit.mjs';
 import { ACTIONS, findAction } from '../../server/actions/registry.js';
 import { tmpInputDir } from '../../server/actions/tmp-inputs.js';
 import { copyFixtureRoot } from '../helpers/app.js';
+import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 
 const PIPELINE = `# Pipeline\n\n## Pending\n\n- [ ] https://a.example/1 | A | Role\n- [x] https://a.example/2 | B | Role\n- not a checkbox\n\n## Done\n\n- [ ] https://a.example/1 | A | Role\n`;
 
@@ -159,6 +162,17 @@ describe('action registry covers section 3.3', () => {
     expect(text).toContain('- backend');
     expect(text).toContain('- intern');
     expect(text).toContain('- Remote');
+  });
+  it('scan.network writes title_filter keys the scanner reads: roles keep a title, exclude rejects one', async () => {
+    const dataRoot = copyFixtureRoot();
+    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: ['intern'], locationAllow: [], block: [], sinceDays: 7, ats: ['greenhouse'], limit: 100 }, { codeRoot: '/code', dataRoot, tmpInputs: [] });
+    const config = YAML.parse(fs.readFileSync(cmd.env!.CAREER_OPS_PORTALS!, 'utf8'));
+    const { resolveTitleFilterConfig } = (await import(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'scan-ats-full.mjs')).href)) as { resolveTitleFilterConfig: (c: unknown) => unknown };
+    const { buildTitleFilter } = (await import(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'title-keywords.mjs')).href)) as { buildTitleFilter: (f: unknown) => (title: string) => boolean };
+    const keep = buildTitleFilter(resolveTitleFilterConfig(config));
+    expect(keep('Backend Engineer')).toBe(true);
+    expect(keep('Sales Manager')).toBe(false);
+    expect(keep('Backend Intern')).toBe(false);
   });
   it('every input file a build writes is collected for the run to remove, the network scan filters file named only in the env included', () => {
     const dataRoot = copyFixtureRoot();
