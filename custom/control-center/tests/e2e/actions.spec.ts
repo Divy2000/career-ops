@@ -56,6 +56,27 @@ test.describe('deterministic writes through the action registry', () => {
   });
 });
 
+test.describe('Hired from a filtered tracker tab (R8-10)', () => {
+  const setStatus = (page: Page, row: number, state: string) =>
+    page.request.post('/api/actions/tracker.setStatus', { data: { params: { row, state } }, headers: { 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
+
+  test('the Hired Wall dialog opens although the hired row leaves the Interview tab', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    try {
+      await page.goto('/tracker?tab=interview');
+      await page.getByRole('row', { name: /Globex Payments/ }).click();
+      await page.getByLabel('Change status').selectOption('Hired');
+      await expect(page.getByRole('row', { name: /Globex Payments/ })).toHaveCount(0);
+      const dialog = page.getByRole('dialog', { name: 'Hired celebration' });
+      await expect(dialog).toContainText('Congratulations on Globex Payments!');
+      await dialog.getByRole('button', { name: 'Close' }).click();
+      await expect(dialog).toHaveCount(0);
+    } finally {
+      expect((await setStatus(page, 3, 'Interview')).status()).toBe(200);
+    }
+  });
+});
+
 test.describe('Command palette actions with params', () => {
   test('Network scan (dry run) asks only for the ATS, offers sinceDays as a choice and sends it as a number the action accepts', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);

@@ -72,8 +72,12 @@ export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: {
   );
 }
 
-/** Status picker with the current status first; Discarded and SKIP ask for a reason (TUI parity). */
-export function StatusControl({ row }: { row: TrackerRow }) {
+/**
+ * Status picker with the current status first; Discarded and SKIP ask for a reason (TUI parity). A host whose list can
+ * drop the row once it is Hired (a filtered tracker tab unmounts this control on the refetch) shows the Hired Wall
+ * dialog itself through onHired.
+ */
+export function StatusControl({ row, onHired }: { row: TrackerRow; onHired?: (row: TrackerRow & { reportLabel: string }) => void }) {
   const { setStatus, busy, message } = useSetStatus();
   const [pending, setPending] = useState<string | null>(null);
   const [hired, setHired] = useState(false);
@@ -81,7 +85,10 @@ export function StatusControl({ row }: { row: TrackerRow }) {
 
   const commit = async (state: string, note?: string) => {
     if (!(await setStatus(row, state, { note }))) return;
-    if (state === 'Hired' && row.reportLabel !== null) setHired(true);
+    if (state === 'Hired' && row.reportLabel !== null) {
+      if (onHired) onHired({ ...row, reportLabel: row.reportLabel });
+      else setHired(true);
+    }
     setPending(null);
   };
 

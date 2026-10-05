@@ -4,6 +4,7 @@ import { useTracker } from '../../lib/queries';
 import { DataState, Empty, ScorePill, StatusPill, Tabs } from '../../components/ui';
 import { EmptyTracker } from '../../components/EmptyTracker';
 import { StatusControl } from './StatusControl';
+import { HiredDialog } from './HiredDialog';
 import { AskTrackerPanel } from './AskTrackerPanel';
 import { CompareSelected } from './CompareSelected';
 import type { TrackerRow } from '@shared/api';
@@ -109,6 +110,8 @@ export function TrackerPage() {
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [cols, setCols] = useState<Set<SortKey>>(loadCols);
   const [help, setHelp] = useState(false);
+  // Kept here, not in the preview's StatusControl: a Hired row leaves a filtered tab, and the control with it.
+  const [hired, setHired] = useState<(TrackerRow & { reportLabel: string }) | null>(null);
   const go = useNavigate();
 
   useEffect(() => {
@@ -263,6 +266,7 @@ export function TrackerPage() {
             )}
           </div>
           <aside className="preview card" aria-label="Preview">
+            {hired && <HiredDialog key={hired.num} report={hired.reportLabel} company={hired.company} onClose={() => setHired(null)} />}
             {current ? (
               <>
                 <h2>{current.company}</h2>
@@ -272,7 +276,7 @@ export function TrackerPage() {
                   <StatusPill status={current.status} />
                 </div>
                 <div style={{ marginTop: 12 }}>
-                  <StatusControl key={current.num} row={current} />
+                  <StatusControl key={current.num} row={current} onHired={setHired} />
                 </div>
                 <dl className="kv" style={{ marginTop: 12 }}>
                   <dt>Archetype</dt>
