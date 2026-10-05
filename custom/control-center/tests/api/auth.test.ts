@@ -28,10 +28,26 @@ describe('auth and request hardening', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('localhost is an accepted Host alias', async () => {
-    const res = await t.app.inject({ method: 'GET', url: '/healthz', headers: { ...t.authed, host: 'localhost:4317' } });
+  it('localhost is an accepted Host alias on an authenticated API route', async () => {
+    // Not /healthz: it answers before the Host check.
+    const res = await t.app.inject({ method: 'GET', url: '/api/system/status', headers: { ...t.authed, host: 'localhost:4317' } });
     expect(res.statusCode).toBe(200);
   });
+
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE'] as const) {
+    it(`a ${method} from the app's own Origin without X-CC: 1 is refused with 403, and with it passes the gate`, async () => {
+      const { 'x-cc': _xcc, ...noMarker } = t.authedWrite;
+      const missing = await t.app.inject({ method, url: '/api/system/status', headers: noMarker, payload: {} });
+      expect(missing.statusCode).toBe(403);
+      expect(missing.body).toBe('cross-origin request refused');
+      const wrong = await t.app.inject({ method, url: '/api/system/status', headers: { ...t.authedWrite, 'x-cc': '0' }, payload: {} });
+      expect(wrong.statusCode).toBe(403);
+      expect(wrong.body).toBe('cross-origin request refused');
+      const marked = await t.app.inject({ method, url: '/api/system/status', headers: t.authedWrite, payload: {} });
+      expect(marked.body).not.toBe('cross-origin request refused');
+      expect(marked.statusCode).toBe(404);
+    });
+  }
 
   it('a wrong token on /auth gets 403 and no cookie', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/auth?t=nope', headers: { host: TEST_HOST } });
