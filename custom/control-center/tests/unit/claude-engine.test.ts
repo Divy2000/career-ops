@@ -427,6 +427,13 @@ describe('guard hook: read confinement', () => {
     expect(pre('Bash', { command: 'node check-liveness.mjs file:///etc/passwd' }).status).toBe(2);
   });
 
+  it('a Bash command naming more than 4 hosts exits 2 before any lookup', () => {
+    const urls = ['a', 'b', 'c', 'd', 'e'].map((h) => `https://${h}.nothing.invalid/x`).join(' ');
+    const r = pre('Bash', { command: `node check-liveness.mjs ${urls}` });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/5 different hosts/);
+  });
+
   it('PowerShell always exits 2', () => {
     const r = pre('PowerShell', { command: 'Get-Content ~/.ssh/id_rsa' });
     expect(r.status).toBe(2);

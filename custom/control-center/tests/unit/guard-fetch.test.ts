@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkFetchUrl, checkUrlLiteral, httpUrlsIn, isPublicAddress } from '../../server/claude/guard-policy.mjs';
+import { checkFetchUrl, checkFetchUrls, checkUrlLiteral, DNS_BUDGET_MS, httpUrlsIn, isPublicAddress, MAX_URL_HOSTS } from '../../server/claude/guard-policy.mjs';
+import { HOOK_TIMEOUT_S } from '../../server/claude/invocation.js';
 
 type Lookup = (host: string) => Promise<Array<{ address: string; family: number }>>;
 const resolvesTo = (map: Record<string, string[]>): Lookup => async (host) => {
@@ -89,5 +90,61 @@ describe('address classification', () => {
   it('httpUrlsIn lists the http(s) arguments and inline flag values of a command', () => {
     expect(httpUrlsIn('node check-liveness.mjs https://a.example/1 --url=http://b.example/2 jds/x.md')).toEqual(['https://a.example/1', 'http://b.example/2']);
     expect(httpUrlsIn('node merge-tracker.mjs')).toEqual([]);
+  });
+});
+
+describe('DNS budget: every lookup of one call shares one deadline, well inside the hook timeout', () => {
+  // A hook still running at its timeout does not block (probe C14), so the DNS check must always answer first.
+  it('the budget leaves the hook time to refuse before its own timeout, and the host cap fits the lookup pool', () => {
+    expect(DNS_BUDGET_MS).toBeLessThanOrEqual((HOOK_TIMEOUT_S * 1000 * 2) / 3);
+    expect(MAX_URL_HOSTS).toBe(4);
+  });
+
+  it('given 8 URLs whose lookups never answer, refuses within one budget, with every lookup started at once', async () => {
+    const started: string[] = [];
+    const hang: Lookup = (host) => {
+      started.push(host);
+      return new Promise(() => {});
+    };
+    const urls = ['a', 'b', 'c', 'd'].flatMap((h) => [`https://${h}.example.org/1`, `https://${h}.example.org/2`]);
+    const t0 = Date.now();
+    const why = await checkFetchUrls(urls, hang, { label: 'Bash', budgetMs: 300 });
+    const elapsed = Date.now() - t0;
+    expect(why).toMatch(/^Bash: could not resolve/);
+    // One budget for the call, not one per host (one after another would take 4 budgets).
+    expect(elapsed).toBeLessThan(300 + 250);
+    expect([...started].sort()).toEqual(['a.example.org', 'b.example.org', 'c.example.org', 'd.example.org']);
+  });
+
+  it('a host that hangs next to a host that resolves to the metadata address: refused within the budget', async () => {
+    const lookup: Lookup = (host) => (host === 'meta.example.org' ? Promise.resolve([{ address: '169.254.169.254', family: 4 }]) : new Promise(() => {}));
+    const t0 = Date.now();
+    const why = await checkFetchUrls(['https://slow.example.org/x', 'https://meta.example.org/latest'], lookup, { budgetMs: 300 });
+    expect(why).toEqual(expect.any(String));
+    expect(Date.now() - t0).toBeLessThan(300 + 250);
+  });
+
+  it('more than 4 distinct hosts in one call are refused before any lookup; 4 public hosts pass', async () => {
+    let lookups = 0;
+    const counting: Lookup = async (host) => {
+      lookups++;
+      return [{ address: '93.184.216.34', family: 4 }].map((a) => ({ ...a, host }));
+    };
+    const five = ['a', 'b', 'c', 'd', 'e'].map((h) => `https://${h}.example.org/x`);
+    expect(await checkFetchUrls(five, counting, { label: 'Bash' })).toMatch(/5 different hosts/);
+    expect(lookups).toBe(0);
+    // Several URLs on one host count once.
+    expect(await checkFetchUrls([...five.slice(0, 4), 'https://a.example.org/other', 'https://A.EXAMPLE.ORG/again'], counting, { label: 'Bash' })).toBeNull();
+    expect(lookups).toBe(4);
+  });
+
+  it('a literal problem in any URL is refused without a lookup', async () => {
+    let lookups = 0;
+    const counting: Lookup = async () => {
+      lookups++;
+      return [{ address: '93.184.216.34', family: 4 }];
+    };
+    expect(await checkFetchUrls(['https://jobs.example.com/1', 'http://127.0.0.1/'], counting)).toMatch(/127\.0\.0\.1/);
+    expect(lookups).toBe(0);
   });
 });

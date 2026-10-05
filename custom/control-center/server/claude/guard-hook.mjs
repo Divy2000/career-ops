@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkRead, checkSearch, httpUrlsIn, locate, matches, snapshotKey } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkRead, checkSearch, httpUrlsIn, locate, matches, snapshotKey } from './guard-policy.mjs';
 
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -96,11 +96,9 @@ async function main() {
     const command = String(input.command ?? '');
     const reason = checkBash(command, policy, cwd);
     if (reason) deny(reason);
-    // checkBash already refused local schemes and literal private hosts; names are resolved here.
-    for (const url of httpUrlsIn(command)) {
-      const why = await checkFetchUrl(url, undefined, { label: 'Bash' });
-      if (why) deny(why);
-    }
+    // checkBash already refused local schemes and literal private hosts; names are resolved here, all at once under one budget.
+    const why = await checkFetchUrls(httpUrlsIn(command), undefined, { label: 'Bash' });
+    if (why) deny(why);
     process.exit(0);
   }
 

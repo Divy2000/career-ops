@@ -252,25 +252,56 @@ function withTimeout(promise, ms) {
 }
 
 /**
- * Null when a URL may be fetched: checkUrlLiteral, then every address the name resolves to must be public.
- * A lookup that fails, answers nothing or takes longer than the timeout is refused.
+ * One deadline for every lookup a single tool call needs. A hook still running at its own timeout (30 s) does
+ * not block, so the DNS check must always answer, and refuse, well before that.
  */
-export async function checkFetchUrl(raw, lookup = lookupAll, opts = {}) {
+export const DNS_BUDGET_MS = 20_000;
+/** Distinct hosts one call may name: each needs a getaddrinfo thread, and libuv's pool has four. */
+export const MAX_URL_HOSTS = 4;
+
+/**
+ * Null when every URL may be fetched: each passes checkUrlLiteral, the call names at most MAX_URL_HOSTS
+ * distinct hosts, and every address each name resolves to is public. All names are resolved in parallel under
+ * one shared budget; a lookup that fails, answers nothing or is still pending when the budget ends is refused.
+ */
+export async function checkFetchUrls(urls, lookup = lookupAll, opts = {}) {
   const label = opts.label ?? 'WebFetch';
-  const literal = checkUrlLiteral(raw, label);
-  if (literal) return literal;
-  const host = hostOf(new URL(String(raw)));
-  if (net.isIP(host)) return null;
-  let addrs;
-  try {
-    addrs = await withTimeout(lookup(host), opts.timeoutMs ?? 5000);
-  } catch (err) {
-    return `${label}: could not resolve ${host} (${err && err.message}); refused`;
+  const hosts = new Set();
+  for (const raw of urls) {
+    const literal = checkUrlLiteral(raw, label);
+    if (literal) return literal;
+    hosts.add(hostOf(new URL(String(raw))));
   }
-  if (!Array.isArray(addrs) || addrs.length === 0) return `${label}: could not resolve ${host} (no addresses); refused`;
-  const bad = addrs.map((a) => a && a.address).find((a) => typeof a !== 'string' || !isPublicAddress(a));
-  if (bad !== undefined) return `${label}: ${host} resolves to ${bad}, a private, loopback or link-local address`;
-  return null;
+  const maxHosts = opts.maxHosts ?? MAX_URL_HOSTS;
+  if (hosts.size > maxHosts) return `${label}: ${hosts.size} different hosts in one call; at most ${maxHosts} are checked, so the call is refused`;
+  const names = [...hosts].filter((h) => !net.isIP(h));
+  if (names.length === 0) return null;
+  const budget = opts.budgetMs ?? opts.timeoutMs ?? DNS_BUDGET_MS;
+  const verdict = (host) =>
+    Promise.resolve()
+      .then(() => lookup(host))
+      .then(
+        (addrs) => {
+          if (!Array.isArray(addrs) || addrs.length === 0) return `could not resolve ${host} (no addresses)`;
+          const bad = addrs.map((a) => a && a.address).find((a) => typeof a !== 'string' || !isPublicAddress(a));
+          return bad === undefined ? null : `${host} resolves to ${bad}, a private, loopback or link-local address`;
+        },
+        (err) => `could not resolve ${host} (${err && err.message})`,
+      );
+  let reasons;
+  try {
+    reasons = await withTimeout(Promise.all(names.map(verdict)), budget);
+  } catch (err) {
+    return `${label}: could not resolve ${names.join(', ')} (${err && err.message}); refused`;
+  }
+  const reason = reasons.find((r) => r !== null);
+  if (!reason) return null;
+  return `${label}: ${reason}${reason.startsWith('could not resolve') ? '; refused' : ''}`;
+}
+
+/** checkFetchUrls for one URL (WebFetch). */
+export function checkFetchUrl(raw, lookup = lookupAll, opts = {}) {
+  return checkFetchUrls([raw], lookup, opts);
 }
 
 // ---- Bash ----
