@@ -28,7 +28,7 @@ I want to install the H-1B-aware career-ops fork (Divy2000/career-ops). Follow t
 1. Show me your plan first: every command you will run and every folder you will create or change. Ask me before each system change (installing software, cloning, writing outside the clone). Wait for my yes.
 2. Check the requirements: macOS, git, Node.js 22.6 or newer, npm and the claude CLI. Tell me what is missing and how to install it. Do not install system software without asking me.
 3. Clone the fork at the pinned tag into ~/career-ops:
-   git clone --branch fork-install-v2 https://github.com/Divy2000/career-ops.git ~/career-ops
+   git clone --branch fork-install-v3 https://github.com/Divy2000/career-ops.git ~/career-ops
 4. Run the installer from the clone:
    cd ~/career-ops
    custom/install/install.sh --non-interactive --no-start --no-launchd --onboard none
@@ -46,7 +46,7 @@ Claude shows its plan, asks before each change, and stops at the one step it can
 For people who prefer a script. **The script accepts Markdown only**: your resume must be a `.md` (or `.markdown`) file, and project documents too. For PDF, DOCX or any other format, use Option 1, or convert the file to Markdown first.
 
 ```bash
-git clone --branch fork-install-v2 https://github.com/Divy2000/career-ops.git ~/career-ops
+git clone --branch fork-install-v3 https://github.com/Divy2000/career-ops.git ~/career-ops
 cd ~/Documents/job-search   # the folder that holds resume.md and your project .md files
 ~/career-ops/custom/install/install.sh --resume resume.md --docs project-a.md project-b.md
 ```
@@ -88,12 +88,12 @@ Exit codes: `0` done, `1` failure, `2` usage or input error, `3` done with actio
 **One-liner (least safe).** Prefer `git clone`, shown first: it is the route where you read the script before it runs. If you still want a single command, download the pinned bootstrap, read it, then run it:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v2/custom/install/bootstrap.sh
+curl -fsSLO https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v3/custom/install/bootstrap.sh
 less bootstrap.sh
 bash bootstrap.sh --resume resume.md
 ```
 
-`bootstrap.sh` runs nothing if the download is cut off: its whole body is one function that is called on the last line, so a truncated file defines nothing and executes nothing. The real safeguards are reading the script before you run it and the pinned tag (`fork-install-v2`, not a moving branch). Piping it straight into a shell skips reading it: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v2/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
+`bootstrap.sh` runs nothing if the download is cut off: its whole body is one function that is called on the last line, so a truncated file defines nothing and executes nothing. The real safeguards are reading the script before you run it and the pinned tag (`fork-install-v3`, not a moving branch). Piping it straight into a shell skips reading it: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v3/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
 
 ## What you get
 
