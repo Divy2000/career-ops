@@ -33,11 +33,34 @@ export const PORTAL_RULES: FieldRules = {
   max_posting_age_days: (v) => (Number(v) > 0 && Number.isInteger(Number(v)) ? null : 'whole number of days'),
 };
 
+const filled = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+
+/**
+ * Why the scanner would pass over an enabled tracked company, or null. Providers find a board from careers_url or api;
+ * the other ways in are an explicit provider, a local parser command, or a websearch entry handed to the agent with
+ * its query. Anything else is skipped as "no provider matched".
+ */
+export function trackedCompanyProblem(row: Record<string, unknown>): string | null {
+  if (row.enabled === false) return null;
+  if (filled(row.careers_url) || filled(row.api) || filled(row.provider)) return null;
+  if (isPlainObject(row.parser) && filled(row.parser.command)) return null;
+  if (row.scan_method === 'websearch' && (filled(row.scan_query) || filled(row.search_query))) return null;
+  const name = filled(row.name) ? String(row.name) : 'A company';
+  return `${name}: needs a careers_url or an api URL (or a provider, a parser, or scan_method websearch with a scan_query), or the scanner skips it. Add one or set enabled to false.`;
+}
+
+/** Every enabled tracked company in the document the scanner could not reach. */
+export function portalsProblems(doc: unknown): string[] {
+  const list = isPlainObject(doc) && Array.isArray(doc.tracked_companies) ? doc.tracked_companies : [];
+  return list.flatMap((row) => (isPlainObject(row) ? [trackedCompanyProblem(row)] : [])).filter((p): p is string => p !== null);
+}
+
 function StructuredPortals() {
   const s = useStructuredConfig('portals');
   const doc = isPlainObject(s.doc) ? s.doc : {};
   const known = new Set(PORTAL_SECTIONS.map((x) => x.key));
   const unknown = Object.keys(doc).filter((k) => !known.has(k));
+  const problems = portalsProblems(doc);
   return (
     <div className="stack">
       <div className="toolbar" aria-label="Portals editor actions">
@@ -54,11 +77,21 @@ function StructuredPortals() {
         <button type="button" className="button--ghost" onClick={s.discard} disabled={s.pending.length === 0 && !s.conflict}>
           Discard changes
         </button>
-        <button type="button" className="button--primary" onClick={() => void s.save()} disabled={s.pending.length === 0 || s.saving}>
+        <button type="button" className="button--primary" onClick={() => void s.save()} disabled={s.pending.length === 0 || s.saving || problems.length > 0}>
           Validate and save
         </button>
       </div>
       <EditorNoteView note={s.note} />
+      {problems.length > 0 && (
+        <div className="card card--warn" role="alert">
+          <strong>Not saved until fixed.</strong>
+          <ul className="bullets">
+            {problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {s.conflict && (
         <details className="card card--warn" open>
           <summary>Current version on disk (your pending edits are applied on top in the form)</summary>
@@ -85,7 +118,7 @@ function StructuredPortals() {
                 Add {sec.key}
               </button>
             ) : (
-              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PORTAL_RULES} columnsHint={sec.columns} />
+              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PORTAL_RULES} columnsHint={sec.columns} rowRule={sec.key === 'tracked_companies' ? trackedCompanyProblem : undefined} />
             )}
             {sec.key === 'location_filter' && isPlainObject(doc.location_filter) && (
               <div className="row gap" style={{ marginTop: 8 }}>

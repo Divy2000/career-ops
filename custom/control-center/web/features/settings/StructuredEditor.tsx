@@ -115,7 +115,10 @@ export function rowName(row: Record<string, unknown>, i: number): string {
   return `row ${i + 1}`;
 }
 
-export function ObjectTable({ path, rows, onOp, rules, columnsHint = [] }: { path: JsonPath; rows: Record<string, unknown>[]; onOp: OpSink; rules?: FieldRules; columnsHint?: string[] }) {
+/** A check on a whole new row (a field rule sees one cell): the error to show, or null. */
+export type RowRule = (row: Record<string, unknown>) => string | null;
+
+export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule }: { path: JsonPath; rows: Record<string, unknown>[]; onOp: OpSink; rules?: FieldRules; columnsHint?: string[]; rowRule?: RowRule }) {
   const columns = [...new Set([...columnsHint, ...rows.flatMap((r) => Object.keys(r).filter((k) => isScalar(r[k])))])];
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +138,11 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [] }: { pat
     }
     if (Object.keys(row).length === 0) {
       setError('fill in at least one column');
+      return;
+    }
+    const rowError = rowRule?.(row) ?? null;
+    if (rowError) {
+      setError(rowError);
       return;
     }
     setError(null);
@@ -249,11 +257,11 @@ export function ObjectFields({ path, value, onOp, rules, depth = 0 }: { path: Js
 }
 
 /** Dispatches on the value shape: scalar, list of scalars, list of objects, object, or a read-only JSON preview. */
-export function KeyEditor({ path, value, onOp, rules, depth = 0, columnsHint }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; depth?: number; columnsHint?: string[] }): ReactNode {
+export function KeyEditor({ path, value, onOp, rules, depth = 0, columnsHint, rowRule }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; depth?: number; columnsHint?: string[]; rowRule?: RowRule }): ReactNode {
   if (isScalar(value)) return <ScalarInput path={path} value={value} onOp={onOp} rules={rules} />;
   if (Array.isArray(value)) {
     if (value.every(isScalar)) return <ScalarList path={path} items={value} onOp={onOp} rules={rules} />;
-    if (value.every(isPlainObject)) return <ObjectTable path={path} rows={value} onOp={onOp} rules={rules} columnsHint={columnsHint} />;
+    if (value.every(isPlainObject)) return <ObjectTable path={path} rows={value} onOp={onOp} rules={rules} columnsHint={columnsHint} rowRule={rowRule} />;
   }
   if (isPlainObject(value) && depth < 3) return <ObjectFields path={path} value={value} onOp={onOp} rules={rules} depth={depth} />;
   return (

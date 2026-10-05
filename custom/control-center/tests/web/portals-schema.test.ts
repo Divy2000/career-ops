@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { describe, expect, it } from 'vitest';
-import { PORTAL_RULES, PORTAL_SECTIONS } from '@web/features/settings/PortalsEditor';
+import { PORTAL_RULES, PORTAL_SECTIONS, portalsProblems, trackedCompanyProblem } from '@web/features/settings/PortalsEditor';
 import { tempDir } from '../helpers/tmp';
 
 const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -54,5 +54,37 @@ process.stdout.write(JSON.stringify(['Backend Engineer', 'Backend Intern', 'Sale
     const run = spawnSync(process.execPath, [path.join(CODE_ROOT, 'validate-portals.mjs'), '--file', file], { encoding: 'utf8' });
     expect(run.stdout + run.stderr).toContain('0 errors');
     expect(run.status).toBe(0);
+  });
+
+  it('every template company is one the scanner can reach, so none is flagged', () => {
+    expect(template.tracked_companies.map((c) => trackedCompanyProblem(c)).filter(Boolean)).toEqual([]);
+    expect(portalsProblems(template)).toEqual([]);
+  });
+
+  it('an enabled company with no careers_url or api is flagged, unless it names a provider or a parser, is a websearch with a query, or is disabled', () => {
+    expect(trackedCompanyProblem({ name: 'Acme' })).toMatch(/^Acme: needs a careers_url or an api URL/);
+    expect(trackedCompanyProblem({ name: 'Acme', enabled: true, careers_url: '  ' })).toMatch(/^Acme: needs a careers_url/);
+    expect(trackedCompanyProblem({ name: 'Acme', scan_method: 'websearch' })).toMatch(/^Acme: needs/);
+    for (const ok of [
+      { name: 'Acme', enabled: false },
+      { name: 'Acme', careers_url: 'https://job-boards.greenhouse.io/acme' },
+      { name: 'Acme', api: 'https://boards-api.greenhouse.io/v1/boards/acme/jobs' },
+      { name: 'Acme', provider: 'remoteok' },
+      { name: 'Acme', parser: { command: 'node', args: ['parsers/acme.mjs'] } },
+      { name: 'Acme', scan_method: 'websearch', scan_query: 'site:acme.com careers backend' },
+    ]) expect(trackedCompanyProblem(ok), JSON.stringify(ok)).toBeNull();
+    expect(portalsProblems({ tracked_companies: [{ name: 'Acme' }, { name: 'Globex', careers_url: 'https://job-boards.greenhouse.io/globex' }, { name: 'Initech', enabled: false }] })).toEqual([trackedCompanyProblem({ name: 'Acme' })]);
+  });
+
+  it('the scanner skips a name-only company and reaches the URL and provider forms the rule accepts', () => {
+    const entries = [{ name: 'Acme' }, { name: 'Acme', careers_url: 'https://job-boards.greenhouse.io/acme' }, { name: 'Acme', api: 'https://boards-api.greenhouse.io/v1/boards/acme/jobs' }, { name: 'Acme', provider: 'remoteok' }];
+    const script = `import { loadProviders, resolveProvider } from ${JSON.stringify(path.join(CODE_ROOT, 'providers', '_registry.mjs'))};
+const providers = await loadProviders(${JSON.stringify(path.join(CODE_ROOT, 'providers'))});
+process.stdout.write(JSON.stringify(${JSON.stringify(entries)}.map((e) => Boolean(resolveProvider(e, providers)?.provider))));`;
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: CODE_ROOT, encoding: 'utf8' });
+    expect(run.status, run.stderr).toBe(0);
+    const reached = JSON.parse(run.stdout) as boolean[];
+    expect(reached).toEqual([false, true, true, true]);
+    expect(entries.map((e) => trackedCompanyProblem(e) === null)).toEqual(reached);
   });
 });
