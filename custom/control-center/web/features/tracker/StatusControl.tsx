@@ -12,12 +12,14 @@ export function StatusControl({ row }: { row: TrackerRow }) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  const [otherText, setOtherText] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [hired, setHired] = useState(false);
   const ordered = [row.status, ...STATES.filter((s) => s !== row.status)];
   const predicted = row.summary?.discardReasons ?? [];
   const reasons = [...new Set([...predicted, ...DISCARD_REASONS])];
+  const chosenReason = reason === '__other' ? otherText.trim() : reason;
 
   const commit = async (state: string, note?: string) => {
     setBusy(true);
@@ -28,6 +30,7 @@ export function StatusControl({ row }: { row: TrackerRow }) {
       if (state === 'Hired' && row.report !== null) setHired(true);
       setPending(null);
       setReason('');
+      setOtherText('');
       await qc.invalidateQueries({ queryKey: ['tracker'] });
     } catch (err) {
       const e = err as ApiError;
@@ -72,9 +75,9 @@ export function StatusControl({ row }: { row: TrackerRow }) {
             ))}
             <option value="__other">Other</option>
           </select>
-          {reason === '__other' && <input aria-label="Other reason" placeholder="Reason" onChange={(e) => setReason(e.target.value ? `other: ${e.target.value}` : '__other')} />}
+          {reason === '__other' && <input aria-label="Other reason" placeholder="Reason" value={otherText} onChange={(e) => setOtherText(e.target.value)} />}
           <div className="row gap" style={{ marginTop: 8 }}>
-            <button type="button" disabled={!reason || reason === '__other' || busy} onClick={() => void commit(pending, `DISCARD: ${reason.replace(/^other: /, '')}`)}>
+            <button type="button" disabled={!chosenReason || busy} onClick={() => void commit(pending, `DISCARD: ${chosenReason}`)}>
               Confirm {pending}
             </button>
             <button type="button" onClick={() => setPending(null)}>
