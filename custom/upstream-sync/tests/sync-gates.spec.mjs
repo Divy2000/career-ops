@@ -8,6 +8,7 @@ import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC = path.join(HERE, '..', 'sync.sh');
+const LIB = path.join(HERE, '..', 'lib.sh');
 
 function stub(dir, name, body) {
   mkdirSync(dir, { recursive: true });
@@ -36,4 +37,53 @@ test('the headless sync Claude gets the OAuth token but runs with subprocess env
   assert.match(env, /^CLAUDE_CODE_OAUTH_TOKEN=tok-123$/m);
   assert.match(env, /^CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1$/m);
   assert.match(env, /^ANTHROPIC_API_KEY=$/m);
+});
+
+// npm stub: logs each call's arguments; `npm ... test` prints what vitest prints, or fails when told to.
+function npmWorld({ testExit = 0, testOutput = ' Test Files  3 passed (3)\n      Tests  42 passed (42)' } = {}) {
+  const dir = tempDir('sync-cc-');
+  const bin = path.join(dir, 'bin');
+  const calls = path.join(dir, 'calls.txt');
+  stub(bin, 'npm', `echo "$*" >> "${calls}"\ncase " $* " in *" test "*) printf '%s\\n' "${testOutput}"; exit ${testExit};; esac`);
+  const run = () => spawnSync('bash', ['-c', `source "${LIB}"\ncontrol_center_checks "${dir}/cc.log"`], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  return { dir, calls, run, log: () => readFileSync(path.join(dir, 'cc.log'), 'utf8'), callList: () => readFileSync(calls, 'utf8').trim().split('\n') };
+}
+
+test('control_center_checks installs control-center from its lockfile without scripts, then runs its tests and typecheck, logging all of it', () => {
+  const w = npmWorld();
+  const r = w.run();
+  assert.equal(r.status, 0, r.stderr);
+  const calls = w.callList();
+  assert.equal(calls.length, 3);
+  assert.match(calls[0], /^--prefix custom\/control-center ci\b.*--ignore-scripts/);
+  assert.match(calls[1], /^--prefix custom\/control-center test$/);
+  assert.match(calls[2], /^--prefix custom\/control-center run typecheck$/);
+  assert.match(w.log(), /Tests +42 passed/);
+});
+
+test('control_center_checks fails when the tests fail, and runs nothing after the failing step', () => {
+  const w = npmWorld({ testExit: 1, testOutput: ' Tests  1 failed | 41 passed (42)' });
+  assert.notEqual(w.run().status, 0);
+  assert.equal(w.callList().length, 2);
+});
+
+test('control_center_checks fails when no test ran, even if npm exits 0', () => {
+  const w = npmWorld({ testOutput: 'No test files found, exiting with code 0' });
+  assert.notEqual(w.run().status, 0);
+});
+
+test('sync.sh runs the control-center checks after the custom tests and before pushing', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const custom = sync.indexOf('node --test custom/*/tests/*.spec.mjs');
+  const cc = sync.indexOf('control_center_checks "$STATE_DIR/$TODAY.control-center-tests.txt"');
+  const push = sync.indexOf('git push');
+  assert.ok(custom > -1 && cc > custom && push > cc, `order was custom=${custom} cc=${cc} push=${push}`);
+});
+
+test('sync.sh auto-merges only when the control-center checks passed too', () => {
+  const line = readFileSync(SYNC, 'utf8').split('\n').find((l) => l.startsWith('if [ $CUSTOM_OK = 1 ]'));
+  assert.ok(line, 'auto-merge condition not found');
+  const decide = (ccOk) => spawnSync('bash', ['-c', `CUSTOM_OK=1 NEW_FAILURES= AUTO_MERGE=1 KEPT_README=0 CC_OK=${ccOk}\n${line}\necho merge\nelse\necho hold\nfi`], { encoding: 'utf8' }).stdout.trim();
+  assert.equal(decide(1), 'merge');
+  assert.equal(decide(0), 'hold');
 });
