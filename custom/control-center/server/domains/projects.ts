@@ -32,6 +32,8 @@ export interface LibraryEntry {
   source: string | null;
   bullets: string[];
   line: number;
+  /** Why the form cannot rewrite this block in place (edit the file directly), or null. */
+  editProblem: string | null;
   /** Character offsets of the entry block in the file (heading through last content line). */
   start: number;
   end: number;
@@ -73,6 +75,7 @@ export interface ProjectView {
   source: string | null;
   bullets: string[];
   line: number;
+  editProblem: string | null;
   inCv: boolean;
 }
 

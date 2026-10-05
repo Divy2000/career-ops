@@ -131,6 +131,52 @@ describe('PUT /api/projects/:id', () => {
   });
 });
 
+describe('editing an upstream digest block', () => {
+  const DIGEST = [
+    '# Article Digest',
+    '',
+    '## FraudShield -- Real-Time Fraud Detection',
+    '',
+    '**Hero metrics:** 99.7% precision',
+    '',
+    '**Key decisions:**',
+    '- Chose streaming over batch',
+    '',
+    '**Proof points:**',
+    '- Handles 10K transactions/second',
+    '- Cut false positives 60%',
+    '',
+    '---',
+    '',
+    '## Nested Notes',
+    '- One.',
+    '  - a nested detail',
+    '- Two.',
+    '',
+  ].join('\n');
+
+  it('rewrites only the edited proof point and keeps the sections the form does not show', async () => {
+    fs.writeFileSync(file(), DIGEST);
+    const before = await current();
+    const fraud = before.entries.find((e: { id: string }) => e.id === 'fraudshield');
+    expect(fraud.editProblem).toBeNull();
+    const res = await send('PUT', '/api/projects/fraudshield', { title: 'FraudShield', tagline: fraud.tagline, bullets: ['Handles 12K transactions/second', 'Cut false positives 60%'] }, before.etag);
+    expect(res.statusCode).toBe(200);
+    expect(read()).toBe(DIGEST.replace('10K', '12K'));
+  });
+
+  it('reports a block it cannot rewrite in place as not editable and refuses a PUT with 422, writing nothing', async () => {
+    fs.writeFileSync(file(), DIGEST);
+    const before = await current();
+    const nested = before.entries.find((e: { id: string }) => e.id === 'nested-notes');
+    expect(nested.editProblem).toMatch(/edit article-digest\.md directly/);
+    const res = await send('PUT', '/api/projects/nested-notes', { title: 'Nested Notes', bullets: ['One.'] }, before.etag);
+    expect(res.statusCode).toBe(422);
+    expect(res.json().errors[0]).toMatch(/cannot be edited here/);
+    expect(read()).toBe(DIGEST);
+  });
+});
+
 describe('DELETE /api/projects/:id', () => {
   it('removes one entry, and gives 404 for an unknown id and 409 for a stale If-Match', async () => {
     const before = await current();

@@ -13,8 +13,9 @@ const READ: ProjectsRead = {
   etag: 'e1',
   validation: { ok: true, errors: [], warnings: [] },
   entries: [
-    { id: 'event-router', title: 'Event Router', url: 'https://github.com/alex-example/event-router', tagline: null, tags: ['python', 'kafka'], kind: 'project', dates: null, source: 'documents/projects/router.pdf', bullets: ['One.', 'Two.'], line: 5, inCv: true },
-    { id: 'ranking-notes', title: 'Ranking Notes', url: null, tagline: null, tags: [], kind: 'article', dates: null, source: null, bullets: ['Wrote it.'], line: 12, inCv: false },
+    { id: 'event-router', title: 'Event Router', url: 'https://github.com/alex-example/event-router', tagline: null, tags: ['python', 'kafka'], kind: 'project', dates: null, source: 'documents/projects/router.pdf', bullets: ['One.', 'Two.'], line: 5, editProblem: null, inCv: true },
+    { id: 'ranking-notes', title: 'Ranking Notes', url: null, tagline: null, tags: [], kind: 'article', dates: null, source: null, bullets: ['Wrote it.'], line: 12, editProblem: null, inCv: false },
+    { id: 'nested-notes', title: 'Nested Notes', url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['One.', 'Two.'], line: 20, editProblem: 'it has text or nested items between its copy-paste bullets, which the form cannot keep in place; edit article-digest.md directly', inCv: false },
   ],
 };
 
@@ -96,7 +97,7 @@ describe('Projects library tab', () => {
     await mount();
     await click(byRole('tab', 'Projects')!);
     const list = await until(() => labelled<HTMLUListElement>('Projects in the library'), 'the list');
-    await until(() => list.querySelectorAll(':scope > li').length === 2 || null, 'two entries');
+    await until(() => list.querySelectorAll(':scope > li').length === 3 || null, 'three entries');
     const [router, notes] = [...list.querySelectorAll(':scope > li')].map((li) => li.textContent ?? '');
     expect(router).toContain('Event Router');
     expect(router).toContain('In CV');
@@ -105,6 +106,18 @@ describe('Projects library tab', () => {
     expect(router).toContain('from router.pdf');
     expect(notes).toContain('Article');
     expect(notes).toContain('1 bullet');
+  });
+
+  it('shows a block the form cannot rewrite in place as read-only, saying why, and still lets it be deleted', async () => {
+    await mount();
+    await click(byRole('tab', 'Projects')!);
+    const edit = await until(() => byRole('button', 'Edit Nested Notes'), 'the edit button');
+    expect((edit as HTMLButtonElement).disabled).toBe(true);
+    const row = edit.closest('li')!;
+    expect(row.querySelector('[role="note"]')?.textContent).toMatch(/Read-only here.*nested items.*edit article-digest\.md directly/);
+    expect((byRole('button', 'Delete Nested Notes') as HTMLButtonElement).disabled).toBe(false);
+    expect((byRole('button', 'Edit Event Router') as HTMLButtonElement).disabled).toBe(false);
+    expect(byRole('button', 'Edit Event Router')!.closest('li')!.querySelector('[role="note"]')).toBeNull();
   });
 
   it('given a 422 on save, shows the server errors and keeps the draft', async () => {

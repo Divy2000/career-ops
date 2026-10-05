@@ -144,9 +144,14 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
             ))}
           </div>
         )}
+        {entry.editProblem && (
+          <p className="project-row__locked small" role="note">
+            Read-only here: {entry.editProblem}.
+          </p>
+        )}
       </div>
       <div className="project-row__actions">
-        <button type="button" aria-label={`Edit ${entry.title}`} disabled={disabled} onClick={onEdit}>
+        <button type="button" aria-label={`Edit ${entry.title}`} disabled={disabled || entry.editProblem !== null} title={entry.editProblem ? 'This entry has content the form cannot keep; edit article-digest.md directly' : undefined} onClick={onEdit}>
           Edit
         </button>
         <button type="button" className="button--ghost" aria-label={`Delete ${entry.title}`} disabled={disabled} onClick={onDelete}>

@@ -13,6 +13,7 @@ const entry: ProjectView = {
   dates: '2024',
   bullets: ['One.', 'Two.'],
   line: 5,
+  editProblem: null,
   inCv: false,
 };
 

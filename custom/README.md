@@ -24,7 +24,7 @@ Tags: python, fastapi
 - Cut first-response time from 9 to 2 hours.
 ```
 
-The ` -- link` part, `Tags:` and `Dates:` are optional. A project needs 1 to 6 bullets (more than 6 is a warning, more than 8 an error). `Kind: publication` or `Kind: article` marks an entry that is not a project, so it is never offered as one. `Source: documents/projects/<file>` records the document an imported entry came from. Upstream digest blocks (`**Hero metrics:**`, `**Proof points:**`) are read too.
+The ` -- link` part, `Tags:` and `Dates:` are optional. A project needs 1 to 6 bullets (more than 6 is a warning, more than 8 an error). `Kind: publication` or `Kind: article` marks an entry that is not a project, so it is never offered as one. `Source: documents/projects/<file>` records the document an imported entry came from. Upstream digest blocks (`**Hero metrics:**`, `**Proof points:**`) are read too, and an edit keeps their other sections.
 
 ```bash
 node custom/projects/rank.mjs jds/acme.md --json   # recommended 2-4, candidates, excluded, libraryCoverage
