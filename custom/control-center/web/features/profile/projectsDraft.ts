@@ -50,6 +50,10 @@ export function draftProblems(d: ProjectDraft): string[] {
   if (!input.title) problems.push('Add a title.');
   if (input.url && !/^https?:\/\/\S+$/i.test(input.url)) problems.push('The link must start with http:// or https://.');
   if (input.kind === 'project' && input.bullets.length === 0) problems.push('Add at least one bullet.');
+  // The library stores one bullet per line; numbered as the form labels them ("Bullet 1").
+  d.bullets.forEach((b, i) => {
+    if (/[\r\n]/.test(b.trim())) problems.push(`Bullet ${i + 1} spans more than one line; give each point its own bullet.`);
+  });
   return problems;
 }
 
