@@ -126,11 +126,12 @@ export function toolResultsDirs(projectsDir: string, codeRoot: string, claudeSes
 }
 
 /**
- * A word-initial @ in a prompt can attach a file before any tool or hook runs; a word joiner after it keeps
- * the text readable and the mention inert. E-mail addresses (word characters before the @) are untouched.
+ * An @ at the start of the prompt or after whitespace can attach a file before any tool or hook runs; a word
+ * joiner after it keeps the text readable and the mention inert. An @ anywhere else (e-mail addresses, URLs
+ * such as https://medium.com/@acme, which reach reports and dedup keys) is left exactly as written.
  */
 export function neutralizeFileMentions(text: string): string {
-  return text.replace(/(^|[^\w.+-])@(?!\u2060)/g, '$1@\u2060');
+  return text.replace(/(^|\s)@(?!\u2060)/g, '$1@\u2060');
 }
 
 /**
