@@ -62,3 +62,13 @@ control_center_checks() {
   } > "$log" 2>&1 || return 1
   grep -qE 'Tests[[:space:]]+[1-9][0-9]* passed' "$log"
 }
+
+# custom_tests <log>: run the fork's custom/*/tests specs (from the repo root),
+# all output to <log>. Fails when a test fails, and when no test passed at all.
+# Node 22 prints TAP ("# pass N") when output is not a TTY and Node 23+ the spec
+# reporter ("ℹ pass N"), so either summary counts.
+custom_tests() {
+  local log="$1"
+  node --test custom/*/tests/*.spec.mjs > "$log" 2>&1 || return 1
+  grep -qE '^(#|ℹ) pass [1-9]' "$log"
+}

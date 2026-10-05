@@ -72,9 +72,38 @@ test('control_center_checks fails when no test ran, even if npm exits 0', () => 
   assert.notEqual(w.run().status, 0);
 });
 
+// node stub: logs each call's arguments and prints what `node --test` prints, in the given reporter's format.
+function customTestsWorld({ exit = 0, output }) {
+  const dir = tempDir('sync-custom-');
+  const bin = path.join(dir, 'bin');
+  const calls = path.join(dir, 'calls.txt');
+  mkdirSync(path.join(dir, 'custom/a/tests'), { recursive: true });
+  writeFileSync(path.join(dir, 'custom/a/tests/a.spec.mjs'), '');
+  stub(bin, 'node', `echo "$*" >> "${calls}"\nprintf '%s\\n' "${output}"\nexit ${exit}`);
+  const run = () => spawnSync('bash', ['-c', `source "${LIB}"\ncustom_tests "${dir}/custom.log"`], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  return { run, log: () => readFileSync(path.join(dir, 'custom.log'), 'utf8'), calls: () => readFileSync(calls, 'utf8').trim() };
+}
+
+test('custom_tests passes on the TAP summary Node 22 prints when output goes to a file', () => {
+  const w = customTestsWorld({ output: 'ok 1 - a\n1..1\n# tests 1\n# pass 1\n# fail 0' });
+  assert.equal(w.run().status, 0);
+  assert.equal(w.calls(), '--test custom/a/tests/a.spec.mjs');
+  assert.match(w.log(), /^# pass 1$/m);
+});
+
+test('custom_tests passes on the spec reporter summary Node 23+ prints', () => {
+  assert.equal(customTestsWorld({ output: '✔ a (1ms)\nℹ tests 1\nℹ pass 1\nℹ fail 0' }).run().status, 0);
+});
+
+test('custom_tests fails when a test fails, and when no test ran even if node exits 0', () => {
+  assert.notEqual(customTestsWorld({ exit: 1, output: '# tests 2\n# pass 1\n# fail 1' }).run().status, 0);
+  assert.notEqual(customTestsWorld({ output: '1..0\n# tests 0\n# pass 0' }).run().status, 0);
+  assert.notEqual(customTestsWorld({ output: 'ℹ tests 0\nℹ pass 0' }).run().status, 0);
+});
+
 test('sync.sh runs the control-center checks after the custom tests and before pushing', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  const custom = sync.indexOf('node --test custom/*/tests/*.spec.mjs');
+  const custom = sync.indexOf('custom_tests "$STATE_DIR/$TODAY.custom-tests.txt"');
   const cc = sync.indexOf('control_center_checks "$STATE_DIR/$TODAY.control-center-tests.txt"');
   const push = sync.indexOf('git push');
   assert.ok(custom > -1 && cc > custom && push > cc, `order was custom=${custom} cc=${cc} push=${push}`);

@@ -142,8 +142,7 @@ if [ -n "$CHANGED_UPSTREAM" ]; then
 fi
 
 CUSTOM_OK=1
-node --test custom/*/tests/*.spec.mjs > "$STATE_DIR/$TODAY.custom-tests.txt" 2>&1 || CUSTOM_OK=0
-grep -qE "^ℹ pass [1-9]" "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0   # zero tests ran is not a pass
+custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0
 echo "custom tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
 
 CC_OK=1
