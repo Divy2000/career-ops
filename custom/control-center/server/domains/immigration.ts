@@ -132,14 +132,24 @@ export function localDate(d = new Date()): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** The local date the day before `date` (YYYY-MM-DD). */
+function dayBefore(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return localDate(new Date(y!, m! - 1, d! - 1));
+}
+
 /**
- * A run with no done line is running only while the job runs, and only a log dated today can belong to the run going
- * on now: an older one is interrupted without asking. For today's log the probe is asked; null (unknown) keeps it running.
+ * A run with no done line is running only while the job runs, and only a log dated today or yesterday (a run that
+ * crossed midnight writes to the file of the day it started) can belong to the run going on now: an older one is
+ * interrupted without asking. Today's log asks the probe and null (unknown) keeps it running; yesterday's runs on only
+ * when the probe says so, so a job with no probe (the weekly sync) does not keep yesterday's run alive.
  */
 export async function withJobState<T extends DailyLog>(log: T, today: string, jobRunning: () => Promise<boolean | null>): Promise<T> {
   if (log.status !== 'running') return log;
-  if (log.date !== today) return { ...log, status: 'interrupted' };
-  return (await jobRunning()) === false ? { ...log, status: 'interrupted' } : log;
+  const interrupted = { ...log, status: 'interrupted' as const };
+  if (log.date === today) return (await jobRunning()) === false ? interrupted : log;
+  if (log.date === dayBefore(today)) return (await jobRunning()) === true ? log : interrupted;
+  return interrupted;
 }
 
 export function listLogDates(dataRoot: string, logDir = path.join('data', 'immigration', 'logs')): string[] {

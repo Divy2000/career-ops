@@ -150,7 +150,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
   app.get('/api/interviews', async () => readInterviews(cfg.dataRoot));
 }
 
-/** Only the daily job has a process probe; a weekly log dated today with no done line keeps reading running (older ones read interrupted). */
+/** Only the daily job has a process probe; a weekly log dated today with no done line keeps reading running (older ones read interrupted, see withJobState). */
 async function readJobLog(dataRoot: string, job: ScheduleJob, date: string, daily: DailyJobWatch) {
   const raw = readText(path.join(dataRoot, job.logDir, `${date}.log`));
   if (raw.kind !== 'ok') return null;

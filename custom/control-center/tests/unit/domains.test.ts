@@ -64,16 +64,28 @@ describe('immigration overview', () => {
     expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('running');
   });
 
-  it('a run with no done line in a log older than today is interrupted, whatever today\'s job is doing, and the probe is not asked', async () => {
+  it('a run with no done line in a log older than yesterday is interrupted, whatever the job is doing, and the probe is not asked', async () => {
     let asked = 0;
     const running = async () => {
       asked++;
       return true;
     };
-    const log = parseDailyLog('=== 2026-10-04 08:00:00 start\n--- 08:00:01 policy watch\n', '2026-10-04');
+    const log = parseDailyLog('=== 2026-10-03 08:00:00 start\n--- 08:00:01 policy watch\n', '2026-10-03');
     expect((await withJobState(log, '2026-10-05', running)).status).toBe('interrupted');
     expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('interrupted');
     expect(asked).toBe(0);
+  });
+
+  it('yesterday\'s run with no done line (one that crossed midnight) reads running only while the job is known to run', async () => {
+    const log = parseDailyLog('=== 2026-10-04 23:58:00 start\n--- 23:58:01 policy watch\n', '2026-10-04');
+    expect((await withJobState(log, '2026-10-05', async () => true)).status).toBe('running');
+    expect((await withJobState(log, '2026-10-05', async () => false)).status).toBe('interrupted');
+    // No probe (the weekly sync): an unfinished run from yesterday is not assumed to run on.
+    expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('interrupted');
+    const monthEnd = parseDailyLog('=== 2026-09-30 23:58:00 start\n', '2026-09-30');
+    expect((await withJobState(monthEnd, '2026-10-01', async () => true)).status).toBe('running');
+    const yearEnd = parseDailyLog('=== 2025-12-31 23:58:00 start\n', '2025-12-31');
+    expect((await withJobState(yearEnd, '2026-01-01', async () => true)).status).toBe('running');
   });
 
   it('today is the local calendar date, not the UTC one', () => {
