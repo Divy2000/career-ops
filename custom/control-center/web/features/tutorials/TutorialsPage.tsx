@@ -206,7 +206,7 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
   };
   useEffect(() => () => void (osdTimer.current && clearTimeout(osdTimer.current)), []);
 
-  const { position, seek, isRestoreSeek } = themed;
+  const { position, seek, noteSeek, isRestoreSeek } = themed;
   // Every seek the viewer asks for (keys, a chapter) goes through the swap controller, so one made while a theme swap loads sticks,
   // and it dismisses Up next.
   const seekTo = useCallback(
@@ -356,9 +356,12 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
               onLoadedMetadata={update}
               onPlay={() => setEnded(false)}
               onSeeking={() => {
-                // Any seek dismisses Up next (the native controls too), except the one a theme swap makes to restore the place.
+                // Any seek dismisses Up next (the native controls too) and becomes the place a theme swap under way restores,
+                // except the one the swap makes itself to restore the place.
                 const v = video.current;
-                if (v && !isRestoreSeek(v.currentTime)) setEnded(false);
+                if (!v || isRestoreSeek(v.currentTime)) return;
+                noteSeek(v.currentTime);
+                setEnded(false);
               }}
               onPause={() => {
                 const v = video.current;

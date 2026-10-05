@@ -408,6 +408,29 @@ describe('a viewer seek during a swap', () => {
     expect(media.seeks).toEqual([12.5, 2.5, 2.5]);
   });
 
+  it('given a native seek (the scrubber) to 2.5 after the new file is parsed, when the new file then fails, then the fallback restores 2.5', () => {
+    const { media, swap } = swapping();
+    media.loaded(60);
+    // What the page does on the element's seeking event for a seek that is not the swap's own restore.
+    media.currentTime = 2.5;
+    swap.noteSeek(2.5);
+    media.failed();
+    media.loaded(60);
+    expect(media.seeks).toEqual([12.5, 2.5, 2.5]);
+  });
+
+  it('only records a noted seek, never moves the element, and ignores one while the new file loads or with no swap under way', () => {
+    const { media, swap } = swapping();
+    swap.noteSeek(7);
+    expect(swap.position()).toBe(12.5);
+    media.loaded(60);
+    swap.noteSeek(2.5);
+    expect(media.seeks).toEqual([12.5]);
+    const idle = setup();
+    idle.swap.noteSeek(3);
+    expect(idle.media.seeks).toEqual([]);
+  });
+
   it('moves the element itself when no swap is waiting for its file: none under way, or the restore already made', () => {
     const { media, swap } = setup();
     media.src = 'dark.mp4';

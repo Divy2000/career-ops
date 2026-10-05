@@ -62,6 +62,8 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
   const position = useCallback(() => swap.current?.position() ?? null, []);
   /** A seek by the viewer, through the swap controller (it exists whenever the element does): during a swap it replaces the place the swap restores. */
   const seek = useCallback((time: number) => swap.current?.seekTo(time), []);
+  /** A seek the element made that is not the swap's restore (the native scrubber included): a swap under way keeps it as the place. */
+  const noteSeek = useCallback((time: number) => swap.current?.noteSeek(time), []);
   /** True once, for the `seeking` event of the swap's own restoring seek; any other seek is the viewer's. */
   const isRestoreSeek = useCallback((time: number) => {
     if (restoreAt.current === null || Math.abs(time - restoreAt.current) > 0.05) return false;
@@ -73,6 +75,7 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
     initialSrc,
     position,
     seek,
+    noteSeek,
     isRestoreSeek,
     warning,
     poster: (resolved === 'light' && part.posterLight ? part.posterLight : part.poster)?.url,

@@ -63,6 +63,12 @@ export interface MediaSwap {
   position(): number | null;
   /** The viewer moved the playhead to `time`: a swap under way restores there from now on, and the element moves now unless its new file is still loading. */
   seekTo(time: number): void;
+  /**
+   * The element seeked to `time` by some other way (the native scrubber): a swap under way restores there from now on. It only records
+   * the place, never moves the element, so calling it from the element's own seeking event cannot loop. Ignored while the new file loads,
+   * when the element has no real position.
+   */
+  noteSeek(time: number): void;
   dispose(): void;
 }
 
@@ -178,6 +184,9 @@ export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
       if (snapshot) snapshot.time = time;
       // While the new file loads the element has no position to move; the restore applies the place once it is parsed.
       if (!awaitingFile) media.currentTime = time;
+    },
+    noteSeek(time) {
+      if (snapshot && !awaitingFile) snapshot.time = time;
     },
     dispose() {
       if (!stop) return;
