@@ -11,7 +11,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { SessionPanel } from '../../components/SessionPanel';
 import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
 import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
-import { KIND_OPTIONS, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, hostOf, moveItem, type ProjectDraft } from './projectsDraft';
+import { KIND_OPTIONS, describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, hostOf, moveItem, type ProjectDraft } from './projectsDraft';
 
 const QUERY_KEY = ['config', 'projects'];
 const useProjects = () => useQuery({ queryKey: QUERY_KEY, queryFn: () => apiGet<ProjectsRead>('/api/projects') });
@@ -193,7 +193,10 @@ function ProjectForm({ editing, liveEtag, onChange, onDone }: { editing: Editing
         // Told and shown the refreshed list, the user may now save the draft over the version the server has.
         onChange({ ...editing, baseEtag: (err.body as { current?: { etag: string | null } }).current?.etag ?? null });
         await qc.invalidateQueries({ queryKey: QUERY_KEY });
-      } else setErrors([`Could not save: ${describeError(err)}`]);
+      } else {
+        const issues = err instanceof ApiError && err.status === 400 ? describeIssues((err.body as { issues?: Parameters<typeof describeIssues>[0] }).issues) : [];
+        setErrors(issues.length ? issues : [`Could not save: ${describeError(err)}`]);
+      }
     } finally {
       setSaving(false);
     }
