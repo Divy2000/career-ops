@@ -25,6 +25,22 @@ const entrySchema = z.object({
   source: LINE.max(300).nullish(),
 });
 const textSchema = z.object({ text: z.string().max(2_000_000) });
+
+/** The form's own words for what failed: "bullet 2 must be one line", not a bare "invalid entry". */
+export function entryProblem(issues: z.core.$ZodIssue[]): string {
+  const field = (p: PropertyKey[]) => {
+    const [key, index] = p;
+    if (typeof index === 'number' && (key === 'bullets' || key === 'tags')) return `${key === 'bullets' ? 'bullet' : 'tag'} ${index + 1}`;
+    return String(key ?? 'entry');
+  };
+  const rule = (i: z.core.$ZodIssue) => {
+    if (i.code === 'invalid_format' && i.message === 'one line') return 'must be one line';
+    if (i.code === 'too_big') return `must be at most ${String(i.maximum)} ${i.origin === 'array' ? 'items' : 'characters'}`;
+    if (i.code === 'too_small') return i.origin === 'array' ? `needs at least ${String(i.minimum)}` : 'must not be empty';
+    return i.message;
+  };
+  return `${issues.map((i) => `${field(i.path)} ${rule(i)}`).join('; ')}`;
+}
 // `source`: a document under documents/ (as intake names it, e.g. projects/x.pdf) the import came from.
 const sourceField = z.string().min(1).max(300).optional();
 const convertSchema = z.object({ format: z.enum(['json', 'markdown']), text: z.string().min(1).max(2_000_000), source: sourceField });
@@ -117,7 +133,7 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
 
   app.post<{ Body: unknown }>('/api/projects', async (req, reply) => {
     const body = entrySchema.safeParse(req.body ?? {});
-    if (!body.success) return reply.code(400).send({ error: 'invalid entry', issues: body.error.issues });
+    if (!body.success) return reply.code(400).send({ error: entryProblem(body.error.issues), issues: body.error.issues });
     const l = await lib();
     let id: string | undefined;
     try {
@@ -130,7 +146,7 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
 
   app.put<{ Params: { id: string }; Body: unknown }>('/api/projects/:id', async (req, reply) => {
     const body = entrySchema.safeParse(req.body ?? {});
-    if (!body.success) return reply.code(400).send({ error: 'invalid entry', issues: body.error.issues });
+    if (!body.success) return reply.code(400).send({ error: entryProblem(body.error.issues), issues: body.error.issues });
     const { id } = req.params;
     return save(req, reply, (l, text) => (exists(l, text, id) ? l.replaceEntry(text, id, body.data) : { notFound: `no project ${id}` }), id);
   });
