@@ -19,15 +19,21 @@ export function InboxAi({ urls }: { urls: string[] }) {
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
   const unique = [...new Set(urls)];
   const tooMany = unique.length > BATCH_MAX_URLS;
+  // Busy from the click to the server's answer: the server dedupes URLs within one request only, so a second click
+  // would start every evaluation again.
+  const [busy, setBusy] = useState(false);
   const evaluateAll = async () => {
     if (unique.length === 0 || tooMany) return;
-    if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them' }))) return;
+    setBusy(true);
     try {
+      if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them' }))) return;
       const r = await fanOut('oferta', unique);
       setNote(`Started ${r.sessions.length} evaluations with report numbers ${r.reserved.join(', ')}.`);
       await navigate({ to: '/sessions' });
     } catch (err) {
       setNote(`Could not start the evaluations: ${describeError(err)}`);
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -36,7 +42,7 @@ export function InboxAi({ urls }: { urls: string[] }) {
         <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           Process inbox <Pill tone="warn">Uses tokens</Pill>
         </button>
-        <button type="button" disabled={unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
+        <button type="button" disabled={busy || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {tooMany && (
