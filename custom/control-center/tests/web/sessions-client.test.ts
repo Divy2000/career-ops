@@ -48,3 +48,14 @@ describe('session client: a request without a payload', () => {
     expect(calls[0]!.headers).toMatchObject({ 'X-CC': '1' });
   });
 });
+
+describe('targetFor (Sessions > New session, command palette)', () => {
+  it('reads a row number, a URL or a company, and a projects-ingest source as the documents/ path the route takes', async () => {
+    const { targetFor } = await import('@web/features/sessions/SessionsPage');
+    expect(targetFor('3')).toEqual({ type: 'app', value: '3' });
+    expect(targetFor('https://jobs.example.com/1')).toEqual({ type: 'url', value: 'https://jobs.example.com/1' });
+    expect(targetFor('Acme')).toEqual({ type: 'company', value: 'Acme' });
+    expect(targetFor(' projects/router.pdf ', 'projects-ingest')).toEqual({ type: 'text', value: 'projects/router.pdf' });
+    expect(targetFor('', 'projects-ingest')).toEqual({ type: 'none', value: null });
+  });
+});

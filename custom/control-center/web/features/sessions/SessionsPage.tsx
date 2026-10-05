@@ -50,11 +50,11 @@ export function SessionsPage() {
               </select>
             </label>
             <label style={{ flex: 1 }}>
-              Target (URL, company or row number){' '}
-              <input aria-label="New session target" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder="optional" />
+              {newMode === 'projects-ingest' ? 'Source document (path under documents/)' : 'Target (URL, company or row number)'}{' '}
+              <input aria-label="New session target" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder={newMode === 'projects-ingest' ? 'projects/my-project.pdf' : 'optional'} />
             </label>
           </div>
-          <SessionPanel key={newMode} mode={newMode} target={targetFor(targetValue)} placeholder="What should this session do?" />
+          <SessionPanel key={newMode} mode={newMode} target={targetFor(targetValue, newMode)} placeholder="What should this session do?" />
         </div>
       )}
       <div className="toolbar row gap">
@@ -125,9 +125,11 @@ export function SessionsPage() {
   );
 }
 
-export function targetFor(value: string): SessionMeta['target'] {
+/** projects-ingest reads a document under documents/, which the route takes as a text target. */
+export function targetFor(value: string, mode?: string): SessionMeta['target'] {
   const v = value.trim();
   if (!v) return { type: 'none', value: null };
+  if (mode === 'projects-ingest') return { type: 'text', value: v };
   if (/^\d+$/.test(v)) return { type: 'app', value: v };
   if (/^https?:\/\//.test(v)) return { type: 'url', value: v };
   return { type: 'company', value: v };

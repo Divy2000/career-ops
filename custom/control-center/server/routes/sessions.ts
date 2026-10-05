@@ -16,6 +16,19 @@ const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
+/**
+ * Claude only gets the prompt and the preamble, never the session's target, so a target the prompt does not already
+ * name is added to the first message. A text target (a document path) is the mode's own input and is left alone.
+ */
+export function promptWithTarget(prompt: string, target: { type: string; value: string | null }): string {
+  const v = target.value?.trim();
+  if (!v || target.type === 'none' || target.type === 'text') return prompt;
+  // A row number is only named as "#3": a bare "3" in the prompt can be anything.
+  if (prompt.includes(target.type === 'app' ? `#${v}` : v)) return prompt;
+  const what = target.type === 'app' ? `tracker row #${v}` : target.type === 'company' ? `company ${v}` : v;
+  return `${prompt}\n\nTarget: ${what}`;
+}
+
 export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; bus: EventBus }): Promise<void> {
   const { manager } = opts;
   // Unlocking data/blacklist.md for a turn is the same explicit gate as PUT /api/blacklist: Dev Chat only, and the header on that request.
@@ -37,7 +50,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
-    let userPrompt = parsed.data.prompt;
+    let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);
     // projects-ingest runs no command: the app extracts its documents/ source (as intake does) and the text rides in the first message.
     if (parsed.data.mode === 'projects-ingest') {
       const doc = parsed.data.target.type === 'text' && parsed.data.target.value ? await extractSourceText(opts.cfg.codeRoot, opts.cfg.dataRoot, parsed.data.target.value) : { ok: false as const, error: 'projects-ingest needs the documents/ path of the source as its target' };
