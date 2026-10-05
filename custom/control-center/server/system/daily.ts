@@ -14,7 +14,14 @@ export function maybeFakeDailyProbe(cfg: ServerConfig, exec: Exec): Exec {
   return async (cmd, args, opts) => (cmd === 'pgrep' ? { code: running ? 0 : 1, stdout: running ? '4242\n' : '', stderr: '' } : exec(cmd, args, opts));
 }
 
-/** Polls `pgrep -f custom/immigration/run-daily.sh`; never blocks anything (core locks do). */
+/**
+ * The job's own command line: bash running run-daily.sh as its script (launchd, the lock re-exec and the app all start
+ * it so). Anchored, because pgrep -f matches the whole argument list and a Claude prompt that merely names the script
+ * must not read as the job running. Probing the lock with lockf instead could make a scheduled run skip.
+ */
+export const DAILY_JOB_PATTERN = '^([^ ]*/)?bash [^-].*custom/immigration/run-daily\\.sh( |$)';
+
+/** Polls `pgrep -f DAILY_JOB_PATTERN`; never blocks anything (core locks do). */
 export class DailyJobWatch {
   private timer: NodeJS.Timeout | null = null;
   private state: DailyStatus = { running: false, checkedAt: null };
@@ -47,7 +54,7 @@ export class DailyJobWatch {
   }
 
   async poll(): Promise<void> {
-    const r = await this.exec('pgrep', ['-f', 'custom/immigration/run-daily.sh'], { timeoutMs: 4000 });
+    const r = await this.exec('pgrep', ['-f', DAILY_JOB_PATTERN], { timeoutMs: 4000 });
     const running = r.code === 0 && r.stdout.trim().length > 0;
     const changed = running !== this.state.running;
     this.state = { running, checkedAt: new Date().toISOString() };

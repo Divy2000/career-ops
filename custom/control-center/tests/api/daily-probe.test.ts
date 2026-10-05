@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, testConfig, type TestApp } from '../helpers/app.js';
-import { maybeFakeDailyProbe } from '../../server/system/daily.js';
+import { DailyJobWatch, maybeFakeDailyProbe } from '../../server/system/daily.js';
+import { EventBus } from '../../server/watch/bus.js';
+import { execNoShell } from '../../server/routes/system.js';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { tempDir } from '../helpers/tmp.js';
 import { configFromEnv } from '../../server/config.js';
 import type { Exec } from '../../server/routes/system.js';
 
@@ -32,6 +36,46 @@ describe('daily job detection', () => {
   it('asks the host through pgrep when no override is set', async () => {
     t = await makeTestApp({}, { exec: hostSays(true), dailyPollMs: 30 });
     expect(await dailyRunning(t)).toBe(true);
+  });
+});
+
+describe('the daily job probe on real processes', () => {
+  // Real pgrep, but only the processes this test started count, so a daily job running on the host cannot change the result.
+  const ownPgrep = (pids: number[]): Exec => async (cmd, args, opts) => {
+    const r = await execNoShell(cmd, args, opts);
+    const mine = r.stdout.split('\n').filter((p) => pids.includes(Number(p)));
+    return { code: mine.length ? 0 : 1, stdout: mine.map((p) => `${p}\n`).join(''), stderr: r.stderr };
+  };
+  const children: ChildProcess[] = [];
+  afterEach(() => {
+    for (const c of children.splice(0)) c.kill('SIGKILL');
+  });
+  const started = async (bin: string, args: string[]): Promise<number> => {
+    const c = spawn(bin, args, { stdio: 'ignore' });
+    children.push(c);
+    await new Promise((r) => setTimeout(r, 200));
+    return c.pid!;
+  };
+
+  it('does not count a process that only mentions run-daily.sh in its arguments, such as a Claude prompt about it', async () => {
+    const pid = await started(process.execPath, ['-e', 'setTimeout(() => {}, 20000)', 'Why did custom/immigration/run-daily.sh skip the rank step?']);
+    const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
+    expect(await watch.runningNow()).toBe(false);
+  });
+
+  it('does not count a bash -c command line that only names run-daily.sh', async () => {
+    const pid = await started('/bin/bash', ['-c', 'sleep 20; echo custom/immigration/run-daily.sh']);
+    const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
+    expect(await watch.runningNow()).toBe(false);
+  });
+
+  it('counts bash running run-daily.sh, the way launchd and the lock re-exec start it', async () => {
+    const script = path.join(tempDir('cc-daily-probe-'), 'custom', 'immigration', 'run-daily.sh');
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, 'sleep 20\n');
+    const pid = await started('/bin/bash', [script]);
+    const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
+    expect(await watch.runningNow()).toBe(true);
   });
 });
 
