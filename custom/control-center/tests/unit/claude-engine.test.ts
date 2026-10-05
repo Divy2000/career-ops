@@ -4,9 +4,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn } from '../../server/claude/guard-policy.mjs';
+import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
@@ -912,6 +912,74 @@ describe('checkBash: exact per-command argument grammars', () => {
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
+  });
+});
+
+describe('every script a session may run is audited for the files it writes', () => {
+  // The generic script grammar only read-checks path arguments, so it is right only for scripts that write nothing or
+  // only their own fixed files. Each one below was audited (its parser and every write call, imports included); a script
+  // whose arguments choose a file it writes is modelled in guard-policy.mjs (WRITER_SCRIPTS) instead. A script a mode
+  // starts granting fails here until someone has read it.
+  const FIXED_OR_NO_WRITES: Record<string, string> = {
+    'add-entry.mjs': 'cv.md and article-digest.md',
+    'agent-inbox.mjs': 'data/agent-inbox.md (or CAREER_OPS_INBOX) and .gitignore',
+    'analyze-patterns.mjs': 'nothing; --self-test makes and removes tagged files in reports/',
+    'archive-posting.mjs': 'jds/<date>_<slug>_<slug>.pdf; company and role are slugified and --report must be digits',
+    'audit-portals.mjs': 'nothing',
+    'browser-extract.mjs': 'nothing',
+    'calibrate.mjs': 'nothing',
+    'career-profile.mjs': 'data/career-profile.yml; its path argument is only read',
+    'check-liveness.mjs': 'nothing',
+    'company-history.mjs': 'nothing; --self-test writes in a temp folder',
+    'contact-extract.mjs': 'data/contacts.tsv; --file is only read',
+    'custom/immigration/freshness.mjs': 'nothing',
+    'custom/projects/rank.mjs': 'nothing',
+    'cv-sync-check.mjs': 'nothing',
+    'cv-templates.mjs': 'nothing',
+    'cv-title-check.mjs': 'nothing; --self-test writes in a temp folder',
+    'dedup-tracker.mjs': 'the tracker and its backup',
+    'discover-ats.mjs': 'portals.yml (--write); --in is only read',
+    'fetch-jd.mjs': 'nothing',
+    'find.mjs': 'nothing',
+    'followup-cadence.mjs': 'nothing',
+    'followup-seed.mjs': 'data/follow-ups.md and its lock',
+    'funnel-velocity.mjs': 'nothing',
+    'intake.mjs': 'data/intake-state.json and the documents/ scaffold; --text reads inside documents/',
+    'jd-skill-gap.mjs': 'nothing',
+    'keyword-match.mjs': 'nothing',
+    'mark-pdf-ready.mjs': 'the tracker',
+    'match-star.mjs': 'nothing',
+    'merge-tracker.mjs': 'the tracker and batch/tracker-additions/',
+    'normalize-statuses.mjs': 'the tracker and its backup',
+    'outcome.mjs': 'data/outcomes/<row>/ and the tracker; --clean-output removes output/ files only after a verified copy',
+    'paste-reply.mjs': 'data/reply-candidates.json; --file is only read',
+    'prepare-application.mjs': 'nothing',
+    'rejection-latency.mjs': 'nothing',
+    'reserve-report-num.mjs': 'reports/NNN-RESERVED.md sentinels',
+    'salary-gap.mjs': 'nothing',
+    'scan.mjs': 'data/pipeline.md, data/scan-history.tsv and its run logs',
+    'set-status.mjs': 'the tracker and data/status-log.tsv',
+    'stats.mjs': 'nothing',
+    'story-provenance-check.mjs': 'nothing',
+    'update-system.mjs': 'the code checkout (apply, rollback), its lock and dismiss files',
+    'upskill.mjs': 'nothing; --self-test makes and removes tagged files in reports/',
+    'validate-portals.mjs': 'nothing; --file is only read, --self-test writes in a temp folder',
+    'validate-profile.mjs': 'nothing',
+    'verify-ats.mjs': 'nothing',
+    'verify-cv-facts.mjs': 'nothing',
+    'verify-pipeline.mjs': 'removes stale reports/*-RESERVED.md sentinels',
+    'verify-portals.mjs': 'nothing; --file is only read',
+  };
+  const granted = new Set<string>();
+  for (const id of listModeIds()) for (const [bin, script] of getModePolicy(id)!.bashPrefixes) if ((bin === 'node' || bin === 'bash') && script) granted.add(script);
+
+  it('each granted script is modelled as a writer or listed with the fixed files it writes', () => {
+    expect([...granted].filter((s) => !WRITER_SCRIPT_NAMES.includes(s) && !Object.hasOwn(FIXED_OR_NO_WRITES, s)).sort()).toEqual([]);
+    expect(Object.keys(FIXED_OR_NO_WRITES).filter((s) => WRITER_SCRIPT_NAMES.includes(s))).toEqual([]);
+  });
+
+  it('the audit list names only scripts some session is granted', () => {
+    expect(Object.keys(FIXED_OR_NO_WRITES).filter((s) => !granted.has(s))).toEqual([]);
   });
 });
 

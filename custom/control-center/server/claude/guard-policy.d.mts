@@ -44,5 +44,7 @@ export function readUrlList(policy: ReadPolicy, file: string, cwd: string | unde
 export function tokenize(command: string): string[] | null;
 /** Scripts no session may run, whatever its policy lists: they start agent CLIs outside the session guard. */
 export const AGENT_SPAWNING_SCRIPTS: readonly string[];
+/** Scripts modelled on their own parsers because their arguments choose files they write. */
+export const WRITER_SCRIPT_NAMES: readonly string[];
 export function checkBash(command: string, policy: BashPolicy, cwd?: string): string | null;
 export function snapshotKey(sessionDir: string, abs: string): string;

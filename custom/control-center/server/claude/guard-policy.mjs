@@ -397,6 +397,9 @@ const WRITER_SCRIPTS = {
   },
 };
 
+/** The scripts modelled above; every other script a session may run must write nothing or only its own fixed files. */
+export const WRITER_SCRIPT_NAMES = Object.freeze(Object.keys(WRITER_SCRIPTS));
+
 const GIT_FLAGS = {
   status: { exact: ['-s', '--short', '-b', '--branch', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--long', '-v', '--verbose', '-u', '-uno', '-unormal', '-uall', '--untracked-files', '--untracked-files=no', '--untracked-files=normal', '--untracked-files=all', '--ignored', '--show-stash', '--ahead-behind', '--no-ahead-behind', '--no-renames', '-z'], patterns: [] },
   diff: {
