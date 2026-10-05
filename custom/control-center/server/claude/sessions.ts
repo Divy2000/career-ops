@@ -53,6 +53,16 @@ export interface SessionMeta {
   forkPending?: boolean;
   /** SESSION_POLICY_VERSION when the session was created or forked; absent on sessions from before read confinement. */
   policyVersion?: number;
+  /**
+   * The CLI has a conversation under claudeSessionId: a turn reported session.init. Until then a turn starts it
+   * (--session-id) instead of resuming it. Absent on sessions from before this field, which go by their turn count.
+   */
+  conversationStarted?: boolean;
+}
+
+/** Whether the CLI has a conversation to resume under the session's claudeSessionId. */
+export function conversationStarted(meta: SessionMeta): boolean {
+  return meta.conversationStarted ?? meta.turns.length > 0;
 }
 
 export interface StoredEvent {
@@ -120,6 +130,7 @@ export class SessionStore {
       lastReason: null,
       ...(input.forkPending ? { forkPending: true } : {}),
       policyVersion: SESSION_POLICY_VERSION,
+      conversationStarted: false,
     };
     fs.mkdirSync(this.dirOf(meta.id), { recursive: true });
     this.write(meta);
@@ -140,6 +151,14 @@ export class SessionStore {
     meta.forkPending = false;
     this.write(meta);
     return true;
+  }
+
+  /** Records that the CLI started this session's conversation (written once). */
+  markConversationStarted(id: string): void {
+    const meta = this.mustRead(id);
+    if (meta.conversationStarted === true) return;
+    meta.conversationStarted = true;
+    this.write(meta);
   }
 
   setReportNum(id: string, reportNum: number | null): SessionMeta {

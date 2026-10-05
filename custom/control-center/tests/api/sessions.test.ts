@@ -344,6 +344,41 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('a session whose first turn was cancelled while queued starts its conversation on the next turn, and a fork of it starts fresh', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const args = async (runId: string) => (await call(app, 'GET', `/api/runs/${runId}`)).json().meta.cmd.args as string[];
+    try {
+      expect((await call(app, 'PUT', '/api/settings/app', { claudeConcurrency: 1 })).statusCode).toBe(200);
+      const slowId: string = (await call(app, 'POST', '/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json().id;
+      const queued = (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json();
+      expect(app.runner.queuedIds()).toEqual([queued.turns[0].runId]);
+      expect((await call(app, 'POST', `/api/sessions/${queued.id}/cancel`, {})).statusCode).toBe(200);
+      expect((await settleOn(app, queued.id)).meta.status).toBe('cancelled');
+      expect((await call(app, 'POST', `/api/sessions/${slowId}/cancel`, {})).statusCode).toBe(200);
+      // No Claude conversation exists under its id yet, so a fork cannot resume it: the fork starts its own.
+      const fork = await settleOn(app, (await call(app, 'POST', `/api/sessions/${queued.id}/fork`, { prompt: 'Research again' })).json().id);
+      const forkArgs = await args(fork.meta.turns[0]!.runId);
+      expect(forkArgs).toEqual(expect.arrayContaining(['--session-id', fork.meta.claudeSessionId]));
+      expect(forkArgs).not.toContain('--resume');
+      expect(forkArgs).not.toContain('--fork-session');
+      expect(fork.meta.claudeSessionId).not.toBe(queued.claudeSessionId);
+      expect(fork.meta).toMatchObject({ status: 'done', forkedFrom: queued.id, conversationStarted: true });
+      expect(fork.meta.forkPending ?? false).toBe(false);
+      // The reply is the conversation's first turn: --session-id, never --resume of an id the CLI never created.
+      expect((await call(app, 'POST', `/api/sessions/${queued.id}/turns`, { prompt: 'Research' })).statusCode).toBe(202);
+      const second = await settleOn(app, queued.id);
+      const secondArgs = await args(second.meta.turns[1]!.runId);
+      expect(secondArgs).toEqual(expect.arrayContaining(['--session-id', queued.claudeSessionId]));
+      expect(secondArgs).not.toContain('--resume');
+      // Once a turn has started the conversation, the next one resumes it.
+      expect((await call(app, 'POST', `/api/sessions/${queued.id}/turns`, { prompt: 'More' })).statusCode).toBe(202);
+      const third = await settleOn(app, queued.id);
+      expect(await args(third.meta.turns[2]!.runId)).toEqual(expect.arrayContaining(['--resume', queued.claudeSessionId]));
+    } finally {
+      await app.close();
+    }
+  });
+
   it('two concurrent sends on one session: one starts a turn, the other gets 409', async () => {
     const slow = await makeTestApp({}, { readToken: async () => (await wait(150), FAKE_TOKEN) });
     try {
