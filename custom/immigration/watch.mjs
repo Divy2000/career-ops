@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
+import { localToday } from '../../lib/local-today.mjs';
 
 const DIR = path.join(getCareerOpsRoot(), 'data/immigration');
 const SEEN = path.join(DIR, 'seen.json');
@@ -105,7 +106,8 @@ async function main() {
   }
   const seen = existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] };
   const lastSuccess = { ...(seen.last_success ?? {}) };
-  const today = new Date().toISOString().slice(0, 10);
+  // The local day, as run-daily.sh dates its log: the UTC day is already tomorrow on a US evening.
+  const today = localToday();
   // Each source keeps its own last-success date, so a long outage of one source
   // is backfilled from where it stopped instead of only the default lookback.
   const sinceFor = (source) => sinceArg ?? sinceForSource({ lastSuccess: sourceCursor(seen, source), today });

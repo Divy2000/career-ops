@@ -2,6 +2,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PACKAGE_ROOT } from '../config.js';
 import { coreModuleUrl, runModule, childJson } from '../core/child.js';
+import { localDate } from '../../shared/local-date.js';
 import type { FollowupEdit, FollowupEditResult } from './followups-edit.js';
 
 export interface PipelineOffer {
@@ -24,7 +25,7 @@ await appendToPipeline(req.offers);
 if (req.history) await appendToScanHistory(req.offers, req.date, 'added');
 process.stdout.write(JSON.stringify({ ok: true, added: req.offers.length }));
 `;
-  const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers, history, date: new Date().toISOString().slice(0, 10) }, timeoutMs: 30_000 });
+  const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers, history, date: localDate() }, timeoutMs: 30_000 });
   if (r.code !== 0) throw new Error(`pipeline writer exited ${r.code}: ${r.stderr.trim().slice(-600)}`);
   return childJson<{ added: number }>(r);
 }

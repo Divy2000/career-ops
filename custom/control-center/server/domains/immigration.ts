@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { parseTsv, readText } from './files.js';
+import { localDate } from '../../shared/local-date.js';
 
 export interface DigestSection {
   date: string;
@@ -127,10 +128,7 @@ export function parseDailyLog(text: string, date: string): DailyLog {
 }
 
 /** The local calendar date (YYYY-MM-DD) the job scripts name their logs by (`date +%Y-%m-%d`). */
-export function localDate(d = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+export { localDate };
 
 /** The local date the day before `date` (YYYY-MM-DD). */
 function dayBefore(date: string): string {

@@ -8,6 +8,7 @@ import { DataState, Empty, TableScroll } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
+import { formatLocalMinute } from '../../lib/time';
 
 const detailRoute = getRouteApi('/sessions/$id');
 
@@ -109,7 +110,7 @@ export function SessionsPage() {
                     <td className="muted">{describeTarget(s.target)}</td>
                     <td className="mono">{s.turns.length}</td>
                     <td className="mono">${s.totals.costUsd.toFixed(3)}</td>
-                    <td className="mono muted">{s.updatedAt.slice(0, 19).replace('T', ' ')}</td>
+                    <td className="mono muted">{formatLocalMinute(s.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>

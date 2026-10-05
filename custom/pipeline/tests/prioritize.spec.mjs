@@ -5,18 +5,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PRIORITIZE = path.join(REPO, 'custom', 'pipeline', 'prioritize.mjs');
 
-const dayIn = (timeZone, at) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
-
 test('prioritize puts the rows the scanner first saw on the local today first, also when the UTC date is already another day', () => {
-  // One of these zones is on another calendar day than UTC at any instant (UTC+14 from 10:00 UTC, UTC-11 before 11:00 UTC).
-  const now = new Date();
-  const utc = now.toISOString().slice(0, 10);
-  const zone = ['Pacific/Kiritimati', 'Pacific/Pago_Pago'].find((z) => dayIn(z, now) !== utc);
-  const localToday = dayIn(zone, now);
+  const { zone, localToday } = zoneOffUtcDay();
   const root = tempDir('prioritize-');
   fs.mkdirSync(path.join(root, 'data'));
   const backlog = '- [ ] https://jobs.example.com/backlog | Backlog Co | Data Analyst | Remote';

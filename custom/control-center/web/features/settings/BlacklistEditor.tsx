@@ -7,8 +7,8 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
 import type { BlacklistRead, BlacklistRow } from '@shared/api';
+import { localDate } from '@shared/local-date';
 
-const today = () => new Date().toISOString().slice(0, 10);
 
 /**
  * The only place that writes data/blacklist.md. Saving opens an explicit confirm
@@ -27,7 +27,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     else edit.pin();
     setRowsState(next);
   };
-  const [draft, setDraft] = useState<BlacklistRow>({ company: prefillCompany ?? '', since: today(), scope: 'company', reason: '' });
+  const [draft, setDraft] = useState<BlacklistRow>({ company: prefillCompany ?? '', since: localDate(), scope: 'company', reason: '' });
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const current = rows ?? q.data?.rows ?? [];
   const dirty = rows !== null;
@@ -39,7 +39,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     }
     setNote(null);
     setRows([...current, { ...draft, company: draft.company.trim(), reason: draft.reason.trim() }]);
-    setDraft({ company: '', since: today(), scope: 'company', reason: '' });
+    setDraft({ company: '', since: localDate(), scope: 'company', reason: '' });
   };
   const save = async () => {
     const from = edit.base ?? q.data;

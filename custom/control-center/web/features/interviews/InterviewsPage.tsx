@@ -7,6 +7,7 @@ import { ModeLauncher } from '../../components/ModeLauncher';
 import { ScriptTab, JsonView } from '../insights/ScriptTab';
 import { isPlainObject } from '../../lib/yamlOpsClient';
 import type { InterviewsRead } from '@shared/api';
+import { localDate } from '@shared/local-date';
 
 /** Rows in rejection-latency output that name a company become explicit "Add to blacklist" suggestions; nothing is written here. */
 export function companySuggestions(json: unknown): string[] {
@@ -82,7 +83,7 @@ export function InterviewsPage() {
                 <ul className="bullets">
                   {[...q.data.prepDocs, ...q.data.sessions].map((d) => (
                     <li key={d.path}>
-                      <span className="mono">{d.path}</span> <span className="faint small">{new Date(d.mtimeMs).toISOString().slice(0, 10)}</span>
+                      <span className="mono">{d.path}</span> <span className="faint small">{localDate(new Date(d.mtimeMs))}</span>
                     </li>
                   ))}
                 </ul>

@@ -6,6 +6,7 @@ import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
 import { LogBrowser, ScheduleCards } from './ScheduleCards';
 import { groupQuickActions } from './quickActions';
 import { describeError } from '../../lib/actions';
+import { formatLocalClock, formatLocalMinute } from '../../lib/time';
 
 const ANSI = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*[A-Za-z]`, 'g');
 export const stripAnsi = (s: string) => s.replace(ANSI, '');
@@ -47,7 +48,7 @@ function LogViewer({ run }: { run: RunMeta }) {
       <pre ref={pre} className="log" aria-live="polite" aria-label="Run log" tabIndex={0}>
         {lines.length === 0 ? <span className="faint">No output yet.</span> : lines.map((l) => (
           <div key={l.seq} className={l.stream === 'stderr' ? 'log__err' : ''}>
-            <span className="faint">{l.ts.slice(11, 19)} </span>
+            <span className="faint">{formatLocalClock(l.ts)} </span>
             {stripAnsi(l.line)}
           </div>
         ))}
@@ -140,7 +141,7 @@ export function RunsPage() {
                       <td>
                         {r.label} <span className="faint mono small">{r.actionId}</span>
                       </td>
-                      <td className="mono muted">{(r.startedAt ?? r.createdAt).slice(0, 19).replace('T', ' ')}</td>
+                      <td className="mono muted">{formatLocalMinute(r.startedAt ?? r.createdAt)}</td>
                       <td className="mono">{r.exitCode ?? ''}</td>
                       <td>
                         {(r.status === 'running' || r.status === 'queued') && (

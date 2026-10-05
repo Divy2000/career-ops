@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
@@ -89,6 +89,32 @@ describe('follow-up writes', () => {
     expect((await del('/api/followups/override', { appNum: 6 })).statusCode).toBe(200);
     expect((await get('/api/tracker/6')).json().timeline.pin).toBeNull();
     expect((await post('/api/followups/override', { appNum: 6, date: 'soon' })).statusCode).toBe(400);
+  });
+});
+
+describe('dates the app writes are local dates (vitest runs in America/Los_Angeles)', () => {
+  // 19:00 on 2026-10-05 in Los Angeles is already 2026-10-06 in UTC.
+  const usEvening = () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 5, 19, 0));
+  };
+  afterEach(() => vi.useRealTimers());
+
+  it('a follow-up pin records the local day it was set on', async () => {
+    usEvening();
+    const r = await post('/api/followups/override', { appNum: 6, date: '2026-10-12' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await get('/api/tracker/6')).json().timeline.pin).toMatchObject({ appNum: 6, date: '2026-10-12', setOn: '2026-10-05' });
+    expect((await del('/api/followups/override', { appNum: 6 })).statusCode).toBe(200);
+  });
+
+  it('a posting added to the pipeline is first seen on the local day, as scan.mjs stamps it', async () => {
+    usEvening();
+    const url = 'https://jobs.example.com/evening/1';
+    const r = await post('/api/pipeline/add', { offers: [{ url, company: 'Evening Co', title: 'Backend Engineer' }] });
+    expect(r.statusCode, r.body).toBe(200);
+    const row = readData('data/scan-history.tsv').split('\n').find((l) => l.startsWith(`${url}\t`));
+    expect(row?.split('\t')[1]).toBe('2026-10-05');
   });
 });
 
