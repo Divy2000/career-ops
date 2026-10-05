@@ -104,6 +104,18 @@ describe('action registry', () => {
     expect((await get('/api/runs/does-not-exist')).statusCode).toBe(404);
   });
 
+  it('JD skill gap runs jd-skill-gap.mjs on the pasted JD and finishes, and asks for the JD instead of running without one (R7-15)', async () => {
+    expect((await post('/api/actions/insights.jdSkillGap', { params: {} })).statusCode).toBe(400);
+    const res = await post('/api/actions/insights.jdSkillGap', { params: { text: '## Requirements\n\n- 5+ years of experience with Python\n- Experience with Kafka and Kubernetes\n' } });
+    expect(res.statusCode, res.body).toBe(202);
+    const meta = await waitForRun(res.json().runId);
+    expect(meta).toMatchObject({ actionId: 'insights.jdSkillGap', status: 'done', exitCode: 0 });
+    const lines = ((await get(`/api/runs/${res.json().runId}`)).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
+    expect(lines).not.toMatch(/Usage: node jd-skill-gap\.mjs/);
+    expect(lines).toMatch(/JD skills found: 3/);
+    expect(lines).toMatch(/Real gaps \(not found anywhere\): Kafka, Kubernetes/);
+  });
+
   it('an async action records the input files it wrote with its run, the network scan filters file passed only in the env included', async () => {
     const started: Array<Parameters<typeof t.runner.start>[0]> = [];
     // Captured, not run: the network scan would fetch the public ATS dataset.

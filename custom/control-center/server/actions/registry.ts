@@ -352,13 +352,14 @@ export const ACTIONS: ActionDef[] = [
       ['insights.processQuality', 'Process quality', 'processQuality'],
       ['insights.weeklyDigest', 'Weekly digest', 'weeklyDigest'],
       ['insights.assessmentLog', 'Assessment log', 'assessmentLog'],
-      ['insights.jdSkillGap', 'JD skill gap', 'jdSkillGap'],
       ['insights.storyProvenance', 'Story provenance check', 'storyProvenanceCheck'],
       ['insights.contacts', 'Contacts summary', 'contacts'],
     ] as Array<[string, string, CliId]>
   ).map(([id, label, cli]) => define({ id, label, cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, cli, ['--summary']) })),
   define({ id: 'insights.companyHistory', label: 'Company history', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company')]) }),
   define({ id: 'insights.keywordMatch', label: 'Keyword match', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive.optional() }), build: (p, ctx) => node(ctx, 'keywordMatch', ['--json', ...(p.n ? [String(p.n)] : [])]) }),
+  // jd-skill-gap.mjs needs a JD file (it exits 1 with its usage text without one): the pasted JD goes to a temp file.
+  define({ id: 'insights.jdSkillGap', label: 'JD skill gap', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ text: z.string().min(1).max(50_000) }), build: (p, ctx) => node(ctx, 'jdSkillGap', [tmpFile(ctx, 'md', p.text), '--summary']) }),
   define({ id: 'insights.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),
   define({ id: 'insights.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
   // ---- follow-ups ----

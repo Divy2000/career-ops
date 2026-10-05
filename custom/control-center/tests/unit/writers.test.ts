@@ -212,6 +212,7 @@ function sampleParams(id: string): Record<string, unknown> {
     'followups.replyPaste': { subject: 's', from: 'f', body: 'b' },
     'followups.inviteMatch': { text: 'hello' },
     'insights.inviteMatch': { text: 'hello' },
+    'insights.jdSkillGap': { text: '- Experience with Python' },
     'projects.rank': { text: 'We need Python.' },
     'followups.contactsVcf': { callerId: 'me' },
     'plugins.run': { id: 'h1b-sponsor', hook: 'check', args: [] },
