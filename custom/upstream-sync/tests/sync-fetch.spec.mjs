@@ -213,7 +213,7 @@ test('deps_fingerprint falls back to package.json when the root has no tracked l
 
 // ---- sync.sh end to end, as far as it can go without Keychain, Claude or network ----
 
-function runSync(world, { home }) {
+function runSync(world, { home, inherited = {} }) {
   const syncDir = path.join(world.live, 'custom/upstream-sync');
   mkdirSync(syncDir, { recursive: true });
   for (const f of ['sync.sh', 'keep-fork-readme.sh', 'lib.sh', 'sync-prompt.md']) copyFileSync(path.join(SYNC_DIR, f), path.join(syncDir, f));
@@ -224,9 +224,12 @@ function runSync(world, { home }) {
     stub(dir, 'security', 'exit 44');
     stub(dir, 'osascript', 'exit 0');
   }
+  // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
+  // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
+  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, ...env } = { ...GIT_ENV, ...inherited };
   const res = spawnSync('bash', [path.join(syncDir, 'sync.sh'), '--no-merge'], {
     cwd: world.live,
-    env: { ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...env, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` },
     encoding: 'utf8',
     timeout: 60_000,
   });
@@ -279,4 +282,18 @@ test('sync.sh uses the shared helpers: no bare "git fetch upstream main", no unc
   assert.match(sync, /install_root_deps ignore-scripts/);
   assert.match(sync, /deps_fingerprint/);
   assert.match(sync, /\^\[0-9\]\+\$/, 'BEHIND is checked to be numeric');
+});
+
+test('Given the shell exports a data root (as the launchd plist does), sync.sh under test still logs to the test checkout and never into that root', () => {
+  const w = makeWorld({ upstreamAhead: false });
+  const home = path.join(w.base, 'home');
+  const decoy = path.join(w.base, 'real-data-root');
+  mkdirSync(home);
+  mkdirSync(decoy);
+  try {
+    const res = runSync(w, { home, inherited: { CAREER_OPS_ROOT: decoy, CAREER_OPS_DATA_DIR: decoy, CAREER_OPS_TRACKER: path.join(decoy, 'applications.md') } });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.log, /nothing to do/);
+    assert.deepEqual(readdirSync(decoy), []);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
