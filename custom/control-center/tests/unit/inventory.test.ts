@@ -5,8 +5,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { z } from 'zod';
-import { ACTIONS } from '../../server/actions/registry.js';
+import { ACTIONS, actionMetadata } from '../../server/actions/registry.js';
 import modes from '../../server/claude/modes.generated.json' with { type: 'json' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -123,13 +122,6 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['projects.tab', { web: 'ProjectsLibrary', e2e: 'Profile > Projects library' }],
 ];
 
-function requiredParams(id: string): string[] {
-  const def = ACTIONS.find((a) => a.id === id);
-  if (!def) return [];
-  const schema = z.toJSONSchema(def.params) as { required?: string[] };
-  return schema.required ?? [];
-}
-
 describe('spec section 1 inventory reaches its new location', () => {
   it('lists every capability exactly once', () => {
     const ids = INVENTORY.map(([id]) => id);
@@ -140,15 +132,16 @@ describe('spec section 1 inventory reaches its new location', () => {
   it.each(INVENTORY)('%s', (_id, reach) => {
     if (reach.api) {
       expect(serverSrc, `route ${reach.api} is registered`).toContain(`'${reach.api}'`);
-      const prefix = reach.api.split(':')[0]!;
-      expect(apiTestSrc + e2eSrc, `route ${reach.api} is exercised by an API or e2e test`).toContain(prefix);
+      // The whole route, each :param standing for any one path segment (a literal or a template expression).
+      const route = new RegExp(reach.api.split('/').map((seg) => (seg.startsWith(':') ? "[^/'\"`\\s?]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('/') + "(?![\\w-])");
+      expect(apiTestSrc + e2eSrc, `route ${reach.api} is exercised by an API or e2e test`).toMatch(route);
     }
     if (reach.action) {
       expect(ACTIONS.map((a) => a.id), `action ${reach.action} is registered`).toContain(reach.action);
-      // The palette lists every registry action; those with required params open the params dialog there.
+      // The palette lists what GET /api/actions lists; an action with required params opens its params dialog there.
       const hosted = webSrc.includes(`'${reach.action}'`);
-      const viaPalette = requiredParams(reach.action).length === 0 || webSrc.includes('ActionParamsDialog');
-      expect(hosted || viaPalette, `action ${reach.action} is launched from a page or from the palette`).toBe(true);
+      const listed = actionMetadata().some((a) => a.id === reach.action);
+      expect(hosted || listed, `action ${reach.action} is launched from a page or from the palette`).toBe(true);
     }
     if (reach.mode) expect(modeIds.has(reach.mode) || webSrc.includes(`'${reach.mode}'`), `mode ${reach.mode} is registered`).toBe(true);
     if (reach.web) expect(webSrc, `web source mentions ${reach.web}`).toContain(reach.web);
