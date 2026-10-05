@@ -130,8 +130,10 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const name = pathLabel(path);
-  const columnLike = (col: string) => rows.find((r) => r[col] !== undefined)?.[col];
-  // A blank cell has no value to copy a type from, so it is typed like a new row's cell: false in a blank enabled cell is the boolean.
+  // A blank cell is an absent key or an explicit blank value (`enabled:` reads as null): neither has a type to copy.
+  const blank = (v: unknown) => v === undefined || v === null;
+  const columnLike = (col: string) => rows.find((r) => !blank(r[col]))?.[col];
+  // A blank cell is typed like a new row's cell: false in a blank enabled cell is the boolean.
   const parseBlank = (col: string) => (text: string) => (text.trim() === '' ? '' : parseCell(text.trim(), columnLike(col)));
   const addRow = () => {
     const row: Record<string, unknown> = {};
@@ -177,7 +179,7 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
           {rows.map((row, i) => (
             <tr key={i}>
               {columns.map((c) => (
-                <td key={c}>{isScalar(row[c]) || row[c] === undefined ? <ScalarInput path={[...path, i, c]} value={row[c] ?? ''} onOp={onOp} rules={rules} ariaLabel={`${c} of ${rowName(row, i)}`} parse={row[c] === undefined ? parseBlank(c) : undefined} /> : <code className="faint small">{JSON.stringify(row[c])}</code>}</td>
+                <td key={c}>{isScalar(row[c]) || row[c] === undefined ? <ScalarInput path={[...path, i, c]} value={row[c] ?? ''} onOp={onOp} rules={rules} ariaLabel={`${c} of ${rowName(row, i)}`} parse={blank(row[c]) ? parseBlank(c) : undefined} /> : <code className="faint small">{JSON.stringify(row[c])}</code>}</td>
               ))}
               <td>
                 <button type="button" className="button--ghost" aria-label={`Remove ${rowName(row, i)}`} onClick={() => onOp({ op: 'delete', path: [...path, i] })}>

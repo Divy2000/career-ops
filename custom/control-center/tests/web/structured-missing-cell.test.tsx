@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -10,6 +11,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { YamlOp } from '@shared/api';
 import { KeyEditor } from '@web/features/settings/StructuredEditor';
 import { PORTAL_RULES, PORTAL_SECTIONS } from '@web/features/settings/PortalsEditor';
+import YAML from 'yaml';
+import { applyYamlOps } from '../../server/domains/yamlOps';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -76,5 +79,26 @@ describe('a blank cell in a structured Portals table', () => {
     await typeAndBlur('api of Beta', '');
     await typeAndBlur('enabled of Beta', '');
     expect(ops).toEqual([{ op: 'set', path: ['tracked_companies', 1, 'provider'], value: 'greenhouse' }]);
+  });
+
+  it('an explicit blank value (`enabled:`, read as null) is a blank cell too: false saves the boolean the scanner skips on', async () => {
+    const raw = 'tracked_companies:\n  - name: Acme\n    careers_url: https://job-boards.greenhouse.io/acme\n    enabled:\n';
+    const rows = (YAML.parse(raw) as { tracked_companies: Array<Record<string, unknown>> }).tracked_companies;
+    expect(rows[0]!.enabled).toBeNull();
+    const ops = await mount(rows);
+    await typeAndBlur('enabled of Acme', 'false');
+    expect(ops).toEqual([{ op: 'set', path: ['tracked_companies', 0, 'enabled'], value: false }]);
+    // The saved file, read the way scan.mjs reads portals.yml (js-yaml), pauses the company.
+    const saved = applyYamlOps(raw, ops);
+    const code = `const yaml = await import('js-yaml'); const doc = yaml.load(${JSON.stringify(saved)}); process.stdout.write(String(doc.tracked_companies[0].enabled === false));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: CODE_ROOT, encoding: 'utf8' });
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toBe('true');
+  });
+
+  it('a null in another row does not stand in for the column type: an enabled column of null and true still types false as a boolean', async () => {
+    const ops = await mount([{ ...beta, enabled: null }, acme]);
+    await typeAndBlur('enabled of Beta', 'false');
+    expect(ops).toEqual([{ op: 'set', path: ['tracked_companies', 0, 'enabled'], value: false }]);
   });
 });
