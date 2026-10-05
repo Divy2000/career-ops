@@ -2,6 +2,7 @@
 // modes.generated.json is produced by scripts/derive-mode-policies.ts and
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
+import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -368,14 +369,20 @@ export function bashPrefixFor(script: string): string[] {
   return script.endsWith('.sh') ? ['bash', script] : ['node', script];
 }
 
+/** A script the mode files reference that no session may run: it starts an agent CLI outside the guard (guard-policy.mjs). */
+function sessionRunnable(script: string): boolean {
+  return !AGENT_SPAWNING_SCRIPTS.includes(script);
+}
+
 export function getModePolicy(id: string): ModePolicy | null {
   const derived = MODES.find((m) => m.id === id);
   const virtual = VIRTUAL_MODES[id];
   if (!derived && !virtual) return null;
   const policyClass = classForMode(id);
   const def = POLICY_CLASSES[policyClass];
-  const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].sort();
-  const bashPrefixes = def.bashPrefixes ?? scripts.map(bashPrefixFor);
+  const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].filter(sessionRunnable).sort();
+  const explicit = def.bashPrefixes?.filter((p) => p.every(sessionRunnable));
+  const bashPrefixes = explicit ?? scripts.map(bashPrefixFor);
   return {
     id,
     title: derived?.title ?? virtual!.title,
@@ -383,11 +390,24 @@ export function getModePolicy(id: string): ModePolicy | null {
     writeGlobs: [...def.writeGlobs],
     network: virtual?.network ?? [...def.network],
     scripts,
-    bashRules: def.bashPrefixes ? def.bashPrefixes.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
+    bashRules: explicit ? explicit.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
     bashPrefixes,
     allowsTask: id === 'pdf/hm-audit',
     ...(def.mcp ? { mcp: def.mcp } : {}),
   };
+}
+
+/**
+ * Modes that never run as a session, with the reason the app shows. Batch mode exists to run batch-runner.sh,
+ * which no session may run; Pipeline > Batch evaluates the same URLs as one confined session each (manager.fanOut).
+ */
+const REFUSED_MODES: Readonly<Record<string, string>> = {
+  batch: 'Batch mode runs batch/batch-runner.sh, whose workers are claude -p --dangerously-skip-permissions processes outside the session guard, so it never runs as a session. Use Pipeline > Batch instead: it evaluates each URL in its own confined session.',
+};
+
+/** Why `id` may not run as a session, or null when it may. */
+export function sessionRefusal(id: string): string | null {
+  return Object.hasOwn(REFUSED_MODES, id) ? REFUSED_MODES[id]! : null;
 }
 
 export function listModeIds(): string[] {

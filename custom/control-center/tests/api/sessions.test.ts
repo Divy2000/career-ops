@@ -471,6 +471,28 @@ describe('read confinement (BUG-06)', () => {
     expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
   });
 
+  it('batch mode never runs as a session: a start, a fan-out, a new turn and a fork are refused with 422 and the reason, and nothing starts', async () => {
+    const runsBefore = (await get('/api/runs')).json().length;
+    const sessionsBefore = (await get('/api/sessions')).json().length;
+    const start = await post('/api/sessions', { mode: 'batch', prompt: 'Process the batch' });
+    expect(start.statusCode).toBe(422);
+    expect(start.json().error).toMatch(/batch-runner\.sh.*Pipeline > Batch/);
+    const fan = await post('/api/sessions/fanout', { mode: 'batch', urls: ['https://jobs.example.com/synthetic/30'] });
+    expect(fan.statusCode).toBe(422);
+    expect(fan.json().error).toMatch(/Pipeline > Batch/);
+    expect((await get('/api/sessions')).json()).toHaveLength(sessionsBefore);
+    // A batch session created before this rule existed is still viewable, never continued.
+    const old = t.sessions.store.setStatus(t.sessions.store.create({ mode: 'batch', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null }).id, 'done');
+    for (const [url, body] of [[`/api/sessions/${old.id}/turns`, { prompt: 'continue' }], [`/api/sessions/${old.id}/fork`, { prompt: 'again' }]] as const) {
+      const res = await post(url, body);
+      expect(res.statusCode, url).toBe(422);
+      expect(res.json().error).toMatch(/Pipeline > Batch/);
+    }
+    expect((await get(`/api/sessions/${old.id}`)).statusCode).toBe(200);
+    expect(t.sessions.read(old.id)!.turns).toHaveLength(0);
+    expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
+  });
+
   it('new sessions and forks carry the current policy version', () => {
     expect(SESSION_POLICY_VERSION).toBe(2);
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
