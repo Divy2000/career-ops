@@ -87,3 +87,18 @@ test('sync.sh auto-merges only when the control-center checks passed too', () =>
   assert.equal(decide(1), 'merge');
   assert.equal(decide(0), 'hold');
 });
+
+test('the sync prompt carries the baseline failures and conflicts verbatim, even when they hold $ replacement patterns', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('PROMPT="$('));
+  const to = lines.findIndex((l, i) => i > from && l.includes('sync-prompt.md")"'));
+  const snippet = lines.slice(from, to + 1).join('\n').replace('"$LIVE/custom/upstream-sync/sync-prompt.md"', `"${path.join(HERE, '..', 'sync-prompt.md')}"`);
+  const baseline = "❌ cost check: expected $& got $$5 ($` and $')";
+  // cat stands in for reading the baseline-failures file.
+  const script = `STATE_DIR=/s TODAY=2026-10-04 BEHIND=3 CONFLICTS='a $& b'\ncat() { printf '%s' "$BASELINE_TEXT"; }\n${snippet}\nprintf '%s' "$PROMPT"`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, BASELINE_TEXT: baseline }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes(baseline), r.stdout.slice(0, 3000));
+  assert.ok(r.stdout.includes('a $& b'));
+  assert.equal(r.stdout.includes('{{'), false, 'every placeholder is filled');
+});
