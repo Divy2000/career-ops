@@ -232,6 +232,12 @@ export const HOME_READ_DENY = [
   '~/Library/Application Support/Firefox/**',
 ];
 
+/**
+ * Version of the confinement a session's turns run under. Sessions created before read confinement (no
+ * version, or 1) can be viewed but not resumed or forked: their transcripts may hold reads from outside the roots.
+ */
+export const SESSION_POLICY_VERSION = 2;
+
 /** Denied for every non Dev Chat session, regardless of class (enforced by the hook). */
 export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
 /**

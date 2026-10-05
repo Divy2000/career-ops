@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { PolicyClass } from './modes.js';
+import { SESSION_POLICY_VERSION, type PolicyClass } from './modes.js';
 import { monotonicIso } from '../runner/store.js';
 import type { SessionEvent } from './stream-parse.js';
 import { guardSessionDir } from '../../supervisor/recovery.js';
@@ -49,6 +49,8 @@ export interface SessionMeta {
    * (and appending to) the source conversation.
    */
   forkPending?: boolean;
+  /** SESSION_POLICY_VERSION when the session was created or forked; absent on sessions from before read confinement. */
+  policyVersion?: number;
 }
 
 export interface StoredEvent {
@@ -104,6 +106,7 @@ export class SessionStore {
       reportNum: input.reportNum ?? null,
       lastReason: null,
       ...(input.forkPending ? { forkPending: true } : {}),
+      policyVersion: SESSION_POLICY_VERSION,
     };
     fs.mkdirSync(this.dirOf(meta.id), { recursive: true });
     this.write(meta);

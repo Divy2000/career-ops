@@ -3,6 +3,7 @@
 // spawn and only ever lives in the child's env, stdout is normalized into
 // events.ndjson, and the honesty gate decides done / awaiting_user.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
@@ -13,8 +14,9 @@ import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
-import { buildArgv, buildEnv, buildPermissions, buildPreamble, redact, writePolicyFile, writeSettingsFile } from './invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy, type ModePolicy } from './modes.js';
+import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, writePolicyFile, writeSettingsFile } from './invocation.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, type ModePolicy } from './modes.js';
+import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 
@@ -90,6 +92,8 @@ export interface ManagerDeps {
   exec: Exec;
   pollMs?: number;
   playwrightAvailable?: boolean;
+  /** The home directory a root may not be or contain (tests point it at a temp root). */
+  home?: string;
 }
 
 export class SessionManager {
@@ -151,6 +155,7 @@ export class SessionManager {
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const meta = this.must(id);
+    assertCurrentPolicy(meta);
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
     if (this.sending.has(id)) throw new BusyError(`session ${id} is starting a turn`);
     if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${id} is ${meta.status}`);
@@ -169,6 +174,7 @@ export class SessionManager {
 
   async fork(id: string, prompt: string): Promise<SessionMeta> {
     const src = this.must(id);
+    assertCurrentPolicy(src);
     const policy = this.effectivePolicy(src.mode);
     if (!policy) throw new Error(`unknown mode ${src.mode}`);
     const forked = this.store.fork(id);
@@ -301,7 +307,12 @@ export class SessionManager {
     try {
       const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
       const deny = blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
-      const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny });
+      assertRootsConfinable(this.cfg.codeRoot, this.cfg.dataRoot, this.deps.home ?? os.homedir());
+      // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
+      await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
+      // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
+      const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
+      const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
       // Per turn, next to the turn's policy: the permissions this turn ran with, in a file so no rule is split as an argument.
       const settingsFile = writeSettingsFile(turnDir, { permissions: buildPermissions({ policy, codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, guardRoot: this.cfg.guardRoot }) });
       const preamble = buildPreamble({ policy, outputLanguage: readOutputLanguage(this.cfg.dataRoot), reportNum: meta.reportNum ?? undefined, blacklistAllowed, codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot });
@@ -493,3 +504,9 @@ export function parseReservedRange(stdout: string): number[] {
 
 export class BusyError extends Error {}
 export class NotFoundError extends Error {}
+/** The session predates the current confinement (SESSION_POLICY_VERSION): viewable, never resumed or forked. */
+export class OutdatedSessionError extends Error {}
+
+function assertCurrentPolicy(meta: SessionMeta): void {
+  if ((meta.policyVersion ?? 1) < SESSION_POLICY_VERSION) throw new OutdatedSessionError(`session ${meta.id} started before read confinement; start a new session`);
+}

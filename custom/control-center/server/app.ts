@@ -37,6 +37,8 @@ export interface AppDeps {
   /** Keychain token reader for Claude sessions (tests inject a constant). */
   readToken?: TokenReader;
   sessionPollMs?: number;
+  /** The home directory session roots may not be or contain (tests point it at a temp root). */
+  homeDir?: string;
   /**
    * Blue/green reload children start passive: they serve requests but do not
    * reconcile runs and sessions until activate(), which the supervisor sends
@@ -91,7 +93,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });
-  const sessions = new SessionManager(cfg, runner, bus, { readToken: deps.readToken ?? keychainTokenReader(exec), exec, pollMs: deps.sessionPollMs });
+  const sessions = new SessionManager(cfg, runner, bus, { readToken: deps.readToken ?? keychainTokenReader(exec), exec, pollMs: deps.sessionPollMs, home: deps.homeDir });
   closers.push(async () => sessions.close());
   let activated = false;
   const activate = () => {

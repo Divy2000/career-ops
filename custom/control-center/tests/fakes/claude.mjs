@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Fake Claude CLI for tests. Replays stream-json scenario files, honors
-// --session-id / --resume, performs scripted file writes and Bash steps and
+// --session-id / --resume, performs scripted writes, reads, fetches and Bash steps and
 // invokes the real guard hook from --settings with the real stdin JSON so the
 // hook is exercised. Scenario selection: FAKE_CLAUDE_SCENARIO (one file) or
 // FAKE_CLAUDE_SCENARIO_DIR/<mode>.json (CC_MODE set by the session manager, with
 // slashes replaced by dashes), falling back to default.json.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -44,7 +45,7 @@ if (!scenarioPath) {
   process.exit(2);
 }
 const dataRoot = process.env.CAREER_OPS_ROOT ?? process.cwd();
-const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8').replaceAll('{{REPORT_NUM}}', reportNum).replaceAll('{{DATA_ROOT}}', dataRoot));
+const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8').replaceAll('{{REPORT_NUM}}', reportNum).replaceAll('{{DATA_ROOT}}', dataRoot).replaceAll('{{HOME}}', os.homedir()));
 const events = resumed && scenario.resume ? scenario.resume : scenario.events;
 
 let settings = null;
@@ -118,6 +119,42 @@ for (const ev of events) {
     const r = spawnSync(cmd === 'node' ? process.execPath : cmd, args, { encoding: 'utf8', env: subprocessEnv, cwd: process.cwd() });
     const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.slice(-1500);
     emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: r.status !== 0, content: `exit ${r.status}\n${out}` }] } });
+    continue;
+  }
+  if (ev.__read) {
+    // Scripted Read: the PreToolUse hook decides, then the file is read like the real tool would.
+    const input = { file_path: path.isAbsolute(ev.__read) ? ev.__read : path.resolve(process.cwd(), ev.__read) };
+    const id = toolId();
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input }] } });
+    const verdict = runHook('PreToolUse', 'Read', input);
+    if (verdict.blocked) {
+      denials.push({ tool_name: 'Read', tool_use_id: id, tool_input: input });
+      emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `PreToolUse:Read hook error: ${verdict.reason}` }] } });
+      continue;
+    }
+    let content;
+    let isError = false;
+    try {
+      content = fs.readFileSync(input.file_path).toString('utf8').slice(0, 1500);
+    } catch (err) {
+      content = `<tool_use_error>${err.message}</tool_use_error>`;
+      isError = true;
+    }
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content }] } });
+    continue;
+  }
+  if (ev.__fetch) {
+    // Scripted WebFetch: only the hook's verdict is real; nothing is ever fetched.
+    const input = { url: ev.__fetch, prompt: 'Return the page text' };
+    const id = toolId();
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'WebFetch', input }] } });
+    const verdict = runHook('PreToolUse', 'WebFetch', input);
+    if (verdict.blocked) {
+      denials.push({ tool_name: 'WebFetch', tool_use_id: id, tool_input: input });
+      emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `PreToolUse:WebFetch hook error: ${verdict.reason}` }] } });
+      continue;
+    }
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: '(fake) page text' }] } });
     continue;
   }
   if (ev.__sleep) {

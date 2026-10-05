@@ -117,6 +117,15 @@ export function buildPermissions(input: { policy: ModePolicy; codeRoot: string; 
 }
 
 /**
+ * Where Claude Code saves a session's oversized tool results (probe C10): <projects>/<the cwd with every
+ * non-alphanumeric character as '-'>/<session id>/tool-results, under both spellings of the code root. The CLI
+ * lets the session read only its own folder (probe C19); the hook gets it as a read-only root.
+ */
+export function toolResultsDirs(projectsDir: string, codeRoot: string, claudeSessionId: string): string[] {
+  return [...new Set(spellings(codeRoot).map((c) => path.join(projectsDir, c.replace(/[^a-zA-Z0-9]/g, '-'), claudeSessionId, 'tool-results')))];
+}
+
+/**
  * A word-initial @ in a prompt can attach a file before any tool or hook runs; a word joiner after it keeps
  * the text readable and the mention inert. E-mail addresses (word characters before the @) are untouched.
  */
