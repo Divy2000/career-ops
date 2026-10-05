@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
 test.describe('deterministic writes through the action registry', () => {
@@ -103,6 +104,36 @@ test.describe('Command palette actions with params', () => {
     await expect.poll(() => sent.length).toBe(1);
     expect(sent[0]).toEqual({ params: { sinceDays: 7, ats: ['greenhouse'] } });
     await page.unrouteAll();
+  });
+});
+
+test.describe('Command palette shows what a sync action returned (R8-22)', () => {
+  test('Reserve report numbers shows the reserved range', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/runs');
+    let range: string | null = null;
+    try {
+      await page.keyboard.press('Control+k');
+      await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('Reserve report numbers');
+      await page.locator('[cmdk-item]', { hasText: 'Reserve report numbers' }).click();
+      const params = page.getByRole('dialog', { name: /Reserve report numbers/ });
+      await params.getByLabel('count').fill('3');
+      await params.getByRole('button', { name: 'Run' }).click();
+      const result = page.getByRole('dialog', { name: 'Reserve report numbers: output' });
+      await expect(result).toBeVisible();
+      range = (await result.getByLabel('Action output').textContent())?.trim() ?? null;
+      expect(range).toMatch(/^\d{3}-\d{3}$/);
+      const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
+      expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+      await result.getByRole('button', { name: 'Close' }).click();
+      await expect(result).toHaveCount(0);
+    } finally {
+      // Later specs count report numbers: the reservations go again.
+      if (range) {
+        const res = await page.request.post('/api/actions/pipeline.releaseReportNums', { data: { params: { range } }, headers: { 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
+        expect(res.status()).toBe(200);
+      }
+    }
   });
 });
 
