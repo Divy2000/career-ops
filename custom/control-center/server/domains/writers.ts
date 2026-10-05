@@ -20,6 +20,7 @@ const env = (dataRoot: string) => ({ CAREER_OPS_ROOT: dataRoot, NO_COLOR: '1' })
  * request adds nothing twice: an offer whose URL the pipeline already lists (pending or processed), or that came earlier
  * in the same request, is skipped, with the URL keys and pipeline parsing the scanners dedupe with (scan.mjs
  * collectSeenUrls and normalizeUrlForDedup).
+ * A URL the pipeline lists but scan-history lacks (an earlier add whose history write failed) gets its history row.
  * The in-process queue serializes this server's adds; appendToPipeline takes the pipeline lock only around its own
  * write, so a scanner appending the very same new URL in between is the one race left (the scanners dedupe too).
  */
@@ -27,19 +28,37 @@ export function appendOffers(codeRoot: string, dataRoot: string, offers: Pipelin
   return serialized(async () => {
     const code = `
 import fs from 'node:fs';
-import { appendToPipeline, appendToScanHistory, collectSeenUrls, normalizeUrlForDedup, PIPELINE_PATH } from ${JSON.stringify(coreModuleUrl(codeRoot, 'scan.mjs'))};
+import { appendToPipeline, appendToScanHistory, collectSeenUrls, normalizeUrlForDedup, PIPELINE_PATH, SCAN_HISTORY_PATH } from ${JSON.stringify(coreModuleUrl(codeRoot, 'scan.mjs'))};
 const req = JSON.parse(fs.readFileSync(0, 'utf8'));
 const pipelineText = fs.existsSync(PIPELINE_PATH) ? fs.readFileSync(PIPELINE_PATH, 'utf8') : '';
 const { seen } = collectSeenUrls({ pipelineText });
+const listed = new Set(seen);
+// Every URL history has a row for, whatever its status.
+const recorded = new Set();
+if (req.history && fs.existsSync(SCAN_HISTORY_PATH)) {
+  for (const line of fs.readFileSync(SCAN_HISTORY_PATH, 'utf8').split('\\n').slice(1)) {
+    const url = line.split('\\t')[0];
+    if (url) recorded.add(normalizeUrlForDedup(url));
+  }
+}
 const fresh = [];
+const unrecorded = [];
 for (const offer of req.offers) {
   const key = normalizeUrlForDedup(offer.url);
-  if (seen.has(key)) continue;
+  if (seen.has(key)) {
+    if (req.history && listed.has(key) && !recorded.has(key)) unrecorded.push(offer);
+    recorded.add(key);
+    continue;
+  }
   seen.add(key);
+  recorded.add(key);
   fresh.push(offer);
 }
 await appendToPipeline(fresh);
-if (req.history && fresh.length) await appendToScanHistory(fresh, req.date, 'added');
+// The pipeline and history writes are two locked steps, so an add can land in the pipeline and fail before its history
+// row; the retry then skips the URL as listed. Such a URL gets its history row now, so it is still recorded once.
+const historyRows = [...fresh, ...unrecorded];
+if (req.history && historyRows.length) await appendToScanHistory(historyRows, req.date, 'added');
 process.stdout.write(JSON.stringify({ ok: true, added: fresh.length, skipped: req.offers.length - fresh.length }));
 `;
     const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers, history, date: localDate() }, timeoutMs: 30_000 });

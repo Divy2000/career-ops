@@ -81,6 +81,24 @@ describe('pipeline writes', () => {
     const history = readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${fresh}\t`) || l.startsWith(`${other}\t`));
     expect(history).toHaveLength(2);
   });
+  it('a retry after the history write failed records the missing history row once, and nothing for a URL history already has', async () => {
+    // The state a failed add leaves: the pipeline write landed, appendToScanHistory did not (lock timeout, full disk).
+    const halfway = 'https://boards.example.com/halfway/1';
+    const pipelinePath = path.join(t.cfg.dataRoot, 'data', 'pipeline.md');
+    fs.writeFileSync(pipelinePath, readData('data/pipeline.md').replace('## Pending\n\n', `## Pending\n\n- [ ] ${halfway} | Halfway Co | Backend Engineer\n`));
+    const rowsFor = (url: string) => readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${url}\t`));
+    expect(rowsFor(halfway)).toEqual([]);
+    const body = { offers: [{ url: halfway, company: 'Halfway Co', title: 'Backend Engineer' }, { url: 'https://jobs.example.com/acme/123', company: 'Acme Robotics', title: 'Senior Backend Engineer' }] };
+    const retry = await post('/api/pipeline/add', body);
+    expect(retry.statusCode, retry.body).toBe(200);
+    expect(retry.json()).toEqual({ added: 0, skipped: 2 });
+    expect(rowsFor(halfway)).toHaveLength(1);
+    expect(rowsFor(halfway)[0]!.split('\t').slice(3, 6)).toEqual(['Backend Engineer', 'Halfway Co', 'added']);
+    expect(rowsFor('https://jobs.example.com/acme/123')).toHaveLength(1);
+    expect((await post('/api/pipeline/add', body)).json()).toEqual({ added: 0, skipped: 2 });
+    expect(rowsFor(halfway)).toHaveLength(1);
+    expect(readData('data/pipeline.md').split(`${halfway} `).length - 1).toBe(1);
+  });
   it('Network scan results with no location, a very long location and more rows than one request takes are all added', async () => {
     const postings: ScanPostingInput[] = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: 'Remote', source: 'greenhouse' }));
     postings[0]!.location = null;
