@@ -23,13 +23,17 @@ export type PipelineRead = { kind: 'missing'; path: string } | { kind: 'ok'; pat
 
 const CHECKBOX_RE = /^\s*-\s*\[([ xX])\]\s*(.+)$/;
 const LABELED = /^([a-z][\w-]*):\s*(.*)$/i;
-// Labels the writers emit (scan.mjs PIPELINE_LABELED_SEGMENT_RE). They ride on any row shape, so they count from the
-// second cell; any other `word:` cell is a label only past the role, where it cannot be a company or a title.
-const KNOWN_LABEL = /^(?:posted|trust|note|rank):\s/i;
 const EM_DASH = String.fromCharCode(0x2014);
 const EN_DASH = String.fromCharCode(0x2013);
+const RANK_DASH = `(?:[-:]|${EN_DASH}|${EM_DASH})`;
 // `rank: 3.2/5 <dash> reason`; the dash written by rank-pipeline is U+2014, hand edits use - or :.
-const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*(?:[-:]|${EN_DASH}|${EM_DASH})?\\s*(.*)$`);
+const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*${RANK_DASH}?\\s*(.*)$`);
+// Labeled segments ride on any row shape, so on a bare URL row they sit where company and title go. There a cell is a
+// label only in the exact form a writer emits it: scan.mjs formatPipelineOffer (`posted: YYYY-MM-DD`,
+// `trust: <score>[ flag,flag]`, `note: <text>`) and rank-pipeline.mjs formatRankSegment (`rank: <n>/5 <dash> <reason>`).
+// So a company or title like `Rank: Senior Engineer` or `posted: soon` stays text. Past the title any `word:` cell is
+// a label, as before.
+const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
 
 export function seniorityOf(title: string): string | null {
   const t = title.toLowerCase();
@@ -85,7 +89,7 @@ export function parsePipeline(md: string): PipelineRow[] {
     const positional: string[] = [];
     const labels = new Map<string, string>();
     cells.forEach((cell, idx) => {
-      const lm = idx >= 3 || (idx >= 1 && KNOWN_LABEL.test(cell)) ? cell.match(LABELED) : null;
+      const lm = idx >= 3 || (idx >= 1 && WRITTEN_SEGMENT.test(cell)) ? cell.match(LABELED) : null;
       if (lm) labels.set(lm[1]!.toLowerCase(), lm[2]!.trim());
       else positional.push(cell);
     });

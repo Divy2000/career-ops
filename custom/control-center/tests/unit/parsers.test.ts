@@ -159,6 +159,20 @@ describe('pipeline', () => {
     expect(row).toMatchObject({ company: 'Remote: EMEA Inc', role: 'Engineer: Backend' });
   });
 
+  it('reads company or title text that starts with a label word as text unless it is exactly the segment a writer emits', () => {
+    const parse = (cells: string) => parsePipeline(`## Pending\n- [ ] https://a.example/1 | ${cells}\n`)[0]!;
+    expect(parse('Rank: Senior Engineer | Acme')).toMatchObject({ company: 'Rank: Senior Engineer', role: 'Acme', rank: null });
+    expect(parse('Acme | rank: 4 engineers wanted')).toMatchObject({ company: 'Acme', role: 'rank: 4 engineers wanted', rank: null });
+    expect(parse('Posted: Daily Co | Backend Engineer')).toMatchObject({ company: 'Posted: Daily Co', role: 'Backend Engineer', postedAt: null });
+    expect(parse('Acme | posted: soon')).toMatchObject({ company: 'Acme', role: 'posted: soon', postedAt: null });
+    expect(parse('Trust: Banking Inc | Analyst')).toMatchObject({ company: 'Trust: Banking Inc', role: 'Analyst' });
+    expect(parse('trust: high | Analyst')).toMatchObject({ company: 'trust: high', role: 'Analyst' });
+    expect(parse('Note: Labs | Engineer')).toMatchObject({ company: 'Note: Labs', role: 'Engineer', note: null });
+    // What scan.mjs and rank-pipeline.mjs write on a bare URL row stays metadata.
+    expect(parse(`posted: 2026-06-18 | trust: 60 missing_apply_url,suspicious_domain | rank: 3.2/5 ${String.fromCharCode(0x2014)} solid match`)).toMatchObject({ company: '', role: '', postedAt: '2026-06-18', rank: 3.2, rankReason: 'solid match' });
+    expect(parse('trust: 80 | note: curated shortlist')).toMatchObject({ company: '', role: '', note: 'curated shortlist' });
+  });
+
   it('joins first-seen and source from scan history and distinguishes a missing file', () => {
     const p = readPipeline(root);
     expect(p.kind).toBe('ok');
