@@ -15,11 +15,13 @@ export function maybeFakeDailyProbe(cfg: ServerConfig, exec: Exec): Exec {
 }
 
 /**
- * The job's own command line: bash running run-daily.sh as its script (launchd, the lock re-exec and the app all start
- * it so). Anchored, because pgrep -f matches the whole argument list and a Claude prompt that merely names the script
- * must not read as the job running. Probing the lock with lockf instead could make a scheduled run skip.
+ * The job's own command line: bash running run-daily.sh as its script, by any path (launchd and the app pass an
+ * absolute one; a manual run types `bash custom/immigration/run-daily.sh` or `bash run-daily.sh`, which the lock
+ * re-exec keeps). Anchored, because pgrep -f matches the whole argument list and a Claude prompt or a `bash -c` that
+ * merely names the script must not read as the job running. Probing the lock with lockf instead could make a
+ * scheduled run skip.
  */
-export const DAILY_JOB_PATTERN = '^([^ ]*/)?bash [^-].*custom/immigration/run-daily\\.sh( |$)';
+export const DAILY_JOB_PATTERN = '^([^ ]*/)?bash ([^-].*/)?run-daily\\.sh( |$)';
 
 /** Polls `pgrep -f DAILY_JOB_PATTERN`; never blocks anything (core locks do). */
 export class DailyJobWatch {

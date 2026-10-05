@@ -50,8 +50,8 @@ describe('the daily job probe on real processes', () => {
   afterEach(() => {
     for (const c of children.splice(0)) c.kill('SIGKILL');
   });
-  const started = async (bin: string, args: string[]): Promise<number> => {
-    const c = spawn(bin, args, { stdio: 'ignore' });
+  const started = async (bin: string, args: string[], opts: { cwd?: string; argv0?: string } = {}): Promise<number> => {
+    const c = spawn(bin, args, { stdio: 'ignore', ...opts });
     children.push(c);
     await new Promise((r) => setTimeout(r, 200));
     return c.pid!;
@@ -76,6 +76,33 @@ describe('the daily job probe on real processes', () => {
     const pid = await started('/bin/bash', [script]);
     const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
     expect(await watch.runningNow()).toBe(true);
+  });
+
+  it('counts a manual run typed with a relative path, from the checkout or from custom/immigration', async () => {
+    const root = tempDir('cc-daily-probe-');
+    const dir = path.join(root, 'custom', 'immigration');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'run-daily.sh'), 'sleep 20\n');
+    // argv0 'bash' is the command line a shell gives `bash custom/immigration/run-daily.sh`.
+    const fromCheckout = await started('/bin/bash', ['custom/immigration/run-daily.sh'], { cwd: root, argv0: 'bash' });
+    expect(await new DailyJobWatch(ownPgrep([fromCheckout]), new EventBus()).runningNow()).toBe(true);
+    const fromFolder = await started('/bin/bash', ['run-daily.sh'], { cwd: dir, argv0: 'bash' });
+    expect(await new DailyJobWatch(ownPgrep([fromFolder]), new EventBus()).runningNow()).toBe(true);
+  });
+
+  it('counts run-daily.sh in a checkout whose path has a space', async () => {
+    const script = path.join(tempDir('cc daily probe-'), 'custom', 'immigration', 'run-daily.sh');
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, 'sleep 20\n');
+    const pid = await started('/bin/bash', [script]);
+    expect(await new DailyJobWatch(ownPgrep([pid]), new EventBus()).runningNow()).toBe(true);
+  });
+
+  it('does not count a script whose name only ends in run-daily.sh', async () => {
+    const dir = tempDir('cc-daily-probe-');
+    fs.writeFileSync(path.join(dir, 'not-run-daily.sh'), 'sleep 20\n');
+    const pid = await started('/bin/bash', ['not-run-daily.sh'], { cwd: dir, argv0: 'bash' });
+    expect(await new DailyJobWatch(ownPgrep([pid]), new EventBus()).runningNow()).toBe(false);
   });
 });
 
