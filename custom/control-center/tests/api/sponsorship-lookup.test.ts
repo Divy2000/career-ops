@@ -155,7 +155,7 @@ describe('GET /api/sponsorship/lookup', () => {
 
   it('requires the session cookie', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/api/sponsorship/lookup?company=Acme', headers: { host: t.authed.host } });
-    expect([401, 403]).toContain(res.statusCode);
+    expect(res.statusCode).toBe(401);
   });
 });
 

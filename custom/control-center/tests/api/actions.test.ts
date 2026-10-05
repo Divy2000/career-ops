@@ -87,7 +87,8 @@ describe('action registry', () => {
 
   it('system.doctor returns the JSON report synchronously', async () => {
     const res = await post('/api/actions/system.doctor', { params: {} });
-    expect([200, 500]).toContain(res.statusCode);
+    // doctor.mjs --json reports its findings in the JSON and always exits 0.
+    expect(res.statusCode, res.body).toBe(200);
     expect(res.json().result).toBeTypeOf('object');
   });
 
