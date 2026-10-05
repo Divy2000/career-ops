@@ -87,13 +87,14 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const daily = new DailyJobWatch(maybeFakeDailyProbe(cfg, dailyPidfileProbe(cfg.dataRoot, exec)), bus, deps.dailyPollMs);
   daily.start();
   closers.push(async () => daily.stop());
-  await app.register(systemRoutes, { cfg, exec });
+  const readToken = deps.readToken ?? keychainTokenReader(exec);
+  await app.register(systemRoutes, { cfg, readToken, exec });
   await app.register(readRoutes, { cfg, bus, exec, daily });
   await app.register(actionRoutes, { cfg, runner, bus, exec });
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });
-  const sessions = new SessionManager(cfg, runner, bus, { readToken: deps.readToken ?? keychainTokenReader(exec), exec, pollMs: deps.sessionPollMs, home: deps.homeDir });
+  const sessions = new SessionManager(cfg, runner, bus, { readToken, exec, pollMs: deps.sessionPollMs, home: deps.homeDir });
   closers.push(async () => sessions.close());
   let activated = false;
   const activate = () => {

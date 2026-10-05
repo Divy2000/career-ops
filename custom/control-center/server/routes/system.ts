@@ -26,10 +26,17 @@ export const execNoShell: Exec = (cmd, args, { cwd, timeoutMs, env }) =>
     });
   });
 
-export async function readSystemStatus(cfg: ServerConfig, exec: Exec = execNoShell): Promise<SystemStatus> {
-  const [claude, keychain, version] = await Promise.all([
+/**
+ * `readToken` is the reader the sessions use (the Keychain, or the test token), so the status and a session agree on
+ * whether a token is stored. The token value is discarded and never leaves this process.
+ */
+export async function readSystemStatus(cfg: ServerConfig, readToken: () => Promise<string>, exec: Exec = execNoShell): Promise<SystemStatus> {
+  const [claude, tokenStored, version] = await Promise.all([
     exec(cfg.claudeBin, ['--version'], { timeoutMs: 8000 }),
-    exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { timeoutMs: 5000 }),
+    readToken().then(
+      (token) => token.length > 0,
+      () => false,
+    ),
     readCareerOpsVersion(cfg),
   ]);
   const approvedList = approvedClaudeVersions(cfg.nodeEnv);
@@ -45,8 +52,7 @@ export async function readSystemStatus(cfg: ServerConfig, exec: Exec = execNoShe
       problem: claude.code !== 0 || approved ? null : parsed ? unapprovedWarning(parsed, approvedList) : `could not read the Claude Code version from ${JSON.stringify(claude.stdout.trim().slice(0, 80))}; sessions are refused until it reports an approved version.`,
     },
     roots: { code: cfg.codeRoot, data: cfg.dataRoot },
-    // Exit code only: the token value is discarded and never leaves this process.
-    keychainTokenPresent: keychain.code === 0,
+    keychainTokenPresent: tokenStored,
     anthropicApiKeySet: Boolean(process.env.ANTHROPIC_API_KEY),
     careerOps: { version },
   };
@@ -62,6 +68,6 @@ async function readCareerOpsVersion(cfg: ServerConfig): Promise<string | null> {
   }
 }
 
-export async function systemRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; exec?: Exec }): Promise<void> {
-  app.get('/api/system/status', async () => readSystemStatus(opts.cfg, opts.exec));
+export async function systemRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; readToken: () => Promise<string>; exec?: Exec }): Promise<void> {
+  app.get('/api/system/status', async () => readSystemStatus(opts.cfg, opts.readToken, opts.exec));
 }
