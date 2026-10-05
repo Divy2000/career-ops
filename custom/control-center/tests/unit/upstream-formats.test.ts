@@ -7,7 +7,7 @@ import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { readShortlist } from '../../server/domains/shortlist.js';
 import { parseReport } from '../../server/domains/reports.js';
-import { readInterviews } from '../../server/domains/contacts.js';
+import { parseContacts, readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
 import { parsePipeline, readScanHistory } from '../../server/domains/pipeline.js';
 import { activePin, parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
@@ -303,5 +303,22 @@ process.stdout.write(JSON.stringify([...m.parseNextOverrides(${JSON.stringify(te
     const cadence = JSON.parse(r.stdout) as unknown[];
     expect(cadence).toContainEqual({ appNum: 1, date: '2026-10-20', setOn: '2026-10-05' });
     expect([...parseNextOverrides(text).values()]).toEqual(cadence);
+  });
+});
+
+describe('data/contacts.tsv (contact-extract.mjs appendContact, read back like contacts.mjs parseContacts)', () => {
+  it('shows a cell the writer formula-escaped as it was typed, folds a stray tab back into the notes and skips a short row (SW-server-04)', async () => {
+    const file = path.join(tempDir('cc-contacts-contract-'), 'contacts.tsv');
+    const { appendContact } = (await import(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'contact-extract.mjs')).href)) as { appendContact: (c: Record<string, string>, p: string) => Promise<number> };
+    await appendContact({ name: 'Pat Example', company: 'Acme Robotics', type: 'recruiter', title: '-Lead recruiter', phone: '+49 123', email: 'pat@acme.example', linkedin: '', tracker: '1', notes: '=friendly' }, file);
+    const written = fs.readFileSync(file, 'utf8');
+    expect(written).toContain("\t'+49 123\t");
+    fs.appendFileSync(file, 'Sam Other\tGlobex Payments\tpeer\tEngineer\t-\t-\t-\t-\tmet at meetup\tasked about visas\nShort\tRow\n');
+    const { rows, skipped } = parseContacts(fs.readFileSync(file, 'utf8'));
+    expect(rows.map((r) => [r.name, r.title, r.phone, r.notes])).toEqual([
+      ['Pat Example', '-Lead recruiter', '+49 123', '=friendly'],
+      ['Sam Other', 'Engineer', '', 'met at meetup asked about visas'],
+    ]);
+    expect(skipped).toBe(1);
   });
 });

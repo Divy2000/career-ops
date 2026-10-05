@@ -26,17 +26,21 @@ export function parseContacts(text: string): { rows: ContactRow[]; skipped: numb
   const rows: ContactRow[] = [];
   let skipped = 0;
   text.split(/\r?\n/).forEach((line, i) => {
-    if (!line.trim() || line.startsWith('#')) return;
-    const c = line.split('\t').map((x) => x.trim());
-    if (!c[0] || !c[1]) {
+    if (!line.trim() || line.trim().startsWith('#')) return;
+    // As contacts.mjs reads it: every cell un-escaped, fewer than 4 cells skipped, a stray tab in the notes folded back.
+    const c = line.split('\t').map((x) => unescapeFormulaCell(x.trim()));
+    if (c.length < 4 || !c[0] || !c[1]) {
       skipped += 1;
       return;
     }
     const tracker = c[7] && /^\d+$/.test(c[7]) ? Number(c[7]) : null;
-    rows.push({ line: i + 1, name: c[0], company: c[1], type: c[2] ?? '', title: c[3] ?? '', phone: dash(c[4]), email: dash(c[5]), linkedin: dash(c[6]), tracker, notes: dash(c[8]) });
+    rows.push({ line: i + 1, name: c[0], company: c[1], type: c[2] ?? '', title: c[3] ?? '', phone: dash(c[4]), email: dash(c[5]), linkedin: dash(c[6]), tracker, notes: dash(c.length > 8 ? c.slice(8).join(' ') : undefined) });
   });
   return { rows, skipped };
 }
+
+/** contacts.mjs unescapeFormulaCell: the writers prefix a cell starting with = + - @ with ' so spreadsheets keep it text. */
+const unescapeFormulaCell = (cell: string) => cell.replace(/^'(?='*[=+\-@])/, '');
 
 const dash = (v: string | undefined) => (v === undefined || v === '-' ? '' : v);
 
