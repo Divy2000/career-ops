@@ -109,7 +109,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     return collectWhatsNew({ history: readScanHistory(cfg.dataRoot), applications, norm: normalizeTextKey, now: now(), days, limit });
   });
 
-  app.get('/api/immigration/overview', async () => readImmigrationOverview(cfg.codeRoot, cfg.dataRoot, undefined, { localToday: localDate(new Date(now())), running: () => opts.daily.runningNow() }));
+  app.get('/api/immigration/overview', async () => readImmigrationOverview(cfg.codeRoot, cfg.dataRoot, localDate(new Date(now())), () => opts.daily.runningNow()));
 
   app.get<{ Params: { slug: string } }>('/api/immigration/companies/:slug', async (req, reply) => {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(req.params.slug)) return reply.code(400).send({ error: 'bad slug' });

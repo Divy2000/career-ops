@@ -180,8 +180,11 @@ function readJson(p: string): unknown {
   }
 }
 
-/** job.running answers whether run-daily.sh runs now (null: unknown); it is asked only when today's latest run has no done line. */
-export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = new Date().toISOString().slice(0, 10), job: { localToday: string; running: () => Promise<boolean | null> } = { localToday: localDate(), running: async () => null }): Promise<ImmigrationOverview> {
+/**
+ * `today` is the local date, as the scripts date their logs and digest sections; it dates digest staleness and the
+ * latest log. dailyRunning answers whether run-daily.sh runs now (null: unknown), asked only for a recent run with no done line.
+ */
+export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = localDate(), dailyRunning: () => Promise<boolean | null> = async () => null): Promise<ImmigrationOverview> {
   const lib = await importCore<ImmigrationLib>(codeRoot, 'custom/immigration/lib.mjs');
   const imm = path.join(dataRoot, 'data', 'immigration');
   const digestRead = readText(path.join(imm, 'policy-digest.md'));
@@ -221,7 +224,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,
     pendingError: pending.error,
-    dailyLog: latestLog && (await withJobState(latestLog, job.localToday, job.running)),
+    dailyLog: latestLog && (await withJobState(latestLog, today, dailyRunning)),
     logDates,
   };
 }

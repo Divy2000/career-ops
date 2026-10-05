@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, listLogDates, daysBetween, withJobState, localDate } from '../../server/domains/immigration.js';
@@ -111,6 +111,17 @@ describe('immigration overview', () => {
     const text = '=== 2026-10-05 08:00:00 start\n!!! gh pr create failed\n=== 2026-10-05 10:00:00 start\n--- 10:00:01 rank top 100\n!!! step failed: rank top 100\n=== 2026-10-05 10:05:00 done (failed=1)\n';
     expect(parseDailyLog(text, '2026-10-05')).toMatchObject({ status: 'failed', failedSteps: ['rank top 100'], problems: [] });
     expect(parseDailyLog('=== 2026-10-05 08:00:00 start\n!!! gh pr create failed\n=== 2026-10-05 10:00:00 start\n=== 2026-10-05 10:05:00 done\n', '2026-10-05')).toMatchObject({ status: 'ok', problems: [] });
+  });
+
+  it('counts digest staleness from the local date by default, so an evening read (UTC already tomorrow) is not a day stale', async () => {
+    // vitest runs in America/Los_Angeles: 20:00 local on 2026-10-04 is 03:00 UTC on 2026-10-05.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 9, 4, 20, 0));
+      expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root)).digest).toMatchObject({ latestDate: '2026-10-02', staleDays: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('parses company files and the whole overview through the core lib', async () => {

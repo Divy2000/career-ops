@@ -68,6 +68,21 @@ describe('a daily run with no done line', () => {
   });
 });
 
+describe('the overview route', () => {
+  it('counts digest staleness from the local date, as the daily job dates its logs', async () => {
+    t = await makeTestApp({ fakeDaily: 'idle' }, { exec: hostSays(false), dailyPollMs: 60_000 });
+    // vitest runs in America/Los_Angeles: 20:00 local on 2026-10-04 is 03:00 UTC on 2026-10-05.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 9, 4, 20, 0));
+      const overview = (await t.app.inject({ method: 'GET', url: '/api/immigration/overview', headers: t.authed })).json();
+      expect(overview.digest).toMatchObject({ latestDate: '2026-10-02', staleDays: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('maybeFakeDailyProbe', () => {
   const probe = (exec: Exec) => exec('pgrep', ['-f', 'custom/immigration/run-daily.sh'], { timeoutMs: 1000 });
   it('ignores fakeDaily on a config that is not NODE_ENV=test', async () => {
