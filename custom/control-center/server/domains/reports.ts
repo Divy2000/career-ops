@@ -84,8 +84,11 @@ export function parseScore(raw: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// The score header as the localized modes write it (modes/it, modes/tr, modes/ua); the rest keep **Score:**.
-const SCORE_KEY = 'Score|Punteggio|Puan|\u0411\u0430\u043b';
+// Header labels as the localized report templates write them (modes/<lang>/); URL, PDF, Via and Work Auth stay English.
+const SCORE_KEY = 'Score|Punteggio|Puan|Бал';
+const DATE_KEY = 'Date|Datum|Data|Dato|Tanggal|Tarih|Дата';
+const ARCHETYPE_KEY = 'Archetype|Archetyp|Arketype|Archetipo|Arquétipo|Arketipe|Arketip|Архетип';
+const LEGITIMACY_KEY = 'Legitimacy|Легітимність|Meşruiyet';
 
 /** A `**Key:**` header line; French and Korean reports write `**Key :**`. */
 function headerField(md: string, key: string): string | null {
@@ -166,13 +169,13 @@ export function parseReport(markdown: string, file: string, num: number): Report
     title,
     company: str(machine?.company) ?? companyPart?.trim() ?? '',
     role: str(machine?.role) ?? rolePart?.trim() ?? '',
-    date: headerField(markdown, 'Date'),
+    date: headerField(markdown, DATE_KEY),
     url: headerField(markdown, 'URL'),
     via: headerField(markdown, 'Via'),
     // The Machine Summary carries the normalized archetype; the header may read "Not a target - closest default: X".
-    archetype: str(machine?.archetype) ?? headerField(markdown, 'Archetype'),
+    archetype: str(machine?.archetype) ?? headerField(markdown, ARCHETYPE_KEY),
     score: parseScore(scoreRaw) ?? (typeof machine?.score === 'number' ? (machine.score as number) : null),
-    legitimacy: headerField(markdown, 'Legitimacy') ?? str(machine?.legitimacy_tier),
+    legitimacy: headerField(markdown, LEGITIMACY_KEY) ?? str(machine?.legitimacy_tier),
     workAuth: headerField(markdown, 'Work Auth'),
     pdf: headerField(markdown, 'PDF'),
     tldr: blockField(blockA, 'TL;DR'),

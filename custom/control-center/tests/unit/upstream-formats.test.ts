@@ -110,6 +110,28 @@ describe('localized report templates (modes/<lang>/)', () => {
       expect(r.role).toBe('Acme');
       if (/^\*\*Date\s*:\*\*/m.test(t.header)) expect(r.date).toBe('2026-10-01');
     });
+
+    it(`every header field a report from ${t.file} carries reaches the parsed report (date and archetype included)`, () => {
+      // Each placeholder gets its own value, so a header line the parser drops cannot hide behind another's.
+      let n = 0;
+      const filled = t.header
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/\{X(?:\.X)?\/5\}|\{X(?:\.X)?\}\/5/g, '4.2/5')
+        .replace(/\{YYYY-MM-DD\}/g, '2026-10-01')
+        .replace(/\{[^}]*\}/g, () => `value-${++n}`);
+      const r = parseReport(`${filled}\n\n---\n\n## A) Role Summary\n`, '010-acme.md', 10);
+      const parsed = [r.date, r.url, r.via, r.archetype, r.legitimacy, r.workAuth, r.pdf];
+      const lines = filled.split('\n').filter((l) => /^\*\*[^*]+\*\*/.test(l));
+      expect(lines.length).toBeGreaterThan(3);
+      for (const line of lines) {
+        const m = line.match(/^\*\*([^*]+?)\s*:\*\*\s*(.*)$/)!;
+        const value = m[2]!.trim();
+        if (value === '' || value.includes('4.2/5')) continue;
+        expect(parsed, `${t.file}: **${m[1]}:** ${value}`).toContain(value);
+      }
+      expect(r.date).toBe('2026-10-01');
+      expect(r.archetype).toMatch(/^value-\d+$/);
+    });
   }
 });
 
