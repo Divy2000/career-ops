@@ -3,6 +3,7 @@ import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
+import { localDate } from '../../shared/local-date.js';
 
 async function login(page: Page) {
   await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -200,10 +201,20 @@ test.describe('deterministic writes from the pages', () => {
     const sources = page.getByRole('group', { name: 'ATS sources' }).getByRole('checkbox');
     await expect(sources).toHaveCount(6);
     expect(await sources.evaluateAll((boxes) => boxes.map((b) => b.closest('label')!.textContent!.trim()))).toEqual(['greenhouse', 'lever', 'ashby', 'workday', 'icims', 'bamboohr']);
-    await page.getByRole('tab', { name: 'Fresh' }).click();
-    await expect(page).toHaveURL(/tab=fresh/);
-    await expect(page.getByRole('table', { name: 'Fresh matches' })).toBeVisible();
-    const axe = await (await axeBuilder(page)).analyze();
-    expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    // Fresh lists what the scanner added in the last 7 days by the server's clock, so the fixture's own dated rows age out
+    // (SW-tests-03): this one is first seen today.
+    const history = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'scan-history.tsv');
+    const original = fs.readFileSync(history, 'utf8');
+    fs.appendFileSync(history, `https://careers.example.com/fresh-e2e/1\t${localDate()}\tgreenhouse\tReliability Engineer\tFresh E2E Co\tadded\tRemote\tf-e2e\t\t0.7\t\tfresh e2e co\n`);
+    try {
+      await page.getByRole('tab', { name: 'Fresh' }).click();
+      await expect(page).toHaveURL(/tab=fresh/);
+      const table = page.getByRole('table', { name: 'Fresh matches' });
+      await expect(table.getByRole('row', { name: /Fresh E2E Co/ })).toContainText(`Reliability Engineer${localDate()}`);
+      const axe = await (await axeBuilder(page)).analyze();
+      expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    } finally {
+      fs.writeFileSync(history, original);
+    }
   });
 });
