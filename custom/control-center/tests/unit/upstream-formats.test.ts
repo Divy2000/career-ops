@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { readShortlist } from '../../server/domains/shortlist.js';
+import { parseReport } from '../../server/domains/reports.js';
 import { localDate } from '../../shared/local-date.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -40,5 +41,26 @@ describe('custom/pipeline/shortlist.mjs output', () => {
     expect(s.excluded).toEqual([
       { company: 'Initech Cloud', role: 'Backend Engineer II', url: 'https://jobs.example.com/initech/9', alert: 'paused', date: '2026-09-29', headline: 'Initech pauses visa sponsorship' },
     ]);
+  });
+});
+
+describe('oferta report format (modes/oferta.md, examples/sample-report.md)', () => {
+  it('the template still asks for a Block A table', () => {
+    const mode = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'modes', 'oferta.md'), 'utf8');
+    expect(mode).toMatch(/## Block A[^\n]*Role Summary\n\nTable with:/);
+  });
+
+  it('the sample report yields its TL;DR and Remote rows', () => {
+    const md = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'examples', 'sample-report.md'), 'utf8');
+    const r = parseReport(md, '001-acme-ai.md', 1);
+    expect(r.tldr).toBe('Senior AI eng to build and scale LLM infrastructure for enterprise customers');
+    expect(r.remote).toBe('Full remote (US timezone overlap)');
+  });
+
+  it('comp is the Machine Summary advertised_comp the batch prompt defines', () => {
+    const prompt = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'batch', 'batch-prompt.md'), 'utf8');
+    expect(prompt).toMatch(/^advertised_comp: /m);
+    const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## Machine Summary\n```yaml\nadvertised_comp: "80-90k EUR"\n```\n\n## A) Role Summary\n\n| Field | Value |\n|---|---|\n| **Remote** | Hybrid |\n';
+    expect(parseReport(md, '002-acme.md', 2).comp).toBe('80-90k EUR');
   });
 });

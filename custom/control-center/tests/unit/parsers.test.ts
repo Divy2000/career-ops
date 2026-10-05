@@ -33,7 +33,7 @@ describe('reports', () => {
     expect(readReport(root, 5)).toMatchObject({ kind: 'reserved', file: '005-RESERVED.md' });
   });
 
-  it('parses the header, Machine Summary and Block A details', () => {
+  it('parses the header, Machine Summary and the Block A table oferta writes', () => {
     const r = readReport(root, 1);
     expect(r.kind).toBe('ok');
     if (r.kind !== 'ok') return;
@@ -46,11 +46,16 @@ describe('reports', () => {
       finalDecision: 'Apply',
       discardReasons: [],
       remote: 'hybrid (Austin, TX, 3 days on site)',
-      comp: '$170k-$195k base plus equity',
+      comp: '$170k-$195k',
     });
     expect(r.report.tldr).toMatch(/^Senior backend role/);
     expect(r.report.via).toBeNull();
     expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'G']);
+  });
+
+  it('still reads a Block A written as bullets, and its Comp line when the Machine Summary has no advertised_comp', () => {
+    const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## A) Role Summary\n- Remote: full remote\n- Comp: $150k\n- TL;DR: Good fit.\n';
+    expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: 'full remote', comp: '$150k', tldr: 'Good fit.' });
   });
 
   it('reads discard reasons and the cover letter PDF path', () => {

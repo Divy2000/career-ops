@@ -33,7 +33,9 @@ advertised_comp: "$95k-$110k"
 ```
 
 ## A) Role Summary
-- Archetype detected: Backend Platform Engineer (closest default)
-- Remote: onsite (Dallas, TX)
-- Comp: $95k-$110k
-- TL;DR: Mid-level role through a staffing agency with no sponsorship; skip.
+
+| Field | Value |
+|-------|-------|
+| **Archetype** | Backend Platform Engineer (closest default) |
+| **Remote** | onsite (Dallas, TX) |
+| **TL;DR** | Mid-level role through a staffing agency with no sponsorship; skip. |

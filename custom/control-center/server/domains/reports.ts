@@ -131,7 +131,10 @@ function machineSummary(md: string, file: string): Record<string, unknown> | nul
   }
 }
 
-function bullet(sectionContent: string, label: string): string | null {
+/** A Block A field: a `| **Label** | value |` table row (what oferta writes) or a legacy `- Label: value` bullet. */
+function blockField(sectionContent: string, label: string): string | null {
+  const row = sectionContent.match(new RegExp(`^\\|\\s*\\**${label}\\**\\s*\\|\\s*(.*?)\\s*\\|\\s*$`, 'mi'));
+  if (row && row[1]) return row[1];
   const re = new RegExp(`^\\s*[-*]?\\s*\\**${label}\\**\\s*(?:\\([^)]*\\))?\\s*:\\s*(.+)$`, 'mi');
   const m = sectionContent.match(re);
   return m ? m[1]!.trim() : null;
@@ -166,9 +169,10 @@ export function parseReport(markdown: string, file: string, num: number): Report
     legitimacy: headerField(markdown, 'Legitimacy') ?? str(machine?.legitimacy_tier),
     workAuth: headerField(markdown, 'Work Auth'),
     pdf: headerField(markdown, 'PDF'),
-    tldr: bullet(blockA, 'TL;DR'),
-    remote: bullet(blockA, 'Remote'),
-    comp: bullet(blockA, 'Comp'),
+    tldr: blockField(blockA, 'TL;DR'),
+    remote: blockField(blockA, 'Remote'),
+    // Block A has no Comp row; the Machine Summary carries the JD's own figure.
+    comp: str(machine?.advertised_comp) ?? blockField(blockA, 'Comp'),
     finalDecision: str(machine?.final_decision),
     discardReasons: discard,
     machine,

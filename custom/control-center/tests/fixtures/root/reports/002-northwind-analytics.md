@@ -33,7 +33,9 @@ advertised_comp: null
 ```
 
 ## A) Role Summary
-- Archetype detected: ML Platform Engineer
-- Remote: full remote (US)
-- Comp: not advertised
-- TL;DR: ML infrastructure role; partial match, sponsorship unstated.
+
+| Field | Value |
+|-------|-------|
+| **Archetype** | ML Platform Engineer |
+| **Remote** | full remote (US) |
+| **TL;DR** | ML infrastructure role; partial match, sponsorship unstated. |
