@@ -703,6 +703,13 @@
       ]
     },
     {
+      "module": "tracker-utils.mjs",
+      "names": [
+        "loadCanonicalStates",
+        "resolveCanonicalState"
+      ]
+    },
+    {
       "module": "contacts.mjs",
       "names": [
         "parseContacts",
