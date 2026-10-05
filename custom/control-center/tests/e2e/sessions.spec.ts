@@ -31,6 +31,24 @@ test.describe('AI sessions through the fake Claude', () => {
     await expect(page.getByRole('cell', { name: 'done' }).first()).toBeVisible();
   });
 
+  test('Pipeline > Batch asks first, then starts one oferta session per URL through the fan-out', async ({ page }) => {
+    const bodies: unknown[] = [];
+    // Answered here so no evaluation runs: the server side of the fan-out is covered by the sessions API tests.
+    await page.route('**/api/sessions/fanout', async (route) => {
+      bodies.push(route.request().postDataJSON());
+      await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ sessions: [], reserved: [41, 42] }) });
+    });
+    await page.goto('/pipeline?tab=batch');
+    await expect(page.getByText(/batch-runner/)).toHaveCount(0);
+    await page.getByLabel('Batch URLs').fill('https://jobs.example.com/batch/1\nhttps://jobs.example.com/batch/2');
+    await page.getByRole('button', { name: /Batch evaluate/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Start 2 evaluation sessions?' })).toBeVisible();
+    expect(bodies).toEqual([]);
+    await page.getByRole('button', { name: 'Start them' }).click();
+    await expect(page).toHaveURL(/\/sessions$/);
+    expect(bodies).toEqual([{ mode: 'oferta', urls: ['https://jobs.example.com/batch/1', 'https://jobs.example.com/batch/2'] }]);
+  });
+
   test('Interview practice waits for the reply and resumes the same Claude session', async ({ page }) => {
     await page.goto('/tracker/3');
     await page.getByRole('tab', { name: 'Interview' }).click();

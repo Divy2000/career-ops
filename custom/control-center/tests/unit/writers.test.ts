@@ -84,7 +84,8 @@ describe('follow-ups edits', () => {
 /** Every action id the spec's section 3.3 table lists. */
 export const SPEC_ACTION_IDS = [
   'tracker.setStatus', 'tracker.delete', 'tracker.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.reconcile', 'tracker.syncCheck', 'tracker.hiredShare', 'tracker.hiredMark',
-  'pipeline.prioritize', 'pipeline.rank', 'pipeline.shortlist', 'pipeline.reserveReportNums', 'pipeline.releaseReportNums', 'pipeline.batchRun',
+  // Batch evaluation (3.3 pipeline.batchRun) is the sessions fan-out now: batch-runner.sh's workers run outside any guard.
+  'pipeline.prioritize', 'pipeline.rank', 'pipeline.shortlist', 'pipeline.reserveReportNums', 'pipeline.releaseReportNums',
   'scan.portals', 'scan.network', 'scan.full', 'scan.hn', 'scan.interamt', 'scan.funded', 'scan.reposts',
   'portals.validate', 'portals.verify', 'portals.audit', 'portals.fixSlugs',
   'immigration.watch', 'immigration.freshness', 'immigration.h1b',
@@ -114,6 +115,13 @@ describe('action registry covers section 3.3', () => {
       expect(['free', 'network', 'tokens']).toContain(a.cost);
     }
   });
+  it('no action runs batch/batch-runner.sh: Pipeline > Batch starts confined sessions through the fan-out instead', () => {
+    expect(findAction('pipeline.batchRun')).toBeUndefined();
+    for (const a of ACTIONS) {
+      const cmd = a.build(a.params.parse(sampleParams(a.id)), ctx);
+      expect([cmd.bin, ...cmd.args].join(' '), a.id).not.toMatch(/batch-runner/);
+    }
+  });
   it('destructive actions carry a confirm text', () => {
     for (const id of ['system.updateApply', 'system.rollback', 'tracker.delete', 'portals.fixSlugs']) expect(findAction(id)!.confirm, id).toBeTruthy();
   });
@@ -130,10 +138,6 @@ describe('action registry covers section 3.3', () => {
     expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
     expect(findAction('immigration.h1b')!.build({ company: 'Acme', mode: 'json' }, ctx).args.slice(1)).toEqual(['Acme', '--json']);
     expect(findAction('followups.replyPaste')!.build({ subject: 's', from: 'f', body: 'b' }, ctx).args).toContain('--file');
-    const batch = findAction('pipeline.batchRun')!.build({ urls: ['https://x.example/1'], parallel: 2 }, ctx);
-    expect(batch.bin).toBe('/bin/bash');
-    expect(batch.args[0]).toMatch(/batch-runner\.sh$/);
-    expect(batch.args).toContain('--parallel');
     const render = findAction('docs.renderPdf')!.build({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'a4' }, ctx);
     expect(render.args.slice(1)).toEqual([path.join(ctx.dataRoot, 'output/a.html'), path.join(ctx.dataRoot, 'output/a.pdf'), '--format=a4', '--report=1']);
     const bundle = 'output/001-acme-robotics-backend/cv/tailored/v002/cv';
@@ -165,7 +169,6 @@ function sampleParams(id: string): Record<string, unknown> {
     'tracker.hiredMark': { report: 1, mark: 'never' },
     'pipeline.reserveReportNums': { count: 2 },
     'pipeline.releaseReportNums': { range: '1-2' },
-    'pipeline.batchRun': { urls: ['https://x.example/1'], parallel: 1 },
     'scan.network': { roles: ['a'], exclude: [], locationAllow: [], block: [], sinceDays: 7, ats: ['greenhouse'], limit: 50 },
     'scan.seeds': { list: 'yc' },
     'immigration.freshness': { company: 'Acme' },
