@@ -24,11 +24,16 @@ async function readFirstSeen() {
     throw err;
   }
   const lines = text.split('\n');
-  // scan.mjs also accepts a headerless history; skip only a real header row.
-  if (lines[0]?.startsWith('url\t')) lines.shift();
+  // scan.mjs also accepts a headerless history (same column order); skip only a real header row.
+  const header = lines[0]?.startsWith('url\t') ? lines.shift().split('\t') : null;
+  const statusAt = header ? header.indexOf('status') : 5;
   for (const line of lines) {
-    const [url, seen] = line.split('\t');
-    if (url && seen && !firstSeen.has(url)) firstSeen.set(url, seen);
+    const cells = line.split('\t');
+    const [url, seen] = cells;
+    // Only an `added` row is the day the job entered the pipeline: skipped_location, age and cooldown rows never pin a
+    // URL (scan.mjs), so a later added row for it is the date that counts. The latest added row wins.
+    const status = statusAt >= 0 ? cells[statusAt] : undefined;
+    if (url && seen && (status === undefined || status.trim() === 'added')) firstSeen.set(url, seen);
   }
   return firstSeen;
 }
