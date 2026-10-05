@@ -10,7 +10,7 @@ import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
 import { sweepStaleInputs } from './actions/tmp-inputs.js';
-import { OutsideRootsError } from './lib/atomic-write.js';
+import { OutsideRootsError, unresolvablePath } from './lib/atomic-write.js';
 import { writeRoutes } from './routes/writes.js';
 import { DailyJobWatch, maybeFakeDailyProbe } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
@@ -59,8 +59,11 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const exec = deps.exec ?? execNoShell;
   const app = Fastify({ logger: cfg.nodeEnv === 'test' ? false : { level: 'info' }, trustProxy: false });
   // A write refused for leaving the data root carries its reason in `error`, where the client looks for it.
+  // So does a read or write of a user file whose path cannot be resolved (a symlink loop): never a 500.
   app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof OutsideRootsError) return reply.code(err.statusCode).send({ error: err.message });
+    const errPath = (err as NodeJS.ErrnoException).path;
+    const refused = err instanceof OutsideRootsError ? err : unresolvablePath(errPath ? path.relative(cfg.dataRoot, errPath) : 'the file', err);
+    if (refused) return reply.code(refused.statusCode).send({ error: refused.message });
     return reply.send(err);
   });
   const closers: Array<() => Promise<void>> = [];

@@ -13,8 +13,9 @@ afterEach(async () => {
 });
 
 const get = (url: string) => t.app.inject({ method: 'GET', url, headers: t.authed });
-const send = (method: 'PUT' | 'POST', url: string, payload: Record<string, unknown>, headers: Record<string, string> = {}) =>
-  t.app.inject({ method, url, headers: { ...t.authedWrite, ...headers }, payload });
+// A header whose value could not be read (no ETag while the file cannot be read) is left out.
+const send = (method: 'PUT' | 'POST', url: string, payload: Record<string, unknown>, headers: Record<string, string | undefined> = {}) =>
+  t.app.inject({ method, url, headers: { ...t.authedWrite, ...Object.fromEntries(Object.entries(headers).filter(([, v]) => typeof v === 'string')) as Record<string, string> }, payload });
 
 /** Every writer that saves a user file through writeFileAtomic, with the file it writes and a request that makes it write. */
 const WRITERS: Array<{ name: string; rel: string; seed: string; write: () => Promise<{ statusCode: number; body: string }> }> = [
@@ -44,10 +45,8 @@ const WRITERS: Array<{ name: string; rel: string; seed: string; write: () => Pro
     rel: 'config/plugins.yml',
     seed: 'plugins: {}\n',
     write: async () => {
-      const list = (await get('/api/plugins')).json();
-      const id = list.plugins[0].id as string;
-      const etag = list.config.etag as string | null;
-      return send('PUT', `/api/config/plugins/${id}`, { enabled: true }, etag ? { 'if-match': etag } : {});
+      const etag = ((await get('/api/plugins')).json().config?.etag) as string | undefined;
+      return send('PUT', '/api/config/plugins/gmail', { enabled: true }, { 'if-match': etag });
     },
   },
   {
@@ -102,6 +101,19 @@ describe('a user file that is a symlink', () => {
       expect(res.statusCode, res.body).toBeLessThan(300);
       expect(fs.readFileSync(inside, 'utf8')).not.toBe(w.seed);
       expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    });
+  }
+
+  for (const w of WRITERS) {
+    it(`${w.name}: answers a link loop with a 403 that says why, never a 500, and leaves the link alone`, async () => {
+      const link = path.join(t.cfg.dataRoot, w.rel);
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(path.basename(w.rel), link);
+      const looped = await w.write();
+      expect(looped.statusCode, looped.body).toBe(403);
+      expect((JSON.parse(looped.body) as { error: string }).error).toMatch(new RegExp(`cannot tell where ${w.rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} leads \\(ELOOP.*nothing was read or written`));
+      expect(fs.readlinkSync(link)).toBe(path.basename(w.rel));
     });
   }
 });
