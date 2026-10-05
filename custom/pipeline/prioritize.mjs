@@ -38,7 +38,16 @@ async function readFirstSeen() {
   return firstSeen;
 }
 
+const USAGE = `Usage: node custom/pipeline/prioritize.mjs [--today YYYY-MM-DD]
+Reorders the pending rows of data/pipeline.md: jobs first seen today, fresh postings and backend/AI titles first.
+  --today YYYY-MM-DD   the day that counts as today (default: the local date)
+`;
+
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    process.stdout.write(USAGE);
+    return;
+  }
   const ti = process.argv.indexOf('--today');
   // The local day, as scan.mjs stamps first-seen dates; the UTC day is already tomorrow on a US evening.
   const today = ti === -1 ? localToday() : process.argv[ti + 1];

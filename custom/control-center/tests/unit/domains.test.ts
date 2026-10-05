@@ -164,7 +164,8 @@ describe('immigration overview', () => {
     ]);
     expect(o.officialFeed).toHaveLength(2);
     expect(o.dailyLog?.status).toBe('failed');
-    expect((o.tiers as { companies: Record<string, unknown> }).companies['acme robotics']).toBeDefined();
+    // custom/pipeline/shortlist.mjs's tier cache: the pipeline's company name to its lookup.
+    expect((o.tiers as Record<string, { tier: string }>)['Acme Robotics']).toMatchObject({ tier: 'strong', matched: 'Acme Robotics, Inc.' });
   });
 
   it('counts the watcher queue from pending.json and reports null when there is none', async () => {

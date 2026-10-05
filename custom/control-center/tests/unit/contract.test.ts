@@ -21,7 +21,21 @@ function runHelp(cli: CliContract) {
     encoding: 'utf8',
     timeout: 30_000,
   });
-  return { status: r.status, out: `${r.stdout}\n${r.stderr}` };
+  return { status: r.status, signal: r.signal, out: `${r.stdout}\n${r.stderr}` };
+}
+
+/** Every file under `root` with its bytes, to tell whether a run wrote anything. */
+function snapshot(root: string): Map<string, string> {
+  const files = new Map<string, string>();
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else files.set(path.relative(root, p), fs.readFileSync(p, 'base64'));
+    }
+  };
+  walk(root);
+  return files;
 }
 
 describe('core contract', () => {
@@ -33,9 +47,15 @@ describe('core contract', () => {
     it(`${cli.script} answers ${cli.helpArgs.join(' ')} with the contracted flags`, () => {
       expect(fs.existsSync(cliScriptPath(DEFAULT_CODE_ROOT, cli.id as never)), `${cli.script} exists`).toBe(true);
       if (cli.probe === false) return;
-      const { status, out } = runHelp(cli);
+      const before = snapshot(fixtureRoot);
+      const { status, signal, out } = runHelp(cli);
+      // A timeout or a crash by signal has no exit status; the stream separator alone is no output.
+      expect({ status, signal }, out.slice(0, 500)).toMatchObject({ signal: null });
+      expect(status, out.slice(0, 500)).not.toBeNull();
       if (cli.expectExit !== null) expect(status, out.slice(0, 500)).toBe(cli.expectExit);
-      expect(out.length, 'help output is not empty').toBeGreaterThan(0);
+      expect(out.trim().length, 'help output is not empty').toBeGreaterThan(0);
+      // A help probe is a read: a script that ignores the flag and runs for real (writes, lookups, live feeds) fails here.
+      expect(snapshot(fixtureRoot), `${cli.script} ${cli.helpArgs.join(' ')} wrote to the data root`).toEqual(before);
       expect(out, `${cli.script} help should not be a crash`).not.toMatch(/ERR_MODULE_NOT_FOUND|SyntaxError|TypeError/);
       for (const flag of cli.flags) expect(out, `${cli.script} mentions ${flag}`).toContain(flag);
     });

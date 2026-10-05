@@ -73,3 +73,15 @@ test('a job the scanner skipped or cooled down first and added today counts as f
   const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
   assert.equal(pending.at(-1), backlog);
 });
+
+test('--help prints the usage and touches nothing (SW-libs-05)', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n';
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--help'], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Usage: node custom\/pipeline\/prioritize\.mjs \[--today YYYY-MM-DD\]/);
+  assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+});

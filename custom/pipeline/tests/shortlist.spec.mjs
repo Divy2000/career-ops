@@ -92,3 +92,14 @@ for (const [what, write] of [
     assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
   });
 }
+
+test('--help prints the usage and touches nothing: no lookups, no shortlist, no tier cache (SW-libs-05)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Data Analyst | Remote\n';
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
+  const r = spawnSync(process.execPath, [SHORTLIST, '--help'], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Usage: node custom\/pipeline\/shortlist\.mjs \[--min-rank 3\] \[--top 40\]/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+});

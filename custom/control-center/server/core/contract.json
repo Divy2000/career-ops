@@ -5,7 +5,7 @@
     "Every CLI below is invoked as node <script> <helpArgs> with cwd at the code root and CAREER_OPS_ROOT at a fixture copy.",
     "expectExit null means the usage text is checked but the exit code is not pinned.",
     "flags are substrings that must appear in stdout+stderr of the help run.",
-    "probe false: the script exists but its help run is not side-effect free, so the contract test only checks the file.",
+    "probe false: the script exists but its help run is not side-effect free, so the contract test only checks the file (custom/immigration/watch.mjs has no --help: it fetches the live feeds and writes the watcher state).",
     "writers are core modules imported only inside child processes (server/core/child.ts), never into the server."
   ],
   "clis": [
@@ -147,8 +147,10 @@
       "helpArgs": [
         "--help"
       ],
-      "expectExit": null,
-      "flags": []
+      "expectExit": 0,
+      "flags": [
+        "--today"
+      ]
     },
     {
       "id": "shortlist",
@@ -156,8 +158,11 @@
       "helpArgs": [
         "--help"
       ],
-      "expectExit": null,
-      "flags": []
+      "expectExit": 0,
+      "flags": [
+        "--min-rank",
+        "--top"
+      ]
     },
     {
       "id": "immigrationWatch",
@@ -166,7 +171,8 @@
         "--help"
       ],
       "expectExit": null,
-      "flags": []
+      "flags": [],
+      "probe": false
     },
     {
       "id": "freshness",
