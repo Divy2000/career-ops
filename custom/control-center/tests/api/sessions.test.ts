@@ -10,6 +10,7 @@ import { makePdf } from '../helpers/pdf.js';
 import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
 import { tempDir } from '../helpers/tmp.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
+import { StreamParser } from '../../server/claude/stream-parse.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -497,6 +498,82 @@ describe('Claude sessions', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toMatch(/onboarding/);
     expect(fs.existsSync(profile)).toBe(false);
+  });
+});
+
+describe('session output that cannot be processed fails only that session (R5-02)', () => {
+  const CONSTRUCTOR_LATE = { events: [INIT, delta('before '), { __sleep: 1500 }, result('Done.\n<<cc:constructor {}>>', 0.02)] };
+  const poisonOn = (marker: string) =>
+    vi.spyOn(StreamParser.prototype, 'push').mockImplementation(function (this: StreamParser, line: string) {
+      if (line.includes(marker)) throw new Error('synthetic parser failure');
+      return parsePush.call(this, line);
+    });
+  const parsePush = StreamParser.prototype.push;
+  const invalid = (events: Settled['events']) => events.map((e) => e.event).filter((e) => e.type === 'envelope.invalid');
+
+  it('a final answer with an envelope named after an Object property is reported as invalid and the session finishes', async () => {
+    const { meta, events } = await withScenario(scenarioFile({ events: [INIT, result('Done.\n<<cc:constructor {}>>', 0.02)] }), async () => settle((await post('/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id));
+    expect(invalid(events)).toEqual([expect.objectContaining({ kind: 'constructor', error: 'unknown envelope kind constructor' })]);
+    expect(meta.status).not.toBe('running');
+    expect((await get('/api/sessions')).statusCode).toBe(200);
+  });
+
+  it('a server restarted on the same events replays that envelope without crashing and finishes the session', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = tempDir('cc-test-guard-');
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    let b: TestApp | null = null;
+    try {
+      const { id, turns } = await withScenario(scenarioFile(CONSTRUCTOR_LATE), async () => (await call(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      await a.close();
+      await until(() => Boolean(a.runner.store.readExit(turns[0].runId)));
+      b = await makeTestApp({ dataRoot, guardRoot });
+      const { meta, events } = await settleOn(b, id);
+      expect(invalid(events)).toEqual([expect.objectContaining({ kind: 'constructor' })]);
+      expect(meta.status).not.toBe('running');
+    } finally {
+      await b?.close();
+      await a.close().catch(() => undefined);
+    }
+  });
+
+  it('a line that throws while it is processed stops the run and errors the session, and other sessions still finish', async () => {
+    const spy = poisonOn('POISON-LINE');
+    try {
+      const started = Date.now();
+      const { meta, events } = await withScenario(scenarioFile({ events: [INIT, delta('POISON-LINE'), { __sleep: 15_000 }, result('never reached', 0.01)] }), async () => settle((await post('/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id, 12_000));
+      expect(Date.now() - started).toBeLessThan(12_000);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/could not process the session output: synthetic parser failure/) });
+      expect(events.map((e) => e.event).filter((e) => e.type === 'error')).toEqual([expect.objectContaining({ message: expect.stringMatching(/synthetic parser failure/) })]);
+      expect((await get(`/api/runs/${meta.turns[0]!.runId}`)).json().meta.status).toBe('cancelled');
+      const other = await settle((await post('/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id);
+      expect(other.meta.status).toBe('done');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a server restarted on the same throwing line errors the session again and keeps serving', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = tempDir('cc-test-guard-');
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    let b: TestApp | null = null;
+    const spy = poisonOn('POISON-LINE');
+    try {
+      const { id, turns } = await withScenario(scenarioFile({ events: [INIT, delta('before '), { __sleep: 1500 }, delta('POISON-LINE'), result('after', 0.01)] }), async () => (await call(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      await a.close();
+      await until(() => Boolean(a.runner.store.readExit(turns[0].runId)));
+      b = await makeTestApp({ dataRoot, guardRoot });
+      const { meta } = await settleOn(b, id);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/synthetic parser failure/) });
+      expect((await call(b, 'GET', '/api/sessions')).statusCode).toBe(200);
+    } finally {
+      spy.mockRestore();
+      await b?.close();
+      await a.close().catch(() => undefined);
+    }
   });
 });
 

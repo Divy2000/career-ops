@@ -80,8 +80,9 @@ export function extractEnvelopes(text: string, streaming: boolean): { envelopes:
 }
 
 function validate(kind: string, json: string, raw: string): Envelope {
-  const schema = (ENVELOPE_SCHEMAS as Record<string, z.ZodType>)[kind];
-  if (!schema) return { ok: false, kind, error: `unknown envelope kind ${kind}`, raw };
+  // Own keys only: a kind like `constructor` must not reach Object.prototype.
+  if (!Object.hasOwn(ENVELOPE_SCHEMAS, kind)) return { ok: false, kind, error: `unknown envelope kind ${kind}`, raw };
+  const schema = (ENVELOPE_SCHEMAS as Record<string, z.ZodType>)[kind]!;
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);

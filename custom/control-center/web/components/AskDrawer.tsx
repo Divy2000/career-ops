@@ -34,6 +34,11 @@ export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) =
   setPortals: { label: () => 'Change portals.yml', confirm: true, writes: true },
 };
 
+/** Own keys only: an advisor-named action like `toString` must not reach Object.prototype. */
+function askAction(name: string): (typeof ASK_ACTIONS)[string] | null {
+  return Object.hasOwn(ASK_ACTIONS, name) ? ASK_ACTIONS[name]! : null;
+}
+
 export function useAskHotkey(toggle: () => void): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -60,13 +65,13 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind !== 'act') return;
     const p = payload as { action: string; params: Record<string, unknown> };
-    setProposals((prev) => [...prev, { id: Date.now() + prev.length, action: p.action, params: p.params ?? {}, state: ASK_ACTIONS[p.action] ? 'pending' : 'unsupported', note: ASK_ACTIONS[p.action] ? null : `"${p.action}" is not in the action allowlist` }]);
+    setProposals((prev) => [...prev, { id: Date.now() + prev.length, action: p.action, params: p.params ?? {}, state: askAction(p.action) ? 'pending' : 'unsupported', note: askAction(p.action) ? null : `"${p.action}" is not in the action allowlist` }]);
   }, []);
 
   const update = (id: number, patch: Partial<Proposal>) => setProposals((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
   const run = async (p: Proposal) => {
-    const def = ASK_ACTIONS[p.action];
+    const def = askAction(p.action);
     if (!def) return;
     if (def.confirm && !(await confirm({ title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true }))) {
       update(p.id, { state: 'rejected', note: 'declined' });
@@ -144,7 +149,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           <h2>Proposed actions</h2>
           <ul className="stack" style={{ listStyle: 'none', padding: 0 }}>
             {proposals.map((p) => {
-              const def = ASK_ACTIONS[p.action];
+              const def = askAction(p.action);
               return (
                 <li key={p.id} className="proposal row gap" data-proposal-state={p.state}>
                   <span style={{ flex: 1 }}>

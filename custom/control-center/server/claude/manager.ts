@@ -375,8 +375,19 @@ export class SessionManager {
     let sawResult = false;
     let turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null = null;
     let finalText = '';
+    // A line that cannot be processed fails this session (its run is stopped), never the server that tracks it.
+    let failure: string | null = null;
     const handle = (l: RawLine, emit: boolean) => {
       seq = l.seq;
+      if (failure) return;
+      try {
+        handleLine(l, emit);
+      } catch (err) {
+        failure = `could not process the session output: ${(err as Error).message}`;
+        this.runner.cancel(runId);
+      }
+    };
+    const handleLine = (l: RawLine, emit: boolean) => {
       const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
       for (const ev of events) {
         if (ev.type === 'envelope') envelopes++;
@@ -411,7 +422,7 @@ export class SessionManager {
       clearInterval(timer);
       this.active.delete(id);
       pull();
-      void this.finalize(id, n, run, policy, state, { envelopes, denials, sawResult, turnDone, finalText: finalText || parser.text });
+      void this.finalize(id, n, run, policy, state, { envelopes, denials, sawResult, turnDone, finalText: finalText || parser.text, failure });
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
@@ -421,7 +432,7 @@ export class SessionManager {
     return Boolean(this.store.read(id)?.turns.find((t) => t.n === n)?.endedAt);
   }
 
-  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string }): Promise<void> {
+  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
     const meta = this.store.read(id);
     // Already finalized (by another server, or before a restart): its cost and report number were settled then.
     if (!meta || this.turnEnded(id, n)) return;
@@ -436,8 +447,9 @@ export class SessionManager {
     const newReports: NewReport[] = ownReports(detectNewReports(this.cfg.dataRoot, new Set(state.beforeReports)), { reportNum: meta.reportNum, turnFiles: changed });
     if (newReports.length) this.emit(id, { type: 'evaluation', reports: newReports });
     const cancelled = meta.status === 'cancelled' || run.status === 'cancelled';
+    if (r.failure) this.emit(id, { type: 'error', message: r.failure });
     // A lost run (queued at a restart, or its process vanished) says why, instead of looking like a signal exit.
-    const outcome = run.status === 'lost' && !cancelled ? { status: 'error' as const, reason: run.error ?? 'the run was lost without an exit record' } : decideTurnOutcome({
+    const outcome = r.failure ? { status: 'error' as const, reason: r.failure } : run.status === 'lost' && !cancelled ? { status: 'error' as const, reason: run.error ?? 'the run was lost without an exit record' } : decideTurnOutcome({
       modeId: meta.mode,
       policyClass: policy.policyClass,
       cancelled,
