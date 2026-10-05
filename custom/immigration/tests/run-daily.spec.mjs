@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs, { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -347,4 +347,35 @@ test('Given the plist pins a node (CC_NODE_BIN), every node the job runs is that
   const seen = fs.existsSync(calls) ? readFileSync(calls, 'utf8') : '';
   assert.match(seen, /path-resolver\.mjs/, 'the data root was resolved with the pinned node');
   for (const step of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) assert.ok(seen.includes(step), `${step} ran on the pinned node:\n${seen}`);
+});
+
+test('a failed policy pass acknowledges nothing: its batch stays pending for the next run, the step fails and the other steps still run', () => {
+  const w = dailyWorld();
+  const r = w.run({ FAKE_CLAUDE_EXIT: '1' });
+  assert.equal(r.calls.length, 1, r.log);
+  assert.doesNotMatch(r.steps, /^watch --ack/m);
+  assert.match(r.log, /^!!! step failed: policy watch$/m);
+  for (const step of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) assert.match(r.steps, new RegExp(`^${step} `, 'm'));
+  assert.equal(r.status, 1);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('a run that starts while another holds the lock is skipped: a dated line in skipped.log, exit 0, no step runs', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  const lock = path.join(imm, '.run-daily.lockf');
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore' });
+  try {
+    // lockf creates the file with the lock already held (O_EXLOCK), so its existence means the lock is taken.
+    for (let i = 0; i < 200 && !fs.existsSync(lock); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(fs.existsSync(lock), 'the holder never took the lock');
+    const r = w.run();
+    assert.equal(r.status, 0, r.log);
+    assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} another run-daily holds the lock; skipped$/m);
+    assert.equal(r.steps, '');
+    assert.equal(r.log, '', 'no dated run log is started');
+  } finally {
+    holder.kill();
+  }
 });

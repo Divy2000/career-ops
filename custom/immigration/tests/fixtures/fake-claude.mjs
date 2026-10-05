@@ -46,3 +46,5 @@ fs.appendFileSync(
   })}\n`,
 );
 console.log('SUMMARY: 0 policy changes, 0 company alerts');
+// FAKE_CLAUDE_EXIT makes a pass (or rank call) fail the way a crashed or refused claude -p does.
+process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? 0));
