@@ -101,13 +101,23 @@ async function loadAlerts(companies) {
   return out;
 }
 
+// scan.mjs creates the pipeline only once a scan adds an offer, so a fresh root has none yet: an empty pipeline.
+async function readPipeline() {
+  try {
+    return await readFile(PIPELINE, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return '';
+    throw err;
+  }
+}
+
 const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 
 async function main() {
   const minRank = arg('--min-rank', 3);
   const top = arg('--top', 40);
   const today = localToday();
-  const rows = (await readFile(PIPELINE, 'utf8')).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
+  const rows = (await readPipeline()).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];
   const { tiers, looked } = await loadTiers(companies, today);
   const alerts = await loadAlerts(companies);

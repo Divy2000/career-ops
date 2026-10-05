@@ -31,3 +31,14 @@ test('the shortlist is written on a root with no data/immigration folder (the da
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
 });
+
+test('the shortlist is written, empty, on a root with no data/pipeline.md yet (a first scan that added nothing)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /shortlist: 0 kept, 0 excluded/);
+  assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^Ranked rows with rank >= 3: 0\./m);
+  assert.equal(fs.existsSync(path.join(root, 'data', 'pipeline.md')), false);
+});

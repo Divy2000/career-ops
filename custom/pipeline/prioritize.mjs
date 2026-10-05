@@ -44,7 +44,15 @@ async function main() {
   let firstSeen;
   const ordered = await withPipelineLock(PIPELINE, async () => {
     firstSeen = await readFirstSeen();
-    const lines = (await readFile(PIPELINE, 'utf8')).split('\n');
+    let text;
+    try {
+      text = await readFile(PIPELINE, 'utf8');
+    } catch (err) {
+      // scan.mjs creates the file only once a scan adds an offer, so a fresh root has none yet: nothing to order.
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    }
+    const lines = text.split('\n');
     const slots = lines.flatMap((l, i) => (l.startsWith('- [ ] ') ? [i] : []));
     const sorted = orderPending(slots.map((i) => lines[i]), { today, firstSeen });
     slots.forEach((slot, k) => { lines[slot] = sorted[k]; });
@@ -54,6 +62,10 @@ async function main() {
     await rename(tmp, PIPELINE);
     return sorted;
   });
+  if (ordered === null) {
+    process.stdout.write('prioritized 0 pending rows: no data/pipeline.md yet\n');
+    return;
+  }
   const fresh = ordered.filter((l) => firstSeen.get(l.split(' | ')[0].slice(6)) === today).length;
   process.stdout.write(`prioritized ${ordered.length} pending rows (${fresh} first seen ${today}); backup at data/pipeline.md.bak\n`);
 }
