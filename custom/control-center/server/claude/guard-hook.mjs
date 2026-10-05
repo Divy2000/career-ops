@@ -8,9 +8,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkRead, checkSearch, httpUrlsIn, locate, matches, readUrlList, snapshotKey, unresolvedPathReason, urlListFilesIn } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, matches, PLAYWRIGHT_TOOL_PREFIX, readUrlList, snapshotKey, unresolvedPathReason, urlListFilesIn } from './guard-policy.mjs';
 
-const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 function deny(reason) {
@@ -111,9 +110,9 @@ async function main() {
     process.exit(0);
   }
 
-  if (tool === 'mcp__playwright__browser_click' || tool === 'mcp__playwright__browser_press_key') {
-    const text = [input.element, input.ref, input.text].filter((v) => typeof v === 'string').join(' ');
-    if (SUBMIT_RE.test(text)) deny('Playwright: this looks like a submit control. The user presses Submit, never the session.');
+  if (tool.startsWith(PLAYWRIGHT_TOOL_PREFIX)) {
+    const reason = await checkPlaywright(policy, tool, input, cwd);
+    if (reason) deny(reason);
     process.exit(0);
   }
   process.exit(0);

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
-import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
+import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
@@ -285,9 +285,66 @@ describe('guard hook', () => {
     expect(allow.some((r) => r.includes('batch-runner') || r.includes('rank-pipeline'))).toBe(false);
   });
   it('denies Playwright clicks that look like a submit', () => {
-    expect(pre('mcp__playwright__browser_click', { element: 'Submit application button', ref: 'e12' }).status).toBe(2);
-    expect(pre('mcp__playwright__browser_click', { element: 'Next page', ref: 'e13' }).status).toBe(0);
-    expect(pre('mcp__playwright__browser_press_key', { key: 'Enter', element: 'Apply now' }).status).toBe(2);
+    const dir = path.join(realRoot, 'session-apply');
+    fs.mkdirSync(dir);
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('apply')! });
+    const pw = (name: string, input: Record<string, unknown>) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: `mcp__playwright__${name}`, tool_input: input, cwd: realRoot, session_id: 's' }).status;
+    expect(pw('browser_click', { element: 'Submit application button', ref: 'e12' })).toBe(2);
+    expect(pw('browser_click', { element: 'Next page', ref: 'e13' })).toBe(0);
+    // Requirement change (SW-claude-10): the inputs are the pinned @playwright/mcp 0.0.41 shapes; press_key carries only the key.
+    expect(pw('browser_press_key', { key: 'Enter' })).toBe(2);
+  });
+  it('routes every Playwright tool to the guard and refuses those that can submit, run page code, leave the public web or upload secrets (SW-claude-10)', () => {
+    const dir = path.join(realRoot, 'session-playwright');
+    fs.mkdirSync(dir);
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('apply')! });
+    const pw = (name: string, input: Record<string, unknown>, which = pf) => hookRun(dir, which, { hook_event_name: 'PreToolUse', tool_name: `mcp__playwright__${name}`, tool_input: input, cwd: realRoot, session_id: 's' });
+    const refused: Array<[string, Record<string, unknown>]> = [
+      ['browser_click', { ref: 'e14' }],
+      ['browser_press_key', { key: 'NumpadEnter' }],
+      ['browser_press_key', { key: 'Control+Enter' }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'me@example.com', submit: true }],
+      ['browser_type', { element: 'Why us', ref: 'e4', text: 'First line\nSecond line', slowly: true }],
+      ['browser_evaluate', { function: '() => document.forms[0].submit()' }],
+      ['browser_evaluate', { function: '() => document.title' }],
+      ['browser_navigate', { url: 'file:///etc/passwd' }],
+      ['browser_navigate', { url: 'http://127.0.0.1:4317/' }],
+      ['browser_navigate', { url: 'http://169.254.169.254/latest/meta-data' }],
+      ['browser_file_upload', { paths: ['/etc/passwd'] }],
+      ['browser_file_upload', { paths: [path.join(realRoot, 'output', 'cv.pdf'), path.join(realRoot, '.env')] }],
+      ['browser_take_screenshot', { filename: '/tmp/cc-shot.png' }],
+      ['browser_snapshot', { filename: 'snap.md' }],
+      ['browser_tabs', { action: 'new', url: 'http://10.0.0.1/' }],
+      ['browser_run_code_unsafe', { code: 'async (page) => page.title()' }],
+      ['browser_mouse_click_xy', { element: 'Submit', x: 10, y: 10 }],
+    ];
+    for (const [name, input] of refused) expect(pw(name, input).status, `${name} ${JSON.stringify(input)}`).toBe(2);
+    const allowed: Array<[string, Record<string, unknown>]> = [
+      ['browser_snapshot', {}],
+      ['browser_press_key', { key: 'Tab' }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'me@example.com' }],
+      ['browser_type', { element: 'Why us', ref: 'e4', text: 'First line\nSecond line' }],
+      ['browser_fill_form', { fields: [{ name: 'Name', type: 'textbox', ref: 'e2', value: 'Ada' }] }],
+      ['browser_select_option', { element: 'Country', ref: 'e5', values: ['Canada'] }],
+      ['browser_navigate', { url: 'https://93.184.215.14/jobs/1' }],
+      ['browser_file_upload', { paths: [path.join(realRoot, 'output', 'cv.pdf')] }],
+      ['browser_take_screenshot', {}],
+      ['browser_wait_for', { time: 1 }],
+      ['browser_tabs', { action: 'list' }],
+    ];
+    for (const [name, input] of allowed) expect(pw(name, input).status, `${name} ${JSON.stringify(input)}`).toBe(0);
+    // These are the tool shapes of the pinned MCP version; a version change needs this guard re-read.
+    expect(JSON.parse(fs.readFileSync(PLAYWRIGHT_MCP_PATH, 'utf8')).mcpServers.playwright.args).toContain('@playwright/mcp@0.0.41');
+    // A session whose policy grants no Playwright gets none of it, whatever the tool.
+    expect(pw('browser_snapshot', {}, policy).status).toBe(2);
+    // The settings route every Playwright tool to the hook through a second group; the probed matcher stays as recorded.
+    const settings = JSON.parse(fs.readFileSync(writeSettingsFile(path.join(dir, 'settings')), 'utf8')) as { hooks: { PreToolUse: Array<{ matcher: string }> } };
+    const groups = settings.hooks.PreToolUse.map((g) => g.matcher);
+    expect(groups[0]).toBe(PRE_TOOL_MATCHER);
+    expect(groups).toHaveLength(2);
+    const playwright = new RegExp(groups[1]!);
+    for (const name of ['mcp__playwright__browser_evaluate', 'mcp__playwright__browser_navigate', 'mcp__playwright__anything_new']) expect(playwright.test(name), name).toBe(true);
+    for (const name of ['Bash', 'Write', 'mcp__other__browser_click', 'x_mcp__playwright__y']) expect(playwright.test(name), name).toBe(false);
   });
   it('protects Blacklist.md, APPLICATIONS.md and Supervisor/ in any case, on a case-insensitive or a case-sensitive volume', () => {
     const root = fs.realpathSync(tempDir('cc-hook-case-'));

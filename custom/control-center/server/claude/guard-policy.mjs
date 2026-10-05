@@ -771,6 +771,54 @@ export function checkBash(command, policy, cwd) {
   return reason;
 }
 
+// ---- Playwright MCP (the version pinned in playwright-mcp.json) ----
+
+const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
+export const PLAYWRIGHT_TOOL_PREFIX = 'mcp__playwright__';
+/** Tools that only read the page, fill or pick values, or move within it; every other tool has a check below or is refused. */
+const PLAYWRIGHT_PLAIN = new Set(['browser_snapshot', 'browser_console_messages', 'browser_network_requests', 'browser_wait_for', 'browser_hover', 'browser_drag', 'browser_resize', 'browser_select_option', 'browser_fill_form', 'browser_handle_dialog', 'browser_navigate_back', 'browser_close', 'browser_install', 'browser_take_screenshot']);
+
+/**
+ * Null when a Playwright MCP call may run, else the reason. The session never submits (a submit-looking click, Enter,
+ * type with submit, page JavaScript), never browses outside the public web (navigate gets the WebFetch checks), never
+ * uploads a file a Read could not reach and never saves a file outside the guard. A tool not named here is refused.
+ */
+export async function checkPlaywright(policy, tool, input, cwd, lookup = lookupAll) {
+  const name = tool.slice(PLAYWRIGHT_TOOL_PREFIX.length);
+  const label = `Playwright ${name}`;
+  const i = input && typeof input === 'object' ? input : {};
+  if (policy.playwright !== true) return `${label}: Playwright is not granted to this session`;
+  if (i.filename !== undefined) return `${label}: saving to a file is not allowed; call it without filename`;
+  const submit = `${label}: this would submit the form. The user presses Submit, never the session.`;
+  switch (name) {
+    case 'browser_click':
+      if (typeof i.element !== 'string' || !i.element.trim()) return `${label}: describe the element (element) so the guard can tell it is not a submit control`;
+      return SUBMIT_RE.test(i.element) ? submit : null;
+    case 'browser_press_key':
+      return /enter/i.test(String(i.key ?? '')) ? submit : null;
+    case 'browser_type':
+      // Typed one character at a time, a line break is an Enter key press.
+      return i.submit === true || (i.slowly === true && /[\r\n]/.test(String(i.text ?? ''))) ? submit : null;
+    case 'browser_navigate':
+      return checkFetchUrl(String(i.url ?? ''), lookup, { label });
+    case 'browser_tabs':
+      return i.url === undefined ? null : checkFetchUrl(String(i.url), lookup, { label });
+    case 'browser_file_upload': {
+      if (i.paths === undefined) return null;
+      if (!Array.isArray(i.paths)) return `${label}: paths must be a list`;
+      for (const p of i.paths) {
+        const why = checkRead(policy, { file_path: p }, cwd, label);
+        if (why) return why;
+      }
+      return null;
+    }
+    case 'browser_evaluate':
+      return `${label}: page JavaScript can submit a form or send data, so sessions never run it`;
+    default:
+      return PLAYWRIGHT_PLAIN.has(name) ? null : `${label}: not a Playwright tool the guard knows, so it is refused`;
+  }
+}
+
 /** First-touch snapshot keyed by the absolute path, so code-root and data-root files never collide. */
 export function snapshotKey(sessionDir, abs) {
   return path.join(sessionDir, 'before', encodeURIComponent(abs));

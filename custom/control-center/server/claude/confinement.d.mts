@@ -10,6 +10,7 @@ export const ALWAYS_DENIED_WRITES: string[];
 export function shellQuote(s: string): string;
 export function guardHookCommand(nodePath?: string, hookPath?: string): string;
 export const PRE_TOOL_MATCHER: string;
+export const PLAYWRIGHT_TOOL_MATCHER: string;
 export const HOOK_TIMEOUT_S: number;
 export interface GuardHook {
   type: 'command';

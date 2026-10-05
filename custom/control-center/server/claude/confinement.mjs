@@ -142,6 +142,11 @@ export function guardHookCommand(nodePath = process.execPath, hookPath = GUARD_H
 /** Tools the guard hook sees before they run. The matcher holds only names and `|`, so the CLI matches each name exactly. */
 export const PRE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Glob|Grep|WebFetch|Agent|Task|PowerShell|mcp__playwright__browser_click|mcp__playwright__browser_press_key';
 /**
+ * Every Playwright MCP tool, so the hook can refuse the ones it does not know. Any other character makes the CLI
+ * (2.1.289) read a matcher as a regular expression tested against the tool name; ^ anchors it to the server prefix.
+ */
+export const PLAYWRIGHT_TOOL_MATCHER = '^mcp__playwright__';
+/**
  * A hook that times out does not block (Claude Code docs, probe C14): the CLI flags and the settings
  * permissions are the gate, and the hook is the second layer. 30 s bounds its DNS lookups with room to spare.
  */
@@ -151,7 +156,10 @@ export const HOOK_TIMEOUT_S = 30;
 export function guardHooks(command = guardHookCommand()) {
   const hook = { type: 'command', command, timeout: HOOK_TIMEOUT_S };
   return {
-    PreToolUse: [{ matcher: PRE_TOOL_MATCHER, hooks: [hook] }],
+    PreToolUse: [
+      { matcher: PRE_TOOL_MATCHER, hooks: [hook] },
+      { matcher: PLAYWRIGHT_TOOL_MATCHER, hooks: [hook] },
+    ],
     PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [hook] }],
   };
 }
