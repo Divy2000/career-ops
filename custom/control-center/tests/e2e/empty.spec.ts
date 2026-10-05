@@ -104,3 +104,33 @@ test.describe('a daily run that never wrote its done line', () => {
     await expect(logs.getByText('2026-10-05 08:00:00 to n/a')).toBeVisible();
   });
 });
+
+test.describe('a run that wrote a !!! failure line and exited', () => {
+  const daily = path.join(EMPTY_ROOT, 'data', 'immigration', 'logs', '2026-10-05.log');
+  const weeklyDir = path.join(EMPTY_ROOT, 'data', 'upstream-sync');
+  const weekly = path.join(weeklyDir, '2026-10-04.log');
+  test.beforeEach(() => {
+    fs.writeFileSync(daily, "=== 2026-10-05 08:00:00 start\n!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password\n");
+    fs.mkdirSync(weeklyDir, { recursive: true });
+    fs.writeFileSync(weekly, '=== 2026-10-04 03:00:00 start\n!!! cannot fetch main from the upstream remote (see the line above)\n');
+  });
+  test.afterEach(() => {
+    fs.rmSync(daily, { force: true });
+    fs.rmSync(weekly, { force: true });
+  });
+
+  test('Today and the log browser say failed and give the reason from that line, for the daily job and the weekly sync', async ({ page }) => {
+    await login(page);
+    await expect(page.getByText("Daily job 2026-10-05: failed (Keychain item 'career-ops-claude-token' not found)")).toBeVisible();
+    await page.goto('/runs');
+    const logs = page.locator('[aria-labelledby="log-browser-heading"]');
+    await expect(logs.getByLabel('Log date')).toHaveValue('2026-10-05');
+    await expect(logs.getByText('failed', { exact: true })).toBeVisible();
+    await expect(logs.getByRole('list', { name: 'Failures' })).toContainText("Keychain item 'career-ops-claude-token' not found. Run: claude setup-token");
+    await logs.getByLabel('Log job').selectOption('upstream-sync');
+    await expect(logs.getByLabel('Log date')).toHaveValue('2026-10-04');
+    await expect(logs.getByText('failed', { exact: true })).toBeVisible();
+    await expect(logs.getByRole('list', { name: 'Failures' })).toContainText('cannot fetch main from the upstream remote');
+    await (await axeBuilder(page)).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
+  });
+});

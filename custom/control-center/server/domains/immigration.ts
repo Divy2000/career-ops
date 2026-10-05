@@ -32,6 +32,8 @@ export interface DailyLog {
   status: 'ok' | 'failed' | 'running' | 'interrupted' | 'empty';
   steps: DailyLogStep[];
   failedSteps: string[];
+  /** Other `!!!` lines of the last run (sync.sh's fail, run-daily.sh's early exits), without the marker: each fails the run. */
+  problems: string[];
   failedCount: number | null;
 }
 
@@ -99,6 +101,7 @@ export function parseDailyLog(text: string, date: string): DailyLog {
   const lastStart = lines.findLastIndex((line) => RUN_START.test(line));
   const steps: DailyLogStep[] = [];
   const failedSteps: string[] = [];
+  const problems: string[] = [];
   let startedAt: string | null = null;
   let finishedAt: string | null = null;
   let failedCount: number | null = null;
@@ -115,10 +118,12 @@ export function parseDailyLog(text: string, date: string): DailyLog {
       failedSteps.push(name);
       const step = steps.find((s) => s.name === name);
       if (step) step.failed = true;
-    }
+    } else if ((m = line.match(/^!!!\s+(.+)$/))) problems.push(m[1]!.trim());
   }
-  const status: DailyLog['status'] = !startedAt ? 'empty' : !finishedAt ? 'running' : failedSteps.length || (failedCount ?? 0) > 0 ? 'failed' : 'ok';
-  return { date, startedAt, finishedAt, status, steps, failedSteps, failedCount };
+  // A failure line fails the run even with no done line: the scripts write one and exit.
+  const failed = failedSteps.length > 0 || problems.length > 0 || (failedCount ?? 0) > 0;
+  const status: DailyLog['status'] = !startedAt ? 'empty' : failed ? 'failed' : !finishedAt ? 'running' : 'ok';
+  return { date, startedAt, finishedAt, status, steps, failedSteps, problems, failedCount };
 }
 
 /** The local calendar date (YYYY-MM-DD) the job scripts name their logs by (`date +%Y-%m-%d`). */

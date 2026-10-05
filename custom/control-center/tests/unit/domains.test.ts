@@ -99,6 +99,20 @@ describe('immigration overview', () => {
     expect(parseDailyLog('=== 2026-10-04 03:00:00 start\n=== 2026-10-04 03:00:09 done (up to date)\n', '2026-10-04')).toMatchObject({ status: 'ok', finishedAt: '2026-10-04 03:00:09', failedCount: null });
   });
 
+  it('any !!! line in the last run fails it with that line as the reason, even with no done line (sync.sh and run-daily.sh exit early that way)', async () => {
+    const sync = parseDailyLog('=== 2026-10-04 03:00:00 start\n--- fetching\n!!! Keychain item career-ops-claude-token not found\n', '2026-10-04');
+    expect(sync).toMatchObject({ status: 'failed', finishedAt: null, failedSteps: [], problems: ['Keychain item career-ops-claude-token not found'] });
+    expect((await withJobState(sync, '2026-10-04', async () => false)).status).toBe('failed');
+    const daily = parseDailyLog("=== 2026-10-05 08:00:00 start\n!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token\n", '2026-10-05');
+    expect(daily).toMatchObject({ status: 'failed', problems: ["Keychain item 'career-ops-claude-token' not found. Run: claude setup-token"] });
+  });
+
+  it('a step failure stays a failed step, not a problem, and an earlier run\'s !!! line does not fail the last run', () => {
+    const text = '=== 2026-10-05 08:00:00 start\n!!! gh pr create failed\n=== 2026-10-05 10:00:00 start\n--- 10:00:01 rank top 100\n!!! step failed: rank top 100\n=== 2026-10-05 10:05:00 done (failed=1)\n';
+    expect(parseDailyLog(text, '2026-10-05')).toMatchObject({ status: 'failed', failedSteps: ['rank top 100'], problems: [] });
+    expect(parseDailyLog('=== 2026-10-05 08:00:00 start\n!!! gh pr create failed\n=== 2026-10-05 10:00:00 start\n=== 2026-10-05 10:05:00 done\n', '2026-10-05')).toMatchObject({ status: 'ok', problems: [] });
+  });
+
   it('parses company files and the whole overview through the core lib', async () => {
     const cf = parseCompanyFile('# Acme\n\nchecked_at: 2026-09-28\nverdict: strong\ndol_tier: strong\npolicy_changes_seen: 2\n', 'acme', '/x', (md) => md.match(/checked_at:\s*(\S+)/)?.[1] ?? null);
     expect(cf).toMatchObject({ name: 'Acme', checkedAt: '2026-09-28', verdict: 'strong', dolTier: 'strong', policyChangesSeen: 2 });

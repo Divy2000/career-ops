@@ -33,7 +33,7 @@ echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
 cd "$ROOT"
 
 if ! CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
-  echo "ERROR: Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
+  echo "!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
   exit 1
 fi
 export CLAUDE_CODE_OAUTH_TOKEN
