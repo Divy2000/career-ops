@@ -44,9 +44,9 @@ describe('a daily run with no done line', () => {
   const YESTERDAY = `${before.getFullYear()}-${pad(before.getMonth() + 1)}-${pad(before.getDate())}`;
   const OLD = '2001-01-02';
   const unfinished = (date: string) => `=== ${date} 08:00:00 start\n--- 08:00:01 policy watch\n`;
-  async function statuses(app: TestApp) {
+  async function statuses(app: TestApp, dailyDates = [TODAY, YESTERDAY, OLD]) {
     const logs = path.join(app.cfg.dataRoot, 'data', 'immigration', 'logs');
-    for (const date of [TODAY, YESTERDAY, OLD]) fs.writeFileSync(path.join(logs, `${date}.log`), unfinished(date));
+    for (const date of dailyDates) fs.writeFileSync(path.join(logs, `${date}.log`), unfinished(date));
     const weeklyDir = path.join(app.cfg.dataRoot, 'data', 'upstream-sync');
     fs.mkdirSync(weeklyDir, { recursive: true });
     for (const date of [TODAY, YESTERDAY, OLD]) fs.writeFileSync(path.join(weeklyDir, `${date}.log`), unfinished(date));
@@ -54,7 +54,7 @@ describe('a daily run with no done line', () => {
     return {
       todayChip: (await get('/api/immigration/overview')).dailyLog.status,
       latest: (await get('/api/schedule/logs')).latest.status,
-      today: (await get(`/api/schedule/logs/${TODAY}`)).status,
+      today: (await get(`/api/schedule/logs/${TODAY}`)).status ?? 'none',
       yesterday: (await get(`/api/schedule/logs/${YESTERDAY}`)).status,
       old: (await get(`/api/schedule/logs/${OLD}`)).status,
       weeklyToday: (await get(`/api/schedule/logs/${TODAY}?job=upstream-sync`)).status,
@@ -66,9 +66,20 @@ describe('a daily run with no done line', () => {
     t = await makeTestApp({ fakeDaily: 'idle' }, { exec: hostSays(true), dailyPollMs: 60_000 });
     expect(await statuses(t)).toEqual({ todayChip: 'interrupted', latest: 'interrupted', today: 'interrupted', yesterday: 'interrupted', old: 'interrupted', weeklyToday: 'running', weeklyYesterday: 'interrupted', weeklyOld: 'interrupted' });
   });
-  it('reads running for today\'s and yesterday\'s log while run-daily.sh runs (a run can cross midnight), even before the next poll, and interrupted for an older one', async () => {
+  it('reads running for today\'s log while run-daily.sh runs, even before the next poll; yesterday\'s unfinished run is interrupted once today\'s run has started (one run holds the lock), and an older one too', async () => {
     t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
-    expect(await statuses(t)).toEqual({ todayChip: 'running', latest: 'running', today: 'running', yesterday: 'running', old: 'interrupted', weeklyToday: 'running', weeklyYesterday: 'interrupted', weeklyOld: 'interrupted' });
+    expect(await statuses(t)).toEqual({ todayChip: 'running', latest: 'running', today: 'running', yesterday: 'interrupted', old: 'interrupted', weeklyToday: 'running', weeklyYesterday: 'interrupted', weeklyOld: 'interrupted' });
+  });
+  it('reads running for yesterday\'s log while run-daily.sh runs and no run has started today (a run can cross midnight)', async () => {
+    t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
+    fs.rmSync(path.join(t.cfg.dataRoot, 'data', 'immigration', 'logs', `${TODAY}.log`), { force: true });
+    expect(await statuses(t, [YESTERDAY, OLD])).toMatchObject({ todayChip: 'running', latest: 'running', today: 'none', yesterday: 'running', old: 'interrupted' });
+  });
+  it('reads running for yesterday\'s log while run-daily.sh runs when today\'s log has no start line yet', async () => {
+    t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
+    const logs = path.join(t.cfg.dataRoot, 'data', 'immigration', 'logs');
+    fs.writeFileSync(path.join(logs, `${TODAY}.log`), 'note: written before the start line\n');
+    expect(await statuses(t, [YESTERDAY, OLD])).toMatchObject({ yesterday: 'running', old: 'interrupted' });
   });
 });
 
