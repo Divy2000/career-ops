@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { inputsKey } from '../../server/domains/insightsCache.js';
-import { copyFixtureRoot } from '../helpers/app.js';
+import { inputsKey, readInsight } from '../../server/domains/insightsCache.js';
+import { copyFixtureRoot, FIXTURE_ROOT, testConfig } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
+import type { Exec } from '../../server/routes/system.js';
 
 describe('the insights cache key', () => {
   // upskill leaves out skills cv.md already has and story provenance traces stories to cv.md and the digest.
@@ -61,4 +63,34 @@ describe('the insights cache key on a root-layout tracker (R7-14)', () => {
       expect(inputsKey(root)).not.toBe(before);
     });
   }
+});
+
+describe('the insights cache with CAREER_OPS_TRACKER outside the data root (R7-14 review)', () => {
+  it('recomputes when that tracker or the status-log.tsv beside it changes', async () => {
+    const outside = tempDir('cc-outside-tracker-');
+    const tracker = path.join(outside, 'applications.md');
+    fs.copyFileSync(path.join(FIXTURE_ROOT, 'data', 'applications.md'), tracker);
+    fs.writeFileSync(path.join(outside, 'status-log.tsv'), '2\t2026-10-01\tEvaluated\tApplied\tweb\t\n');
+    const before = process.env.CAREER_OPS_TRACKER;
+    process.env.CAREER_OPS_TRACKER = tracker;
+    let runs = 0;
+    const exec: Exec = async () => ((runs += 1), { code: 0, stdout: '{"ok":true}', stderr: '' });
+    try {
+      const cfg = testConfig();
+      await readInsight(cfg, exec, 'funnelVelocity');
+      await readInsight(cfg, exec, 'funnelVelocity');
+      expect(runs).toBe(1);
+      for (const file of [path.join(outside, 'status-log.tsv'), tracker]) {
+        const later = new Date(Date.now() + 60_000 * (runs + 1));
+        fs.utimesSync(file, later, later);
+        const ran = runs;
+        await readInsight(cfg, exec, 'funnelVelocity');
+        expect(runs, `${file} changed`).toBe(ran + 1);
+      }
+      expect(runs).toBe(3);
+    } finally {
+      if (before === undefined) delete process.env.CAREER_OPS_TRACKER;
+      else process.env.CAREER_OPS_TRACKER = before;
+    }
+  });
 });

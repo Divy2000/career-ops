@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '../config.js';
-import { cliScriptPath, type CliId } from '../core/adapter.js';
+import { cliScriptPath, importCore, type CliId } from '../core/adapter.js';
 import type { Exec } from '../routes/system.js';
 
 export const INSIGHT_SCRIPTS: Record<string, { cli: CliId; label: string }> = {
@@ -77,15 +77,18 @@ function dirKey(dir: string): string {
   return names.map((n) => `${n}@${mtimeOf(path.join(dir, n))}`).join(',');
 }
 
-export function inputsKey(dataRoot: string): string {
-  return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`)].join('|');
+/** `trackerPath` is the tracker the scripts resolve (CAREER_OPS_TRACKER may put it outside the data root); its status log sits beside it. */
+export function inputsKey(dataRoot: string, trackerPath?: string): string {
+  const tracker = trackerPath ? [`tracker=${trackerPath}:${mtimeOf(trackerPath)}`, `tracker-log:${mtimeOf(path.join(path.dirname(trackerPath), 'status-log.tsv'))}`] : [];
+  return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`), ...tracker].join('|');
 }
 
 const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'data', 'control-center', 'insights', `${script}.json`);
 
 export async function readInsight(cfg: ServerConfig, exec: Exec, script: InsightScript, opts: { recompute?: boolean; now?: () => number } = {}): Promise<InsightRead> {
   const def = INSIGHT_SCRIPTS[script]!;
-  const key = inputsKey(cfg.dataRoot);
+  const { resolveTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+  const key = inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot));
   const file = cachePath(cfg.dataRoot, script);
   if (!opts.recompute) {
     try {
