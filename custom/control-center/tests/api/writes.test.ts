@@ -4,11 +4,13 @@ import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import type { Exec } from '../../server/routes/system.js';
 import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
+import { dailyPidfile } from '../../server/system/daily.js';
 
 let t: TestApp;
-let pgrepRunning = false;
+let jobRunning = false;
 const fakeExec: Exec = async (cmd, args, opts) => {
-  if (cmd === 'pgrep') return { code: pgrepRunning ? 0 : 1, stdout: pgrepRunning ? '4242\n' : '', stderr: '' };
+  // The daily probe asks ps about the pid in the job's pidfile.
+  if (cmd === 'ps') return jobRunning ? { code: 0, stdout: '/bin/bash /checkout/custom/immigration/run-daily.sh\n', stderr: '' } : { code: 1, stdout: '', stderr: '' };
   const { execNoShell } = await import('../../server/routes/system.js');
   return execNoShell(cmd, args, opts);
 };
@@ -296,11 +298,18 @@ describe('documents for a row whose number differs from its report', () => {
 });
 
 describe('daily job awareness', () => {
-  it('reports whether run-daily.sh is running from pgrep', async () => {
+  it('reports whether run-daily.sh is running from its pidfile', async () => {
     expect((await get('/api/system/daily')).json()).toMatchObject({ running: false });
-    pgrepRunning = true;
-    await new Promise((r) => setTimeout(r, 200));
-    expect((await get('/api/system/daily')).json()).toMatchObject({ running: true });
-    pgrepRunning = false;
+    const pidfile = dailyPidfile(t.cfg.dataRoot);
+    fs.mkdirSync(path.dirname(pidfile), { recursive: true });
+    fs.writeFileSync(pidfile, '4242\n');
+    jobRunning = true;
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      expect((await get('/api/system/daily')).json()).toMatchObject({ running: true });
+    } finally {
+      jobRunning = false;
+      fs.rmSync(pidfile);
+    }
   });
 });

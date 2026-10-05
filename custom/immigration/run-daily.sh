@@ -24,6 +24,11 @@ if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
   if [ "$rc" = 75 ]; then echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"; exit 0; fi
   exit "$rc"
 fi
+# Only the lock holder gets here: the Control Center reads this pid to tell this data root's run is alive, however
+# the script was started. It goes when the run ends; a crash leaves a stale pid that no longer runs this script.
+PIDFILE="$IMM/.run-daily.pid"
+echo "$$" > "$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
 LOG_DIR="$IMM/logs"
 TODAY="$(date +%Y-%m-%d)"
 RANK_LIMIT="${RANK_LIMIT:-100}"
