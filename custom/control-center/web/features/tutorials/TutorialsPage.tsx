@@ -71,13 +71,16 @@ function EmptyState({ directory }: { directory: string }) {
       <pre className="mono small" tabIndex={0}>{example}</pre>
       <ul className="bullets small muted" style={{ margin: 0 }}>
         <li>
-          <code className="mono">video</code> is required and must be an .mp4. <code className="mono">subtitles</code> is .srt or .vtt, <code className="mono">poster</code> is .jpg or .png, <code className="mono">transcript</code> is .md. Names are plain file names inside the folder.
+          <code className="mono">video</code> (or <code className="mono">parts</code>, below) is required and must be an .mp4. <code className="mono">subtitles</code> is .srt or .vtt, <code className="mono">poster</code> is .jpg or .png, <code className="mono">transcript</code> is .md. Names are plain file names inside the folder.
         </li>
         <li>
           <code className="mono">chapters</code> are <code className="mono">{'{ title, start }'}</code> with start in seconds.
         </li>
         <li>
-          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab: a documentation-style guide of sections and subsections with text, steps, tips, and images or clips in a dark and a light version.
+          A long recording can be split: use <code className="mono">parts</code> instead of <code className="mono">video</code>, each part with its own <code className="mono">id</code>, <code className="mono">title</code>, optional <code className="mono">short</code> label, <code className="mono">video</code>, optional light video, subtitles and posters, its <code className="mono">duration</code> in seconds and its <code className="mono">chapters</code>. The page then shows a playlist and offers the next part when one ends.
+        </li>
+        <li>
+          Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab: a documentation-style guide of sections and subsections with text, steps, tips, and images or clips in a dark and a light version. Sections and subsections can carry a <code className="mono">short</code> label for the contents.
         </li>
         <li>
           To install one from a recording folder: <code className="mono">node custom/control-center/scripts/install-tutorial.mjs &lt;folder&gt;</code>
