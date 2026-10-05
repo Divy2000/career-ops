@@ -39,6 +39,13 @@ export interface NextOverride {
   setOn: string;
 }
 
+/** The pin the cadence still honors (followup-cadence.mjs resolveNextOverride): a follow-up logged after the day it was set drops it. */
+export function activePin(pin: NextOverride | null, followups: Array<{ date: string }>): NextOverride | null {
+  if (!pin) return null;
+  const last = followups.reduce<string | null>((max, f) => (max === null || f.date > max ? f.date : max), null);
+  return last !== null && last > pin.setOn ? null : pin;
+}
+
 const OVERRIDE_RE = /^-\s+next\s+#(\d+)\s+(\d{4}-\d{2}-\d{2})(?:\s+\(set\s+(\d{4}-\d{2}-\d{2})\))?/i;
 
 /** Pin directives (`- next #42 2026-07-10 (set 2026-07-02)`); the last one per application wins. */

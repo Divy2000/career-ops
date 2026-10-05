@@ -10,6 +10,7 @@ import { parseReport } from '../../server/domains/reports.js';
 import { readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
 import { readScanHistory } from '../../server/domains/pipeline.js';
+import { activePin } from '../../server/domains/followups.js';
 import { pathToFileURL } from 'node:url';
 import { localDate } from '../../shared/local-date.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -180,5 +181,21 @@ describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
     fs.mkdirSync(path.join(root, 'data'));
     fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), 'https://jobs.example.com/old\t2026-09-01\tlever\tEngineer\tOldCo\tadded\tBerlin\n');
     expect(readScanHistory(root)).toEqual([{ url: 'https://jobs.example.com/old', firstSeen: '2026-09-01', portal: 'lever', title: 'Engineer', company: 'OldCo', status: 'added', location: 'Berlin', postedAt: '' }]);
+  });
+});
+
+describe('follow-up pins (followup-cadence.mjs resolveNextOverride)', () => {
+  it('the Timeline keeps or drops a pin exactly as the cadence does', () => {
+    const pin = { appNum: 1, date: '2026-10-10', setOn: '2026-10-01' };
+    const cases: Array<string | null> = [null, '2026-09-28', '2026-10-01', '2026-10-02'];
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'followup-cadence.mjs')).href)});
+const pin = { appNum: 1, date: '2026-10-10', setDate: '2026-10-01' };
+process.stdout.write(JSON.stringify(${JSON.stringify(cases)}.map((last) => m.resolveNextOverride(pin, last))));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const cadence = JSON.parse(r.stdout) as Array<string | null>;
+    const ours = cases.map((last) => activePin(pin, last === null ? [] : [{ date: last }, { date: '2026-09-01' }])?.date ?? null);
+    expect(ours).toEqual(cadence);
+    expect(cadence).toEqual(['2026-10-10', '2026-10-10', '2026-10-10', null]);
   });
 });

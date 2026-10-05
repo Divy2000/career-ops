@@ -316,3 +316,26 @@ describe('status log next to the tracker (R7-14)', () => {
     expect(domainFor('status-log.tsv')).toBe('tracker');
   });
 });
+
+describe('the Timeline pin follows the cadence (R7-17)', () => {
+  const FOLLOWUPS = (logged: string) =>
+    `# Follow-ups\n\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 1 | ${logged} | Acme Robotics | Senior Backend Engineer | Email | Pat Example | nudged |\n\n- next #1 2026-10-10 (set 2026-10-01)\n`;
+  const pinFor = async (logged: string) => {
+    const t2 = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'follow-ups.md'), FOLLOWUPS(logged));
+      return (await t2.app.inject({ method: 'GET', url: '/api/tracker/1', headers: t2.authed })).json().timeline.pin;
+    } finally {
+      await t2.close();
+    }
+  };
+
+  it('drops a pin once a follow-up is logged after the day it was set', async () => {
+    expect(await pinFor('2026-10-02')).toBeNull();
+  });
+
+  it('keeps a pin set the same day as the last follow-up, or after it', async () => {
+    expect(await pinFor('2026-10-01')).toMatchObject({ date: '2026-10-10', setOn: '2026-10-01' });
+    expect(await pinFor('2026-09-28')).toMatchObject({ date: '2026-10-10', setOn: '2026-10-01' });
+  });
+});
