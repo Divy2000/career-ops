@@ -497,7 +497,8 @@ describe('imageSize', () => {
     ['a baseline JPEG (SOF0) named .jpeg', jpeg(1280, 720, 0xc0), '.jpeg', { width: 1280, height: 720 }],
     ['a JPEG whose APP1 segment is 40 KB', jpeg(640, 360, 0xc2, 40_000), '.JPG', { width: 640, height: 360 }],
     ['a JPEG with 0xFF fill bytes before a marker', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xff, 0xff]), jpeg(800, 600).subarray(3)]), '.jpg', { width: 800, height: 600 }],
-    ['a JPEG whose frame header is the shortest valid one, 8 bytes', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80, 1]))]), '.jpg', { width: 1920, height: 1080 }],
+    ['a grayscale JPEG: a frame header of 11 bytes with 1 component', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80, 1, 1, 0x11, 0]))]), '.jpg', { width: 1920, height: 1080 }],
+    ['a color JPEG: a frame header of 17 bytes with 3 components', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc2, Buffer.from([8, 0x02, 0xd0, 0x05, 0x00, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]))]), '.jpg', { width: 1280, height: 720 }],
     ['a JPEG with a standalone TEM marker before its segments', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0x01]), jpeg(320, 240).subarray(2)]), '.jpg', { width: 320, height: 240 }],
   ])('reads the size of %s', (_label, bytes, ext, expected) => {
     expect(imageSize(bytes, ext)).toEqual(expected);
@@ -521,6 +522,10 @@ describe('imageSize', () => {
     ['a JPEG cut off before its frame header', jpeg(10, 10).subarray(0, 40), '.jpg', /ends before its frame header/],
     ['a JPEG frame header whose 2-byte length leaves no room for a size', Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xd9, 0x08, 0x04, 0x38, 0x07, 0x80]), '.jpg', /not a valid JPEG file \(its frame header is too short\)/],
     ['a JPEG that ends inside its frame header', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80, 1])).subarray(0, 6)]), '.jpg', /ends before its frame header/],
+    ['a JPEG frame header of 8 bytes that declares 1 component but holds no component spec', Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x08, 0x08, 0x04, 0x38, 0x07, 0x80, 0x01]), '.jpg', /not a valid JPEG file \(its frame header length 8 does not fit 1 component\)/],
+    ['a JPEG frame header that declares 3 components but holds 1', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80, 3, 1, 0x11, 0]))]), '.jpg', /frame header length 11 does not fit 3 components/],
+    ['a JPEG frame header with no components', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80, 0]))]), '.jpg', /not a valid JPEG file \(its frame header lists no components\)/],
+    ['a JPEG that ends inside the component specs of its frame header', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80, 1, 1, 0x11, 0])).subarray(0, 10)]), '.jpg', /ends before its frame header/],
     ['a JPEG frame header of 7 bytes, one short of the size and component count', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xc0, Buffer.from([8, 0x04, 0x38, 0x07, 0x80]))]), '.jpg', /frame header is too short/],
     ['a file type it does not know', Buffer.alloc(40), '.bmp', /cannot check.*\.bmp/],
   ])('refuses %s', (_label, bytes, ext, message) => {
