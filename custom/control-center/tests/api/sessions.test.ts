@@ -201,6 +201,41 @@ describe('Claude sessions', () => {
     expect((await settle(sessions[0].id)).meta.status).toBe('done');
   });
 
+  it('the app model default reaches every fan-out session that picks no model, as it does a single new session', async () => {
+    const other = await makeTestApp();
+    try {
+      expect((await call(other, 'PUT', '/api/settings/app', { modelDefault: 'sonnet' })).statusCode).toBe(200);
+      const fan = await call(other, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/model/1', 'https://jobs.example.com/model/2'] });
+      expect(fan.statusCode, fan.body).toBe(202);
+      const single = await call(other, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/model/3' }, prompt: 'Evaluate https://jobs.example.com/model/3' });
+      expect(single.statusCode, single.body).toBe(202);
+      const ids: string[] = [...fan.json().sessions.map((s: { id: string }) => s.id), single.json().id];
+      for (const id of ids) {
+        const { meta } = await settleOn(other, id);
+        expect(meta.model).toBe('sonnet');
+        const args: string[] = (await call(other, 'GET', `/api/runs/${meta.turns[0]!.runId}`)).json().meta.cmd.args;
+        expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+      }
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('a model the fan-out request names wins over the app model default', async () => {
+    const other = await makeTestApp();
+    try {
+      expect((await call(other, 'PUT', '/api/settings/app', { modelDefault: 'sonnet' })).statusCode).toBe(200);
+      const fan = await call(other, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/model/4'], model: 'opus' });
+      expect(fan.statusCode, fan.body).toBe(202);
+      const { meta } = await settleOn(other, fan.json().sessions[0].id);
+      expect(meta.model).toBe('opus');
+      const args: string[] = (await call(other, 'GET', `/api/runs/${meta.turns[0]!.runId}`)).json().meta.cmd.args;
+      expect(args[args.indexOf('--model') + 1]).toBe('opus');
+    } finally {
+      await other.close();
+    }
+  });
+
   it('a missing Keychain token fails the session loudly without spawning', async () => {
     const other = await makeTestApp({}, { readToken: async () => { throw new Error('Keychain item career-ops-claude-token not found'); } });
     try {

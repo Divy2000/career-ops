@@ -49,6 +49,11 @@ export function readSettings(dataRoot: string): { settings: AppSettings; problem
   }
 }
 
+/** The model a new session runs on: the one the request names, else the app default, else null (the CLI default). */
+export function sessionModel(dataRoot: string, requested: string | null | undefined): string | null {
+  return requested ?? (readSettings(dataRoot).settings.modelDefault || null);
+}
+
 export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): AppSettings {
   const next = appSettingsSchema.parse(mergeSettings(readSettings(dataRoot).settings, patch));
   const abs = path.join(dataRoot, SETTINGS_REL);
