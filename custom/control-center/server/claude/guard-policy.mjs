@@ -344,7 +344,8 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
  *   in any of those slots (with fewer paths given, a trailing flag would be read
  *   as the missing path); modes: a first token that switches to other roles;
  * - readOnlyWith: switches that make the script write nothing (its read modes),
- *   so with any of them present its outputs are only read.
+ *   so with any of them present its outputs are only read;
+ * - outputSuffixes: each output is also written with these suffixes appended.
  * Roles: 'input' (read inside the roots), 'output' (inside the write scope),
  * 'value' (plain). Any other dash token is refused: these parsers would treat it
  * as a path (path.resolve turns -x/../cv.md into cv.md).
@@ -356,6 +357,7 @@ const RENDER_VALUES = { '--format': 'value', '--report': 'value', '--kind': 'val
 const DIGEST_FLAGS = { '--from': 'value', '--to': 'value', '--dir': 'input' };
 // Every other --flag takes the next token as its value; there is no --flag=value form.
 const ANSWERS_FLAGS = { '--report': 'output', '--input': 'input', '--state': 'value', '--date': 'value' };
+const RECONCILE_FLAGS = { '--pipeline': 'output', '--state': 'input' };
 const WRITER_SCRIPTS = {
   // Upserts the answers it is given into --report; --read and --read-draft only print a section of it.
   'application-answers.mjs': { switches: ['--read', '--read-draft', '--strict', '--help', '-h'], next: ANSWERS_FLAGS, positionals: [], readOnlyWith: ['--read', '--read-draft'] },
@@ -371,6 +373,8 @@ const WRITER_SCRIPTS = {
   'build-cv-html.mjs': { switches: ['--help', '--test'], positionals: ['input', 'output', 'input'], indexed: true, modes: { '--preview': ['input', 'input'] } },
   'patch-latex-content.mjs': { switches: ['--help'], positionals: ['input', 'input', 'output'] },
   'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
+  // Rewrites --pipeline (by default data/pipeline.md, its own file) after copying it to <file>.pre-reconcile.bak.
+  'reconcile-pipeline.mjs': { switches: ['--dry-run', '--help', '-h'], next: RECONCILE_FLAGS, eq: RECONCILE_FLAGS, positionals: [], readOnlyWith: ['--dry-run'], outputSuffixes: ['.pre-reconcile.bak'] },
   'application-artifacts.mjs': { switches: ['--init', '--help', '-h'], next: ARTIFACT_FLAGS, eq: ARTIFACT_FLAGS, positionals: [] },
   'contacts.mjs': { switches: ['--summary', '--self-test', '--caller-id', '--vcf', '--help', '-h'], optionalNext: { '--vcf': 'output' }, eq: { '--vcf': 'output' }, positionals: [] },
   'discover-new-companies.mjs': { switches: ['--added-only', '--summary', '--json', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
@@ -511,7 +515,16 @@ function latexCompileSiblings(input) {
 function checkWriterScript(policy, script, spec, args, label) {
   // A read-mode switch is never consumed as a value: like the scripts, the walk below refuses a value that starts with --.
   const readOnly = (spec.readOnlyWith ?? []).some((s) => args.includes(s));
-  const check = (role, value) => (role === 'output' && !readOnly ? writable(policy, value, label) : role === 'input' || role === 'output' ? readable(policy, value, label) : null);
+  const check = (role, value) => {
+    if (role === 'output' && !readOnly) {
+      for (const target of [value, ...(spec.outputSuffixes ?? []).map((suffix) => `${value}${suffix}`)]) {
+        const why = writable(policy, target, label);
+        if (why) return why;
+      }
+      return null;
+    }
+    return role === 'input' || role === 'output' ? readable(policy, value, label) : null;
+  };
   let roles = spec.positionals;
   let rest = args;
   if (spec.modes && args[0] !== undefined && Object.hasOwn(spec.modes, args[0])) {

@@ -811,6 +811,34 @@ describe('checkBash: exact per-command argument grammars', () => {
     expect(checkBash('node application-answers.mjs --report modes/_custom.md --input output/a.json', apply, root)).toMatch(/modes\/_custom\.md is outside the write scope/);
   });
 
+  it('reconcile-pipeline --pipeline: the rewritten file and its .pre-reconcile.bak copy stay inside the write scope; --dry-run only reads', () => {
+    // Only the batch mode grants it today, and batch never runs as a session: latent, but the grammar must hold wherever it is granted.
+    const pipeline = { ...policyFor('batch', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    // With no --pipeline it rewrites data/pipeline.md, its own file.
+    for (const cmd of ['node reconcile-pipeline.mjs', 'node reconcile-pipeline.mjs --dry-run', 'node reconcile-pipeline.mjs --state batch/batch-state.tsv', 'node reconcile-pipeline.mjs --pipeline output/p.md --state=output/s.tsv', 'node reconcile-pipeline.mjs --pipeline=output/p.md'])
+      ok(pipeline, cmd);
+    // The audit trigger: --pipeline names the file it rewrites and copies, anywhere inside the roots.
+    for (const cmd of [
+      'node reconcile-pipeline.mjs --pipeline modes/_custom.md',
+      'node reconcile-pipeline.mjs --pipeline=AGENTS.md',
+      'node reconcile-pipeline.mjs --pipeline data/pipeline.md',
+      'node reconcile-pipeline.mjs --pipeline -x/../cv.md',
+      'node reconcile-pipeline.mjs --pipeline output/p.md --pipeline modes/pipeline.md',
+      'node reconcile-pipeline.mjs --pipeline',
+      'node reconcile-pipeline.mjs --pipeline output/p.md --state /etc/hosts',
+      'node reconcile-pipeline.mjs --state .env',
+      'node reconcile-pipeline.mjs modes/_custom.md',
+      'node reconcile-pipeline.mjs --dry-run=1',
+    ])
+      no(pipeline, cmd);
+    // The backup copy is written next to the file, so the scope must allow it too.
+    const exact = { ...pipeline, allow: ['output/p.md'] };
+    expect(checkBash('node reconcile-pipeline.mjs --pipeline output/p.md', exact, root)).toMatch(/output\/p\.md\.pre-reconcile\.bak is outside the write scope/);
+    // A dry run writes nothing, so --pipeline is only read.
+    ok(pipeline, 'node reconcile-pipeline.mjs --pipeline modes/_custom.md --dry-run');
+    no(pipeline, 'node reconcile-pipeline.mjs --pipeline /etc/hosts --dry-run');
+  });
+
   it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
     ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
     no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');
