@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 import type { Cost } from '../runner/store.js';
-import { cliScriptPath, CONTRACT } from '../core/adapter.js';
+import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
@@ -15,6 +15,8 @@ export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followu
 export interface ActionContext {
   codeRoot: string;
   dataRoot: string;
+  /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
+  tmpInputs: string[];
 }
 
 export interface Command {
@@ -77,7 +79,11 @@ const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) 
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 
 /** Ephemeral input files live under the data root, never in the repo, and go when the run ends (tmp-inputs.ts). */
-const tmpFile = (ctx: ActionContext, ext: string, content: string): string => writeTmpInput(ctx.dataRoot, ext, content);
+const tmpFile = (ctx: ActionContext, ext: string, content: string): string => {
+  const file = writeTmpInput(ctx.dataRoot, ext, content);
+  ctx.tmpInputs.push(file);
+  return file;
+};
 
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
 
@@ -164,17 +170,8 @@ export const ACTIONS: ActionDef[] = [
   }),
   define({ id: 'pipeline.reserveReportNums', label: 'Reserve report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ count: positive.max(50) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--count', String(p.count)]) }),
   define({ id: 'pipeline.releaseReportNums', label: 'Release report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ range: z.string().regex(/^\d+(-\d+)?(,\d+(-\d+)?)*$/) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]) }),
-  define({
-    id: 'pipeline.batchRun',
-    label: 'Batch evaluate',
-    cost: 'tokens',
-    confirm: 'Runs one Claude evaluation per URL through batch/batch-runner.sh. Continue?',
-    resources: ['tracker', 'pipeline'],
-    claude: true,
-    sync: false,
-    params: z.object({ urls: z.array(httpUrl).min(1).max(100), parallel: positive.max(4).default(1) }),
-    build: (p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, CONTRACT.batchRunner.script), tmpFile(ctx, 'tsv', p.urls.join('\n') + '\n'), '--cli', 'claude', '--parallel', String(p.parallel)], cwd: ctx.codeRoot }),
-  }),
+  // Batch evaluation is not an action: batch/batch-runner.sh runs its workers outside any guard, so Pipeline > Batch
+  // starts one confined session per URL through POST /api/sessions/fanout instead.
   // ---- scan ----
   define({
     id: 'scan.portals',

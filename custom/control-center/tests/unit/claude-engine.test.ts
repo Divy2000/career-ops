@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn } from '../../server/claude/guard-policy.mjs';
+import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
@@ -251,6 +251,18 @@ describe('guard hook', () => {
     expect(pre('Bash', { command: 'node scan.mjs' }).status).toBe(2);
     expect(pre('Bash', { command: 'git push origin main' }).status).toBe(2);
     expect(pre('Bash', { command: 'curl https://x.example' }).status).toBe(2);
+  });
+  it('a batch-mode turn: the hook refuses batch-runner.sh and the settings grant no Bash rule for it', () => {
+    const dir = path.join(realRoot, 'session-batch');
+    fs.mkdirSync(dir);
+    const batch = getModePolicy('batch')!;
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: batch });
+    const out = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'bash batch/batch-runner.sh --parallel 2' }, cwd: realRoot, session_id: 's' });
+    expect(out.status).toBe(2);
+    expect(out.stderr).toMatch(/starts agent CLIs outside the session guard/);
+    const allow = buildPermissions({ policy: batch, codeRoot: '/code', dataRoot: '/data', guardRoot: '/guard' }).allow;
+    expect(allow.filter((r) => r.startsWith('Bash('))).toEqual(expect.arrayContaining(['Bash(node reconcile-pipeline.mjs:*)']));
+    expect(allow.some((r) => r.includes('batch-runner') || r.includes('rank-pipeline'))).toBe(false);
   });
   it('denies Playwright clicks that look like a submit', () => {
     expect(pre('mcp__playwright__browser_click', { element: 'Submit application button', ref: 'e12' }).status).toBe(2);
@@ -791,6 +803,24 @@ describe('checkBash: exact per-command argument grammars', () => {
   it('projects-ingest: no command is allowed, not even intake.mjs --text (it creates the documents/ scaffold)', () => {
     const ingest = policyFor('projects-ingest', [...ALWAYS_DENIED_WRITES]);
     for (const cmd of ['node intake.mjs --text projects/kites.pdf', 'node intake.mjs', 'node intake.mjs --commit --all']) no(ingest, cmd);
+  });
+
+  it('a batch-mode session cannot run batch-runner.sh, nor a pipeline session rank-pipeline.mjs: both start agent CLIs outside the guard', () => {
+    const batch = policyFor('batch', [...ALWAYS_DENIED_WRITES]);
+    const pipeline = policyFor('pipeline', [...ALWAYS_DENIED_WRITES]);
+    for (const cmd of ['bash batch/batch-runner.sh', 'bash batch/batch-runner.sh --dry-run', 'bash batch/batch-runner.sh --parallel 2']) no(batch, cmd);
+    for (const cmd of ['node rank-pipeline.mjs', 'node rank-pipeline.mjs --dry-run', 'node rank-pipeline.mjs --cli codex']) no(pipeline, cmd);
+    // The rest of each class still runs.
+    ok(batch, 'node reconcile-pipeline.mjs --dry-run');
+    ok(pipeline, 'node check-liveness.mjs https://jobs.example.com/1');
+  });
+
+  it('agent-spawning scripts are refused even when a policy lists them, in any spelling the shell would run', () => {
+    const forged = { ...oferta, bash: [...oferta.bash, ['bash', 'batch/batch-runner.sh'], ['node', 'rank-pipeline.mjs'], ['bash', './batch/batch-runner.sh'], ['node', 'Rank-Pipeline.mjs']] };
+    for (const cmd of ['bash batch/batch-runner.sh --dry-run', 'node rank-pipeline.mjs --limit 5', 'bash ./batch/batch-runner.sh', 'node Rank-Pipeline.mjs']) {
+      expect(checkBash(cmd, forged, root), cmd).toMatch(/starts agent CLIs outside the session guard/);
+    }
+    expect(AGENT_SPAWNING_SCRIPTS).toEqual(['batch/batch-runner.sh', 'rank-pipeline.mjs']);
   });
 
   it('refuses Bash when the session is not running from the repo root', () => {

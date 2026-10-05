@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
@@ -29,6 +31,52 @@ test.describe('AI sessions through the fake Claude', () => {
     expect(tracker.rows.some((r: { company: string }) => r.company === 'Synthetic Corp')).toBe(true);
     await page.getByRole('link', { name: 'Sessions', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'done' }).first()).toBeVisible();
+  });
+
+  test('Pipeline > Batch asks first, then starts one oferta session per URL through the fan-out', async ({ page }) => {
+    const bodies: unknown[] = [];
+    // Answered here so no evaluation runs: the server side of the fan-out is covered by the sessions API tests.
+    await page.route('**/api/sessions/fanout', async (route) => {
+      bodies.push(route.request().postDataJSON());
+      await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ sessions: [], reserved: [41, 42] }) });
+    });
+    await page.goto('/pipeline?tab=batch');
+    await expect(page.getByText(/batch-runner/)).toHaveCount(0);
+    await page.getByLabel('Batch URLs').fill('https://jobs.example.com/batch/1\nhttps://jobs.example.com/batch/2');
+    await page.getByRole('button', { name: /Batch evaluate/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Start 2 evaluation sessions?' })).toBeVisible();
+    expect(bodies).toEqual([]);
+    await page.getByRole('button', { name: 'Start them' }).click();
+    await expect(page).toHaveURL(/\/sessions$/);
+    expect(bodies).toEqual([{ mode: 'oferta', urls: ['https://jobs.example.com/batch/1', 'https://jobs.example.com/batch/2'] }]);
+  });
+
+  test('New session and the command palette offer no batch mode, while a batch session from before stays listed and opens', async ({ page }) => {
+    // The e2e roots sit under CC_E2E_TMP (playwright.config.ts): root/ is the main app's data root.
+    const id = 'e2e-old-batch-session';
+    const dir = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'control-center', 'sessions', id);
+    fs.mkdirSync(dir, { recursive: true });
+    const at = '2026-10-01T09:00:00.000Z';
+    fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ id, claudeSessionId: '22222222-2222-4222-8222-222222222222', mode: 'batch', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null, status: 'done', createdAt: at, updatedAt: at, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], reportNum: null, policyVersion: 2 }));
+    try {
+      await page.goto('/sessions');
+      await expect(page.getByRole('link', { name: 'batch', exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'New session' }).click();
+      const picker = page.getByLabel('New session mode');
+      await expect(picker.locator('option', { hasText: /^oferta / })).toHaveCount(1);
+      await expect(picker.locator('option', { hasText: /^batch / })).toHaveCount(0);
+      await page.keyboard.press('Control+k');
+      await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('mode oferta');
+      await expect(page.locator('[cmdk-item]', { hasText: /^oferta\b/ }).first()).toBeVisible();
+      await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('mode batch');
+      await expect(page.locator('[cmdk-item]', { hasText: /^batch\b/ })).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await page.getByRole('link', { name: 'batch', exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/sessions/${id}$`));
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('Interview practice waits for the reply and resumes the same Claude session', async ({ page }) => {

@@ -28,7 +28,7 @@ I want to install the H-1B-aware career-ops fork (Divy2000/career-ops). Follow t
 1. Show me your plan first: every command you will run and every folder you will create or change. Ask me before each system change (installing software, cloning, writing outside the clone). Wait for my yes.
 2. Check the requirements: macOS, git, Node.js 22.6 or newer, npm and the claude CLI. Tell me what is missing and how to install it. Do not install system software without asking me.
 3. Clone the fork at the pinned tag into ~/career-ops:
-   git clone --branch fork-install-v2 https://github.com/Divy2000/career-ops.git ~/career-ops
+   git clone --branch fork-install-v3 https://github.com/Divy2000/career-ops.git ~/career-ops
 4. Run the installer from the clone:
    cd ~/career-ops
    custom/install/install.sh --non-interactive --no-start --no-launchd --onboard none
@@ -46,7 +46,7 @@ Claude shows its plan, asks before each change, and stops at the one step it can
 For people who prefer a script. **The script accepts Markdown only**: your resume must be a `.md` (or `.markdown`) file, and project documents too. For PDF, DOCX or any other format, use Option 1, or convert the file to Markdown first.
 
 ```bash
-git clone --branch fork-install-v2 https://github.com/Divy2000/career-ops.git ~/career-ops
+git clone --branch fork-install-v3 https://github.com/Divy2000/career-ops.git ~/career-ops
 cd ~/Documents/job-search   # the folder that holds resume.md and your project .md files
 ~/career-ops/custom/install/install.sh --resume resume.md --docs project-a.md project-b.md
 ```
@@ -88,12 +88,12 @@ Exit codes: `0` done, `1` failure, `2` usage or input error, `3` done with actio
 **One-liner (least safe).** Prefer `git clone`, shown first: it is the route where you read the script before it runs. If you still want a single command, download the pinned bootstrap, read it, then run it:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v2/custom/install/bootstrap.sh
+curl -fsSLO https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v3/custom/install/bootstrap.sh
 less bootstrap.sh
 bash bootstrap.sh --resume resume.md
 ```
 
-`bootstrap.sh` runs nothing if the download is cut off: its whole body is one function that is called on the last line, so a truncated file defines nothing and executes nothing. The real safeguards are reading the script before you run it and the pinned tag (`fork-install-v2`, not a moving branch). Piping it straight into a shell skips reading it: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v2/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
+`bootstrap.sh` runs nothing if the download is cut off: its whole body is one function that is called on the last line, so a truncated file defines nothing and executes nothing. The real safeguards are reading the script before you run it and the pinned tag (`fork-install-v3`, not a moving branch). Piping it straight into a shell skips reading it: `curl -fsSL https://raw.githubusercontent.com/Divy2000/career-ops/fork-install-v3/custom/install/bootstrap.sh | bash -s -- --resume resume.md`.
 
 ## What you get
 
@@ -198,6 +198,7 @@ rm -rf ~/Library/Application\ Support/career-ops-control-center
 | Control Center says the port is in use | Start it on another port: `CC_PORT=4318 custom/control-center/bin/cc`. |
 | Warning that `ANTHROPIC_API_KEY` is set | Harmless: sessions and the daily job force it empty so your subscription is used. Unset it in your shell profile to silence the warning. |
 | Control Center cannot find `claude`, or you have several | Point it at the one you want: `CC_CLAUDE_BIN=/path/to/claude custom/control-center/bin/cc`. |
+| After a Claude Code update, AI sessions fail with "Claude Code X is not approved", the top bar shows "Setup needs attention", and the policy digest says "AI policy pass skipped" | The Control Center still starts and everything but AI sessions works; the daily job still scans, prioritizes and builds the shortlist, and keeps the new official items for the next policy pass. Sessions run only on a Claude Code version whose read confinement was tested (2.1.289 today). Either go back to it with `claude install 2.1.289`, or test and approve the new one with `npm --prefix custom/control-center run probe:reads -- --record` (about 20 small real Claude calls on your token, roughly $1-2). |
 | Chromium or PDF generation fails | Run `node doctor.mjs`; reinstall the browser with `npx playwright install chromium`. |
 | Sponsorship lookup says there is no H-1B index | `node plugins.mjs enable h1b-sponsor --confirm`, then `node plugins/h1b-sponsor/install-h1b-index.mjs` (about 8 MiB). |
 | Every start prints a new token URL | Expected: the token is one-time. Open the URL the latest start printed. |

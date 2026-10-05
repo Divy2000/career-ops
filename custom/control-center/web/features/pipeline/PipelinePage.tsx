@@ -7,6 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
 import { InboxAi } from './InboxAi';
+import { BatchTab } from './BatchTab';
 
 const route = getRouteApi('/pipeline');
 export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
@@ -32,32 +33,8 @@ export function PipelinePage() {
       />
       {tab === 'inbox' && <Inbox />}
       {tab === 'shortlist' && <Shortlist />}
-      {tab === 'batch' && <BatchTab />}
+      {tab === 'batch' && <BatchTab onStarted={() => void navigate({ to: '/sessions' })} />}
     </section>
-  );
-}
-
-function BatchTab() {
-  const actions = useActions();
-  const { run, message } = useRunAction();
-  const [urls, setUrls] = useState('');
-  const [parallel, setParallel] = useState(1);
-  const list = urls.split(/\s+/).filter(Boolean);
-  return (
-    <div className="card stack">
-      <h2>Batch evaluate</h2>
-      <p className="muted">Each URL becomes one evaluation through batch/batch-runner.sh. Paste one URL per line.</p>
-      <textarea aria-label="Batch URLs" rows={6} value={urls} onChange={(e) => setUrls(e.target.value)} />
-      <label className="row gap">
-        <span className="muted">Parallel</span>
-        <input type="number" aria-label="Parallelism" min={1} max={4} value={parallel} onChange={(e) => setParallel(Number(e.target.value) || 1)} />
-      </label>
-      <div className="row gap">
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.batchRun')} disabled={list.length === 0} params={{ urls: list, parallel }} onRun={(p) => void run('pipeline.batchRun', p)} />
-        <span className="faint">{list.length} URLs</span>
-      </div>
-      <Message message={message} />
-    </div>
   );
 }
 

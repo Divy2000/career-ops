@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
-import { BusyError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
-import { listModeIds } from '../claude/modes.js';
+import { BusyError, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
+import { listLaunchableModeIds } from '../claude/modes.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
@@ -25,7 +25,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
 
   app.get('/api/sessions', async () => manager.list());
 
-  app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listModeIds() }));
+  app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listLaunchableModeIds() }));
 
   app.post<{ Body: unknown }>('/api/sessions', async (req, reply) => {
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, reportNum: z.number().int().positive().nullable().optional(), blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
@@ -42,8 +42,13 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       if (!doc.ok) return reply.code(422).send({ error: doc.error });
       userPrompt = `${userPrompt}\n\n<document source="documents/${doc.rel}">\n${doc.text.replace(/<\/document/gi, '<\\/document')}\n</document>`;
     }
-    const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
-    return reply.code(202).send(meta);
+    try {
+      const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
+      return reply.code(202).send(meta);
+    } catch (err) {
+      if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
+      throw err;
+    }
   });
 
   app.post<{ Body: unknown }>('/api/sessions/fanout', async (req, reply) => {
@@ -54,7 +59,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const out = await manager.fanOut({ mode: parsed.data.mode, urls: [...new Set(parsed.data.urls)], model: parsed.data.model ?? null });
       return reply.code(202).send(out);
     } catch (err) {
-      return reply.code(502).send({ error: (err as Error).message });
+      return reply.code(err instanceof ModeRefusedError ? 422 : 502).send({ error: (err as Error).message });
     }
   });
 
@@ -70,6 +75,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     } catch (err) {
       if (err instanceof NotFoundError) return reply.code(404).send({ error: err.message });
       if (err instanceof BusyError || err instanceof OutdatedSessionError) return reply.code(409).send({ error: err.message });
+      if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
       throw err;
     }
   };

@@ -7,6 +7,7 @@ import {
   parsePolicyChanges,
   readCheckedAt,
   decideRefresh,
+  noteSkippedPass,
 } from '../lib.mjs';
 
 test('companySlug lowercases, strips punctuation and legal suffixes', () => {
@@ -230,4 +231,15 @@ test('mergePending keeps unacknowledged items and adds new ones once', () => {
 
 test('mergePending with nothing pending returns the fresh items', () => {
   assert.deepEqual(mergePending([], [{ id: 'x' }]).map((i) => i.id), ['x']);
+});
+
+test('noteSkippedPass puts a dated "pass skipped" section directly under the digest title, once', () => {
+  const digest = '# Immigration policy digest\n\n## 2026-10-04\n- Fee rule published.\n';
+  const once = noteSkippedPass(digest, '2026-10-05', 'Claude Code 2.1.290 is not approved.');
+  assert.equal(once, '# Immigration policy digest\n\n## 2026-10-05\n- AI policy pass skipped: Claude Code 2.1.290 is not approved.\n\n## 2026-10-04\n- Fee rule published.\n');
+  assert.equal(noteSkippedPass(once, '2026-10-05', 'Claude Code 2.1.290 is not approved.'), once, 'a second skip the same day adds nothing');
+  assert.equal(noteSkippedPass('', '2026-10-05', 'x.'), '# Immigration policy digest\n\n## 2026-10-05\n- AI policy pass skipped: x.\n');
+  assert.equal(noteSkippedPass('## 2026-10-01\n- old\n', '2026-10-05', 'x.'), '# Immigration policy digest\n\n## 2026-10-05\n- AI policy pass skipped: x.\n\n## 2026-10-01\n- old\n');
+  // The reason is one bullet: a line break in it cannot start a heading of its own.
+  assert.equal(noteSkippedPass('', '2026-10-05', 'a\n## 2099-01-01 b'), '# Immigration policy digest\n\n## 2026-10-05\n- AI policy pass skipped: a ## 2099-01-01 b\n');
 });

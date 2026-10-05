@@ -265,6 +265,14 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string></dict>`);
   });
 
+  it('the daily plist pins the claude the app runs (CC_CLAUDE_BIN), so launchd never picks another one on its own PATH', async () => {
+    const res = await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 8, minute: 0, enabled: true });
+    expect(res.statusCode, res.body).toBe(200);
+    const xml = fs.readFileSync(path.join(t.cfg.launchAgentsDir, 'com.career-ops.immigration-watch.plist'), 'utf8');
+    expect(path.isAbsolute(t.cfg.claudeBin)).toBe(true);
+    expect(xml).toContain(`<key>CC_CLAUDE_BIN</key><string>${t.cfg.claudeBin}</string>`);
+  });
+
   it('writes no CAREER_OPS_ROOT when the server root did not come from the environment, and keeps it when it did', async () => {
     for (const [fromEnv, expected] of [[false, false], [true, true]] as const) {
       const app = await makeTestApp({ dataRootFromEnv: fromEnv }, { exec: fakeLaunchdExec().exec });

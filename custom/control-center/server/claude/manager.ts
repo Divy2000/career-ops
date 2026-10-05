@@ -15,7 +15,7 @@ import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, writePolicyFile, writeSettingsFile } from './invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
@@ -146,9 +146,17 @@ export class SessionManager {
     return p;
   }
 
+  /** The policy a new turn runs under; a mode that never runs as a session is refused with its reason. */
+  private turnPolicy(mode: string): ModePolicy {
+    const refused = sessionRefusal(mode);
+    if (refused) throw new ModeRefusedError(refused);
+    const policy = this.effectivePolicy(mode);
+    if (!policy) throw new Error(`unknown mode ${mode}`);
+    return policy;
+  }
+
   async start(input: StartInput): Promise<SessionMeta> {
-    const policy = this.effectivePolicy(input.mode);
-    if (!policy) throw new Error(`unknown mode ${input.mode}`);
+    const policy = this.turnPolicy(input.mode);
     const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null });
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
   }
@@ -156,11 +164,10 @@ export class SessionManager {
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const meta = this.must(id);
     assertCurrentPolicy(meta);
+    const policy = this.turnPolicy(meta.mode);
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
     if (this.sending.has(id)) throw new BusyError(`session ${id} is starting a turn`);
     if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${id} is ${meta.status}`);
-    const policy = this.effectivePolicy(meta.mode);
-    if (!policy) throw new Error(`unknown mode ${meta.mode}`);
     this.sending.add(id);
     try {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
@@ -175,16 +182,14 @@ export class SessionManager {
   async fork(id: string, prompt: string): Promise<SessionMeta> {
     const src = this.must(id);
     assertCurrentPolicy(src);
-    const policy = this.effectivePolicy(src.mode);
-    if (!policy) throw new Error(`unknown mode ${src.mode}`);
+    const policy = this.turnPolicy(src.mode);
     const forked = this.store.fork(id);
     return this.runTurn(forked, policy, prompt, { resume: true, fork: true });
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
   async fanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
-    const policy = this.effectivePolicy(input.mode);
-    if (!policy) throw new Error(`unknown mode ${input.mode}`);
+    this.turnPolicy(input.mode);
     const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(input.urls.length)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
     if (r.code !== 0) throw new Error(`reserve-report-num failed (exit ${r.code}): ${r.stderr.trim().slice(-400)}`);
     const reserved = parseReservedRange(r.stdout);
@@ -504,6 +509,8 @@ export function parseReservedRange(stdout: string): number[] {
 
 export class BusyError extends Error {}
 export class NotFoundError extends Error {}
+/** The mode never runs as a session (sessionRefusal); the message says why and what to use instead. */
+export class ModeRefusedError extends Error {}
 /** The session predates the current confinement (SESSION_POLICY_VERSION): viewable, never resumed or forked. */
 export class OutdatedSessionError extends Error {}
 

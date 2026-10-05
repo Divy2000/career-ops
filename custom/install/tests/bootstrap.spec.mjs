@@ -43,7 +43,7 @@ test('it says what it will do, then answering n clones nothing and exits 1', () 
   const r = w.run([], { script: BOOTSTRAP_SH, tty: 'n\n' });
   assert.equal(r.status, 1);
   assert.match(r.out, new RegExp(FORK_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(r.out, /fork-install-v2/);
+  assert.match(r.out, /fork-install-v3/);
   assert.match(r.out, /career-ops/);
   assert.equal(w.log().length, 0);
 });
@@ -61,7 +61,7 @@ test('answering y clones the pinned tag into ~/career-ops and hands every argume
   const r = w.run(['--resume', 'resume.md', '--no-start'], { script: BOOTSTRAP_SH, tty: 'y\n' });
   assert.equal(r.status, 0, r.out);
   const dest = path.join(w.home, 'career-ops');
-  assert.ok(w.log().includes(`git clone --branch fork-install-v2 ${FORK_URL} ${dest}`), w.log().join('\n'));
+  assert.ok(w.log().includes(`git clone --branch fork-install-v3 ${FORK_URL} ${dest}`), w.log().join('\n'));
   assert.ok(w.log().includes('install-sh --resume resume.md --no-start'), w.log().join('\n'));
 });
 

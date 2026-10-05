@@ -471,6 +471,29 @@ describe('read confinement (BUG-06)', () => {
     expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
   });
 
+  it('batch mode never runs as a session: a start, a fan-out, a new turn and a fork are refused with 422 and the reason, and nothing starts', async () => {
+    const runsBefore = (await get('/api/runs')).json().length;
+    const sessionsBefore = (await get('/api/sessions')).json().length;
+    const start = await post('/api/sessions', { mode: 'batch', prompt: 'Process the batch' });
+    expect(start.statusCode).toBe(422);
+    expect(start.json().error).toMatch(/batch-runner\.sh.*Pipeline > Batch/);
+    const fan = await post('/api/sessions/fanout', { mode: 'batch', urls: ['https://jobs.example.com/synthetic/30'] });
+    expect(fan.statusCode).toBe(422);
+    expect(fan.json().error).toMatch(/Pipeline > Batch/);
+    expect((await get('/api/sessions')).json()).toHaveLength(sessionsBefore);
+    // A batch session created before this rule existed is still viewable, never continued.
+    const old = t.sessions.store.setStatus(t.sessions.store.create({ mode: 'batch', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null }).id, 'done');
+    for (const [url, body] of [[`/api/sessions/${old.id}/turns`, { prompt: 'continue' }], [`/api/sessions/${old.id}/fork`, { prompt: 'again' }]] as const) {
+      const res = await post(url, body);
+      expect(res.statusCode, url).toBe(422);
+      expect(res.json().error).toMatch(/Pipeline > Batch/);
+    }
+    expect((await get(`/api/sessions/${old.id}`)).statusCode).toBe(200);
+    expect(((await get('/api/sessions')).json() as Array<{ id: string; mode: string }>).find((s) => s.id === old.id)?.mode).toBe('batch');
+    expect(t.sessions.read(old.id)!.turns).toHaveLength(0);
+    expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
+  });
+
   it('new sessions and forks carry the current policy version', () => {
     expect(SESSION_POLICY_VERSION).toBe(2);
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
@@ -502,6 +525,29 @@ describe('read confinement (BUG-06)', () => {
     } finally {
       await other.close();
     }
+  });
+
+  it('the setup status says when the installed Claude Code is not approved, so the health chip can warn that sessions are refused', async () => {
+    const bin = path.join(tmp('cc-unapproved-'), 'claude');
+    fs.writeFileSync(bin, `#!${process.execPath}\nconsole.log('2.1.290 (Claude Code)');\n`, { mode: 0o755 });
+    const other = await makeTestApp({ claudeBin: bin });
+    try {
+      const status = (await call(other, 'GET', '/api/system/status')).json();
+      expect(status.claude).toMatchObject({ version: '2.1.290 (Claude Code)', approved: false, problem: expect.stringMatching(/Claude Code 2\.1\.290 is not approved.*sessions are refused/i) });
+      // The rest of the app answers as usual.
+      expect((await call(other, 'GET', '/api/tracker')).statusCode).toBe(200);
+    } finally {
+      await other.close();
+    }
+    const unreadable = path.join(tmp('cc-unreadable-'), 'claude');
+    fs.writeFileSync(unreadable, `#!${process.execPath}\nconsole.log('Claude Code is updating...');\n`, { mode: 0o755 });
+    const updating = await makeTestApp({ claudeBin: unreadable });
+    try {
+      expect((await call(updating, 'GET', '/api/system/status')).json().claude).toMatchObject({ approved: false, problem: expect.stringMatching(/could not read the Claude Code version.*sessions are refused/) });
+    } finally {
+      await updating.close();
+    }
+    expect((await get('/api/system/status')).json().claude).toMatchObject({ approved: true, problem: null });
   });
 
   it("the turn policy lets the session read its own oversized tool results and nothing else of Claude's; a fork's first turn gets none", async () => {

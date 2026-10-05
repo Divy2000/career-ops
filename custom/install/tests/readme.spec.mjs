@@ -138,11 +138,11 @@ test('Option 1 (the Claude Code prompt) comes before Option 2 (the install scrip
 
 test('Option 1 prompt is copy-paste ready: plan first, pinned tag, installer flags, user-run Keychain step, ONBOARDING.md', () => {
   const opt1 = section(readme, /^#{2,3}\s+Option 1\b/);
-  const prompt = fencedBlocks(opt1).find((b) => /fork-install-v2/.test(b));
-  assert.ok(prompt, 'Option 1 needs a fenced prompt that names the pinned tag fork-install-v2');
+  const prompt = fencedBlocks(opt1).find((b) => /fork-install-v3/.test(b));
+  assert.ok(prompt, 'Option 1 needs a fenced prompt that names the pinned tag fork-install-v3');
   assert.match(prompt, /plan/i);
   assert.match(prompt, /ask me/i);
-  assert.match(prompt, /git clone[^\n]*fork-install-v2|fork-install-v2[^\n]*clone/i);
+  assert.match(prompt, /git clone[^\n]*fork-install-v3|fork-install-v3[^\n]*clone/i);
   assert.match(prompt, /custom\/install\/install\.sh --non-interactive --no-start --no-launchd --onboard none/);
   assert.match(prompt, /Keychain/);
   assert.match(prompt, /my own terminal|my terminal/i);
@@ -165,7 +165,14 @@ test('Option 2 states the Markdown-only rule, the size limits and what happens t
   assert.match(opt2, /cv\.md/);
   assert.match(opt2, /--replace-cv/);
   assert.match(opt2, /backup/i);
-  assert.match(opt2, /fork-install-v2/);
+  assert.match(opt2, /fork-install-v3/);
+});
+
+test('the README and bootstrap.sh pin one install tag, the one whose install.sh has every documented flag', () => {
+  const bootstrap = readFileSync(path.join(ROOT, 'custom/install/bootstrap.sh'), 'utf8');
+  const named = new Set([...readme.matchAll(/fork-install-v\d+/g), ...bootstrap.matchAll(/fork-install-v\d+/g)].map((m) => m[0]));
+  assert.deepEqual([...named], ['fork-install-v3']);
+  assert.match(bootstrap, /CAREER_OPS_INSTALL_REF:-fork-install-v3\}/);
 });
 
 test('the README uses only flags from the frozen installer contract on install.sh command lines and in the flags table', () => {

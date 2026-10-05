@@ -18,6 +18,8 @@ export interface StartRequest {
   params: unknown;
   cmd: { bin: string; args: string[]; cwd: string };
   env?: NodeJS.ProcessEnv;
+  /** Input files the app wrote for this run (an argument or only an env value names them); removed when it ends. */
+  tmpInputs?: string[];
 }
 
 export function pidAlive(pid: number): boolean {
@@ -87,9 +89,9 @@ export class Runner {
     }
   }
 
-  /** A run that ended (any way) no longer needs the input files the app wrote for it. */
+  /** A run that ended (any way) no longer needs the input files the app wrote for it: those recorded, and any its arguments name. */
   private dropInputs(meta: RunMeta): void {
-    removeTmpInputs(this.dataRoot, meta.cmd.args);
+    removeTmpInputs(this.dataRoot, [...(meta.tmpInputs ?? []), ...meta.cmd.args]);
   }
 
   get claudeSlots(): number {
@@ -136,6 +138,7 @@ export class Runner {
       claude: req.claude,
       cmd: req.cmd,
       params: req.params,
+      tmpInputs: req.tmpInputs ?? [],
     });
     const env = childEnv(req.env);
     this.envById.set(meta.id, env);

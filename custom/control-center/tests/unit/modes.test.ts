@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { deriveModes } from '../../scripts/derive-mode-policies.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { ALWAYS_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds } from '../../server/claude/modes.js';
+import { ALWAYS_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
+import { AGENT_SPAWNING_SCRIPTS } from '../../server/claude/guard-policy.mjs';
 import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
 
 describe('mode registry', () => {
@@ -18,14 +21,15 @@ describe('mode registry', () => {
     expect(ids.some((id) => /readme$/i.test(id))).toBe(false);
   });
 
-  it('every discovered mode has a policy class and every script it references is in its Bash allowlist', () => {
+  it('every discovered mode has a policy class and every script it references is in its Bash allowlist, except the agent-spawning ones', () => {
     for (const mode of MODES) {
       const policy = getModePolicy(mode.id);
       expect(policy, mode.id).not.toBeNull();
       expect(Object.keys(POLICY_CLASSES)).toContain(policy!.policyClass);
       for (const script of mode.scripts) {
-        expect(policy!.scripts, `${mode.id} references ${script}`).toContain(script);
-        expect(policy!.bashRules.some((r) => r.includes(` ${script}:*)`)), `${mode.id} rule for ${script}`).toBe(true);
+        const granted = !AGENT_SPAWNING_SCRIPTS.includes(script);
+        expect(policy!.scripts.includes(script), `${mode.id} references ${script}`).toBe(granted);
+        expect(policy!.bashRules.some((r) => r.includes(` ${script}:*)`)), `${mode.id} rule for ${script}`).toBe(granted);
       }
     }
   });
@@ -80,6 +84,42 @@ describe('mode registry', () => {
     expect(getModePolicy('projects-ingest')?.bashRules).toEqual([]);
   });
 
+  it('no session policy grants a script that starts an agent CLI: not in its scripts, Bash rules or Bash prefixes', () => {
+    expect(AGENT_SPAWNING_SCRIPTS).toEqual(['batch/batch-runner.sh', 'rank-pipeline.mjs']);
+    // The modes tree references both, so the derived lists alone would grant them.
+    expect(MODES.find((m) => m.id === 'batch')?.scripts).toContain('batch/batch-runner.sh');
+    expect(MODES.find((m) => m.id === 'pipeline')?.scripts).toContain('rank-pipeline.mjs');
+    for (const id of listModeIds()) {
+      const p = getModePolicy(id)!;
+      for (const script of AGENT_SPAWNING_SCRIPTS) {
+        expect(p.scripts, `${id} scripts`).not.toContain(script);
+        expect(p.bashRules.some((r) => r.includes(script)), `${id} rules`).toBe(false);
+        expect(p.bashPrefixes.some((b) => b.includes(script)), `${id} prefixes`).toBe(false);
+      }
+    }
+  });
+
+  it('batch mode is refused as a session with a reason that points at Pipeline > Batch; every other mode is not', () => {
+    expect(sessionRefusal('batch')).toMatch(/batch-runner\.sh/);
+    expect(sessionRefusal('batch')).toMatch(/Pipeline > Batch/);
+    for (const id of listModeIds().filter((m) => m !== 'batch')) expect(sessionRefusal(id), id).toBeNull();
+  });
+
+  it('every script a session may run was audited: none that starts an agent CLI is granted unless reviewed', () => {
+    // A module that can spawn a process and names an agent CLI (or skips its permissions) could run an agent outside the guard.
+    const AGENT = /dangerously-skip-permissions|['"`](claude|codex|opencode|gemini|qwen|ollama|copilot|kimi|grok|hermes|antigravity)['"`\s]/;
+    // Reviewed by hand: names the CLIs only to read their config files and spawns nothing but git.
+    const REVIEWED: Record<string, string> = { 'doctor.mjs': 'spawns only git' };
+    const granted = [...new Set(listModeIds().flatMap((id) => getModePolicy(id)!.scripts))];
+    const flagged = granted.filter((script) => importGraph(script).some((file) => {
+      const text = fs.readFileSync(file, 'utf8');
+      return (file.endsWith('.sh') || /child_process/.test(text)) && AGENT.test(text);
+    }));
+    expect(flagged.filter((s) => !REVIEWED[s])).toEqual([]);
+    // The audit does see a spawner: the forbidden scripts would be flagged if a mode granted them.
+    for (const script of AGENT_SPAWNING_SCRIPTS) expect(importGraph(script).some((f) => AGENT.test(fs.readFileSync(f, 'utf8'))), script).toBe(true);
+  });
+
   it('no class ever grants the always-denied files', () => {
     for (const [name, def] of Object.entries(POLICY_CLASSES)) {
       for (const denied of ALWAYS_DENIED_WRITES) {
@@ -88,3 +128,18 @@ describe('mode registry', () => {
     }
   });
 });
+
+/** A script and every module it imports by relative path, as files under the code root. */
+function importGraph(script: string): string[] {
+  const seen = new Set<string>();
+  const stack = [path.join(DEFAULT_CODE_ROOT, script)];
+  const IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"](\.{1,2}\/[^'"]+)['"]/g;
+  while (stack.length) {
+    const file = stack.pop()!;
+    if (seen.has(file) || !fs.existsSync(file)) continue;
+    seen.add(file);
+    if (file.endsWith('.sh')) continue;
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(IMPORT)) stack.push(path.resolve(path.dirname(file), m[1]!));
+  }
+  return [...seen];
+}

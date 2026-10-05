@@ -2,6 +2,8 @@
 // modes.generated.json is produced by scripts/derive-mode-policies.ts and
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
+import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
+import { ALWAYS_DENIED_WRITES } from './confinement.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -179,58 +181,9 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
   },
 };
 
-/**
- * Secret files no session may read, relative to each root and matched case-insensitively (an over-deny on
- * case-sensitive volumes, by design). Enforced as Read deny rules in the per-turn settings file (under each
- * root's given and real path) and by the guard hook. File-name based: a secret under another name is readable.
- */
-export const READ_DENY = [
-  '**/.env',
-  '**/.env.*',
-  '**/*.pem',
-  '**/*.key',
-  '**/*.p12',
-  '**/*.pfx',
-  '**/*.jks',
-  '**/*.keystore',
-  '**/*.ppk',
-  '**/id_rsa*',
-  '**/id_dsa*',
-  '**/id_ecdsa*',
-  '**/id_ed25519*',
-  '**/.npmrc',
-  '**/.pypirc',
-  '**/.netrc',
-  '**/.git-credentials',
-  '**/.git/config',
-  '**/credentials*.json',
-  '**/client_secret*.json',
-  '**/service-account*.json',
-  '**/*.token',
-];
-
-/** Credential stores in the home directory, denied as Read rules (they are outside every root anyway). */
-export const HOME_READ_DENY = [
-  '~/.ssh/**',
-  '~/.aws/**',
-  '~/.gnupg/**',
-  '~/.azure/**',
-  '~/.kube/**',
-  '~/.config/gh/**',
-  '~/.config/gcloud/**',
-  '~/.docker/config.json',
-  '~/.netrc',
-  '~/.npmrc',
-  '~/.pypirc',
-  '~/.git-credentials',
-  '~/.claude.json',
-  '~/.claude/.credentials.json',
-  '~/Library/Keychains/**',
-  '~/Library/Cookies/**',
-  '~/Library/Safari/**',
-  '~/Library/Application Support/Google/Chrome/**',
-  '~/Library/Application Support/Firefox/**',
-];
+// READ_DENY (secret files under each root) and HOME_READ_DENY (home credential stores) live in confinement.mjs, which
+// the daily job's policy pass imports too.
+export { HOME_READ_DENY, READ_DENY } from './confinement.mjs';
 
 /**
  * Version of the confinement a session's turns run under. Sessions created before read confinement (no
@@ -238,8 +191,8 @@ export const HOME_READ_DENY = [
  */
 export const SESSION_POLICY_VERSION = 2;
 
-/** Denied for every non Dev Chat session, regardless of class (enforced by the hook). */
-export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
+// Denied for every non Dev Chat session and the daily policy pass (enforced by the hook); lives in confinement.mjs.
+export { ALWAYS_DENIED_WRITES };
 /**
  * Dev Chat keeps the tracker and blacklist rules and additionally protects the
  * app's own state, the guard and its policy code, recovery, dependencies, and
@@ -368,14 +321,20 @@ export function bashPrefixFor(script: string): string[] {
   return script.endsWith('.sh') ? ['bash', script] : ['node', script];
 }
 
+/** A script the mode files reference that no session may run: it starts an agent CLI outside the guard (guard-policy.mjs). */
+function sessionRunnable(script: string): boolean {
+  return !AGENT_SPAWNING_SCRIPTS.includes(script);
+}
+
 export function getModePolicy(id: string): ModePolicy | null {
   const derived = MODES.find((m) => m.id === id);
   const virtual = VIRTUAL_MODES[id];
   if (!derived && !virtual) return null;
   const policyClass = classForMode(id);
   const def = POLICY_CLASSES[policyClass];
-  const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].sort();
-  const bashPrefixes = def.bashPrefixes ?? scripts.map(bashPrefixFor);
+  const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].filter(sessionRunnable).sort();
+  const explicit = def.bashPrefixes?.filter((p) => p.every(sessionRunnable));
+  const bashPrefixes = explicit ?? scripts.map(bashPrefixFor);
   return {
     id,
     title: derived?.title ?? virtual!.title,
@@ -383,13 +342,31 @@ export function getModePolicy(id: string): ModePolicy | null {
     writeGlobs: [...def.writeGlobs],
     network: virtual?.network ?? [...def.network],
     scripts,
-    bashRules: def.bashPrefixes ? def.bashPrefixes.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
+    bashRules: explicit ? explicit.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
     bashPrefixes,
     allowsTask: id === 'pdf/hm-audit',
     ...(def.mcp ? { mcp: def.mcp } : {}),
   };
 }
 
+/**
+ * Modes that never run as a session, with the reason the app shows. Batch mode exists to run batch-runner.sh,
+ * which no session may run; Pipeline > Batch evaluates the same URLs as one confined session each (manager.fanOut).
+ */
+const REFUSED_MODES: Readonly<Record<string, string>> = {
+  batch: 'Batch mode runs batch/batch-runner.sh, whose workers are claude -p --dangerously-skip-permissions processes outside the session guard, so it never runs as a session. Use Pipeline > Batch instead: it evaluates each URL in its own confined session.',
+};
+
+/** Why `id` may not run as a session, or null when it may. */
+export function sessionRefusal(id: string): string | null {
+  return Object.hasOwn(REFUSED_MODES, id) ? REFUSED_MODES[id]! : null;
+}
+
 export function listModeIds(): string[] {
   return [...MODES.map((m) => m.id), ...Object.keys(VIRTUAL_MODES)].sort();
+}
+
+/** The modes New session and the palette offer: every mode but those refused as a session (their old sessions stay viewable). */
+export function listLaunchableModeIds(): string[] {
+  return listModeIds().filter((id) => sessionRefusal(id) === null);
 }

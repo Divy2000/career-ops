@@ -675,6 +675,20 @@ function checkScript(policy, script, args, label) {
   return null;
 }
 
+/**
+ * Scripts no session may run, whatever its policy lists: each starts an agent CLI of its own outside the session
+ * guard, read confinement and the Bash allowlist (batch-runner.sh runs `claude -p --dangerously-skip-permissions`
+ * workers; rank-pipeline.mjs runs `claude -p`, or whatever binary `--cli` names). Paths relative to the code root.
+ */
+export const AGENT_SPAWNING_SCRIPTS = Object.freeze(['batch/batch-runner.sh', 'rank-pipeline.mjs']);
+
+/** The agent-spawning script a `node` or `bash` command runs, compared without case (macOS volumes ignore it). */
+function agentSpawningScript(tokens) {
+  if ((tokens[0] !== 'node' && tokens[0] !== 'bash') || tokens[1] === undefined) return null;
+  const script = path.posix.normalize(tokens[1]).toLowerCase();
+  return AGENT_SPAWNING_SCRIPTS.find((s) => s.toLowerCase() === script) ?? null;
+}
+
 /** Exact grammar for the arguments after an allowed prefix, chosen by the prefix's shape; unknown shapes never match. */
 function checkArgs(policy, prefix, args, label) {
   const [bin, second] = prefix;
@@ -701,6 +715,8 @@ export function checkBash(command, policy, cwd) {
   if (!first) return 'Bash: empty command';
   if (NETWORK_BINS.has(first)) return `Bash: ${first} is not allowed (network tools are denied)`;
   if (cwd !== undefined && cwd !== null && resolveReal(path.resolve(String(cwd))) !== fs.realpathSync.native(policy.codeRoot)) return 'Bash: the session must run from the repo root';
+  const spawner = agentSpawningScript(tokens);
+  if (spawner) return `Bash: ${spawner} starts agent CLIs outside the session guard, so no session may run it`;
   const candidates = allowed.filter((prefix) => prefix.every((p, i) => tokens[i] === p));
   if (candidates.length === 0) {
     if (first === 'git') return 'Bash: git is not allowed in sessions (Dev Chat may run git status, diff and log)';

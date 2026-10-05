@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { applyOpsJs } from '../../lib/yamlOpsClient';
+import { useEditBase } from '../../lib/editBase';
 import type { ConfigRead, YamlOp } from '@shared/api';
 
 export interface EditorNote {
@@ -12,8 +13,10 @@ export interface EditorNote {
 }
 
 /**
- * Pending ops over a config file. A 409 swaps the base for the server's current
- * version and keeps the pending ops on top, so "save again" is the merge.
+ * Pending ops over a config file, applied to the version the first op was made on: a refetch after a change on
+ * disk never moves them onto another version silently (index-based ops would land on other items), it is announced
+ * and the save gets the 409. A 409 swaps the base for the server's current version and keeps the pending ops on
+ * top, so "save again" is the merge.
  */
 export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const qc = useQueryClient();
@@ -22,13 +25,18 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const [conflict, setConflict] = useState<ConfigRead | null>(null);
   const [note, setNote] = useState<EditorNote | null>(null);
   const [saving, setSaving] = useState(false);
-  const server = conflict ?? q.data ?? null;
+  const edit = useEditBase(q.data);
+  const server = edit.base ?? q.data ?? null;
   const doc = useMemo(() => applyOpsJs(server?.doc ?? null, pending), [server, pending]);
-  const addOp = (op: YamlOp) => setPending((p) => [...p, op]);
+  const addOp = (op: YamlOp) => {
+    edit.pin();
+    setPending((p) => [...p, op]);
+  };
   const discard = () => {
     setPending([]);
     setConflict(null);
     setNote(null);
+    edit.rebase(null);
   };
   const save = async () => {
     if (pending.length === 0) return;
@@ -40,6 +48,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       const warnings = typeof r.warnings === 'string' ? r.warnings : JSON.stringify(r.warnings, null, 2);
       setPending([]);
       setConflict(null);
+      edit.rebase(null);
       setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${pending.length} change${pending.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
       toast.success(`Saved ${server?.path ?? fileKey}`);
       await qc.invalidateQueries({ queryKey: ['config'] });
@@ -47,6 +56,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       if (err instanceof ApiError && err.status === 409) {
         const current = (err.body as { current: ConfigRead }).current;
         setConflict(current);
+        edit.rebase(current);
         setNote({ tone: 'danger', text: `${current.path} changed on disk since you loaded it. Your ${pending.length} pending edit(s) are shown on top of the current version below; review them, then save again or discard.` });
       } else if (err instanceof ApiError && (err.status === 422 || err.status === 400)) {
         const b = err.body as { error: string; findings?: unknown; stderr?: string };
@@ -57,7 +67,9 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       setSaving(false);
     }
   };
-  return { q, server, doc, pending, conflict, note, saving, addOp, save, discard, setNote };
+  const drift: EditorNote | null =
+    edit.drifted && pending.length > 0 ? { tone: 'danger', text: `${server?.path ?? fileKey} changed on disk since you started editing. Your ${pending.length} pending edit(s) still apply to the version you loaded; save to see the current version, or discard.` } : null;
+  return { q, server, doc, pending, conflict, note: note ?? drift, saving, addOp, save, discard, setNote };
 }
 
 export function EditorNoteView({ note }: { note: EditorNote | null }) {

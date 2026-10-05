@@ -164,6 +164,14 @@ describe('launchd schedule helpers', () => {
     const pinned = renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { pinDataRoot: true });
     expect(pinned).toContain('<key>CAREER_OPS_ROOT</key><string>/data</string>');
   });
+  it('pins the daily job to the absolute claude the app resolved (CC_CLAUDE_BIN), escaped, and never the weekly job or a bare name', () => {
+    const daily = renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { claudeBin: '/opt/homebrew/bin/claude' });
+    expect(daily).toContain('<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>/data</string><key>CC_CLAUDE_BIN</key><string>/opt/homebrew/bin/claude</string></dict>');
+    // A root resolved from a marker at run time still gets the pinned binary.
+    expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { pinDataRoot: false, claudeBin: '/Users/me/R&D <bin>/claude' })).toContain('<key>EnvironmentVariables</key><dict><key>CC_CLAUDE_BIN</key><string>/Users/me/R&amp;D &lt;bin&gt;/claude</string></dict>');
+    expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { claudeBin: 'claude' })).not.toContain('CC_CLAUDE_BIN');
+    expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { claudeBin: '/opt/homebrew/bin/claude' })).not.toContain('CC_CLAUDE_BIN');
+  });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';
     expect(parsePrintDisabled(out, 'com.career-ops.immigration-watch')).toBe(true);

@@ -14,7 +14,7 @@ import { parseFollowupsTable, parseNextOverrides } from '../domains/followups.js
 import { readText } from '../domains/files.js';
 import { inside } from '../lib/paths.js';
 import { execNoShell, type Exec } from './system.js';
-import { listModeIds, getModePolicy } from '../claude/modes.js';
+import { listLaunchableModeIds, getModePolicy } from '../claude/modes.js';
 import type { EventBus } from '../watch/bus.js';
 import type { FollowupCadence } from '../../shared/api.js';
 
@@ -153,7 +153,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(cfg.dataRoot)) };
   });
 
-  app.get('/api/modes', async () => listModeIds().map((id) => getModePolicy(id)));
+  app.get('/api/modes', async () => listLaunchableModeIds().map((id) => getModePolicy(id)));
 
   app.get<{ Querystring: { path?: string } }>('/api/files/serve', async (req, reply) => {
     const found = containedPath(cfg.dataRoot, req.query.path ?? '');

@@ -174,6 +174,21 @@ export function sinceForSource({ lastSuccess, today, lookbackDays = SOURCE_LOOKB
   return lastSuccess < floor ? lastSuccess : floor;
 }
 
+/**
+ * The digest with a dated section saying the AI pass was skipped and why, directly under the title (newest first,
+ * like the pass's own sections); unchanged when today's newest section already says it. A missing title is added.
+ */
+export function noteSkippedPass(digest, today, reason) {
+  const bullet = `- AI policy pass skipped: ${String(reason).replace(/\s*[\r\n]+\s*/g, ' ').trim()}`;
+  const section = `## ${today}\n${bullet}\n`;
+  const lines = String(digest ?? '').split('\n');
+  const t = lines.findIndex((l) => /^# /.test(l));
+  const head = t === -1 ? '# Immigration policy digest' : lines.slice(0, t + 1).join('\n');
+  const rest = (t === -1 ? lines : lines.slice(t + 1)).join('\n').replace(/^\n+/, '');
+  if (rest.startsWith(section)) return `${head}\n\n${rest}`;
+  return `${head}\n\n${section}${rest ? `\n${rest}` : ''}`;
+}
+
 export function readCheckedAt(markdown) {
   const m = String(markdown ?? '').match(/^checked_at:\s*(\d{4}-\d{2}-\d{2})\s*$/m);
   return m ? m[1] : null;

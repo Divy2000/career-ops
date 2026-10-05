@@ -42,5 +42,7 @@ export const URL_LIST_MAX_BYTES: number;
 export function urlListFilesIn(command: string): Array<{ file: string; format: 'lines' | 'text' }>;
 export function readUrlList(policy: ReadPolicy, file: string, cwd: string | undefined, format: 'lines' | 'text', label?: string): { urls: string[]; reason?: undefined } | { reason: string; urls?: undefined };
 export function tokenize(command: string): string[] | null;
+/** Scripts no session may run, whatever its policy lists: they start agent CLIs outside the session guard. */
+export const AGENT_SPAWNING_SCRIPTS: readonly string[];
 export function checkBash(command: string, policy: BashPolicy, cwd?: string): string | null;
 export function snapshotKey(sessionDir: string, abs: string): string;

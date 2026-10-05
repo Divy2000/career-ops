@@ -34,7 +34,16 @@ function EngineTab() {
               <dt>Claude binary</dt>
               <dd className="mono">{s.claude.bin}</dd>
               <dt>Claude version</dt>
-              <dd>{s.claude.version ?? <Pill tone="danger">{s.claude.error ?? 'not found'}</Pill>}</dd>
+              <dd>
+                {s.claude.version ?? <Pill tone="danger">{s.claude.error ?? 'not found'}</Pill>}
+                {s.claude.problem && (
+                  <>
+                    {' '}
+                    <Pill tone="warn">not approved: sessions are refused</Pill>
+                    <p className="muted small">{s.claude.problem}</p>
+                  </>
+                )}
+              </dd>
               <dt>Keychain token</dt>
               <dd>{s.keychainTokenPresent ? <Pill tone="ok">present</Pill> : <Pill tone="danger">missing (claude setup-token, then security add-generic-password -s career-ops-claude-token)</Pill>}</dd>
               <dt>ANTHROPIC_API_KEY in the server shell</dt>

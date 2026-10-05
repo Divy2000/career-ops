@@ -4,6 +4,7 @@ import path from 'node:path';
 import { applyInboxSkip, postingUrl } from '../../server/domains/inboxSkip.js';
 import { applyFollowupEdit } from '../../server/domains/followups-edit.mjs';
 import { ACTIONS, findAction } from '../../server/actions/registry.js';
+import { tmpInputDir } from '../../server/actions/tmp-inputs.js';
 import { copyFixtureRoot } from '../helpers/app.js';
 
 const PIPELINE = `# Pipeline\n\n## Pending\n\n- [ ] https://a.example/1 | A | Role\n- [x] https://a.example/2 | B | Role\n- not a checkbox\n\n## Done\n\n- [ ] https://a.example/1 | A | Role\n`;
@@ -84,7 +85,8 @@ describe('follow-ups edits', () => {
 /** Every action id the spec's section 3.3 table lists. */
 export const SPEC_ACTION_IDS = [
   'tracker.setStatus', 'tracker.delete', 'tracker.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.reconcile', 'tracker.syncCheck', 'tracker.hiredShare', 'tracker.hiredMark',
-  'pipeline.prioritize', 'pipeline.rank', 'pipeline.shortlist', 'pipeline.reserveReportNums', 'pipeline.releaseReportNums', 'pipeline.batchRun',
+  // Batch evaluation (3.3 pipeline.batchRun) is the sessions fan-out now: batch-runner.sh's workers run outside any guard.
+  'pipeline.prioritize', 'pipeline.rank', 'pipeline.shortlist', 'pipeline.reserveReportNums', 'pipeline.releaseReportNums',
   'scan.portals', 'scan.network', 'scan.full', 'scan.hn', 'scan.interamt', 'scan.funded', 'scan.reposts',
   'portals.validate', 'portals.verify', 'portals.audit', 'portals.fixSlugs',
   'immigration.watch', 'immigration.freshness', 'immigration.h1b',
@@ -98,7 +100,7 @@ export const SPEC_ACTION_IDS = [
 
 describe('action registry covers section 3.3', () => {
   // Builders may stage ephemeral input files under the data root, so it must exist.
-  const ctx = { codeRoot: '/code', dataRoot: copyFixtureRoot() };
+  const ctx = { codeRoot: '/code', dataRoot: copyFixtureRoot(), tmpInputs: [] as string[] };
   it.each(SPEC_ACTION_IDS)('%s is registered', (id) => {
     expect(findAction(id), id).toBeDefined();
   });
@@ -112,6 +114,13 @@ describe('action registry covers section 3.3', () => {
       expect(Array.isArray(cmd.args)).toBe(true);
       for (const arg of cmd.args) expect(arg, `${a.id} arg ${arg}`).not.toMatch(/[;&|`$><]/);
       expect(['free', 'network', 'tokens']).toContain(a.cost);
+    }
+  });
+  it('no action runs batch/batch-runner.sh: Pipeline > Batch starts confined sessions through the fan-out instead', () => {
+    expect(findAction('pipeline.batchRun')).toBeUndefined();
+    for (const a of ACTIONS) {
+      const cmd = a.build(a.params.parse(sampleParams(a.id)), ctx);
+      expect([cmd.bin, ...cmd.args].join(' '), a.id).not.toMatch(/batch-runner/);
     }
   });
   it('destructive actions carry a confirm text', () => {
@@ -130,10 +139,6 @@ describe('action registry covers section 3.3', () => {
     expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
     expect(findAction('immigration.h1b')!.build({ company: 'Acme', mode: 'json' }, ctx).args.slice(1)).toEqual(['Acme', '--json']);
     expect(findAction('followups.replyPaste')!.build({ subject: 's', from: 'f', body: 'b' }, ctx).args).toContain('--file');
-    const batch = findAction('pipeline.batchRun')!.build({ urls: ['https://x.example/1'], parallel: 2 }, ctx);
-    expect(batch.bin).toBe('/bin/bash');
-    expect(batch.args[0]).toMatch(/batch-runner\.sh$/);
-    expect(batch.args).toContain('--parallel');
     const render = findAction('docs.renderPdf')!.build({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'a4' }, ctx);
     expect(render.args.slice(1)).toEqual([path.join(ctx.dataRoot, 'output/a.html'), path.join(ctx.dataRoot, 'output/a.pdf'), '--format=a4', '--report=1']);
     const bundle = 'output/001-acme-robotics-backend/cv/tailored/v002/cv';
@@ -145,7 +150,7 @@ describe('action registry covers section 3.3', () => {
   });
   it('scan.network writes an ephemeral portals file from the filters and points CAREER_OPS_PORTALS at it', () => {
     const dataRoot = copyFixtureRoot();
-    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: ['intern'], locationAllow: ['Remote'], block: [], sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 }, { codeRoot: '/code', dataRoot });
+    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: ['intern'], locationAllow: ['Remote'], block: [], sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 }, { codeRoot: '/code', dataRoot, tmpInputs: [] });
     expect(cmd.args.slice(1)).toEqual(expect.arrayContaining(['--dry-run', '--json', '--since', '7', '--ats', 'greenhouse,lever', '--limit', '100']));
     const portals = cmd.env?.CAREER_OPS_PORTALS;
     expect(portals).toBeDefined();
@@ -154,6 +159,19 @@ describe('action registry covers section 3.3', () => {
     expect(text).toContain('- backend');
     expect(text).toContain('- intern');
     expect(text).toContain('- Remote');
+  });
+  it('every input file a build writes is collected for the run to remove, the network scan filters file named only in the env included', () => {
+    const dataRoot = copyFixtureRoot();
+    const scan = { codeRoot: '/code', dataRoot, tmpInputs: [] as string[] };
+    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: [], locationAllow: [], block: [], sinceDays: 7, ats: ['greenhouse'], limit: 100 }, scan);
+    expect(scan.tmpInputs).toEqual([cmd.env!.CAREER_OPS_PORTALS]);
+    for (const a of ACTIONS) {
+      const each = { codeRoot: '/code', dataRoot, tmpInputs: [] as string[] };
+      const before = new Set(fs.existsSync(tmpInputDir(dataRoot)) ? fs.readdirSync(tmpInputDir(dataRoot)) : []);
+      a.build(a.params.parse(sampleParams(a.id)), each);
+      const written = (fs.existsSync(tmpInputDir(dataRoot)) ? fs.readdirSync(tmpInputDir(dataRoot)) : []).filter((f) => !before.has(f)).map((f) => path.join(tmpInputDir(dataRoot), f));
+      expect(each.tmpInputs.sort(), a.id).toEqual(written.sort());
+    }
   });
 });
 
@@ -165,7 +183,6 @@ function sampleParams(id: string): Record<string, unknown> {
     'tracker.hiredMark': { report: 1, mark: 'never' },
     'pipeline.reserveReportNums': { count: 2 },
     'pipeline.releaseReportNums': { range: '1-2' },
-    'pipeline.batchRun': { urls: ['https://x.example/1'], parallel: 1 },
     'scan.network': { roles: ['a'], exclude: [], locationAllow: [], block: [], sinceDays: 7, ats: ['greenhouse'], limit: 50 },
     'scan.seeds': { list: 'yc' },
     'immigration.freshness': { company: 'Acme' },

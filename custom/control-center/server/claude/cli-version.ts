@@ -6,6 +6,10 @@
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { CONTRACT } from '../core/adapter.js';
+import { parseClaudeVersion } from './confinement.mjs';
+
+// Shared with the daily job, which gates its own Claude calls the same way.
+export { parseClaudeVersion };
 
 /** What tests/fakes/claude.mjs reports; accepted only under NODE_ENV=test. */
 export const FAKE_CLAUDE_VERSION = '0.0.0-fake';
@@ -16,16 +20,15 @@ export function approvedClaudeVersions(nodeEnv: string): string[] {
   return nodeEnv === 'test' ? [...listed, FAKE_CLAUDE_VERSION] : listed;
 }
 
-/** The leading x.y.z (with an optional -tag) of `claude --version` output. */
-export function parseClaudeVersion(out: string): string | null {
-  const m = out.trim().match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)(?:\s|$)/);
-  return m ? m[1]! : null;
-}
-
 export function unapprovedMessage(found: string, approved: string[]): string {
   const list = approved.length ? approved.join(', ') : 'none yet';
   const install = approved.find((v) => v !== FAKE_CLAUDE_VERSION);
   return `Claude Code ${found} is not approved for Control Center sessions (approved: ${list}); run \`npm run probe:reads\` and add it${install ? `, or \`claude install ${install}\`` : ''}`;
+}
+
+/** Preflight and the setup status: an unapproved CLI refuses sessions (per turn), never the app itself. */
+export function unapprovedWarning(found: string, approved: string[]): string {
+  return `${unapprovedMessage(found, approved)}. Sessions are refused until then; the rest of the app works.`;
 }
 
 export type VersionRunner = (bin: string) => Promise<{ code: number; stdout: string; stderr: string }>;

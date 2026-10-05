@@ -59,9 +59,11 @@ function HealthChip() {
       </span>
     );
   const s = q.data;
-  const ok = Boolean(s.claude.version) && s.keychainTokenPresent;
+  // An unapproved Claude Code runs no session, but the rest of the app works: the chip says so instead of the server refusing to start.
+  const ok = Boolean(s.claude.version) && s.claude.approved && s.keychainTokenPresent;
+  const title = ok ? 'Claude CLI and Keychain token found' : (s.claude.problem ?? 'Setup incomplete: see Settings');
   return (
-    <Link to="/settings" search={{ tab: 'engine' }} className={`chip ${ok ? 'chip--ok' : 'chip--warn'}`} title={ok ? 'Claude CLI and Keychain token found' : 'Setup incomplete: see Settings'} data-short={ok ? 'Setup OK' : 'Setup !'}>
+    <Link to="/settings" search={{ tab: 'engine' }} className={`chip ${ok ? 'chip--ok' : 'chip--warn'}`} title={title} data-short={ok ? 'Setup OK' : 'Setup !'}>
       <ChipText>{ok ? 'Setup OK' : 'Setup needs attention'}</ChipText>
     </Link>
   );
