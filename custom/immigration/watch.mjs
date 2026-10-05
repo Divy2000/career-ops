@@ -11,6 +11,7 @@ import path from 'node:path';
 import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { localToday } from '../../lib/local-today.mjs';
+import { withPipelineLock } from '../../pipeline-lock.mjs';
 
 const DIR = path.join(getCareerOpsRoot(), 'data/immigration');
 const SEEN = path.join(DIR, 'seen.json');
@@ -86,13 +87,21 @@ function parseArgs(argv) {
   return { since };
 }
 
+// Every read-change-write of pending.json holds this lock (the repo's directory lock, pending.json.lock): the daily
+// job, the "Check official feeds" action and a Control Center pass's ack can run at once, and a write made from a
+// stale read would drop an item another writer just queued (and marked seen), or bring back an acknowledged one.
+const withPendingLock = (fn) => withPipelineLock(PENDING, fn);
+
 // Called after the AI pass succeeded: drop the items it was given from the queue.
 async function ack(file) {
   const done = new Set(JSON.parse(await readFile(file, 'utf8')).new_items.map((i) => i.id));
-  const pending = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
-  const left = pending.filter((i) => !done.has(i.id));
-  await writeAtomic(PENDING, JSON.stringify(left, null, 2) + '\n');
-  process.stdout.write(`acknowledged ${pending.length - left.length} item(s); ${left.length} still pending\n`);
+  const { before, left } = await withPendingLock(async () => {
+    const pending = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
+    const kept = pending.filter((i) => !done.has(i.id));
+    await writeAtomic(PENDING, JSON.stringify(kept, null, 2) + '\n');
+    return { before: pending.length, left: kept.length };
+  });
+  process.stdout.write(`acknowledged ${before - left} item(s); ${left} still pending\n`);
 }
 
 async function main() {
@@ -122,21 +131,23 @@ async function main() {
   });
   if (errors.length === results.length) throw new Error(`every source failed: ${errors.join('; ')}`);
 
-  // Items still queued count as known: a crash after the queue write but
-  // before seen.json must not append them to the feed log a second time.
-  const queued = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
-  const known = new Set([...seen.ids, ...queued.map((i) => i.id)]);
-  const fresh = [];
-  for (const item of results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))) {
-    if (!item.url || known.has(item.id) || !isRelevantPolicyItem(item.title)) continue;
-    known.add(item.id);
-    fresh.push(item);
-  }
-
-  // Queue first, then mark seen: a crash in between re-queues on the next run
-  // (mergePending dedupes) instead of losing the item.
-  const pending = mergePending(queued, fresh);
-  await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
+  const { pending, known } = await withPendingLock(async () => {
+    // Items still queued count as known: a crash after the queue write but
+    // before seen.json must not append them to the feed log a second time.
+    const queued = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
+    const known = new Set([...seen.ids, ...queued.map((i) => i.id)]);
+    const fresh = [];
+    for (const item of results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))) {
+      if (!item.url || known.has(item.id) || !isRelevantPolicyItem(item.title)) continue;
+      known.add(item.id);
+      fresh.push(item);
+    }
+    // Queue first, then mark seen: a crash in between re-queues on the next run
+    // (mergePending dedupes) instead of losing the item.
+    const pending = mergePending(queued, fresh);
+    await writeAtomic(PENDING, JSON.stringify(pending, null, 2) + '\n');
+    return { pending, known };
+  });
   // Audit log before seen, deduplicated by URL: a crash anywhere in this
   // sequence can neither drop nor duplicate a feed line on the next run.
   if (!existsSync(FEED)) await writeFile(FEED, FEED_HEADER);
