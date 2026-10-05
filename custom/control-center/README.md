@@ -277,6 +277,7 @@ With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[
   - HTML a session writes can pull in local files: the Playwright-based scripts (`generate-pdf.mjs`, `custom/cv/render-pdf.mjs`, `archive-posting.mjs`, `check-liveness.mjs`) can load `file://` resources referenced inside HTML the session wrote.
   - WebFetch stays open to public hosts, so personal data inside the roots (CV, tracker, contacts, immigration notes, uploads) can leave through a URL, and through WebSearch queries.
   - DNS rebinding between the hook's lookup and Claude Code's own fetch is still possible, and so is a list file changed between the hook's check and the script's read.
+  - WebFetch redirects: the hook checks only the URL a session (or the daily policy pass) asks for. This relies on Claude Code not following a redirect to another host by itself: it reports the redirect, and the model's fetch of the new URL goes through the hook again (probe C13 covers a public URL redirecting to `127.0.0.1`). A same-host redirect stays on the host that was checked.
   - The scan and fix-portal sessions may edit `portals.yml`, and `scan.mjs`, `verify-portals.mjs`, `audit-portals.mjs` and `discover-ats.mjs` fetch the boards it lists without being given a file, so the guard never sees those URLs.
   - A hook that times out (30 s) or is killed does not block. Only the CLI layer is a gate.
   - `READ_DENY` matches file names: a secret under an unusual name inside a root is readable. The hook over-denies case variants on purpose.
