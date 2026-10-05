@@ -208,6 +208,9 @@ button.button--danger:active {
 .table__add-row td {
   background: var(--surface-2);
 }
+.table__add-row button {
+  white-space: nowrap;
+}
 .selection-bar {
   background: var(--accent-soft);
   border-left: 3px solid var(--accent);
