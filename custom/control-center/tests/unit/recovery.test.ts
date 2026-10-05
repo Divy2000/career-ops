@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { changesByTurn, diffFile, listChanges, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
+import { changesByTurn, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
@@ -165,6 +165,53 @@ describe('Dev Chat change sets', () => {
     const r = refusal(() => revertFile(t3, kept, ctx));
     expect(r.status).toBe(409);
     expect(fs.readFileSync(kept, 'utf8')).toBe('the user edit made later\n');
+  });
+});
+
+describe('diffs stay bounded, so /__recovery and the Changes panel never freeze the supervisor or the API', () => {
+  /** A turn that replaced `before` with `after` in custom/big.txt, as the hook records it. */
+  function turnOf(before: Buffer | string, after: Buffer | string) {
+    const root = fs.realpathSync(tempDir('cc-recovery-big-'));
+    const turnDir = path.join(fs.realpathSync(tempDir('cc-recovery-big-guard-')), 'turns', '1');
+    const abs = path.join(root, 'custom', 'big.txt');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.mkdirSync(path.join(turnDir, 'before'), { recursive: true });
+    fs.writeFileSync(snapshotKey(turnDir, abs), before);
+    fs.writeFileSync(abs, after);
+    return diffFile(turnDir, { path: 'custom/big.txt', abs, root: 'code', tool: 'Write', ts: '' });
+  }
+  const lines = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `${tag} line ${i} ${'x'.repeat(40)}`).join('\n') + '\n';
+
+  it('a file larger than the cap is summarized, with line counts and the revert still offered', () => {
+    const before = lines(Math.ceil(MAX_DIFF_BYTES / 50) + 100, 'old');
+    expect(Buffer.byteLength(before)).toBeGreaterThan(MAX_DIFF_BYTES);
+    const after = before.replace('old line 7 ', 'new line 7 ').replace('old line 9 ', 'new line 9 ') + 'appended\n';
+    const d = turnOf(before, after);
+    expect(d).toMatchObject({ status: 'modified', additions: 3, deletions: 2, canRevert: true });
+    expect(d.patch).not.toContain('@@');
+    expect(d.patch).toMatch(/larger than/);
+  });
+
+  it('a binary file is never diffed as text', () => {
+    const d = turnOf(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0x01, 0x02, 0x0a]), Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0x09, 0x0a]));
+    expect(d).toMatchObject({ status: 'modified', additions: 0, deletions: 0, canRevert: true });
+    expect(d.patch).toMatch(/binary/i);
+    expect(turnOf(Buffer.from([0xff, 0xfe, 0x41]), Buffer.from([0xff, 0xfe, 0x42])).patch).toMatch(/binary/i);
+    expect(turnOf(Buffer.from([0x00, 0x01]), Buffer.from([0x00, 0x01])).status).toBe('unchanged');
+  });
+
+  it('a rewrite too far apart to diff quickly gets the summary and line counts instead of a patch', () => {
+    const d = turnOf(lines(3000, 'old'), lines(3000, 'new'));
+    expect(d).toMatchObject({ status: 'modified', additions: 3000, deletions: 3000, canRevert: true });
+    expect(d.patch).not.toContain('@@');
+    expect(d.patch).toMatch(/too many changes/i);
+  });
+
+  it('small text edits still get a unified patch', () => {
+    const d = turnOf('a\nb\nc\n', 'a\nB\nc\n');
+    expect(d).toMatchObject({ status: 'modified', additions: 1, deletions: 1 });
+    expect(d.patch).toContain('-b');
+    expect(d.patch).toContain('+B');
   });
 });
 
