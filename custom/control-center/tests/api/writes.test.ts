@@ -56,6 +56,26 @@ describe('pipeline writes', () => {
     expect(readData('data/pipeline.md')).toContain('https://jobs.example.com/offerco/7');
     expect(readData('data/scan-history.tsv')).toContain('https://jobs.example.com/offerco/7');
   });
+  it('a Network scan result keeps its posted date and its ATS through scan.mjs: the pipeline row and scan-history carry both (R8-08)', async () => {
+    const url = 'https://boards.example.com/posted/1';
+    const [body] = pipelineAddBatches([{ url, company: 'Posted Co', title: 'Platform Engineer', location: 'Remote', postedAt: '2026-09-30', source: 'ashby' }]);
+    expect(body!.offers[0]).toMatchObject({ postedAt: '2026-09-30', portal: 'ashby' });
+    const r = await post('/api/pipeline/add', body);
+    expect(r.statusCode, r.body).toBe(200);
+    expect(readData('data/pipeline.md')).toContain(`- [ ] ${url} | Posted Co | Platform Engineer | Remote | posted: 2026-09-30`);
+    const row = (await get('/api/pipeline')).json().rows.find((x: { url: string }) => x.url === url);
+    expect(row.postedAt).toBe('2026-09-30');
+    const history = readData('data/scan-history.tsv').split('\n').find((l) => l.startsWith(`${url}\t`))!.split('\t');
+    // url, first_seen, portal, title, company, status, location, fingerprint, posted_at
+    expect([history[2], history[5], history[8]]).toEqual(['ashby', 'added', '2026-09-30']);
+  });
+  it('refuses a posted date that is not a calendar day', async () => {
+    for (const postedAt of ['2026-02-30', 'yesterday', '2026-9-1']) {
+      const r = await post('/api/pipeline/add', { offers: [{ url: 'https://boards.example.com/posted/bad', company: 'Bad', title: 'Eng', postedAt }] });
+      expect(r.statusCode, postedAt).toBe(400);
+    }
+    expect(pipelineAddBatches([{ url: 'https://boards.example.com/posted/2', postedAt: 'n/a' }])[0]!.offers[0]).not.toHaveProperty('postedAt');
+  });
   it('adding is idempotent: URLs already in the pipeline (pending or processed, however spelled) and repeats within the request are skipped and counted', async () => {
     const fresh = 'https://boards.example.com/idem/1';
     const other = 'https://boards.example.com/idem/2';

@@ -11,6 +11,17 @@ export interface PipelineOffer {
   title: string;
   location?: string;
   portal?: string;
+  /** YYYY-MM-DD. */
+  postedAt?: string;
+}
+
+/**
+ * An offer in scan.mjs's own shape: it reads the ATS from `source` (scan-history's portal column) and the posting date
+ * from `postedAt` as epoch ms (formatPipelineOffer's `posted:` segment, formatScanHistoryRow's posted_at column).
+ */
+function scanOffer(o: PipelineOffer): Record<string, unknown> {
+  const { portal, postedAt, ...rest } = o;
+  return { ...rest, ...(portal !== undefined ? { source: portal } : {}), ...(postedAt !== undefined ? { postedAt: Date.parse(`${postedAt}T00:00:00Z`) } : {}) };
 }
 
 const env = (dataRoot: string) => ({ CAREER_OPS_ROOT: dataRoot, NO_COLOR: '1' });
@@ -64,7 +75,7 @@ const historyRows = [...fresh, ...unrecorded];
 if (req.history && historyRows.length) await appendToScanHistory(historyRows, req.date, 'added');
 process.stdout.write(JSON.stringify({ ok: true, added: fresh.length, skipped: req.offers.length - fresh.length }));
 `;
-    const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers, history, date: localDate() }, timeoutMs: 30_000 });
+    const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers: offers.map(scanOffer), history, date: localDate() }, timeoutMs: 30_000 });
     if (r.code !== 0) throw new Error(`pipeline writer exited ${r.code}: ${r.stderr.trim().slice(-600)}`);
     const out = childJson<{ added: number; skipped: number }>(r);
     return { added: out.added, skipped: out.skipped };
