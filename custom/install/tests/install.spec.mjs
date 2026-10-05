@@ -22,6 +22,8 @@ const READY_FILES = {
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 const exists = (...p) => fs.existsSync(path.join(...p));
 const md = (w, name, data) => w.write(`src/${name}`, data);
+// A freshly seeded modes/_custom.md: the template with the projects-library rule in place of its first "none yet" line.
+const seededCustom = () => read(INSTALL_DIR, 'templates', '_custom.md').replace('(none yet -- add yours above)', read(INSTALL_DIR, 'templates', '_custom-projects.md').trimEnd());
 
 // ---------------------------------------------------------------- usage and contract
 
@@ -32,6 +34,7 @@ test('--help prints every flag of the contract and the exit codes, exit 0, and t
   for (const flag of ['--yes', '-y', '--non-interactive', '--dir', '--data-root', '--ref', '--no-launchd', '--with-upstream-sync', '--no-start', '--no-h1b-index', '--resume', '--docs', '--replace-cv', '--onboard', '--install-missing', '--core-only', '--dry-run', '--help']) {
     assert.ok(r.stdout.includes(flag), `help mentions ${flag}`);
   }
+  assert.ok(r.stdout.includes('--projects'), 'help mentions --projects');
   assert.match(r.stdout, /interactive \| headless \| none/);
   assert.match(r.stdout, /Markdown/);
   assert.match(r.stdout, /0 done, 1 failure, 2 usage error, 3 done with pending actions/);
@@ -39,7 +42,7 @@ test('--help prints every flag of the contract and the exit codes, exit 0, and t
 });
 
 test('unknown flags, missing values and bad --onboard modes are usage errors (exit 2) that change nothing', () => {
-  for (const args of [['--bogus'], ['--dir'], ['--resume'], ['--docs'], ['--onboard', 'sometimes'], ['--ref'], ['--data-root']]) {
+  for (const args of [['--bogus'], ['--dir'], ['--resume'], ['--docs'], ['--onboard', 'sometimes'], ['--ref'], ['--data-root'], ['--projects']]) {
     const { w, D } = fresh();
     const before = w.snapshot();
     const r = w.run(['--dir', D, ...args]);
@@ -259,7 +262,7 @@ test('a fresh install seeds modes/_custom.md from the template and declares cust
   const { w, D, args } = fresh();
   w.run(args());
   w.run(args());
-  assert.equal(read(D, 'modes', '_custom.md'), read(INSTALL_DIR, 'templates', '_custom.md'));
+  assert.equal(read(D, 'modes', '_custom.md'), seededCustom());
   assert.equal(read(D, 'config', 'local-paths.txt').split('\n').filter((l) => l === 'custom/').length, 1);
   assert.ok(w.log().some((l) => l === 'doctor --json --init-templates'));
 });
@@ -423,6 +426,153 @@ test('docs go to documents/projects, a different file of the same name gets a -1
   assert.equal(exists(D, 'article-digest.md'), false);
   w.run(args('--docs', doc));
   assert.deepEqual(fs.readdirSync(path.join(D, 'documents', 'projects')).sort(), ['proj-1.md', 'proj.md']);
+});
+
+// ---------------------------------------------------------------- projects library (--projects)
+
+const LIBRARY = '# Projects library\n\n## Kite Tracker -- https://example.org/kites\nTags: python\n- Tracked 40 kites.\n';
+
+test('--projects with a library .md and no article-digest.md creates it and keeps a copy in documents/projects', () => {
+  const { w, D, args } = fresh();
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib));
+  assert.equal(read(D, 'article-digest.md'), LIBRARY, r.out);
+  assert.equal(read(D, 'documents', 'projects', 'projects.md'), LIBRARY);
+  assert.match(r.out, /created article-digest\.md/);
+});
+
+test('--projects with a projects JSON converts it into the library format', () => {
+  const { w, D, args } = fresh();
+  const json = md(w, 'projects.json', JSON.stringify([{ id: 'k', name: 'Kite Tracker', url: 'https://example.org/kites', description: 'Tracked 40 kites.', highlights: [], keywords: ['python'] }]));
+  w.run(args('--projects', json));
+  assert.equal(read(D, 'article-digest.md'), LIBRARY);
+});
+
+test('an invalid --projects library exits 2 and changes nothing', () => {
+  const { w, D, args } = fresh();
+  const bad = md(w, 'bad.md', '## Empty\nTags: go\n');
+  const before = w.snapshot();
+  const r = w.run(args('--projects', bad));
+  assert.equal(r.status, 2, r.out);
+  assert.match(r.out, /"Empty".*no copy-paste points/);
+  assert.deepEqual(w.snapshot(), before);
+  assert.equal(exists(D), false);
+  assert.equal(w.calls('git').length, 0);
+});
+
+test('an existing article-digest.md is never overwritten by --projects; a pending action says how to merge', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'article-digest.md': 'MINE\n' } });
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib));
+  assert.equal(read(D, 'article-digest.md'), 'MINE\n');
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /custom\/projects\/import\.mjs .*--merge --write/);
+});
+
+test('--dry-run with --projects says what it would do and writes nothing', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D);
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib, '--dry-run'));
+  assert.match(r.out, /create article-digest\.md from/);
+  assert.equal(exists(D, 'article-digest.md'), false);
+});
+
+// A copy of custom/install outside any checkout (downloaded on its own): the projects parser is not next to it.
+function standalone(w, { parser = true } = {}) {
+  const dl = path.join(w.T, 'dl', 'custom', 'install');
+  fs.cpSync(INSTALL_DIR, dl, { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
+  if (parser) {
+    const repo = path.resolve(INSTALL_DIR, '..', '..');
+    for (const rel of ['custom/projects/lib.mjs', 'tracker-parse.mjs', 'tracker-aliases.json', 'skill-extract.mjs']) {
+      fs.mkdirSync(path.dirname(path.join(w.fakeSrc, rel)), { recursive: true });
+      fs.copyFileSync(path.join(repo, rel), path.join(w.fakeSrc, rel));
+    }
+  }
+  return path.join(dl, 'install.sh');
+}
+const cloneTargets = (w) => w.calls('git').filter((l) => l.startsWith('git clone')).map((l) => l.split(' ').at(-1));
+
+test('--projects gets the same byte checks as --docs before anything changes, also in standalone mode', () => {
+  for (const mode of ['checkout', 'standalone']) {
+    const { w, D, args } = fresh();
+    const script = mode === 'standalone' ? standalone(w) : INSTALL_SH;
+    const bad = w.write('src/bad.md', Buffer.from('## A\n- \xff\n', 'latin1'));
+    const before = w.snapshot();
+    const r = w.run(args('--projects', bad), { script });
+    assert.equal(r.status, 2, `${mode}: ${r.out}`);
+    assert.match(r.out, /bad\.md: not valid UTF-8/, mode);
+    assert.deepEqual(w.snapshot(), before, mode);
+    assert.equal(exists(D), false, mode);
+    assert.equal(w.calls('git').length, 0, mode);
+  }
+});
+
+test('standalone: an invalid --projects file is refused before the checkout or the user layer exists', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w);
+  const bad = md(w, 'bad.md', '## Empty\nTags: go\n');
+  const r = w.run(args('--projects', bad), { script });
+  assert.equal(r.status, 2, r.out);
+  assert.match(r.out, /"Empty".*no copy-paste points/);
+  assert.match(r.out, /No changes were made to the checkout or the user layer/);
+  assert.doesNotMatch(r.out, /unexpected failure/);
+  assert.equal(exists(D), false);
+  // Only the throwaway validator clone ran, and it is gone.
+  const targets = cloneTargets(w);
+  assert.equal(targets.length, 1, w.calls('git').join('\n'));
+  assert.notEqual(targets[0], D);
+  assert.equal(fs.existsSync(targets[0]), false);
+});
+
+test('standalone: a valid --projects file is checked first, then seeds article-digest.md after the checkout', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w);
+  const lib = md(w, 'projects.md', LIBRARY);
+  const r = w.run(args('--projects', lib), { script });
+  assert.equal(read(D, 'article-digest.md'), LIBRARY, r.out);
+  const targets = cloneTargets(w);
+  assert.deepEqual(targets.slice(-1), [D]);
+  assert.equal(targets.length, 2);
+  assert.equal(fs.existsSync(targets[0]), false);
+});
+
+test('standalone: when the validator cannot be fetched, the install stops before any change and says so', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w, { parser: false });
+  const r = w.run(args('--projects', md(w, 'projects.md', LIBRARY)), { script });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /could not fetch the projects validator/);
+  assert.match(r.out, /No changes were made to the checkout or the user layer/);
+  assert.equal(exists(D), false);
+});
+
+// ---------------------------------------------------------------- self-tests
+
+const SELFTEST_SPEC = `import { test } from 'node:test';
+import fs from 'node:fs';
+test('records the self-test marker', () => fs.appendFileSync(process.env.STUB_LOG, 'selftest CAREER_OPS_IN_SELFTEST=' + (process.env.CAREER_OPS_IN_SELFTEST ?? '') + '\\n'));
+`;
+
+test('the health check runs the checkout\'s custom specs with CAREER_OPS_IN_SELFTEST=1', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'custom/demo/tests/a.spec.mjs': SELFTEST_SPEC } });
+  w.run(args());
+  assert.deepEqual(w.calls('selftest'), ['selftest CAREER_OPS_IN_SELFTEST=1']);
+});
+
+test('inside a self-test run the installer does not start the custom specs again', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'custom/demo/tests/a.spec.mjs': SELFTEST_SPEC } });
+  const r = w.run(args(), { env: { CAREER_OPS_IN_SELFTEST: '1' } });
+  assert.deepEqual(w.calls('selftest'), []);
+  assert.match(r.out, /already inside a self-test run; skipping the self-tests/);
+});
+
+test('worlds keep the caller\'s TMPDIR, so nested temp files land where the test run put them', () => {
+  const { w } = fresh();
+  assert.equal(w.env().TMPDIR, process.env.TMPDIR);
 });
 
 // ---------------------------------------------------------------- Keychain
@@ -685,8 +835,10 @@ test('a script that lives inside a checkout uses that checkout: no clone, and th
   const w = makeWorld({ keychain: true });
   const inside = path.join(w.T, 'inside');
   w.makeCheckout(inside);
-  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true });
+  // Without tests/: the installer runs a checkout's custom specs, and these would run this test again.
+  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
   const r = w.run(['--non-interactive', ...QUIET], { script: path.join(inside, 'custom', 'install', 'install.sh') });
+  assert.match(r.out, /no custom\/\*\/tests specs in this checkout; skipping the self-tests/);
   assert.notEqual(r.status, 1, r.out);
   assert.equal(w.log().filter((l) => l.startsWith('git clone')).length, 0);
   assert.ok(r.out.includes(`checkout:  ${inside}`), r.out);
@@ -813,7 +965,7 @@ test('a marker that spells the same --data-root differently (trailing slash, rel
     const r = w.run(args('--data-root', d));
     assert.notEqual(r.status, 1, `${marker}: ${r.out}`);
     assert.equal(read(D, '.career-ops-data'), marker);
-    assert.equal(read(d, 'modes', '_custom.md'), read(INSTALL_DIR, 'templates', '_custom.md'));
+    assert.equal(read(d, 'modes', '_custom.md'), seededCustom());
   }
 });
 

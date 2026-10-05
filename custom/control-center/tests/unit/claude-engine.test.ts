@@ -10,6 +10,7 @@ import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
 import { checkBash, snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
+import { foldsCase } from '../helpers/case.js';
 
 const codeRoot = '/repo/career-ops';
 const base = { claudeBin: 'claude', codeRoot, dataRoot: '/data/root', sessionDir: '/data/root/data/control-center/sessions/s1', policyFile: '/data/root/data/control-center/sessions/s1/policy.json', settingsFile: '/data/root/data/control-center/sessions/s1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: '11111111-1111-4111-8111-111111111111', preamble: 'PREAMBLE', resume: false };
@@ -55,6 +56,13 @@ describe('invocation builder', () => {
     expect(buildArgv({ ...base, policy: getModePolicy('oferta')! }).join(' ')).not.toContain('tok-secret');
     expect(redact('stderr says tok-secret twice tok-secret', 'tok-secret')).toBe('stderr says [redacted] twice [redacted]');
   });
+  it('tells projects-ingest that the document text is in the request and that it runs nothing', () => {
+    const text = buildPreamble({ policy: getModePolicy('projects-ingest')!, outputLanguage: 'en' });
+    expect(text).toMatch(/<document source="documents\/\.\.\."> tags/);
+    expect(text).toMatch(/<<cc:projects \{"markdown":"\.\.\."\}>>/);
+    expect(text).not.toMatch(/intake\.mjs --text/);
+  });
+
   it('writes a preamble that names the scope, the router context and the envelope contract, with no em dash', () => {
     const text = buildPreamble({ policy: getModePolicy('apply')!, outputLanguage: 'en', reportNum: 12 });
     expect(text).toContain('headless');
@@ -130,8 +138,9 @@ describe('guard hook', () => {
     expect(pre('mcp__playwright__browser_click', { element: 'Next page', ref: 'e13' }).status).toBe(0);
     expect(pre('mcp__playwright__browser_press_key', { key: 'Enter', element: 'Apply now' }).status).toBe(2);
   });
-  it('folds case on a case-insensitive volume: Blacklist.md, APPLICATIONS.md and Supervisor/ are still protected', () => {
+  it('protects Blacklist.md, APPLICATIONS.md and Supervisor/ in any case, on a case-insensitive or a case-sensitive volume', () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-case-')));
+    const folding = foldsCase(root);
     fs.mkdirSync(path.join(root, 'data'));
     fs.writeFileSync(path.join(root, 'data', 'blacklist.md'), '# blacklist\n');
     fs.mkdirSync(path.join(root, 'custom', 'control-center', 'supervisor'), { recursive: true });
@@ -139,10 +148,16 @@ describe('guard hook', () => {
     const dir = path.join(root, 'guard');
     const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
     const write = (p: string, tool = 'Write') => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { file_path: p, content: 'x' }, cwd: root, session_id: 's' });
-    // Existing protected file reached through a different case: realpath.native returns the on-disk case.
     const viaCase = write(path.join(root, 'data', 'Blacklist.md'));
     expect(viaCase.status, viaCase.stderr).toBe(2);
-    expect(viaCase.stderr).toMatch(/data\/blacklist\.md is always protected/);
+    if (folding) {
+      // The same file reached through a different case: realpath.native returns the on-disk case.
+      expect(viaCase.stderr).toMatch(/data\/blacklist\.md is always protected/);
+    } else {
+      // A different (not yet existing) file: its path keeps the caller's case, and the deny globs compare case-insensitively.
+      expect(viaCase.stderr).toMatch(/data\/Blacklist\.md is always protected/);
+      expect(fs.existsSync(path.join(root, 'data', 'Blacklist.md'))).toBe(false);
+    }
     expect(write(path.join(root, 'DATA', 'BLACKLIST.MD'), 'Edit').status).toBe(2);
     // Not-yet-existing protected file: the tail keeps the caller's case, so globs compare case-insensitively.
     expect(write(path.join(root, 'data', 'APPLICATIONS.md')).status).toBe(2);
@@ -489,6 +504,28 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(scan, 'node discover-new-companies.mjs --out data/new.yml');
   });
 
+  it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
+    ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
+    no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');
+    no(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html output/extra.html');
+    no(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html --template=x');
+    ok(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --format=letter --report=008 --max-pages=1');
+    ok(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --format letter --max-pages 1 --strict-pages');
+    no(pdf, 'node custom/cv/render-pdf.mjs output/cv.html cv.md');
+    // The input HTML is rewritten with the fitted density, so it must be writable too.
+    no(pdf, 'node custom/cv/render-pdf.mjs reports/cv.html output/cv.pdf');
+    no(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --out=cv.md');
+    no(pdf, 'node custom/cv/render-pdf.mjs output/cv.html output/cv.pdf --max-pages');
+    ok(oferta, 'node custom/projects/rank.mjs jds/acme.md --json');
+    ok(oferta, 'node custom/projects/rank.mjs --check');
+    no(oferta, 'node custom/projects/rank.mjs /etc/passwd --json');
+  });
+
+  it('projects-ingest: no command is allowed, not even intake.mjs --text (it creates the documents/ scaffold)', () => {
+    const ingest = policyFor('projects-ingest', [...ALWAYS_DENIED_WRITES]);
+    for (const cmd of ['node intake.mjs --text projects/kites.pdf', 'node intake.mjs', 'node intake.mjs --commit --all']) no(ingest, cmd);
+  });
+
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
@@ -526,5 +563,8 @@ describe('envelopes', () => {
     const answers = extractEnvelopes('<<cc:answers {"fields":[{"id":"q1","label":"Why us","type":"textarea","required":true,"value":"Because","needsConfirmation":true}]}>>', false);
     expect(answers.envelopes[0]).toMatchObject({ ok: true, kind: 'answers' });
     expect(extractEnvelopes('<<cc:bogus {"a":1}>>', false).envelopes[0]).toMatchObject({ ok: false });
+    const projects = extractEnvelopes('<<cc:projects {"markdown":"## Chess Engine\\n- Wrote it."}>>', false);
+    expect(projects.envelopes[0]).toMatchObject({ ok: true, kind: 'projects', payload: { markdown: '## Chess Engine\n- Wrote it.' } });
+    expect(extractEnvelopes('<<cc:projects {"markdown":""}>>', false).envelopes[0]).toMatchObject({ ok: false });
   });
 });

@@ -63,3 +63,9 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+/* A long option label must not push the mode select past its card. */
+.mode-launcher__pick {
+  min-width: 0;
+  max-width: 100%;
+}

@@ -18,7 +18,7 @@ export function ModeLauncher({ modes, target, heading }: { modes: ModeChoice[]; 
       <div className="card">
         <h2>{heading}</h2>
         <div className="row gap">
-          <label>
+          <label className="mode-launcher__pick">
             <span className="sr-only">Mode</span>
             <select aria-label={`${heading} mode`} value={mode} onChange={(e) => setMode(e.target.value)}>
               {modes.map((m) => (

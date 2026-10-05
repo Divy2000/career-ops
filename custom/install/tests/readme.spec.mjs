@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import os from 'node:os';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const README_REL = '.github/README.md';
@@ -19,7 +19,7 @@ const onboarding = readFileSync(path.join(ROOT, ONBOARDING_REL), 'utf8');
 const FROZEN_FLAGS = [
   '--yes', '--non-interactive', '--dir', '--data-root', '--ref', '--no-launchd', '--with-upstream-sync',
   '--no-start', '--no-h1b-index', '--resume', '--docs', '--replace-cv', '--onboard', '--install-missing',
-  '--core-only', '--dry-run', '--help',
+  '--core-only', '--dry-run', '--help', '--projects',
 ];
 
 function stripCode(markdown) {
@@ -66,7 +66,7 @@ function existsExactCase(rel) {
 }
 
 // Anchored to the checkout by an absolute path: the agent's working directory is not necessarily the checkout.
-const RESOLVER_ONE_LINER = `node --input-type=module -e "import(process.argv[1]).then((m) => console.log(m.getCareerOpsRoot()))" "<checkout>/path-resolver.mjs"`;
+const RESOLVER_ONE_LINER = `node --input-type=module -e "import(process.argv.at(-1)).then((m) => console.log(m.getCareerOpsRoot()))" "<checkout>/path-resolver.mjs"`;
 
 function section(markdown, titlePattern) {
   const lines = markdown.split('\n');
@@ -180,7 +180,7 @@ test('the README uses only flags from the frozen installer contract on install.s
   assert.ok(used.size >= 8, `expected a flags table and command lines, found ${[...used].join(' ')}`);
   const unknown = [...used].filter((f) => !FROZEN_FLAGS.includes(f));
   assert.deepEqual(unknown, []);
-  for (const needed of ['--resume', '--docs', '--replace-cv', '--onboard', '--dry-run', '--non-interactive', '--no-start', '--no-launchd', '--yes', '--data-root', '--with-upstream-sync']) {
+  for (const needed of ['--resume', '--docs', '--replace-cv', '--onboard', '--dry-run', '--non-interactive', '--no-start', '--no-launchd', '--yes', '--data-root', '--with-upstream-sync', '--projects']) {
     assert.ok(used.has(needed), `README never mentions ${needed}`);
   }
 });
@@ -489,13 +489,13 @@ test('every path-resolver command in ONBOARDING.md is anchored to the checkout, 
   for (const cmd of commands) {
     assert.ok(!cmd.includes("import('./path-resolver.mjs')"), `relative import breaks outside the checkout: ${cmd}`);
     assert.match(cmd, /--input-type=module/, cmd);
-    assert.ok(cmd.includes('import(process.argv[1])') && cmd.includes('"<checkout>/path-resolver.mjs"'), `not anchored to <checkout>: ${cmd}`);
+    assert.ok(cmd.includes('import(process.argv.at(-1))') && cmd.includes('"<checkout>/path-resolver.mjs"'), `not anchored to <checkout>: ${cmd}`);
   }
   assert.match(onboarding, /`<checkout>`[^.\n]*absolute path/i, 'the doc says what <checkout> means');
 });
 
 test('the documented path-resolver commands print the data root when run from a directory outside the checkout', () => {
-  const tmp = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'readme-resolver-')));
+  const tmp = realpathSync(tempDir('readme-resolver-'));
   const checkout = path.join(tmp, 'my checkout');
   const elsewhere = path.join(tmp, 'elsewhere');
   mkdirSync(checkout);
@@ -517,4 +517,58 @@ test('the documented path-resolver commands print the data root when run from a 
   const assignment = imageRow.match(/DATA="\$\(.*?path-resolver\.mjs"\)"/)?.[0];
   assert.ok(assignment, 'the images row assigns DATA from the resolver');
   assert.equal(run(`${anchored(assignment)}; printf %s "$DATA"`), checkout);
+});
+
+// ---------------------------------------------------------------- projects library (S10)
+
+test('ONBOARDING.md always adds the shipped projects-library rule with the idempotent helper, never a retyped copy', () => {
+  const custom = onboarding.split('**`modes/_custom.md`.**')[1].split('\n\n**')[0];
+  assert.ok(onboarding.includes('custom/install/templates/_custom-projects.md'));
+  assert.match(onboarding, /node custom\/install\/seed\.mjs projects-rule --data <data-root> --template custom\/install\/templates\/_custom-projects\.md/);
+  assert.match(custom, /whatever the sponsorship answer/i);
+  assert.equal(/^### Projects library/m.test(onboarding), false, 'ONBOARDING.md must not embed its own copy of the rule');
+});
+
+test('ONBOARDING.md maps project documents into the library format and papers into Recent Achievements', () => {
+  const step4 = section(onboarding, /^#{2,3}\s+Step 4\b/);
+  assert.match(step4, /## Title -- link/);
+  assert.match(step4, /Kind: publication/);
+  assert.match(step4, /## Recent Achievements/);
+  assert.match(step4, /Projects\.csv/);
+  assert.match(step4, /node custom\/projects\/import\.mjs/);
+});
+
+test('the questionnaire asks which 2 or 3 projects stay in cv.md, and Step 6 checks the library', () => {
+  assert.match(section(onboarding, /^#{2,3}\s+Step 3\b/), /which 2 or 3 .*cv\.md/i);
+  assert.match(section(onboarding, /^#{2,3}\s+Step 6\b/), /node custom\/projects\/rank\.mjs --check/);
+});
+
+test('the headless draft prompt asks for article-digest.md in the projects-library format', () => {
+  const prompt = readFileSync(path.join(ROOT, 'custom/install/onboard-headless-prompt.md'), 'utf8');
+  assert.match(prompt, /article-digest\.md in the projects-library format/);
+});
+
+test('the landing README documents the projects library, the Recent Achievements rule and --projects', () => {
+  const opt2 = section(readme, /^###\s+Option 2\b/);
+  assert.match(opt2, /--projects/);
+  assert.match(opt2, /article-digest\.md/);
+  assert.match(opt2, /never (?:replaced|overwritten)/i);
+  const got = section(readme, /^##\s+What you get\b/);
+  assert.match(got, /Projects library/);
+  assert.match(got, /custom\/projects\/rank\.mjs/);
+  assert.match(got, /Recent Achievements/);
+});
+
+test('custom/README.md lists the projects library and the fork CV build and render', () => {
+  const custom = readFileSync(path.join(ROOT, 'custom/README.md'), 'utf8');
+  for (const needle of ['`projects/`', '`cv/`', 'rank.mjs', 'import.mjs', 'build-html.mjs', 'render-pdf.mjs', 'Recent Achievements', 'article-digest.md', '_custom-projects.md']) {
+    assert.ok(custom.includes(needle), `custom/README.md mentions ${needle}`);
+  }
+});
+
+test('the Control Center README documents Profile > Projects, its API and the intake-backed PDF import', () => {
+  const cc = readFileSync(path.join(ROOT, 'custom/control-center/README.md'), 'utf8');
+  for (const needle of ['Projects', '/api/projects', 'projects.rank', 'projects-ingest', 'documents/projects/', 'intake.mjs --commit', 'Source:']) {
+    assert.ok(cc.includes(needle), `custom/control-center/README.md mentions ${needle}`);
+  }
 });

@@ -26,6 +26,7 @@ export const ENVELOPE_SCHEMAS = {
     notes: z.string().optional(),
   }),
   cv: z.object({ markdown: z.string().min(1) }),
+  projects: z.object({ markdown: z.string().min(1) }),
   act: z.object({ action: z.string().min(1), params: z.record(z.string(), z.unknown()).default({}) }),
 } as const;
 

@@ -2,7 +2,6 @@
 // older Node the installer is about to complain about.
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const MiB = 1024 * 1024;
 export const LIMITS = {
@@ -110,6 +109,36 @@ export function renderHeadlessPrompt(template, { draftDir, inputs }) {
 }
 
 /** `--flag value` pairs; the flags named in `listFlags` take every value up to the next `--flag`. Returns Map(flag -> string | string[]). */
+const PLACEHOLDER = '(none yet -- add yours above)';
+
+/**
+ * Add a shipped house-rule block (it starts with its own `### Title (...)` heading) to the
+ * `## House Rules` section of modes/_custom.md. Null when the heading is already there.
+ * It replaces the template's placeholder line when that is all the section holds, else it
+ * goes after the section's last line; every other byte stays.
+ */
+export function insertHouseRule(text, block) {
+  const body = block.replace(/\s+$/, '');
+  const title = body.split('\n')[0].replace(/\s*\(.*$/, '').trim();
+  const lines = text.split('\n');
+  if (lines.some((l) => l.trim() === title || l.startsWith(`${title} `) || l.startsWith(`${title}(`))) return null;
+  const start = lines.findIndex((l) => /^## House Rules\s*$/.test(l));
+  if (start === -1) return `${text.replace(/\s+$/, '')}\n\n## House Rules\n\n${body}\n`;
+  let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  if (end === -1) end = lines.length;
+  const section = lines.slice(start + 1, end).join('\n');
+  const content = section.replace(/<!--[\s\S]*?-->/g, '').split('\n').map((l) => l.trim()).filter((l) => l && l !== PLACEHOLDER);
+  const placeholder = lines.findIndex((l, i) => i > start && i < end && l.trim() === PLACEHOLDER);
+  if (content.length === 0 && placeholder !== -1) {
+    lines.splice(placeholder, 1, ...body.split('\n'));
+    return lines.join('\n');
+  }
+  let last = end - 1;
+  while (last > start && !lines[last].trim()) last--;
+  lines.splice(last + 1, 0, '', ...body.split('\n'));
+  return lines.join('\n');
+}
+
 export function parseFlags(argv, listFlags = []) {
   const out = new Map();
   for (let i = 0; i < argv.length; i++) {
@@ -174,15 +203,9 @@ export function validateMarkdownInput(file, { kind, targetCv } = {}) {
     }
     if (targetReal && targetReal === real) return { ok: false, error: `${label}: this is the target cv.md itself; pass a copy of your resume` };
   }
-  const buf = fs.readFileSync(real);
-  let text;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-  } catch {
-    return { ok: false, error: `${label}: not valid UTF-8` };
-  }
-  if (text.includes('\0')) return { ok: false, error: `${label}: contains NUL bytes (binary file?)` };
-  if (text.replace(/^﻿/, '').trim() === '') return { ok: false, error: `${label}: file is empty` };
+  const decoded = decodeText(fs.readFileSync(real), label);
+  if (!decoded.ok) return decoded;
+  const { text } = decoded;
   const warnings = [];
   if (!/^#{1,6}\s/m.test(text)) warnings.push(`${label}: no '#' heading found`);
   if (kind === 'resume' && !/^#{1,6}\s.*\b(experience|education|skills)\b/im.test(text)) {
@@ -191,8 +214,41 @@ export function validateMarkdownInput(file, { kind, targetCv } = {}) {
   return { ok: true, path: file, realpath: real, bytes: st.size, warnings };
 }
 
+// The byte-level checks every text input gets: strict UTF-8 (no silent replacement), no NUL, not empty.
+function decodeText(buf, label) {
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return { ok: false, error: `${label}: not valid UTF-8` };
+  }
+  if (text.includes('\0')) return { ok: false, error: `${label}: contains NUL bytes (binary file?)` };
+  if (text.replace(/^\ufeff/, '').trim() === '') return { ok: false, error: `${label}: file is empty` };
+  return { ok: true, text };
+}
+
+const PROJECTS_EXT = new Set(['.md', '.markdown', '.json']);
+
+/** --projects: a library .md or a projects .json, with the same byte checks and size cap as a --docs file. Returns the decoded text. */
+export function validateProjectsInput(file) {
+  const label = file;
+  let real;
+  try {
+    real = fs.realpathSync(file);
+  } catch {
+    return { ok: false, error: `${label}: file does not exist` };
+  }
+  const st = fs.statSync(real);
+  if (!st.isFile()) return { ok: false, error: `${label}: not a regular file` };
+  if (!PROJECTS_EXT.has(path.extname(file).toLowerCase())) return { ok: false, error: `${label}: --projects takes a .md, .markdown or .json file` };
+  if (st.size > LIMITS.docBytes) return { ok: false, error: `${label}: ${st.size} bytes is over the ${LIMITS.docBytes / MiB} MiB limit for the projects file` };
+  const decoded = decodeText(fs.readFileSync(real), label);
+  if (!decoded.ok) return decoded;
+  return { ok: true, path: file, realpath: real, bytes: st.size, text: decoded.text };
+}
+
 /** Validates the resume and every doc up front; nothing is written whether or not this passes. */
-export function validateInputs({ resume, docs = [], targetCv } = {}) {
+export function validateInputs({ resume, docs = [], projects, targetCv } = {}) {
   const errors = [];
   const warnings = [];
   let total = 0;
@@ -206,11 +262,15 @@ export function validateInputs({ resume, docs = [], targetCv } = {}) {
   if (docs.length > LIMITS.maxDocs) errors.push(`--docs: ${docs.length} files given, at most ${LIMITS.maxDocs} are accepted`);
   for (const d of docs) take(validateMarkdownInput(d, { kind: 'doc', targetCv }));
   if (total > LIMITS.totalBytes) errors.push(`inputs total ${total} bytes, over the ${LIMITS.totalBytes / MiB} MiB limit`);
+  if (projects) {
+    const r = validateProjectsInput(projects);
+    if (!r.ok) errors.push(r.error);
+  }
   return { ok: errors.length === 0, errors, warnings };
 }
 
-// Small CLI used by install.sh: node lib.mjs <command> [args]
-function main(argv) {
+// Small CLI used by install.sh through cli.mjs: node cli.mjs <command> [args]
+export function main(argv) {
   const [cmd, ...rest] = argv;
   switch (cmd) {
     case 'version-ge':
@@ -235,9 +295,7 @@ function main(argv) {
       return 0;
     }
     default:
-      process.stderr.write('usage: lib.mjs version-ge|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
+      process.stderr.write('usage: cli.mjs version-ge|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
       return 2;
   }
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) process.exitCode = main(process.argv.slice(2));

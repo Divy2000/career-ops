@@ -37,6 +37,8 @@ Options:
   --resume <file.md>        Your resume as Markdown (.md or .markdown); copied to documents/cv/, seeds cv.md when absent
   --docs <a.md> [b.md ...]  Project docs as Markdown; values run until the next --flag; copied to documents/projects/
   --replace-cv              Allow replacing an existing, different cv.md with --resume (the old one is backed up first)
+  --projects <file>         Your projects library (.md) or a projects JSON (AutoJobApply or JSON Resume); validated,
+                            copied to documents/projects/, creates article-digest.md when absent (never replaces it)
   --onboard <mode>          interactive | headless | none
                             default: interactive when a terminal and claude are available, else none (prints the command)
   --install-missing         Offer to brew install missing prerequisites (asks y/N each time, never with --yes)
@@ -64,6 +66,8 @@ NO_START=0
 NO_H1B=0
 RESUME=""
 DOCS=()
+PROJECTS=""
+PROJECTS_CHECKED=0
 REPLACE_CV=0
 ONBOARD_MODE=""
 INSTALL_MISSING=0
@@ -165,6 +169,7 @@ while [ "$#" -gt 0 ]; do
       continue
       ;;
     --replace-cv) REPLACE_CV=1 ;;
+    --projects) value_of "$@"; PROJECTS="$2"; shift ;;
     --onboard)
       value_of "$@"
       case "$2" in
@@ -189,6 +194,7 @@ else
   DIR="$HOME/career-ops"
 fi
 if [ -n "$DATA_ROOT_ARG" ]; then DATA_REQ="$(abspath "$DATA_ROOT_ARG")"; else DATA_REQ="$DIR"; fi
+if [ -n "$PROJECTS" ]; then PROJECTS="$(abspath "$PROJECTS")"; fi
 DATA="$DATA_REQ"
 QDIR="$(shell_quote "$DIR")" # for printed commands: the directory may contain spaces
 
@@ -201,7 +207,7 @@ fi
 
 # ---------------------------------------------------------------- helpers
 
-lib() { node "$SCRIPT_DIR/lib.mjs" "$@"; }
+lib() { node "$SCRIPT_DIR/cli.mjs" "$@"; }
 seed() { node "$SCRIPT_DIR/seed.mjs" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -266,12 +272,13 @@ check_data_root_conflict() {
 
 validate_inputs() {
   [ "$VALIDATED" = 1 ] && return 0
-  if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ]; then VALIDATED=1; return 0; fi
+  if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ] && [ -z "$PROJECTS" ]; then VALIDATED=1; return 0; fi
   have node || return 0 # checked again once the prerequisites are in place
   DATA="$(effective_data_root)"
   local vargs=() rc=0
   if [ -n "$RESUME" ]; then vargs+=(--resume "$RESUME"); fi
   if [ "${#DOCS[@]}" -gt 0 ]; then vargs+=(--docs "${DOCS[@]}"); fi
+  if [ -n "$PROJECTS" ]; then vargs+=(--projects "$PROJECTS"); fi
   vargs+=(--cv "$DATA/cv.md")
   node "$SCRIPT_DIR/validate-md.mjs" "${vargs[@]}" >/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -282,17 +289,64 @@ validate_inputs() {
   VALIDATED=1
 }
 
+# The projects parser (custom/projects/lib.mjs): next to this script in a checkout, else in an existing
+# target checkout. A standalone copy of custom/install has neither before the clone. Prints nothing then;
+# it always succeeds, because the ERR trap would report a nonzero status from inside $(...).
+projects_lib() {
+  local c
+  for c in "$SCRIPT_DIR/../projects/lib.mjs" "$DIR/custom/projects/lib.mjs"; do
+    if [ -f "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+}
+
+PROJECTS_NO_CHANGE="No changes were made to the checkout or the user layer."
+
+# Validates --projects before anything is cloned or written. `local` only uses a parser already on
+# disk; `fetch` (once git is known to be there, after "Proceed?") may shallow-clone the fork into a
+# throwaway temp dir for its parser, and stops the install if that fails.
+check_projects() {
+  local mode="$1" lib="" rc=0 scratch=""
+  [ -n "$PROJECTS" ] || return 0
+  [ "$PROJECTS_CHECKED" = 1 ] && return 0
+  have node || return 0 # checked again once the prerequisites are in place
+  if [ ! -f "$PROJECTS" ]; then
+    printf 'error: --projects file not found: %s\n%s\n' "$PROJECTS" "$PROJECTS_NO_CHANGE" >&2
+    exit 2
+  fi
+  lib="$(projects_lib)"
+  if [ -z "$lib" ]; then
+    if [ "$mode" != fetch ] || ! have git; then return 0; fi
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-validator.XXXXXX")"
+    if git clone --quiet --depth 1 ${REF:+--branch "$REF"} "$FORK_URL" "$scratch/repo" >/dev/null 2>&1 && [ -f "$scratch/repo/custom/projects/lib.mjs" ]; then
+      lib="$scratch/repo/custom/projects/lib.mjs"
+    else
+      rm -rf "$scratch"
+      printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$FORK_URL" "$PROJECTS_NO_CHANGE" >&2
+      exit 1
+    fi
+  fi
+  node "$SCRIPT_DIR/seed.mjs" projects-check --lib "$lib" --file "$PROJECTS" >/dev/null || rc=$?
+  if [ -n "$scratch" ]; then rm -rf "$scratch"; fi
+  if [ "$rc" -ne 0 ]; then
+    printf '%s Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' "$PROJECTS_NO_CHANGE" >&2
+    exit 2
+  fi
+  PROJECTS_CHECKED=1
+}
+
 # ---------------------------------------------------------------- intro and platform
 
 check_data_root_conflict
 DATA="$(effective_data_root)"
 validate_inputs
+check_projects local
 
 say "career-ops (H-1B-aware fork) installer"
 say "  checkout:  $DIR"
 say "  data root: $DATA"
 if [ -n "$RESUME" ]; then say "  resume:    $RESUME"; fi
 if [ "${#DOCS[@]}" -gt 0 ]; then say "  docs:      ${DOCS[*]}"; fi
+if [ -n "$PROJECTS" ]; then say "  projects:  $PROJECTS"; fi
 if [ "$DRY_RUN" = 1 ]; then say "  Dry run: nothing will be changed."; fi
 
 step "1/11 Platform"
@@ -345,6 +399,7 @@ fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
 validate_inputs
+check_projects fetch
 
 for entry in "gh|gh|brew install gh|the sponsorship digest PR links" "pdftotext|poppler|brew install poppler|reading PDF resumes in intake" "go|go|brew install go|the optional Go dashboard"; do
   tool="${entry%%|*}"; rest="${entry#*|}"; formula="${rest%%|*}"; rest="${rest#*|}"; fix="${rest%%|*}"; why="${rest#*|}"
@@ -457,7 +512,7 @@ step "5/11 User layer"
 if [ "$DRY_RUN" = 1 ]; then
   dry "declare custom/ in config/local-paths.txt"
   if [ -n "$DATA_ROOT_ARG" ]; then dry "write $DIR/.career-ops-data pointing at $DATA_REQ"; fi
-  dry "create modes/_custom.md from the template if absent, then run doctor.mjs --json --init-templates"
+  dry "create modes/_custom.md from the template if absent (with the projects-library house rule), then run doctor.mjs --json --init-templates"
   dry "NOT create config/profile.yml or portals.yml: onboarding writes them from your documents"
 else
   case "$(seed local-paths --dir "$DIR")" in
@@ -484,8 +539,18 @@ else
   fi
   say "  data root: $DATA"
   case "$(seed custom-template --data "$DATA" --template "$SCRIPT_DIR/templates/_custom.md")" in
-    created) say "  created modes/_custom.md from the fork template" ;;
-    *) say "  modes/_custom.md already exists; left as is" ;;
+    created)
+      say "  created modes/_custom.md from the fork template"
+      if [ "$(seed projects-rule --data "$DATA" --template "$SCRIPT_DIR/templates/_custom-projects.md")" = added ]; then
+        say "  added the projects-library house rule to modes/_custom.md"
+      fi
+      ;;
+    *)
+      say "  modes/_custom.md already exists; left as is"
+      if ! grep -q '^### Projects library' "$DATA/modes/_custom.md"; then
+        say "  it has no projects-library house rule yet; the onboarding adds it after your yes"
+      fi
+      ;;
   esac
   if ! (cd "$DIR" && node doctor.mjs --json --init-templates >/dev/null); then
     pending "node doctor.mjs --json --init-templates failed in $QDIR; run it and read the error."
@@ -542,6 +607,29 @@ else
         ;;
       *) die 1 "could not compare cv.md with the resume: $cv_out" ;;
     esac
+  fi
+fi
+
+if [ -n "$PROJECTS" ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    dry "copy $PROJECTS to documents/projects/ and create article-digest.md from it when absent"
+  else
+    # Already validated in step 2; projects-seed checks again with this checkout's parser.
+    lib_path="$(projects_lib)"
+    [ -n "$lib_path" ] || die 1 "custom/projects/lib.mjs is missing from $DIR; the checkout is set up but article-digest.md was not created from $PROJECTS"
+    proj_out="$(seed projects-seed --lib "$lib_path" --data "$DATA" --file "$PROJECTS")" || die 1 "article-digest.md was not created from $PROJECTS (see the error above); the checkout and the user layer are already set up"
+    proj_copy=""
+    while IFS=$'\t' read -r kind what dest; do
+      case "$kind" in
+        copied) proj_copy="$dest"; say "  copied $dest" ;;
+        present) proj_copy="$dest"; say "  already present: $dest" ;;
+        created) say "  created article-digest.md from $PROJECTS (your projects library)" ;;
+        exists)
+          say "  article-digest.md already exists; left as is"
+          pending "article-digest.md exists, so --projects did not replace it. To add only the new projects: cd $QDIR && node custom/projects/import.mjs $(shell_quote "$proj_copy") --merge --write (run it without --write first to preview)."
+          ;;
+      esac
+    done <<< "$proj_out"
   fi
 fi
 
@@ -725,8 +813,11 @@ else
     pending "node doctor.mjs reported problems; run it in $QDIR and read the output."
   fi
   specs=("$DIR"/custom/*/tests/*.spec.mjs)
-  if [ -e "${specs[0]}" ]; then
-    if ! (cd "$DIR" && run_logged node --test custom/*/tests/*.spec.mjs); then
+  if [ -n "${CAREER_OPS_IN_SELFTEST:-}" ]; then
+    # A spec that runs this installer must not start the specs again (each level would run the next).
+    say "  already inside a self-test run; skipping the self-tests"
+  elif [ -e "${specs[0]}" ]; then
+    if ! (cd "$DIR" && export CAREER_OPS_IN_SELFTEST=1 && run_logged node --test custom/*/tests/*.spec.mjs); then
       pending "The fork self-tests failed (node --test custom/*/tests/*.spec.mjs in $QDIR); see $LOG_FILE."
     fi
   else

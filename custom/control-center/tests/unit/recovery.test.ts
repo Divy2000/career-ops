@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { changesByTurn, diffFile, listChanges, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
+import { foldsCase } from '../helpers/case.js';
 
 const sha = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
 
@@ -219,7 +220,7 @@ describe('guard root (policy and revert bookkeeping outside every session write 
     expect(resolveGuardRoot({ env: {}, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'Library', 'Application Support', 'career-ops-control-center'));
   });
 
-  it('refuses a guard root inside the code or data root (any case) and creates nothing there', () => {
+  it('refuses a guard root inside the code or data root and creates nothing there; a differently cased root counts only where the volume folds case', () => {
     const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-guard-root-')));
     const codeRoot = path.join(base, 'code');
     const dataRoot = path.join(base, 'data');
@@ -229,7 +230,15 @@ describe('guard root (policy and revert bookkeeping outside every session write 
     expect(() => resolve(path.join(dataRoot, 'data', 'control-center', 'guard'))).toThrow(/inside the data root/);
     expect(fs.existsSync(path.join(dataRoot, 'data'))).toBe(false);
     expect(() => resolve(path.join(codeRoot, 'custom', 'guard'))).toThrow(/inside the code root/);
-    expect(() => resolve(path.join(base, 'DATA', 'guard'))).toThrow(/inside the data root/);
+    if (foldsCase(base)) {
+      // base/DATA is the data root itself.
+      expect(() => resolve(path.join(base, 'DATA', 'guard'))).toThrow(/inside the data root/);
+    } else {
+      // base/DATA is a separate folder next to the data root, so it is a valid guard root.
+      expect(resolve(path.join(base, 'DATA', 'guard'))).toBe(path.join(base, 'DATA', 'guard'));
+      expect(fs.statSync(path.join(base, 'DATA', 'guard')).isDirectory()).toBe(true);
+      expect(fs.readdirSync(dataRoot)).toEqual([]);
+    }
     expect(() => resolve(dataRoot)).toThrow(/inside the data root/);
   });
 });

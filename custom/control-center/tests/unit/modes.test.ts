@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveModes } from '../../scripts/derive-mode-policies.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { ALWAYS_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds } from '../../server/claude/modes.js';
+import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
 
 describe('mode registry', () => {
   it('the frozen snapshot matches the modes/ tree (a mode appeared, vanished or changed its script references)', () => {
@@ -55,6 +56,28 @@ describe('mode registry', () => {
     expect(getModePolicy('advisor')?.writeGlobs).toEqual([]);
     expect(getModePolicy('ai-search')?.network).toEqual(['WebSearch']);
     expect(listModeIds()).toContain('sponsorship-check');
+  });
+
+  it('projects library: rank.mjs in evaluate, documents and profile sessions; the fork CV build and render where PDFs are written', () => {
+    for (const mode of ['oferta', 'pdf', 'master-profile']) expect(getModePolicy(mode)?.scripts, mode).toContain('custom/projects/rank.mjs');
+    for (const mode of ['oferta', 'pdf', 'cover']) {
+      expect(getModePolicy(mode)?.scripts, mode).toContain('custom/cv/build-html.mjs');
+      expect(getModePolicy(mode)?.scripts, mode).toContain('custom/cv/render-pdf.mjs');
+    }
+    // A profile session cannot write output/**, so a PDF render there could only fail.
+    expect(getModePolicy('master-profile')?.scripts).not.toContain('custom/cv/render-pdf.mjs');
+  });
+
+  it('projects-ingest is a read-only virtual mode whose turn ends in an envelope', () => {
+    const p = getModePolicy('projects-ingest');
+    expect(p?.policyClass).toBe('read-only');
+    expect(p?.writeGlobs).toEqual([]);
+    expect(ENVELOPE_MODES.has('projects-ingest')).toBe(true);
+  });
+
+  it('projects-ingest runs no command at all: the app hands it the extracted text', () => {
+    expect(getModePolicy('projects-ingest')?.scripts).toEqual([]);
+    expect(getModePolicy('projects-ingest')?.bashRules).toEqual([]);
   });
 
   it('no class ever grants the always-denied files', () => {

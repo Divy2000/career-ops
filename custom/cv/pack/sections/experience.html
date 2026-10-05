@@ -1,0 +1,19 @@
+<!--
+  experience.html - fork partial: one row per role (title - company | location,
+  dates right-aligned), then the bullets. Keeps the job-period class that
+  cv-experience-order.mjs reads.
+-->
+<!--ENTRY-->
+<div class="job">
+  <div class="job-header">
+    <span class="job-heading"><span class="job-role">{{ROLE}}</span><span class="job-sep"> - </span><span class="job-company">{{COMPANY}}</span>{{LOCATION_BLOCK}}</span>
+    <span class="job-period">{{PERIOD}}</span>
+  </div>
+  {{CONTEXT_BLOCK}}
+  <ul>
+    {{BULLETS}}
+  </ul>
+</div>
+<!--LOCATION_BLOCK--> <span class="row-tail"><span class="job-sep">| </span><span class="job-location">{{LOCATION}}</span></span><!--/LOCATION_BLOCK-->
+<!--CONTEXT_BLOCK--><div class="job-context">{{CONTEXT}}</div><!--/CONTEXT_BLOCK-->
+<!--/ENTRY-->

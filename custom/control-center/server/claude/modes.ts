@@ -66,12 +66,15 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
       'jd-skill-gap.mjs',
       'custom/immigration/freshness.mjs',
       'plugins/h1b-sponsor/check.mjs',
+      'custom/projects/rank.mjs',
+      'custom/cv/build-html.mjs',
+      'custom/cv/render-pdf.mjs',
     ],
   },
   documents: {
     writeGlobs: ['output/**', 'templates/cv-*.html', 'templates/cover-*.html', '*.tex'],
     network: ['WebSearch'],
-    extraBash: ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'build-cv-latex.mjs', 'generate-latex.mjs', 'mark-pdf-ready.mjs', 'jd-skill-gap.mjs', 'keyword-match.mjs'],
+    extraBash: ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'build-cv-latex.mjs', 'generate-latex.mjs', 'mark-pdf-ready.mjs', 'jd-skill-gap.mjs', 'keyword-match.mjs', 'custom/projects/rank.mjs', 'custom/cv/build-html.mjs', 'custom/cv/render-pdf.mjs'],
   },
   outreach: {
     writeGlobs: ['data/contacts.tsv', 'data/follow-ups.md', 'data/reply-candidates.json'],
@@ -91,7 +94,8 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
   profile: {
     writeGlobs: ['cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md', 'data/career-profile.yml', 'data/intake-state.json'],
     network: ['WebFetch'],
-    extraBash: ['add-entry.mjs', 'intake.mjs', 'career-profile.mjs'],
+    // rank.mjs --check validates article-digest.md after an edit; no PDF tooling (no output/** scope).
+    extraBash: ['add-entry.mjs', 'intake.mjs', 'career-profile.mjs', 'custom/projects/rank.mjs'],
   },
   analysis: {
     writeGlobs: ['data/upskill/**'],
@@ -219,6 +223,8 @@ export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyC
   'ai-search': { title: 'AI search', policyClass: 'read-only', network: ['WebSearch'] },
   research: { title: 'Portfolio research', policyClass: 'read-only', network: ['WebFetch'] },
   'cv-ingest': { title: 'CV import (PDF/DOCX parse)', policyClass: 'read-only' },
+  // Runs no command: the app extracts the documents/ source with intake's helpers and puts the text in the first message.
+  'projects-ingest': { title: 'Projects import (PDF parse)', policyClass: 'read-only' },
   'fix-portal': { title: 'Fix portal slug', policyClass: 'fix-portal' },
   'immigration-policy': { title: 'Immigration policy pass', policyClass: 'immigration-policy' },
   'sponsorship-check': { title: 'Company sponsorship check', policyClass: 'sponsorship-check' },

@@ -108,6 +108,7 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
 const COVER_FLAGS = { '--payload': 'input', '--out': 'output', '--format': 'value', '--report': 'value' };
 const ARTIFACT_FLAGS = { '--report': 'value', '--company': 'value', '--role': 'value', '--version': 'value', '--root': 'output' };
 const HIRED_FLAGS = { '--report': 'value', '--anonymity': 'value', '--story': 'value', '--weeks': 'value', '--feature': 'value', '--mark': 'value', '--root': 'output' };
+const RENDER_VALUES = { '--format': 'value', '--report': 'value', '--kind': 'value', '--max-pages': 'value' };
 const DIGEST_FLAGS = { '--from': 'value', '--to': 'value', '--dir': 'input' };
 const WRITER_SCRIPTS = {
   'generate-pdf.mjs': {
@@ -127,6 +128,14 @@ const WRITER_SCRIPTS = {
   'discover-new-companies.mjs': { switches: ['--added-only', '--summary', '--json', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
   'hired-share.mjs': { switches: ['--open', '--dry-run', '--status', '--help', '-h'], next: HIRED_FLAGS, eq: HIRED_FLAGS, positionals: [] },
   'weekly-digest.mjs': { switches: ['--summary', '--self-test', '--help', '-h'], next: DIGEST_FLAGS, eq: DIGEST_FLAGS, positionals: [] },
+  'custom/cv/build-html.mjs': { switches: ['--help', '-h'], positionals: ['input', 'output'] },
+  // Rewrites its input HTML with the fitted density, so both paths are outputs.
+  'custom/cv/render-pdf.mjs': {
+    switches: ['--strict-pages', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check', '--help', '-h'],
+    next: RENDER_VALUES,
+    eq: RENDER_VALUES,
+    positionals: ['output', 'output'],
+  },
 };
 
 const GIT_FLAGS = {

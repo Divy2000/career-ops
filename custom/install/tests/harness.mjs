@@ -2,10 +2,10 @@
 // security, launchctl, ...) that record argv into one log, a fake checkout that the git stub "clones",
 // a node shim that fakes the version, and an optional fake terminal file.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const INSTALL_DIR = path.join(HERE, '..');
@@ -62,7 +62,7 @@ fs.writeFileSync(path.join(root, 'data', 'h1b', 'index.ndjson.gz'), 'x');
 }
 
 export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
-  const T = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ci-world-')));
+  const T = fs.realpathSync(tempDir('ci-world-'));
   const bin = path.join(T, 'bin');
   const home = path.join(T, 'home');
   const cwd = path.join(T, 'cwd');
@@ -89,6 +89,8 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
     CAREER_OPS_INSTALL_TTY: path.join(T, 'no-such-tty'),
     CAREER_OPS_CLAUDE_FALLBACK_DIRS: path.join(home, '.local', 'bin'),
     LANG: 'en_US.UTF-8',
+    // The test run's TMPDIR, so whatever the installer or a nested tool makes goes where the caller chose.
+    ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
   };
 
   const world = {

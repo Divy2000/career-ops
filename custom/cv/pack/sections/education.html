@@ -1,0 +1,15 @@
+<!--
+  education.html - fork partial: one row per degree (degree - school | location
+  | note, years right-aligned), the same shape as a role row.
+-->
+<!--ENTRY-->
+<div class="edu-item">
+  <div class="edu-header">
+    <span class="edu-main"><span class="edu-title">{{TITLE}}</span>{{ORG_BLOCK}}{{LOCATION_BLOCK}}{{DESC_BLOCK}}</span>
+    <span class="edu-year">{{YEAR}}</span>
+  </div>
+</div>
+<!--ORG_BLOCK--> <span class="row-tail"><span class="edu-sep">- </span><span class="edu-org">{{ORG}}</span></span><!--/ORG_BLOCK-->
+<!--LOCATION_BLOCK--> <span class="row-tail"><span class="edu-sep">| </span><span class="edu-location">{{LOCATION}}</span></span><!--/LOCATION_BLOCK-->
+<!--DESC_BLOCK--> <span class="row-tail"><span class="edu-sep">| </span><span class="edu-desc">{{DESC}}</span></span><!--/DESC_BLOCK-->
+<!--/ENTRY-->

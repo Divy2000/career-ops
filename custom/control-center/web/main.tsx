@@ -6,6 +6,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/sessions.css';
 import './styles/dialogs.css';
+import './styles/projects.css';
 import './styles/tutorials.css';
 import './styles/guide.css';
 import './styles/theme.css';

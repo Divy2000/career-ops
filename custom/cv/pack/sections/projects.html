@@ -1,0 +1,15 @@
+<!--
+  projects.html - fork partial: bold linked title, then one <li> per bullet.
+  build-cv-html.mjs repeats DESC_BLOCK once per bullet when a project has two
+  or more bullets and no description; custom/cv/build-html.mjs turns a
+  description into the first bullet so every project takes that path.
+-->
+<!--ENTRY-->
+<div class="project">
+  <div class="project-title">{{NAME}}{{BADGE_BLOCK}}{{TECH_BLOCK}}</div>
+  <ul class="project-bullets">{{DESC_BLOCK}}</ul>
+</div>
+<!--BADGE_BLOCK--><span class="project-badge">{{BADGE}}</span><!--/BADGE_BLOCK-->
+<!--DESC_BLOCK--><li>{{DESC}}</li><!--/DESC_BLOCK-->
+<!--TECH_BLOCK--><span class="job-sep"> | </span><span class="project-tech">{{TECH}}</span><!--/TECH_BLOCK-->
+<!--/ENTRY-->

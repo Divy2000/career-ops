@@ -178,6 +178,30 @@
       "flags": []
     },
     {
+      "id": "rankProjects",
+      "script": "custom/projects/rank.mjs",
+      "helpArgs": [
+        "--help"
+      ],
+      "expectExit": 0,
+      "flags": [
+        "--json",
+        "--summary",
+        "--check"
+      ]
+    },
+    {
+      "id": "intake",
+      "script": "intake.mjs",
+      "helpArgs": [],
+      "expectExit": null,
+      "flags": [
+        "--text",
+        "--commit"
+      ],
+      "probe": false
+    },
+    {
       "id": "normalizeStatuses",
       "script": "normalize-statuses.mjs",
       "helpArgs": [
@@ -660,6 +684,29 @@
       "module": "custom/pipeline/lib.mjs",
       "names": [
         "parseRow"
+      ]
+    },
+    {
+      "module": "custom/projects/lib.mjs",
+      "names": [
+        "parseLibrary",
+        "validateLibrary",
+        "serializeEntry",
+        "serializeLibrary",
+        "replaceEntry",
+        "appendEntry",
+        "appendBlock",
+        "removeEntry",
+        "convertJsonProjects",
+        "findCvEntry",
+        "titleKey"
+      ]
+    },
+    {
+      "module": "intake.mjs",
+      "names": [
+        "classifySource",
+        "detectPdfExtractor"
       ]
     }
   ],

@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
-  validateMarkdownInput, validateInputs, LIMITS,
+  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput,
 } from '../lib.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ci-lib-'));
+const tmp = () => tempDir('ci-lib-');
 const write = (dir, name, data) => {
   const f = path.join(dir, name);
   fs.writeFileSync(f, data);
@@ -159,6 +159,9 @@ test('validateMarkdownInput enforces 1 MiB for the resume and 2 MiB for a doc', 
   assert.equal(validateMarkdownInput(f, { kind: 'doc' }).ok, true);
   const g = write(dir, 'y.md', big(2 * 1024 * 1024 + 10));
   assert.match(validateMarkdownInput(g, { kind: 'doc' }).error, /2 MiB/);
+  // Megabyte files go as soon as they are checked, not at the end of the file's run.
+  fs.rmSync(f);
+  fs.rmSync(g);
 });
 
 test('validateMarkdownInput rejects a resume that is the target cv.md itself', () => {
@@ -182,8 +185,46 @@ test('validateInputs names the failing file and caps the doc count and total siz
   const chunk = '# h\n' + 'a'.repeat(1900 * 1024);
   const docs = Array.from({ length: 6 }, (_, i) => write(dir, `d${i}.md`, chunk));
   assert.match(validateInputs({ resume: ok, docs }).errors.join('\n'), /10 MiB/);
+  for (const d of docs) fs.rmSync(d);
 });
 
 test('validateInputs passes with no inputs at all', () => {
   assert.deepEqual(validateInputs({}), { ok: true, errors: [], warnings: [] });
+});
+
+const RULE = '### Projects library (every item)\n\n- Pick from article-digest.md.\n';
+const TEMPLATE = '# Custom\n\n## House Rules\n\n<!-- comment\n     more -->\n\n(none yet -- add yours above)\n\n## Custom Workflows\n\nwork\n';
+
+test('insertHouseRule puts the rule in place of the "none yet" line when that is all the section holds', () => {
+  assert.equal(insertHouseRule(TEMPLATE, RULE), '# Custom\n\n## House Rules\n\n<!-- comment\n     more -->\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n\n## Custom Workflows\n\nwork\n');
+});
+
+test('insertHouseRule appends after the existing rules of the section and keeps them byte for byte', () => {
+  const mine = '# Custom\n\n## House Rules\n\n### Sponsorship check\n\n1. Check.\n\n## Custom Workflows\n';
+  assert.equal(insertHouseRule(mine, RULE), '# Custom\n\n## House Rules\n\n### Sponsorship check\n\n1. Check.\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n\n## Custom Workflows\n');
+});
+
+test('insertHouseRule is idempotent: a file that already has the heading is left alone (null)', () => {
+  const once = insertHouseRule(TEMPLATE, RULE);
+  assert.equal(insertHouseRule(once, RULE), null);
+  assert.equal(insertHouseRule('## House Rules\n\n### Projects library (edited by me)\n- mine\n', RULE), null);
+});
+
+test('insertHouseRule adds a House Rules section at the end when the file has none', () => {
+  assert.equal(insertHouseRule('# Custom\n\nnotes\n', RULE), '# Custom\n\nnotes\n\n## House Rules\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n');
+});
+
+test('validateProjectsInput applies the --docs byte checks to a projects .md or .json: UTF-8, no NUL, not empty, at most 2 MiB', () => {
+  const d = tmp();
+  const ok = (name, data) => validateProjectsInput(write(d, name, data));
+  assert.equal(ok('lib.md', '## A\n- One.\n').ok, true);
+  assert.equal(ok('projects.json', '[{"name":"A"}]').ok, true);
+  assert.match(ok('bad.md', Buffer.from([0x23, 0x23, 0x20, 0x41, 0x0a, 0x2d, 0x20, 0xff, 0x0a])).error, /not valid UTF-8/);
+  assert.match(ok('nul.json', '[{"name":"A\u0000"}]').error, /NUL/);
+  assert.match(ok('empty.md', '\n  \n').error, /empty/);
+  assert.match(ok('notes.txt', '## A\n- One.\n').error, /\.md, \.markdown or \.json/);
+  const big = write(d, 'big.md', `## A\n- ${'x'.repeat(LIMITS.docBytes)}\n`);
+  assert.match(validateProjectsInput(big).error, /over the 2 MiB limit/);
+  fs.rmSync(big);
+  assert.match(validateProjectsInput(path.join(d, 'missing.md')).error, /does not exist/);
 });

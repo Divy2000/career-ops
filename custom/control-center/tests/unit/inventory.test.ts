@@ -109,6 +109,16 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['settings.app', { api: '/api/settings/app' }],
   ['settings.contacts', { api: '/api/contacts' }],
   ['settings.interviews', { api: '/api/interviews' }],
+  // Fork: projects library (article-digest.md) in Profile > Projects
+  ['projects.list', { api: '/api/projects' }],
+  ['projects.edit-delete', { api: '/api/projects/:id' }],
+  ['projects.validate', { api: '/api/projects/validate' }],
+  ['projects.convert', { api: '/api/projects/convert' }],
+  ['projects.append', { api: '/api/projects/append' }],
+  ['projects.upload-source', { api: '/api/projects/upload' }],
+  ['projects.rank', { action: 'projects.rank' }],
+  ['projects.ingest-session', { web: 'projects-ingest' }],
+  ['projects.tab', { web: 'ProjectsLibrary', e2e: 'Profile > Projects library' }],
 ];
 
 function requiredParams(id: string): string[] {
