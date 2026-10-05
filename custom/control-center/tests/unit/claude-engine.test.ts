@@ -271,6 +271,96 @@ describe('guard hook', () => {
   });
 });
 
+describe('guard hook: read confinement', () => {
+  const base = fs.realpathSync(tempDir('cc-hook-read-'));
+  const code = path.join(base, 'code');
+  const data = path.join(base, 'data');
+  const outside = path.join(base, 'outside');
+  for (const d of [code, data, outside]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(code, 'cv.md'), 'cv\n');
+  fs.writeFileSync(path.join(code, '.env'), 'SECRET=1\n');
+  fs.writeFileSync(path.join(outside, 's.txt'), 'outside\n');
+  const guardDir = (name: string) => {
+    const d = path.join(base, 'guard', name);
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const evaluate = (() => {
+    const dir = guardDir('oferta');
+    return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy('oferta')! }) };
+  })();
+  const pre = (tool: string, input: Record<string, unknown>, which = evaluate) => hookRun(which.dir, which.pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: code, session_id: 's' });
+
+  it('Read outside the roots, of a secret file, or through ~ exits 2; a read inside a root exits 0', () => {
+    expect(pre('Read', { file_path: path.join(code, 'cv.md') }).status).toBe(0);
+    const out = pre('Read', { file_path: path.join(outside, 's.txt') });
+    expect(out.status).toBe(2);
+    expect(out.stderr).toMatch(/outside the repo and data roots/);
+    expect(pre('Read', { file_path: path.join(code, '.env') }).status).toBe(2);
+    expect(pre('Read', { file_path: '~/.ssh/id_ed25519' }).status).toBe(2);
+    expect(pre('Read', {}).status).toBe(2);
+  });
+
+  it('Glob and Grep inside the roots exit 0; outside, or with a pattern that climbs out, exit 2', () => {
+    expect(pre('Glob', { pattern: '**/*.md', path: code }).status).toBe(0);
+    expect(pre('Grep', { pattern: 'Score', path: data, glob: '*.md' }).status).toBe(0);
+    expect(pre('Glob', { pattern: '*', path: outside }).status).toBe(2);
+    expect(pre('Glob', { pattern: '../outside/*', path: code }).status).toBe(2);
+    expect(pre('Grep', { pattern: 'x', glob: '{/etc,a}/*' }).status).toBe(2);
+  });
+
+  it('WebFetch of file:, of a loopback address, or of a name that does not resolve exits 2; a public literal address exits 0', () => {
+    for (const url of ['file:///etc/passwd', 'http://127.0.0.1:1/', 'http://localhost/', 'http://[::1]/', 'https://nothing.invalid/']) {
+      const r = pre('WebFetch', { url, prompt: 'x' });
+      expect(r.status, url).toBe(2);
+    }
+    expect(pre('WebFetch', { url: 'https://nothing.invalid/', prompt: 'x' }).stderr).toMatch(/could not resolve/);
+    expect(pre('WebFetch', { url: 'https://93.184.216.34/', prompt: 'x' }).status).toBe(0);
+  });
+
+  it('a Bash script URL argument goes through the same DNS check', () => {
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://nothing.invalid/x' }).stderr).toMatch(/could not resolve/);
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://93.184.216.34/x' }).status).toBe(0);
+    expect(pre('Bash', { command: 'node check-liveness.mjs file:///etc/passwd' }).status).toBe(2);
+  });
+
+  it('PowerShell always exits 2', () => {
+    const r = pre('PowerShell', { command: 'Get-Content ~/.ssh/id_rsa' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/PowerShell/);
+  });
+
+  it('Agent and Task exit 2 unless the policy allows subagents', () => {
+    expect(pre('Agent', { description: 'x', prompt: 'read things' }).status).toBe(2);
+    expect(pre('Task', { description: 'x', prompt: 'read things' }).status).toBe(2);
+    const dir = guardDir('hm-audit');
+    const audit = { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy('pdf/hm-audit')! }) };
+    expect(pre('Agent', { description: 'x', prompt: 'audit' }, audit).status).toBe(0);
+    expect(pre('Task', { description: 'x', prompt: 'audit' }, audit).status).toBe(0);
+  });
+
+  it('a policy written before read confinement refuses every tool call', () => {
+    const dir = guardDir('old');
+    const bytes = JSON.stringify({ codeRoot: code, dataRoot: data, sessionDir: dir, allow: ['reports/**'], deny: [...ALWAYS_DENIED_WRITES], bash: [], playwright: false });
+    fs.writeFileSync(path.join(dir, 'policy.json'), bytes);
+    const old = { dir, pf: { file: path.join(dir, 'policy.json'), sha256: crypto.createHash('sha256').update(bytes).digest('hex') } };
+    for (const [tool, input] of [['Read', { file_path: path.join(code, 'cv.md') }], ['Write', { file_path: path.join(code, 'reports', 'x.md'), content: 'x' }], ['Bash', { command: 'node merge-tracker.mjs' }]] as const) {
+      const r = pre(tool, input, old);
+      expect(r.status, tool).toBe(2);
+      expect(r.stderr).toMatch(/predates read confinement/);
+    }
+  });
+
+  it('the settings file gives every hook a 30 second timeout and routes the read, search, fetch and agent tools to it', () => {
+    const file = writeSettingsFile(guardDir('settings'));
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ matcher: string; hooks: Array<{ timeout?: number }> }>> };
+    const groups = Object.values(settings.hooks).flat();
+    for (const h of groups.flatMap((g) => g.hooks)) expect(h.timeout).toBe(30);
+    const matcher = settings.hooks.PreToolUse![0]!.matcher.split('|');
+    for (const tool of ['Read', 'Glob', 'Grep', 'WebFetch', 'Agent', 'Task', 'PowerShell', 'Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']) expect(matcher, tool).toContain(tool);
+  });
+});
+
 describe('checkBash: exact per-command argument grammars', () => {
   const root = fs.realpathSync(tempDir('cc-bash-'));
   for (const d of ['custom/immigration', 'custom/pipeline', 'custom/control-center/tests/unit', 'output', 'reports', 'data', 'jds']) fs.mkdirSync(path.join(root, d), { recursive: true });

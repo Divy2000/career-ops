@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, locate, matches, snapshotKey } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkRead, checkSearch, httpUrlsIn, locate, matches, snapshotKey } from './guard-policy.mjs';
 
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -26,7 +26,7 @@ function snapshot(sessionDir, abs) {
   else fs.writeFileSync(`${key}.absent`, '');
 }
 
-function main() {
+async function main() {
   const payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const policyFile = process.env.CC_POLICY_FILE;
   if (!policyFile) deny('guard hook: CC_POLICY_FILE is not set');
@@ -35,12 +35,14 @@ function main() {
   const bytes = fs.readFileSync(policyFile);
   if (crypto.createHash('sha256').update(bytes).digest('hex') !== expected) deny('guard hook: the session policy file changed after the turn started; every tool call is refused');
   const policy = JSON.parse(bytes.toString('utf8'));
+  if (!Array.isArray(policy.readDeny)) deny('guard hook: the session policy predates read confinement; every tool call is refused');
   const sessionDir = process.env.CC_SESSION_DIR || policy.sessionDir;
   // Snapshots are per turn (CC_TURN_DIR) so a turn can be reverted on its own; files.ndjson stays per session.
   const snapDir = process.env.CC_TURN_DIR || sessionDir;
   const tool = String(payload.tool_name ?? '');
   const input = payload.tool_input ?? {};
   const event = payload.hook_event_name;
+  const cwd = typeof payload.cwd === 'string' ? payload.cwd : undefined;
 
   if (event === 'PostToolUse') {
     if (WRITE_TOOLS.has(tool)) {
@@ -65,9 +67,40 @@ function main() {
     process.exit(0);
   }
 
-  if (tool === 'Bash') {
-    const reason = checkBash(String(input.command ?? ''), policy, typeof payload.cwd === 'string' ? payload.cwd : undefined);
+  if (tool === 'Read') {
+    const reason = checkRead(policy, input, cwd);
     if (reason) deny(reason);
+    process.exit(0);
+  }
+
+  if (tool === 'Glob' || tool === 'Grep') {
+    const reason = checkSearch(policy, tool, input, cwd);
+    if (reason) deny(reason);
+    process.exit(0);
+  }
+
+  if (tool === 'WebFetch') {
+    const reason = await checkFetchUrl(String(input.url ?? ''));
+    if (reason) deny(reason);
+    process.exit(0);
+  }
+
+  if (tool === 'Agent' || tool === 'Task') {
+    if (policy.allowsAgent !== true) deny(`${tool}: subagents are not granted to this session`);
+    process.exit(0);
+  }
+
+  if (tool === 'PowerShell') deny('PowerShell is never granted to sessions');
+
+  if (tool === 'Bash') {
+    const command = String(input.command ?? '');
+    const reason = checkBash(command, policy, cwd);
+    if (reason) deny(reason);
+    // checkBash already refused local schemes and literal private hosts; names are resolved here.
+    for (const url of httpUrlsIn(command)) {
+      const why = await checkFetchUrl(url, undefined, { label: 'Bash' });
+      if (why) deny(why);
+    }
     process.exit(0);
   }
 
@@ -79,8 +112,4 @@ function main() {
   process.exit(0);
 }
 
-try {
-  main();
-} catch (err) {
-  deny(`guard hook failed: ${err && err.message}`);
-}
+main().catch((err) => deny(`guard hook failed: ${err && err.message}`));

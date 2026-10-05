@@ -196,13 +196,22 @@ export function guardHookCommand(nodePath: string = process.execPath, hookPath: 
   return `${shellQuote(nodePath)} ${shellQuote(hookPath)} || exit 2`;
 }
 
+/** Tools the guard hook sees before they run. The matcher holds only names and `|`, so the CLI matches each name exactly. */
+export const PRE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Glob|Grep|WebFetch|Agent|Task|PowerShell|mcp__playwright__browser_click|mcp__playwright__browser_press_key';
+/**
+ * A hook that times out does not block (Claude Code docs, probe C14): the CLI flags and the settings
+ * permissions are the gate, and the hook is the second layer. 30 s bounds its DNS lookups with room to spare.
+ */
+export const HOOK_TIMEOUT_S = 30;
+
 /** Session settings with the PreToolUse/PostToolUse guard hook (inline hooks are accepted per P0). */
 export function writeSettingsFile(sessionDir: string, opts: { nodePath?: string; hookPath?: string } = {}): string {
   const command = guardHookCommand(opts.nodePath, opts.hookPath);
+  const hook = { type: 'command', command, timeout: HOOK_TIMEOUT_S };
   const settings = {
     hooks: {
-      PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__playwright__browser_click|mcp__playwright__browser_press_key', hooks: [{ type: 'command', command }] }],
-      PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command }] }],
+      PreToolUse: [{ matcher: PRE_TOOL_MATCHER, hooks: [hook] }],
+      PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [hook] }],
     },
   };
   fs.mkdirSync(sessionDir, { recursive: true });
