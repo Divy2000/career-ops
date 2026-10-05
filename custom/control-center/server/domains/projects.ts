@@ -150,18 +150,23 @@ function extractPdf(codeRoot: string, abs: string): Promise<PdfResult> {
 /** The prompt carries the text in argv (macOS ARG_MAX is 1 MiB), so a document's text is capped well below it. */
 export const MAX_DOCUMENT_BYTES = 300_000;
 
-/** The documents/-relative path of an existing file under <dataRoot>/documents, or null. */
+/**
+ * The documents/-relative path of an existing file under <dataRoot>/documents, or null. Compared by real
+ * path, so a symlink that leads outside documents/ is refused; the path returned is the real file's.
+ */
 export function documentsPath(dataRoot: string, rel: string): string | null {
-  const docsDir = path.resolve(dataRoot, 'documents');
   if (path.isAbsolute(rel)) return null;
-  const abs = path.resolve(docsDir, rel);
-  if (!abs.startsWith(docsDir + path.sep)) return null;
+  let docsReal: string;
+  let fileReal: string;
   try {
-    if (!fs.statSync(abs).isFile()) return null;
+    docsReal = fs.realpathSync(path.resolve(dataRoot, 'documents'));
+    fileReal = fs.realpathSync(path.resolve(dataRoot, 'documents', rel));
+    if (!fs.statSync(fileReal).isFile()) return null;
   } catch {
     return null;
   }
-  return path.relative(docsDir, abs).split(path.sep).join('/');
+  if (!fileReal.startsWith(docsReal + path.sep)) return null;
+  return path.relative(docsReal, fileReal).split(path.sep).join('/');
 }
 
 /**

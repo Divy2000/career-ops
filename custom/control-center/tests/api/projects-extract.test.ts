@@ -68,3 +68,37 @@ describe('a slow extractor does not block other requests', () => {
     expect(fs.readFileSync(calls, 'utf8').split('\n').filter((l) => l === '-layout').length).toBe(2);
   });
 });
+
+describe('a source must really live under documents/', () => {
+  let t: TestApp;
+  beforeAll(async () => {
+    t = await makeTestApp();
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  it('refuses a symlink that leads outside documents/, wherever a source path is accepted', async () => {
+    const outside = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-outside-')), 'config');
+    fs.writeFileSync(outside, 'Host secret\n  IdentityFile ~/.ssh/id_ed25519\n');
+    const docs = path.join(t.cfg.dataRoot, 'documents', 'projects');
+    fs.mkdirSync(docs, { recursive: true });
+    fs.symlinkSync(outside, path.join(docs, 'notes.txt'));
+    expect(await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/notes.txt')).toEqual({ ok: false, error: 'not a file under documents/: projects/notes.txt' });
+    const convert = await t.app.inject({ method: 'POST', url: '/api/projects/convert', headers: t.authedWrite, payload: { format: 'markdown', text: '## A\n- b.\n', source: 'projects/notes.txt' } });
+    expect(convert.statusCode).toBe(400);
+    const session = await t.app.inject({ method: 'POST', url: '/api/sessions', headers: t.authedWrite, payload: { mode: 'projects-ingest', target: { type: 'text', value: 'projects/notes.txt' }, prompt: 'Extract.' } });
+    expect(session.statusCode).toBe(422);
+    expect(session.body).not.toContain('IdentityFile');
+  });
+
+  it('accepts a symlink that stays inside documents/ and names the source by its real path', async () => {
+    const docs = path.join(t.cfg.dataRoot, 'documents');
+    fs.mkdirSync(path.join(docs, 'cv'), { recursive: true });
+    fs.mkdirSync(path.join(docs, 'projects'), { recursive: true });
+    fs.writeFileSync(path.join(docs, 'cv', 'projects.md'), '## Kite Tracker\n- Tracked kites.\n');
+    fs.symlinkSync(path.join(docs, 'cv', 'projects.md'), path.join(docs, 'projects', 'linked.md'));
+    expect(await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/linked.md')).toEqual({ ok: true, rel: 'cv/projects.md', text: '## Kite Tracker\n- Tracked kites.\n' });
+  });
+});
+
