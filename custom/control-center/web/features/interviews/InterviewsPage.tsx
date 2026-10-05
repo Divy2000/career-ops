@@ -50,7 +50,7 @@ export function InterviewsPage() {
               <h2 id="active-heading">Active interviews</h2>
               {q.data.active.kind === 'missing' ? (
                 <Empty>
-                  No interview-prep/active-interviews.md yet. The interview/plan mode creates it, or edit it from <Link to="/profile">Profile & CV</Link>.
+                  No {q.data.active.path} yet. Keep your interview rounds there as a table (Company, Role, Round, Date/Time, Interviewer, Status, Notes); the follow-up and insights scripts read it.
                 </Empty>
               ) : (
                 <Md text={q.data.active.text} />

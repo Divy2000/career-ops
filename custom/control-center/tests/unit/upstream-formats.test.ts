@@ -7,6 +7,8 @@ import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { readShortlist } from '../../server/domains/shortlist.js';
 import { parseReport } from '../../server/domains/reports.js';
+import { readInterviews } from '../../server/domains/contacts.js';
+import { USER_FILES } from '../../server/routes/files.js';
 import { localDate } from '../../shared/local-date.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -106,4 +108,43 @@ describe('localized report templates (modes/<lang>/)', () => {
       if (/^\*\*Date\s*:\*\*/m.test(t.header)) expect(r.date).toBe('2026-10-01');
     });
   }
+});
+
+describe('active-interviews.md location (process-quality.mjs, rejection-latency.mjs, tracker-sync-check.mjs)', () => {
+  // The table process-quality.mjs documents: | Company | Role | Round | Date/Time | Interviewer | Status | Notes |
+  const TABLE = '# Active interviews\n\n| Company | Role | Round | Date/Time | Interviewer | Status | Notes |\n|---|---|---|---|---|---|---|\n| Globex | Platform Engineer | Onsite | 2026-10-08 | Panel | Scheduled | |\n';
+  const scriptRows = (root: string): number => {
+    const r = spawnSync(process.execPath, [path.join(DEFAULT_CODE_ROOT, 'process-quality.mjs')], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout).metadata.totalRows;
+  };
+
+  for (const [layout, rel] of [
+    ['data/ (the documented place)', 'data/active-interviews.md'],
+    ['the root (the scripts\' fallback)', 'active-interviews.md'],
+    ['interview-prep/ (no script reads it)', 'interview-prep/active-interviews.md'],
+  ] as const) {
+    it(`the Interviews page shows the file in ${layout} exactly when the scripts read it`, () => {
+      const root = tempDir('cc-interviews-contract-');
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), TABLE);
+      const scriptsRead = scriptRows(root) > 0;
+      const active = readInterviews(root).active;
+      expect(active.kind === 'ok').toBe(scriptsRead);
+      if (active.kind === 'ok') expect(active.path).toBe(rel);
+    });
+  }
+
+  it('the data/ copy wins over the root copy, as in the scripts', () => {
+    const root = tempDir('cc-interviews-contract-');
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(path.join(root, 'data', 'active-interviews.md'), TABLE);
+    fs.writeFileSync(path.join(root, 'active-interviews.md'), '# old copy\n');
+    expect(readInterviews(root).active).toMatchObject({ kind: 'ok', path: 'data/active-interviews.md', text: TABLE });
+  });
+
+  it('a missing file is reported at the documented path, and the editable file is that path', () => {
+    expect(readInterviews(tempDir('cc-interviews-contract-')).active).toEqual({ kind: 'missing', path: 'data/active-interviews.md' });
+    expect(USER_FILES.activeInterviews).toBe('data/active-interviews.md');
+  });
 });
