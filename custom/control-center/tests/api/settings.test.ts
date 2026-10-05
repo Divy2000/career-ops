@@ -225,6 +225,8 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(typeof res.json().nextFire).toBe('string');
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
+    // The weekly job installed and loaded, as the test above leaves it, so this test holds alone too.
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
     fake.calls.length = 0;
     const res = await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 8, minute: 0, enabled: false });
     expect(res.statusCode, res.body).toBe(200);
