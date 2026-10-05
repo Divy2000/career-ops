@@ -213,6 +213,8 @@ function jpegSizeFrom(read) {
     const length = head.readUInt16BE(2);
     if (length < 2) throw new Error('is not a valid JPEG file (a segment has a bad length)');
     if (JPEG_FRAMES.has(marker)) {
+      // The length counts itself: precision (1), height (2), width (2) and the component count (1) need at least 8.
+      if (length < 8) throw new Error('is not a valid JPEG file (its frame header is too short)');
       const frame = read(at + 2, 7);
       if (frame.length < 7) throw cutOff();
       return { width: frame.readUInt16BE(5), height: frame.readUInt16BE(3) };
