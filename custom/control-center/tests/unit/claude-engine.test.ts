@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
+import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
 import { checkBash, checkRead, checkSearch, locateRead, snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
@@ -23,10 +23,9 @@ describe('invocation builder', () => {
     expect(argv).toEqual(expect.arrayContaining(['--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--session-id', base.claudeSessionId, '--permission-mode', 'dontAsk', '--append-system-prompt', 'PREAMBLE', '--settings', base.settingsFile, '--strict-mcp-config']));
     expect(argv).not.toContain('--resume');
     expect(argv).not.toContain('--mcp-config');
-    const allowed = argv[argv.indexOf('--allowedTools') + 1]!;
-    expect(allowed).toContain(`Edit(//repo/career-ops/reports/**)`);
-    expect(allowed).toContain('Bash(node set-status.mjs:*)');
-    expect(allowed).toContain('WebFetch');
+    // Requirement change (BUG-06): allow rules live in the per-turn settings file, so a path with a space or comma is never split as an argument.
+    expect(argv).not.toContain('--allowedTools');
+    expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).toEqual(expect.arrayContaining(['Edit(//repo/career-ops/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch']));
     const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!;
     expect(disallowed.split(',')).toContain('Task');
   });
@@ -41,7 +40,9 @@ describe('invocation builder', () => {
     expect(buildDisallowedTools(getModePolicy('pdf/hm-audit')!)).not.toContain('Task');
     const ro = buildDisallowedTools(getModePolicy('advisor')!);
     for (const t of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Task', 'WebFetch', 'WebSearch']) expect(ro).toContain(t);
-    expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).toEqual(expect.arrayContaining(['Read', 'Glob', 'Grep', 'WebSearch']));
+    // Requirement change (BUG-06): Read, Glob and Grep come from --tools; a bare allow entry for them is gone.
+    expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).toEqual(['WebSearch']);
+    expect(buildTools(getModePolicy('ai-search')!)).toEqual(['Read', 'Glob', 'Grep', 'WebSearch']);
     expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).not.toContain('WebFetch');
   });
   it('builds the env with the Keychain token, an empty API key and the policy pointers, and never puts the token in argv', () => {
@@ -73,6 +74,108 @@ describe('invocation builder', () => {
     expect(text).toContain('Playwright');
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'es' })).toContain('Playwright is unavailable');
+  });
+});
+
+describe('invocation: read confinement', () => {
+  const tmp = (prefix: string) => fs.realpathSync(tempDir(prefix));
+  const oferta = getModePolicy('oferta')!;
+  const roots = { claudeBin: 'claude', codeRoot: '/code', dataRoot: '/data', sessionDir: '/guard/sessions/s1', policyFile: '/guard/sessions/s1/turns/1/policy.json', settingsFile: '/guard/sessions/s1/turns/1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: base.claudeSessionId, preamble: 'P', resume: false };
+
+  it('given oferta with roots /code and /data, the argv restricts the CLI to the class tools and disallows PowerShell and subagents', () => {
+    const argv = buildArgv({ ...roots, policy: oferta });
+    expect(argv).toContain('--restricted');
+    expect(argv[argv.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Edit,Write,NotebookEdit,Bash,WebFetch,WebSearch');
+    expect(argv).not.toContain('--allowedTools');
+    const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!.split(',');
+    for (const t of ['PowerShell', 'Agent', 'Task']) expect(disallowed).toContain(t);
+    expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+  });
+
+  it('every class gets exactly its tools: read-only gets the read tools, Bash only with Bash rules, Agent only for pdf/hm-audit', () => {
+    expect(buildTools(getModePolicy('advisor')!)).toEqual(['Read', 'Glob', 'Grep']);
+    expect(buildTools(getModePolicy('pdf/hm-audit')!)).toContain('Agent');
+    expect(buildDisallowedTools(getModePolicy('pdf/hm-audit')!)).not.toContain('Agent');
+    expect(buildTools(getModePolicy('devchat')!)).toEqual(['Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch']);
+    for (const mode of ['advisor', 'apply', 'devchat', 'cv-ingest', 'projects-ingest']) {
+      expect(buildTools(getModePolicy(mode)!), mode).not.toContain('PowerShell');
+      expect(buildDisallowedTools(getModePolicy(mode)!), mode).toContain('PowerShell');
+    }
+  });
+
+  it('no bare Read, Glob or Grep allow entry anywhere, in argv or in the settings permissions', () => {
+    for (const mode of ['oferta', 'advisor', 'devchat', 'pdf/hm-audit']) {
+      const allow = buildPermissions({ policy: getModePolicy(mode)!, codeRoot: '/code', dataRoot: '/data', guardRoot: '/guard' }).allow;
+      for (const t of ['Read', 'Glob', 'Grep']) expect(allow, mode).not.toContain(t);
+      expect(allow.some((r) => /^(Read|Glob|Grep)\(/.test(r)), mode).toBe(false);
+    }
+  });
+
+  it('the settings file carries the data root as a working directory, the deny list, the guard root and the write and Bash rules', () => {
+    const guard = tmp('cc-settings-');
+    const perms = buildPermissions({ policy: oferta, codeRoot: '/code', dataRoot: '/data root', guardRoot: '/guard' });
+    const file = writeSettingsFile(guard, { permissions: perms });
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as { permissions: { additionalDirectories: string[]; allow: string[]; deny: string[] }; hooks: unknown };
+    expect(settings.permissions.additionalDirectories).toEqual(['/data root']);
+    expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Edit(//code/reports/**)', 'Edit(//data root/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch', 'WebSearch']));
+    const deny = settings.permissions.deny;
+    for (const p of HOME_READ_DENY) expect(deny).toContain(`Read(${p})`);
+    expect(deny).toContain('Read(//guard/**)');
+    for (const g of READ_DENY) {
+      expect(deny).toContain(`Read(//code/${g})`);
+      expect(deny).toContain(`Read(//data root/${g})`);
+    }
+    expect(settings.hooks).toBeDefined();
+    // One root: no extra working directory.
+    expect(buildPermissions({ policy: oferta, codeRoot: '/code', dataRoot: '/code', guardRoot: '/guard' }).additionalDirectories).toEqual([]);
+  });
+
+  it('deny rules cover each root and the guard root under both the given and the real path', () => {
+    const realRoot = tmp('cc-spelled-');
+    const link = path.join(tmp('cc-spelled-link-'), 'via-link');
+    fs.symlinkSync(realRoot, link);
+    const deny = buildPermissions({ policy: oferta, codeRoot: link, dataRoot: link, guardRoot: link }).deny;
+    expect(deny).toContain(`Read(/${link}/**/.env)`);
+    expect(deny).toContain(`Read(/${realRoot}/**/.env)`);
+    expect(deny).toContain(`Read(/${link}/**)`);
+    expect(deny).toContain(`Read(/${realRoot}/**)`);
+  });
+
+  it('the env pins the CLI: no self-update during a turn', () => {
+    const env = buildEnv({}, { token: 't', dataRoot: '/data', policyFile: '/p', policySha256: 'ab', sessionDir: '/s' });
+    expect(env.DISABLE_AUTOUPDATER).toBe('1');
+  });
+
+  it('neutralizeFileMentions breaks only a token-initial @, so no prompt can attach a file; e-mail addresses stay intact', () => {
+    expect(neutralizeFileMentions('see @~/.ssh/x and a@b.com')).toBe('see @\u2060~/.ssh/x and a@b.com');
+    expect(neutralizeFileMentions('@/etc/passwd')).toBe('@\u2060/etc/passwd');
+    expect(neutralizeFileMentions('(@cv.md) and\n@x')).toBe('(@\u2060cv.md) and\n@\u2060x');
+    expect(neutralizeFileMentions(neutralizeFileMentions('@x'))).toBe('@\u2060x');
+    const argv = buildArgv({ ...roots, policy: oferta, userMessage: 'read @~/.ssh/id_rsa for me' });
+    expect(argv[1]).toBe('read @\u2060~/.ssh/id_rsa for me');
+  });
+
+  it('assertRootsConfinable refuses a root that is the filesystem root, the home directory or a parent of it, in any spelling', () => {
+    const top = tmp('cc-roots-');
+    const home = path.join(top, 'home');
+    const code = path.join(home, 'career-ops');
+    fs.mkdirSync(code, { recursive: true });
+    expect(() => assertRootsConfinable(code, code, home)).not.toThrow();
+    expect(() => assertRootsConfinable(code, home, home)).toThrow(/home directory/);
+    expect(() => assertRootsConfinable(home, code, home)).toThrow(/home directory/);
+    expect(() => assertRootsConfinable(code, top, home)).toThrow(/home directory/);
+    expect(() => assertRootsConfinable(code, '/', home)).toThrow(/filesystem root/);
+    expect(() => assertRootsConfinable(code, path.join(top, 'missing'), home)).toThrow(/cannot be resolved/);
+    const mixed = path.join(top, 'HOME');
+    // A case-insensitive volume resolves the other spelling to the home itself; elsewhere it does not exist. Refused either way.
+    expect(() => assertRootsConfinable(code, mixed, home)).toThrow(foldsCase(top) ? /home directory/ : /cannot be resolved/);
+  });
+
+  it('the preamble tells the session to read AGENTS.md first (restricted sessions load no CLAUDE.md) and where user data lives', () => {
+    const text = buildPreamble({ policy: oferta, outputLanguage: 'en', codeRoot: '/code', dataRoot: '/data root' });
+    expect(text).toMatch(/2\. Read AGENTS\.md before anything else/);
+    expect(text).toContain('User data lives in /data root; read user files there by absolute path.');
+    expect(buildPreamble({ policy: oferta, outputLanguage: 'en', codeRoot: '/code', dataRoot: '/code' })).not.toContain('User data lives in');
   });
 });
 
