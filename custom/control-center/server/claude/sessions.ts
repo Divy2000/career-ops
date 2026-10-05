@@ -41,6 +41,8 @@ export interface SessionMeta {
   error: string | null;
   /** Report number reserved for this evaluation (fan-out), released when unused. */
   reportNum: number | null;
+  /** The immigration policy pass's batch of queued items (relative to the data root), acknowledged when a turn ends done. */
+  policyBatch?: string | null;
   /** Why the last turn ended in its status (honesty gate reason). */
   lastReason: string | null;
   /**
@@ -86,7 +88,7 @@ export class SessionStore {
     return guardSessionDir(this.guardRoot, id);
   }
 
-  create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null; forkPending?: boolean }): SessionMeta {
+  create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null; policyBatch?: string | null; forkPending?: boolean }): SessionMeta {
     const now = monotonicIso();
     const meta: SessionMeta = {
       id: newId(),
@@ -104,6 +106,7 @@ export class SessionStore {
       forkedFrom: input.forkedFrom ?? null,
       error: null,
       reportNum: input.reportNum ?? null,
+      ...(input.policyBatch ? { policyBatch: input.policyBatch } : {}),
       lastReason: null,
       ...(input.forkPending ? { forkPending: true } : {}),
       policyVersion: SESSION_POLICY_VERSION,
@@ -132,6 +135,13 @@ export class SessionStore {
   setReportNum(id: string, reportNum: number | null): SessionMeta {
     const meta = this.mustRead(id);
     meta.reportNum = reportNum;
+    this.write(meta);
+    return meta;
+  }
+
+  setPolicyBatch(id: string, policyBatch: string | null): SessionMeta {
+    const meta = this.mustRead(id);
+    meta.policyBatch = policyBatch;
     this.write(meta);
     return meta;
   }

@@ -8,6 +8,7 @@ import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
+import { PendingUnreadableError, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 
@@ -43,8 +44,20 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       if (!doc.ok) return reply.code(422).send({ error: doc.error });
       userPrompt = `${userPrompt}\n\n<document source="documents/${doc.rel}">\n${doc.text.replace(/<\/document/gi, '<\\/document')}\n</document>`;
     }
+    // The policy pass runs as run-daily.sh runs it: daily-prompt.md filled in with the queued official items (the
+    // client's prompt only asks for the pass), and the batch of those items is acknowledged when the pass is done.
+    let pass: PolicyPass | null = null;
+    if (parsed.data.mode === 'immigration-policy') {
+      try {
+        pass = preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
+      } catch (err) {
+        if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
+        throw err;
+      }
+      userPrompt = pass.prompt;
+    }
     try {
-      const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
+      const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: parsed.data.reportNum ?? null, policyBatch: pass?.batch ?? null });
       return reply.code(202).send(meta);
     } catch (err) {
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });

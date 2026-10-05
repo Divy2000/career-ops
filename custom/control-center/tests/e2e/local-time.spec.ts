@@ -46,19 +46,6 @@ test.describe('dates are the viewer\'s local day', () => {
     await expect(page.getByLabel('Blacklist since')).toHaveValue('2026-10-05');
   });
 
-  test('the AI policy pass is asked for the local day', async ({ page }) => {
-    const prompts: string[] = [];
-    await page.route('**/api/sessions', async (route) => {
-      if (route.request().method() !== 'POST') return route.fallback();
-      prompts.push((route.request().postDataJSON() as { prompt: string }).prompt);
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'not started in this test' }) });
-    });
-    await page.goto('/sponsorship');
-    await page.getByRole('button', { name: /Run AI policy pass/ }).click();
-    await expect.poll(() => prompts).toHaveLength(1);
-    expect(prompts[0]).toContain('policy pass for 2026-10-05:');
-  });
-
   test('two digest sections with the same date (a manual pass and the daily run) both render, without a duplicate React key', async ({ page }) => {
     const keyErrors: string[] = [];
     page.on('console', (m) => {
