@@ -93,6 +93,16 @@ describe('read endpoints', () => {
     expect(modes.find((m: { id: string }) => m.id === 'advisor')).toBeTruthy();
   });
 
+  it('GET /api/modes and the engine mode list offer only modes a session can run: batch (refused as a session) is left out', async () => {
+    const modes = ((await get('/api/modes')).json() as Array<{ id: string }>).map((m) => m.id);
+    expect(modes).toContain('oferta');
+    expect(modes).toContain('pipeline');
+    expect(modes).not.toContain('batch');
+    const engine = (await get('/api/sessions/engine')).json() as { modes: string[] };
+    expect(engine.modes).toContain('oferta');
+    expect(engine.modes).not.toContain('batch');
+  });
+
   it('a missing tracker file is reported as missing, not as an error', async () => {
     const t2 = await makeTestApp();
     fs.rmSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'));

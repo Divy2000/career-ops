@@ -77,7 +77,7 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['tui.progress', { e2e: 'Progress' }],
   ['tui.stats', { e2e: 'Archetypes' }],
   ['tui.keyboard', { web: "case 'j'" }],
-  // 1c modes (every mode is also launchable from the palette and Sessions > New)
+  // 1c modes (every mode but batch, which is refused as a session, is also launchable from the palette and Sessions > New)
   ...['auto-pipeline', 'oferta', 'ofertas', 'pipeline', 'triage', 'batch', 'pdf', 'pdf/hm-audit', 'text', 'latex', 'latex-tex', 'titles', 'cover', 'email', 'contacto', 'deep', 'interview-prep', 'interview/plan', 'interview/practice', 'interview/debrief', 'interview-redflag', 'offer-prep', 'outcome', 'apply', 'followup', 'reply-watch', 'patterns', 'calibrate', 'upskill', 'training', 'project', 'interview', 'master-profile', 'add', 'expand', 'intake', 'scan', 'discover', 'tracker', 'agent-inbox', 'update'].map((m): [string, Reach] => [`mode.${m}`, { mode: m }]),
   ['mode.compare-ofertas-host', { e2e: 'Compare selected' }],
   ['mode.ai-analyses-host', { web: "id: 'calibrate'" }],

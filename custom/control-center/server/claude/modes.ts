@@ -364,3 +364,8 @@ export function sessionRefusal(id: string): string | null {
 export function listModeIds(): string[] {
   return [...MODES.map((m) => m.id), ...Object.keys(VIRTUAL_MODES)].sort();
 }
+
+/** The modes New session and the palette offer: every mode but those refused as a session (their old sessions stay viewable). */
+export function listLaunchableModeIds(): string[] {
+  return listModeIds().filter((id) => sessionRefusal(id) === null);
+}

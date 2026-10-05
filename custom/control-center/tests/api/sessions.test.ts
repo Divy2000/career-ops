@@ -489,6 +489,7 @@ describe('read confinement (BUG-06)', () => {
       expect(res.json().error).toMatch(/Pipeline > Batch/);
     }
     expect((await get(`/api/sessions/${old.id}`)).statusCode).toBe(200);
+    expect(((await get('/api/sessions')).json() as Array<{ id: string; mode: string }>).find((s) => s.id === old.id)?.mode).toBe('batch');
     expect(t.sessions.read(old.id)!.turns).toHaveLength(0);
     expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
   });
