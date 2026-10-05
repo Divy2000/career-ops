@@ -53,6 +53,18 @@ export interface ScheduleInput {
   enabled: boolean;
 }
 
+/**
+ * The node the jobs are pinned to (CC_NODE_BIN, as custom/launchd/install.sh writes it): the real path of the one the
+ * app runs on, so a per-shell link (fnm's multishell folders) that is gone after logout is never pinned.
+ */
+export function pinnedNodeBin(execPath: string = process.execPath): string {
+  try {
+    return fs.realpathSync(execPath);
+  } catch {
+    return execPath;
+  }
+}
+
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /**

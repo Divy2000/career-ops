@@ -23,7 +23,7 @@ import { tutorialRoutes } from './routes/tutorials.js';
 import { devchatRoutes } from './routes/devchat.js';
 import { configRoutes } from './routes/config.js';
 import { settingsRoutes } from './routes/settings.js';
-import { ScheduleService } from './system/schedule.js';
+import { pinnedNodeBin, ScheduleService } from './system/schedule.js';
 import { maybeFakeLaunchd } from './system/fake-launchd.js';
 import { readSettings, type AppSettings } from './domains/settings.js';
 
@@ -109,7 +109,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(projectRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });
   await app.register(configRoutes, { cfg, bus, exec });
-  const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, dataRootFromEnv: cfg.dataRootFromEnv, claudeBin: cfg.claudeBin, nodeBin: process.execPath });
+  const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, dataRootFromEnv: cfg.dataRootFromEnv, claudeBin: cfg.claudeBin, nodeBin: pinnedNodeBin() });
   await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings, daily });
 
   if (cfg.watch) {

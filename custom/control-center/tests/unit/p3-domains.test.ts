@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
-import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
+import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, pinnedNodeBin, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
 import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings } from '../../server/domains/settings.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -178,6 +178,15 @@ describe('launchd schedule helpers', () => {
     );
     expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { pinDataRoot: false, nodeBin: '/R&D <n>/node' })).toContain('<key>EnvironmentVariables</key><dict><key>CC_NODE_BIN</key><string>/R&amp;D &lt;n&gt;/node</string></dict>');
     expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { nodeBin: 'node' })).not.toContain('CC_NODE_BIN');
+  });
+  it('pins the real path of the node the app runs on, never a per-shell link to it (an fnm multishell link, say)', () => {
+    const dir = tempDir('cc-node-pin-');
+    const link = path.join(dir, 'fnm_multishells', '1234', 'bin', 'node');
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(process.execPath, link);
+    expect(pinnedNodeBin(link)).toBe(fs.realpathSync(process.execPath));
+    // A path that cannot be resolved is kept as given.
+    expect(pinnedNodeBin(path.join(dir, 'gone', 'node'))).toBe(path.join(dir, 'gone', 'node'));
   });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';
