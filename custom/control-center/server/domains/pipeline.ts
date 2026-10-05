@@ -130,10 +130,15 @@ export interface ScanHistoryRow {
   postedAt: string;
 }
 
+/** The leading columns scan.mjs formatScanHistoryRow writes, in order; a legacy file has no header row naming them. */
+const SCAN_HISTORY_COLUMNS = ['url', 'first_seen', 'portal', 'title', 'company', 'status', 'location', 'fingerprint', 'posted_at'];
+
 export function readScanHistory(dataRoot: string): ScanHistoryRow[] {
   const read = readText(path.join(dataRoot, 'data', 'scan-history.tsv'));
   if (read.kind !== 'ok') return [];
-  return parseTsv(read.text).map((r) => ({
+  // scan.mjs writes the header only on a fresh file and never rewrites an old headerless one.
+  const text = read.text.startsWith('url\t') ? read.text : `${SCAN_HISTORY_COLUMNS.join('\t')}\n${read.text}`;
+  return parseTsv(text).map((r) => ({
     url: r.url ?? '',
     firstSeen: r.first_seen ?? '',
     portal: r.portal ?? '',

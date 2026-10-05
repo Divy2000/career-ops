@@ -9,6 +9,8 @@ import { readShortlist } from '../../server/domains/shortlist.js';
 import { parseReport } from '../../server/domains/reports.js';
 import { readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
+import { readScanHistory } from '../../server/domains/pipeline.js';
+import { pathToFileURL } from 'node:url';
 import { localDate } from '../../shared/local-date.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -146,5 +148,37 @@ describe('active-interviews.md location (process-quality.mjs, rejection-latency.
   it('a missing file is reported at the documented path, and the editable file is that path', () => {
     expect(readInterviews(tempDir('cc-interviews-contract-')).active).toEqual({ kind: 'missing', path: 'data/active-interviews.md' });
     expect(USER_FILES.activeInterviews).toBe('data/active-interviews.md');
+  });
+});
+
+describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
+  /** The file scan.mjs writes on a fresh root, through its own writer in a child (scan.mjs never loads into the app). */
+  function writtenByScan(): { root: string; text: string } {
+    const root = tempDir('cc-scan-history-contract-');
+    fs.mkdirSync(path.join(root, 'data'));
+    const offer = { url: 'https://jobs.example.com/acme/1', source: 'greenhouse-api', title: 'Backend Engineer', company: 'Acme', location: 'Remote', postedAt: Date.parse('2026-09-30T12:00:00Z') };
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'scan.mjs')).href)}); await m.appendToScanHistory([${JSON.stringify(offer)}], '2026-10-01');`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return { root, text: fs.readFileSync(path.join(root, 'data', 'scan-history.tsv'), 'utf8') };
+  }
+  const expected = { url: 'https://jobs.example.com/acme/1', firstSeen: '2026-10-01', portal: 'greenhouse-api', title: 'Backend Engineer', company: 'Acme', status: 'added', location: 'Remote', postedAt: '2026-09-30' };
+
+  it('reads the file a scan writes', () => {
+    const { root } = writtenByScan();
+    expect(readScanHistory(root)).toEqual([expected]);
+  });
+
+  it('reads a legacy file with no header row by column position (scan.mjs never rewrites it)', () => {
+    const { root, text } = writtenByScan();
+    fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), text.split('\n').slice(1).join('\n'));
+    expect(readScanHistory(root)).toEqual([expected]);
+  });
+
+  it('reads a legacy 7-column file with no header', () => {
+    const root = tempDir('cc-scan-history-contract-');
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), 'https://jobs.example.com/old\t2026-09-01\tlever\tEngineer\tOldCo\tadded\tBerlin\n');
+    expect(readScanHistory(root)).toEqual([{ url: 'https://jobs.example.com/old', firstSeen: '2026-09-01', portal: 'lever', title: 'Engineer', company: 'OldCo', status: 'added', location: 'Berlin', postedAt: '' }]);
   });
 });
