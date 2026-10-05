@@ -63,6 +63,15 @@ describe('reports', () => {
     expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: null, comp: '$150k' });
   });
 
+  it('splits the title once, at the em dash or " -- " the templates write, so a role with " - " in it stays whole (R8-18)', () => {
+    const doc = (title: string) => `# ${title}\n\n**Score:** 4/5\n\n## A) Role Summary\n`;
+    expect(parseReport(doc('Bewertung: Acme -- Software Engineer - Platform'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
+    expect(parseReport(doc(`Evaluation: Acme ${EM_DASH} Software Engineer - Platform`), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
+    expect(parseReport(doc(`Evaluation: Acme - Labs ${EM_DASH} Engineer -- Data`), '011-acme.md', 11)).toMatchObject({ company: 'Acme - Labs', role: 'Engineer -- Data' });
+    // A hand-written title with only a plain dash still splits there.
+    expect(parseReport(doc('Evaluation: Acme - Engineer'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Engineer' });
+  });
+
   it('reads discard reasons and the cover letter PDF path', () => {
     const skip = readReport(root, 4);
     expect(skip.kind === 'ok' && skip.report.discardReasons).toEqual(['comp below floor', 'staffing agency']);

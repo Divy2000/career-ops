@@ -147,6 +147,16 @@ function blockField(sectionContent: string, label: string): string | null {
   return m ? m[1]!.trim() : null;
 }
 
+/**
+ * "Company <sep> Role", split once: at the first em dash or " -- " (what the templates write), and at " - " only when
+ * neither is there, so a role such as "Software Engineer - Platform" stays whole.
+ */
+function splitTitle(rest: string): [string, string | undefined] {
+  const sep = rest.match(new RegExp(`\\s+(?:${EM_DASH}|--)\\s+`)) ?? rest.match(/\s+-\s+/);
+  if (!sep || sep.index === undefined) return [rest, undefined];
+  return [rest.slice(0, sep.index), rest.slice(sep.index + sep[0].length)];
+}
+
 export function parseReport(markdown: string, file: string, num: number): ReportFull {
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
   const scoreRaw = headerField(markdown, SCORE_KEY);
@@ -156,7 +166,7 @@ export function parseReport(markdown: string, file: string, num: number): Report
     throw new ParseError('Not an evaluation report: missing a "# Evaluation: Company - Role" title, a **Score:** header or a Machine Summary', file, 1);
   }
   const machine = machineSummary(markdown, file);
-  const [companyPart, rolePart] = title.replace(/^[^:]+:\s*/, '').split(new RegExp(`\\s+${EM_DASH}\\s+|\\s+--?\\s+`));
+  const [companyPart, rolePart] = splitTitle(title.replace(/^[^:]+:\s*/, ''));
   const { intro, sections } = splitSections(markdown);
   const blockA = sections.find((s) => s.letter === 'A')?.content ?? '';
   const cover = sections.find((s) => /cover letter/i.test(s.heading))?.content ?? '';
