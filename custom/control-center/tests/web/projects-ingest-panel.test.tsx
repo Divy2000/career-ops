@@ -147,6 +147,7 @@ describe('Import projects: parser sessions per uploaded document', () => {
   const settle = async () => {
     for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
   };
+  const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(label));
   const fileWith = async (name: string, content: string, type: string) => {
     const input = host.querySelector<HTMLInputElement>('input[type="file"][aria-label="Projects file"]')!;
     await act(async () => {
@@ -167,6 +168,26 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(panelsShown()).toEqual([]);
     expect(importText()).toBe('[{"name":"Kite"}]');
     expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
+  });
+
+  it('a preview that answers after the draft changed is dropped, so Append never pairs it with the newer source', async () => {
+    await mount();
+    await choose('first.pdf', 'application/pdf');
+    await act(async () => panels.onEnvelope.get('projects/first.pdf')!('projects', { markdown: '## From First\n- a.' }, 1));
+    hold.convert = true;
+    await act(async () => button('Preview')!.click());
+    await choose('second.pdf', 'application/pdf');
+    await act(async () => panels.onEnvelope.get('projects/second.pdf')!('projects', { markdown: '## From Second\n- b.' }, 1));
+    await act(async () => held[0]!.release());
+    await settle();
+    expect(host.querySelector('[aria-label="Import preview"]')).toBeNull();
+    expect(button('Append')).toBeUndefined();
+    hold.convert = false;
+    await act(async () => button('Preview')!.click());
+    await settle();
+    await act(async () => button('Append')!.click());
+    await settle();
+    expect(sent.filter((c) => c.url === '/api/projects/append').map((c) => c.body)).toEqual([{ markdown: '## From Second\n- b.\n<!-- projects/second.pdf -->\n', source: 'projects/second.pdf' }]);
   });
 
 });

@@ -270,14 +270,16 @@ function ProjectForm({ editing, etag, onChange, onDone }: { editing: Editing; et
 function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended: () => void }) {
   const [format, setFormat] = useState<'json' | 'markdown'>('json');
   const [text, setText] = useState('');
-  const [preview, setPreview] = useState<ConvertResult | null>(null);
+  // A preview remembers the source it was made for, so Append never pairs it with a newer one.
+  const [previewed, setPreviewed] = useState<{ result: ConvertResult; source: string | null } | null>(null);
+  const preview = previewed?.result ?? null;
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   // The documents/ source the draft came from (intake's path, e.g. projects/x.pdf); sent with preview and append.
   const [source, setSource] = useState<string | null>(null);
   // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
   const currentUpload = useRef<string | null>(null);
-  // Bumped by every new file choice; an async step that finishes under an older generation is dropped.
+  // Bumped by every change to the draft (file choice, parser fill); an async step that finishes under an older generation is dropped.
   const generation = useRef(0);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
@@ -286,10 +288,11 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
       if (kind !== 'projects' || currentUpload.current !== forPath) return;
+      generation.current += 1;
       setSource(forPath);
       setFormat('markdown');
       setText((payload as { markdown: string }).markdown);
-      setPreview(null);
+      setPreviewed(null);
     },
     [],
   );
@@ -299,7 +302,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
     const mine = ++generation.current;
     const current = () => generation.current === mine;
     setError(null);
-    setPreview(null);
+    setPreviewed(null);
     setSource(null);
     showUpload(null);
     if (/\.(json|md|markdown|txt)$/i.test(file.name)) {
@@ -322,25 +325,33 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   };
 
   const convert = async () => {
+    const mine = generation.current;
+    const forSource = source;
     setError(null);
     try {
-      setPreview(await apiSend<ConvertResult>('POST', '/api/projects/convert', { format, text, ...(source ? { source } : {}) }));
+      const result = await apiSend<ConvertResult>('POST', '/api/projects/convert', { format, text, ...(forSource ? { source: forSource } : {}) });
+      if (generation.current === mine) setPreviewed({ result, source: forSource });
     } catch (err) {
-      setPreview(null);
+      if (generation.current !== mine) return;
+      setPreviewed(null);
       setError(describeError(err));
     }
   };
 
   const append = async () => {
-    if (!preview?.markdown) return;
+    if (!previewed?.result.markdown) return;
+    const { result, source: forSource } = previewed;
+    const mine = generation.current;
     try {
-      const out = await apiSend<{ recorded?: boolean; warning?: string }>('POST', '/api/projects/append', { markdown: preview.markdown, ...(source ? { source } : {}) }, ifMatch(etag));
-      toast.success(out.recorded ? `Imported into article-digest.md; documents/${source} is recorded as ingested` : 'Imported into article-digest.md');
+      const out = await apiSend<{ recorded?: boolean; warning?: string }>('POST', '/api/projects/append', { markdown: result.markdown, ...(forSource ? { source: forSource } : {}) }, ifMatch(etag));
+      toast.success(out.recorded ? `Imported into article-digest.md; documents/${forSource} is recorded as ingested` : 'Imported into article-digest.md');
       if (out.warning) toast.warning(out.warning);
-      setPreview(null);
+      onAppended();
+      if (generation.current !== mine) return;
+      generation.current += 1;
+      setPreviewed(null);
       setText('');
       setSource(null);
-      onAppended();
     } catch (err) {
       const body = err instanceof ApiError ? (err.body as { errors?: string[] }) : null;
       setError(body?.errors?.join(' ') ?? describeError(err));
@@ -380,7 +391,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           <span className="muted">Each block gets a Source line; Append records the document as ingested, as intake does.</span>
         </p>
       )}
-      <textarea aria-label="Projects to import" className="mono projects-import__text" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreview(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
+      <textarea aria-label="Projects to import" className="mono projects-import__text" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreviewed(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
       <div className="row gap">
         <button type="button" disabled={!text.trim()} onClick={() => void convert()}>
           Preview
