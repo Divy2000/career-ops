@@ -217,6 +217,35 @@ test.describe('Cancel stops a running session or run from the page', () => {
     await expect(page.getByRole('alert')).toHaveCount(0);
   });
 
+  test('Delete on a session page is disabled while a reply runs, and a refused delete says why', async ({ page }) => {
+    const origin = { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}` };
+    const { id } = await startSlowSession(page);
+    try {
+      await page.request.post(`/api/sessions/${id}/cancel`, { headers: origin });
+      await expect.poll(() => sessionStatus(page, id), { timeout: 10_000 }).toBe('cancelled');
+      await page.goto(`/sessions/${id}`);
+      const panel = page.locator(`[data-session-id="${id}"]`);
+      const del = page.getByRole('button', { name: 'Delete', exact: true });
+      await expect(panel.getByText('cancelled', { exact: true })).toBeVisible();
+      await expect(del).toBeEnabled();
+      await panel.getByLabel('Reply to the session').fill('Calibrate again, slowly');
+      await panel.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect(panel.getByText('running', { exact: true })).toBeVisible({ timeout: 10_000 });
+      await expect(del).toBeDisabled();
+      await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(panel.getByText('cancelled', { exact: true })).toBeVisible({ timeout: 10_000 });
+      await expect(del).toBeEnabled();
+      await page.route(`**/api/sessions/${id}`, (route) => (route.request().method() === 'DELETE' ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: `session ${id} is still running` }) }) : route.fallback()));
+      await del.click();
+      await page.getByRole('dialog', { name: 'Delete this session?' }).getByRole('button', { name: 'Delete' }).click();
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: `Could not delete the session: session ${id} is still running` })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1 })).toContainText(id);
+    } finally {
+      await page.unrouteAll();
+      await page.request.post(`/api/sessions/${id}/cancel`, { headers: origin });
+    }
+  });
+
   test('a Cancel the server refuses says so on the session page and on the Runs page', async ({ page }) => {
     const { id, runId } = await startSlowSession(page);
     try {

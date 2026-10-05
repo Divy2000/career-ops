@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
+import { describeError } from '../../lib/actions';
 import { useSessions } from '../../lib/sessions';
 import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
 import { DataState, Empty, TableScroll } from '../../components/ui';
@@ -140,9 +141,18 @@ export function SessionDetailPage() {
   const openSession = (next: string) => {
     if (next !== id) void navigate({ to: '/sessions/$id', params: { id: next } });
   };
+  // The meta query refreshes when a turn ends, not when a reply starts one; the live stream says running at once.
+  // The stream never sends queued, so its starting value is not a status.
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
+  const onStatus = useCallback((s: string) => setLiveStatus(s), []);
   const remove = async () => {
     if (!(await confirm({ title: 'Delete this session?', body: 'The transcript and its events are removed. Runs it started are kept.', confirmLabel: 'Delete', danger: true }))) return;
-    await apiSend('DELETE', `/api/sessions/${id}`, {});
+    try {
+      await apiSend('DELETE', `/api/sessions/${id}`, {});
+    } catch (err) {
+      toast.error(`Could not delete the session: ${describeError(err)}`);
+      return;
+    }
     toast.success('Session deleted');
     setDeleted(true);
   };
@@ -165,13 +175,13 @@ export function SessionDetailPage() {
               </div>
               <button
                 type="button"
-                disabled={q.data.meta.status === 'running' || q.data.meta.status === 'queued'}
+                disabled={q.data.meta.status === 'running' || q.data.meta.status === 'queued' || liveStatus === 'running'}
                 onClick={() => void remove()}
               >
                 Delete
               </button>
             </div>
-            <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} onSessionId={openSession} />
+            <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} onSessionId={openSession} onStatus={onStatus} />
             <div className="card">
               <h2>Turns</h2>
               <TableScroll label="Turns">
