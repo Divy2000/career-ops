@@ -1,9 +1,10 @@
-// Insights scripts (JSON by default, spec 1d) cached by the mtimes of their inputs.
+// Insights scripts (JSON by default, spec 1d) cached by the mtimes of their inputs and the local day.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '../config.js';
 import { cliScriptPath, importCore, type CliId } from '../core/adapter.js';
 import type { Exec } from '../routes/system.js';
+import { localDate } from '../../shared/local-date.js';
 
 export const INSIGHT_SCRIPTS: Record<string, { cli: CliId; label: string }> = {
   funnelVelocity: { cli: 'funnelVelocity', label: 'Funnel velocity' },
@@ -88,7 +89,9 @@ const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'dat
 export async function readInsight(cfg: ServerConfig, exec: Exec, script: InsightScript, opts: { recompute?: boolean; now?: () => number } = {}): Promise<InsightRead> {
   const def = INSIGHT_SCRIPTS[script]!;
   const { resolveTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
-  const key = inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot));
+  const now = opts.now ?? Date.now;
+  // The scripts count days from today (rejection latency, weekly digest, funnel velocity), so a new local day is a new input.
+  const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}|day:${localDate(new Date(now()))}`;
   const file = cachePath(cfg.dataRoot, script);
   if (!opts.recompute) {
     try {
@@ -109,7 +112,7 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
     script,
     label: def.label,
     kind: r.code === 0 ? 'ok' : 'failed',
-    computedAt: new Date((opts.now ?? Date.now)()).toISOString(),
+    computedAt: new Date(now()).toISOString(),
     inputsKey: key,
     exit: r.code,
     json,

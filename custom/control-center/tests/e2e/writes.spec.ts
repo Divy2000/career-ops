@@ -99,6 +99,29 @@ test.describe('deterministic writes from the pages', () => {
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
+  test("a delete preview made on one row does not arm the delete of the row Back returns to", async ({ page }) => {
+    // Row #1 links to #3 as another application at the same company, so the move from #1 to #3 stays inside the app.
+    await page.route('**/api/tracker/1', async (route) => {
+      const res = await route.fetch();
+      const body = (await res.json()) as { companyHistory: unknown[] };
+      await route.fulfill({ response: res, json: { ...body, companyHistory: [{ num: 3, role: 'Staff Software Engineer', status: 'Interview', date: '2026-09-25' }] } });
+    });
+    await page.goto('/tracker/1');
+    await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Timeline' }).click();
+    await page.getByRole('link', { name: '#3 Staff Software Engineer' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Globex Payments' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Documents' }).click();
+    await page.getByRole('button', { name: 'Preview delete (dry run)' }).click();
+    await expect(page.getByRole('button', { name: 'Confirm delete #3' })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Documents' }).click();
+    await expect(page.getByRole('button', { name: 'Preview delete (dry run)' })).toBeVisible();
+    await expect(page.getByLabel('Delete preview')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Confirm delete #1' })).toHaveCount(0);
+  });
+
   test('Network scan Add all sends every result, in bodies the pipeline route accepts, and says how many were added', async ({ page }) => {
     // The scan run and the pipeline write are answered here: the route's own limits are covered by the writes API tests.
     const postings = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: i === 0 ? null : i === 1 ? 'Office '.repeat(40).trim() : 'Remote', postedAt: null, source: 'greenhouse' }));

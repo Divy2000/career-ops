@@ -293,3 +293,19 @@ test.describe('Cancel stops a running session or run from the page', () => {
     }
   });
 });
+
+test.describe('Sessions list filters (R8-21)', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('a filter that hides every session says no session matches, not that there are none yet', async ({ page }) => {
+    const stamp = '2026-10-05T12:00:00.000Z';
+    const session = { id: 'e2e-filter-done', claudeSessionId: '44444444-4444-4444-8444-444444444444', mode: 'deep', policyClass: 'research', target: { type: 'app', value: '1' }, model: null, status: 'done', createdAt: stamp, updatedAt: stamp, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], reportNum: null, policyVersion: 2 };
+    await page.route('**/api/sessions', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([session]) }));
+    await page.goto('/sessions');
+    await expect(page.getByRole('row').filter({ hasText: 'deep' })).toHaveCount(1);
+    await page.getByLabel('Filter by status').selectOption('error');
+    await expect(page.getByText('No sessions match the filters.')).toBeVisible();
+    await expect(page.getByText(/No sessions yet/)).toHaveCount(0);
+    await axeClean(page);
+  });
+});

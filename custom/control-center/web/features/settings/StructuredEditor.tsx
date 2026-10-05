@@ -25,7 +25,13 @@ function parseScalar(text: string, like: unknown): unknown {
   return text;
 }
 
-export function ScalarInput({ path, value, onOp, rules, ariaLabel }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; ariaLabel?: string }) {
+/** A table cell takes the type of its column's other values; with none to copy, true and false are switches, as in Add key. */
+function parseCell(text: string, like: unknown): unknown {
+  const flag = like === undefined && (text === 'true' || text === 'false');
+  return typeof like === 'boolean' || flag ? text === 'true' : parseScalar(text, like ?? '');
+}
+
+export function ScalarInput({ path, value, onOp, rules, ariaLabel, parse }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; ariaLabel?: string; parse?: (text: string) => unknown }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const name = ariaLabel ?? pathLabel(path);
@@ -39,8 +45,8 @@ export function ScalarInput({ path, value, onOp, rules, ariaLabel }: { path: Jso
       setError(err);
       return;
     }
-    const next = parseScalar(draft, value);
-    if (typeof value === 'number' && Number.isNaN(next)) {
+    const next = parse ? parse(draft) : parseScalar(draft, value);
+    if (typeof next === 'number' && Number.isNaN(next)) {
       setError('must be a number');
       return;
     }
@@ -124,6 +130,11 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const name = pathLabel(path);
+  // A blank cell is an absent key or an explicit blank value (`enabled:` reads as null): neither has a type to copy.
+  const blank = (v: unknown) => v === undefined || v === null;
+  const columnLike = (col: string) => rows.find((r) => !blank(r[col]))?.[col];
+  // A blank cell is typed like a new row's cell: false in a blank enabled cell is the boolean.
+  const parseBlank = (col: string) => (text: string) => (text.trim() === '' ? '' : parseCell(text.trim(), columnLike(col)));
   const addRow = () => {
     const row: Record<string, unknown> = {};
     for (const col of columns) {
@@ -134,10 +145,7 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
         return;
       }
       if (text === '') continue;
-      const like = rows.find((r) => r[col] !== undefined)?.[col];
-      // With no row to copy a type from (an empty list), true and false are switches, as in Add key.
-      const flag = like === undefined && (text === 'true' || text === 'false');
-      row[col] = typeof like === 'boolean' || flag ? text === 'true' : parseScalar(text, like ?? '');
+      row[col] = parseCell(text, columnLike(col));
     }
     if (Object.keys(row).length === 0) {
       setError('fill in at least one column');
@@ -171,7 +179,7 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
           {rows.map((row, i) => (
             <tr key={i}>
               {columns.map((c) => (
-                <td key={c}>{isScalar(row[c]) || row[c] === undefined ? <ScalarInput path={[...path, i, c]} value={row[c] ?? ''} onOp={onOp} rules={rules} ariaLabel={`${c} of ${rowName(row, i)}`} /> : <code className="faint small">{JSON.stringify(row[c])}</code>}</td>
+                <td key={c}>{isScalar(row[c]) || row[c] === undefined ? <ScalarInput path={[...path, i, c]} value={row[c] ?? ''} onOp={onOp} rules={rules} ariaLabel={`${c} of ${rowName(row, i)}`} parse={blank(row[c]) ? parseBlank(c) : undefined} /> : <code className="faint small">{JSON.stringify(row[c])}</code>}</td>
               ))}
               <td>
                 <button type="button" className="button--ghost" aria-label={`Remove ${rowName(row, i)}`} onClick={() => onOp({ op: 'delete', path: [...path, i] })}>

@@ -66,35 +66,45 @@ export function PluginsTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(q.data?.plugins ?? []).map((p) => (
-                    <tr key={p.id}>
-                      <td>
-                        <input type="checkbox" aria-label={`Enable ${p.id}`} checked={p.enabled} onChange={(e) => void toggle(p.id, e.target.checked)} />
-                      </td>
-                      <td>
-                        <strong>{p.name}</strong> <span className="faint mono small">{p.id} {p.version}</span>
-                        <div className="muted small">{p.description}</div>
-                      </td>
-                      <td>
-                        {p.hooks.map((h) => (
-                          <Pill key={h}>{h}</Pill>
-                        ))}
-                      </td>
-                      <td className="mono small">{p.requiredEnv.length ? p.requiredEnv.join(', ') : <span className="faint">no keys</span>}</td>
-                      <td>
-                        <div className="row gap">
-                          <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook: p.hooks[0] }} disabled={!p.enabled} onRun={(params) => void run('plugins.run', params)}>
-                            Run {p.hooks[0] ?? 'hook'}
-                          </ActionButton>
-                          {p.hasSkill && (
-                            <button type="button" onClick={() => void showSkill(p.id)}>
-                              Skill doc
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {(q.data?.plugins ?? []).map((p) => {
+                    // plugins.mjs run never runs a provider hook: those ride the portal scan.
+                    const hook = p.hooks.find((h) => h !== 'provider');
+                    return (
+                      <tr key={p.id}>
+                        <td>
+                          <input type="checkbox" aria-label={`Enable ${p.id}`} checked={p.enabled} onChange={(e) => void toggle(p.id, e.target.checked)} />
+                        </td>
+                        <td>
+                          <strong>{p.name}</strong> <span className="faint mono small">{p.id} {p.version}</span>
+                          <div className="muted small">{p.description}</div>
+                        </td>
+                        <td>
+                          {p.hooks.map((h) => (
+                            <Pill key={h}>{h}</Pill>
+                          ))}
+                        </td>
+                        <td className="mono small">{p.requiredEnv.length ? p.requiredEnv.join(', ') : <span className="faint">no keys</span>}</td>
+                        <td>
+                          <div className="row gap">
+                            {hook ? (
+                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled} onRun={(params) => void run('plugins.run', params)}>
+                                Run {hook}
+                              </ActionButton>
+                            ) : (
+                              <span className="muted small">
+                                Runs during the portal scan for <span className="mono">provider: {p.id}</span> entries in portals.yml
+                              </span>
+                            )}
+                            {p.hasSkill && (
+                              <button type="button" onClick={() => void showSkill(p.id)}>
+                                Skill doc
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </TableScroll>

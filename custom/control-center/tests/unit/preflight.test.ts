@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { preflight, resolveClaudeBin, claudeCandidates, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
@@ -84,7 +85,12 @@ describe('preflight claude probe', () => {
 
   it('reports a timeout as a timeout, after retrying once', async () => {
     const marker = path.join(tempDir('cc-preflight-'), 'runs');
-    const bin = fakeClaude(`require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'x'); setTimeout(() => {}, 10000);`);
+    // Each attempt must start well inside the 1.5 s timeout to record itself. A node fake can take longer than that to
+    // boot on a loaded machine, and the first run of any new executable waits on the OS check of it, so this is a
+    // shell fake that has run once (with `warm`) before the probe times it.
+    const bin = path.join(tempDir('cc-preflight-'), 'claude');
+    fs.writeFileSync(bin, `#!/bin/sh\n[ "$1" = warm ] && exit 0\nprintf x >> '${marker}'\nexec sleep 10\n`, { mode: 0o755 });
+    expect(spawnSync(bin, ['warm']).status).toBe(0);
     const r = await preflight({ ...base, claudeBin: bin, claudeTimeoutMs: 1500 });
     expect(r.ok).toBe(false);
     expect(r.errors[0]).toMatch(/not runnable at ".*claude"/);

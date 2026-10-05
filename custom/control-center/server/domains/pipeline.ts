@@ -31,8 +31,8 @@ const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*${RANK_DASH}?\\s*
 // Labeled segments ride on any row shape, so on a bare URL row they sit where company and title go. There a cell is a
 // label only in the exact form a writer emits it: scan.mjs formatPipelineOffer (`posted: YYYY-MM-DD`,
 // `trust: <score>[ flag,flag]`, `note: <text>`) and rank-pipeline.mjs formatRankSegment (`rank: <n>/5 <dash> <reason>`).
-// So a company or title like `Rank: Senior Engineer` or `posted: soon` stays text. Past the title any `word:` cell is
-// a label, as before.
+// So a company or title like `Rank: Senior Engineer` or `posted: soon` stays text, and so does a location such as
+// `Remote: US` (scan.mjs keeps colons in it): only those written forms are labels, in any column.
 const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
 
 export function seniorityOf(title: string): string | null {
@@ -89,7 +89,7 @@ export function parsePipeline(md: string): PipelineRow[] {
     const positional: string[] = [];
     const labels = new Map<string, string>();
     cells.forEach((cell, idx) => {
-      const lm = idx >= 3 || (idx >= 1 && WRITTEN_SEGMENT.test(cell)) ? cell.match(LABELED) : null;
+      const lm = idx >= 1 && WRITTEN_SEGMENT.test(cell) ? cell.match(LABELED) : null;
       if (lm) labels.set(lm[1]!.toLowerCase(), lm[2]!.trim());
       else positional.push(cell);
     });

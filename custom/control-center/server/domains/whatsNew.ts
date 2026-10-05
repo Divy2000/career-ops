@@ -56,7 +56,8 @@ export function collectWhatsNew(opts: {
   for (const row of sorted) {
     if (!/^https?:\/\//i.test(row.url)) continue;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(row.firstSeen) || Date.parse(`${row.firstSeen}T00:00:00Z`) < cutoff) continue;
-    if (/skipped|expired/i.test(row.status)) continue;
+    // Only what the scanner put in the pipeline: it also records skips, expiries and company cooldowns (`cooldown:...`).
+    if (row.status.trim().toLowerCase() !== 'added') continue;
     if (isEvaluated(keys, opts.norm, row.company, row.title)) continue;
     count++;
     if (offers.length < opts.limit) {

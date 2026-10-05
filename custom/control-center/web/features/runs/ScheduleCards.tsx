@@ -11,6 +11,13 @@ import type { ScheduleLogs, ScheduleState } from '@shared/api';
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const pad = (n: number) => String(n).padStart(2, '0');
 
+/** A whole number typed into a time field, or null; Number('') is 0, so a cleared field would schedule the job at 00. */
+function timeField(text: string, max: number): number | null {
+  if (!/^\d{1,2}$/.test(text.trim())) return null;
+  const n = Number(text.trim());
+  return n <= max ? n : null;
+}
+
 function JobCard({ job }: { job: ScheduleState }) {
   const qc = useQueryClient();
   const actions = useActions();
@@ -21,11 +28,17 @@ function JobCard({ job }: { job: ScheduleState }) {
   const [error, setError] = useState<string | null>(null);
   const put = async (enabled: boolean) => {
     setError(null);
+    const h = timeField(hour, 23);
+    const m = timeField(minute, 59);
+    if (h === null || m === null) {
+      setError(h === null ? 'Hour must be a whole number from 0 to 23.' : 'Minute must be a whole number from 0 to 59.');
+      return;
+    }
     try {
-      const body: Record<string, unknown> = { hour: Number(hour), minute: Number(minute), enabled };
+      const body: Record<string, unknown> = { hour: h, minute: m, enabled };
       if (job.kind === 'weekly') body.weekday = Number(weekday);
       await apiSend('PUT', `/api/schedule/${job.label}`, body);
-      toast.success(enabled ? `${job.title} scheduled at ${pad(Number(hour))}:${pad(Number(minute))}` : `${job.title} disabled`);
+      toast.success(enabled ? `${job.title} scheduled at ${pad(h)}:${pad(m)}` : `${job.title} disabled`);
       await qc.invalidateQueries({ queryKey: ['system', 'schedule'] });
     } catch (err) {
       setError(`Could not update launchd: ${describeError(err)}`);

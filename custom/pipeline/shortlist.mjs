@@ -87,6 +87,18 @@ async function loadTiers(companies, today) {
 async function loadAlerts(companies) {
   if (!existsSync(ALERTS)) return new Map();
   const bySlug = parseCompanyAlerts(await readFile(ALERTS, 'utf8'));
+  // The slug column is whatever the writing session derived; the company name, slugged here like the pipeline rows,
+  // matches even when its rule differed (AT&T as at-t, a kept "corporation").
+  for (const [, alert] of [...bySlug]) {
+    let own;
+    try {
+      own = companySlug(alert.company);
+    } catch {
+      continue;
+    }
+    const prev = bySlug.get(own);
+    if (!prev || alert.date >= prev.date) bySlug.set(own, alert);
+  }
   const out = new Map();
   for (const c of companies) {
     let slug;
@@ -111,6 +123,18 @@ async function readPipeline() {
   }
 }
 
+// The pasted-URL workflow never writes portals.yml, and js-yaml refuses an empty document: no title negatives either way.
+async function readPortals() {
+  let text;
+  try {
+    text = await readFile(PORTALS, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return {};
+    throw err;
+  }
+  return text.trim() ? (yaml.load(text) ?? {}) : {};
+}
+
 const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 
 async function main() {
@@ -123,7 +147,7 @@ async function main() {
   const alerts = await loadAlerts(companies);
   // Re-apply only the CURRENT negatives: rows the scanner admitted (including
   // via per-company title_filter_overrides) stay, titles blocked since then go.
-  const titleCfg = yaml.load(await readFile(PORTALS, 'utf8')).title_filter ?? {};
+  const titleCfg = (await readPortals())?.title_filter ?? {};
   const titleOk = buildTitleFilter({ positive: [], negative: titleCfg.negative ?? [] });
   const { shortlist, excluded } = buildShortlist(rows, { tiers, alerts, minRank, keep: (r) => titleOk(r.title) });
 

@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   companySlug,
   parseRssItems,
@@ -15,6 +18,21 @@ test('companySlug lowercases, strips punctuation and legal suffixes', () => {
   assert.equal(companySlug('Capital One (Plano)'), 'capital-one-plano');
   assert.equal(companySlug('Weights & Biases'), 'weights-and-biases');
   assert.equal(companySlug('  Amazon.com Services LLC '), 'amazon-com-services');
+});
+
+// The policy pass writes the slug column of company-alerts.tsv by hand; shortlist.mjs and the app match it against
+// companySlug, so the rule the prompt states must be companySlug's, and its worked examples must come out the same (R8-05).
+test('the daily prompt states the companySlug rule, and its slug examples are what companySlug returns', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const prompt = fs.readFileSync(path.join(here, '..', 'daily-prompt.md'), 'utf8');
+  const lib = fs.readFileSync(path.join(here, '..', 'lib.mjs'), 'utf8');
+  const libSuffixes = lib.match(/const LEGAL_SUFFIXES = \/\\b\(([^)]+)\)/)[1].split('|');
+  const promptSuffixes = prompt.match(/legal suffixes \(([^)]+)\)/)[1].split(/,\s*/);
+  assert.deepEqual([...promptSuffixes].sort(), [...libSuffixes].sort());
+  assert.match(prompt, /`&` becomes `and`/);
+  const examples = [...prompt.matchAll(/`([^`]+)` is `([a-z0-9-]+)`/g)].map((m) => [m[1], m[2]]);
+  assert.ok(examples.length >= 3, `examples in the prompt: ${JSON.stringify(examples)}`);
+  for (const [name, slug] of examples) assert.equal(companySlug(name), slug, name);
 });
 
 test('companySlug rejects an empty name', () => {

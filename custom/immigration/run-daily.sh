@@ -118,11 +118,12 @@ if (after !== before) {
   mkdir -p "$IMM/batches"
   batch="$IMM/batches/$(date +%Y%m%dT%H%M%S)-$$.json"
   printf '%s' "$watch_json" > "$batch"
-  prompt="$(WATCH_JSON="$watch_json" TODAY="$TODAY" IMM="$IMM" node -e '
+  prompt="$(WATCH_JSON="$watch_json" TODAY="$TODAY" IMM="$IMM" PROFILE="$DATA/config/profile.yml" node -e '
 const fs = require("fs");
 const t = fs.readFileSync("custom/immigration/daily-prompt.md", "utf8");
 // Replacer functions: a string replacement would expand $&, $` and the like inside the feed JSON or the path.
-process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceAll("{{IMM}}", () => process.env.IMM).replace("{{WATCH_JSON}}", () => process.env.WATCH_JSON));
+// The profile is named by its absolute path: the pass runs in the checkout, and the data root may be elsewhere.
+process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceAll("{{IMM}}", () => process.env.IMM).replaceAll("{{PROFILE}}", () => process.env.PROFILE).replace("{{WATCH_JSON}}", () => process.env.WATCH_JSON));
 ')" || return 1
   # The pass reads untrusted web pages, so it runs confined like a Control Center session
   # (custom/control-center README section 4): --restricted keeps Read inside the checkout and the

@@ -10,7 +10,7 @@ import { describeError, useActions, useRunAction } from '../lib/actions';
 import { startSession } from '../lib/sessions';
 import { targetFor } from '../features/sessions/SessionsPage';
 import { useConfirm } from './ConfirmDialog';
-import { CostPill } from './ActionBar';
+import { ActionOutput, CostPill } from './ActionBar';
 import { THEME_OPTIONS } from './ThemeSwitcher';
 import { THEME_MODES, useTheme } from '../lib/theme';
 import type { ActionMeta, ModePolicy } from '@shared/api';
@@ -156,6 +156,26 @@ function ActionParamsDialog({ action, onClose, onRun }: { action: ActionMeta; on
   );
 }
 
+/** What a sync action printed (its result and stderr), so a palette run is never just a "Done" toast. */
+function ActionOutputDialog({ label, text, onClose }: { label: string; text: string; onClose: () => void }) {
+  return (
+    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog__overlay" />
+        <Dialog.Content className="dialog" aria-describedby={undefined}>
+          <Dialog.Title className="dialog__title">{label}: output</Dialog.Title>
+          <ActionOutput text={text} />
+          <div className="row gap dialog__actions">
+            <button type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () => void }) {
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState('');
@@ -210,7 +230,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const actions = useActions();
   const modes = useQuery({ queryKey: ['modes'], queryFn: () => apiGet<ModePolicy[]>('/api/modes'), staleTime: 60_000, enabled: open });
   const confirm = useConfirm();
-  const { run } = useRunAction();
+  const { run, output } = useRunAction();
+  const [outputOf, setOutputOf] = useState<string | null>(null);
   const { setMode } = useTheme();
   const [launch, setLaunch] = useState<string | null>(null);
   const [withParams, setWithParams] = useState<ActionMeta | null>(null);
@@ -223,6 +244,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     const out = await run(a.id, params);
     setWithParams(null);
     if (out && 'runId' in out) void navigate({ to: '/runs' });
+    else setOutputOf(a.label);
   };
   const pick = (a: ActionMeta) => {
     onOpenChange(false);
@@ -284,6 +306,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         </Command.List>
       </Command.Dialog>
       {launch && <ModeLaunchDialog mode={launch} onClose={() => setLaunch(null)} />}
+      {outputOf && output !== null && <ActionOutputDialog label={outputOf} text={output} onClose={() => setOutputOf(null)} />}
       {withParams && <ActionParamsDialog action={withParams} onClose={() => setWithParams(null)} onRun={(p) => execute(withParams, p)} />}
     </>
   );

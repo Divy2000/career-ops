@@ -90,9 +90,9 @@ const DATE_KEY = 'Date|Datum|Data|Dato|Tanggal|Tarih|Дата';
 const ARCHETYPE_KEY = 'Archetype|Archetyp|Arketype|Archetipo|Arquétipo|Arketipe|Arketip|Архетип';
 const LEGITIMACY_KEY = 'Legitimacy|Легітимність|Meşruiyet';
 
-/** A `**Key:**` header line; French and Korean reports write `**Key :**`. */
+/** A `**Key:**` header line; French and Korean reports write `**Key :**`. Blanks never cross a line: an empty `**URL:**` is empty. */
 function headerField(md: string, key: string): string | null {
-  const re = new RegExp(`^\\*\\*(?:${key})\\s*:\\*\\*\\s*(.*)$`, 'mi');
+  const re = new RegExp(`^\\*\\*(?:${key})[ \\t]*:\\*\\*[ \\t]*(.*)$`, 'mi');
   const m = md.match(re);
   if (!m) return null;
   const v = m[1]!.trim();
@@ -140,11 +140,21 @@ function machineSummary(md: string, file: string): Record<string, unknown> | nul
 
 /** A Block A field: a `| **Label** | value |` table row (what oferta writes) or a legacy `- Label: value` bullet. */
 function blockField(sectionContent: string, label: string): string | null {
-  const row = sectionContent.match(new RegExp(`^\\|\\s*\\**${label}\\**\\s*\\|\\s*(.*?)\\s*\\|\\s*$`, 'mi'));
+  const row = sectionContent.match(new RegExp(`^\\|[ \\t]*\\**${label}\\**[ \\t]*\\|[ \\t]*(.*?)[ \\t]*\\|[ \\t]*$`, 'mi'));
   if (row && row[1]) return row[1];
-  const re = new RegExp(`^\\s*[-*]?\\s*\\**${label}\\**\\s*(?:\\([^)]*\\))?\\s*:\\s*(.+)$`, 'mi');
+  const re = new RegExp(`^[ \\t]*[-*]?[ \\t]*\\**${label}\\**[ \\t]*(?:\\([^)]*\\))?[ \\t]*:[ \\t]*(.+)$`, 'mi');
   const m = sectionContent.match(re);
   return m ? m[1]!.trim() : null;
+}
+
+/**
+ * "Company <sep> Role", split once: at the first em dash or " -- " (what the templates write), and at " - " only when
+ * neither is there, so a role such as "Software Engineer - Platform" stays whole.
+ */
+function splitTitle(rest: string): [string, string | undefined] {
+  const sep = rest.match(new RegExp(`\\s+(?:${EM_DASH}|--)\\s+`)) ?? rest.match(/\s+-\s+/);
+  if (!sep || sep.index === undefined) return [rest, undefined];
+  return [rest.slice(0, sep.index), rest.slice(sep.index + sep[0].length)];
 }
 
 export function parseReport(markdown: string, file: string, num: number): ReportFull {
@@ -156,7 +166,7 @@ export function parseReport(markdown: string, file: string, num: number): Report
     throw new ParseError('Not an evaluation report: missing a "# Evaluation: Company - Role" title, a **Score:** header or a Machine Summary', file, 1);
   }
   const machine = machineSummary(markdown, file);
-  const [companyPart, rolePart] = title.replace(/^[^:]+:\s*/, '').split(new RegExp(`\\s+${EM_DASH}\\s+|\\s+--?\\s+`));
+  const [companyPart, rolePart] = splitTitle(title.replace(/^[^:]+:\s*/, ''));
   const { intro, sections } = splitSections(markdown);
   const blockA = sections.find((s) => s.letter === 'A')?.content ?? '';
   const cover = sections.find((s) => /cover letter/i.test(s.heading))?.content ?? '';

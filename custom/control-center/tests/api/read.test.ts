@@ -150,6 +150,26 @@ describe('GET /api/followups on an empty tracker', () => {
     }
   });
 
+  it('counts a status by its states.yml label: any case and the aliases set-status.mjs accepts (R8-17)', async () => {
+    const t2 = await makeTestApp();
+    try {
+      const rows = [
+        '| 1 | 2026-09-20 | Acme | - | Engineer | 4.0/5 | interview | - | - | |',
+        '| 2 | 2026-09-21 | Beta | - | Engineer | 4.0/5 | aplicado | - | - | |',
+        '| 3 | 2026-09-22 | Gamma | - | Engineer | 4.0/5 | Applied | - | - | |',
+        '| 4 | 2026-09-23 | Delta | - | Engineer | 4.0/5 | **OFFER** | - | - | |',
+      ];
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), `${HEADER_ONLY}${rows.join('\n')}\n`);
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'status-log.tsv'), '3\t2026-09-25\tapplied\tentrevista\tweb\t\n');
+      const dash = (await t2.app.inject({ method: 'GET', url: '/api/insights/dashboard', headers: t2.authed })).json();
+      expect(dash.dashboard.totals.byStatus).toEqual({ Interview: 1, Applied: 2, Offer: 1 });
+      const funnel = Object.fromEntries((dash.dashboard.funnel as Array<{ stage: string; count: number }>).map((f) => [f.stage, f.count]));
+      expect(funnel).toMatchObject({ Evaluated: 4, Applied: 4, Responded: 3, Interview: 3, Offer: 1 });
+    } finally {
+      await t2.close();
+    }
+  });
+
   it('reports a header-only tracker and its dashboard as ok and empty', async () => {
     const t2 = await makeTestApp();
     fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), HEADER_ONLY);

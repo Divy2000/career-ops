@@ -8,6 +8,8 @@ export interface ScanPostingInput {
   company?: string | null;
   title?: string | null;
   location?: string | null;
+  /** The posting's day (YYYY-MM-DD), null when the board gives none. */
+  postedAt?: string | null;
   source?: string | null;
 }
 
@@ -17,6 +19,15 @@ export interface PipelineOfferInput {
   title: string;
   location?: string;
   portal?: string;
+  /** YYYY-MM-DD; scan.mjs writes it as the row's `posted:` segment and the history's posted_at column. */
+  postedAt?: string;
+}
+
+/** A real calendar day written YYYY-MM-DD (2026-02-30 is not one). */
+export function isIsoDay(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
 function clamp(value: string | null | undefined, max: number): string | undefined {
@@ -33,6 +44,7 @@ export function pipelineAddBatches(postings: ScanPostingInput[]): Array<{ offers
     const portal = clamp(p.source, PIPELINE_OFFER_LIMITS.portal);
     if (location !== undefined) offer.location = location;
     if (portal !== undefined) offer.portal = portal;
+    if (p.postedAt && isIsoDay(p.postedAt)) offer.postedAt = p.postedAt;
     return offer;
   });
   const batches: Array<{ offers: PipelineOfferInput[] }> = [];

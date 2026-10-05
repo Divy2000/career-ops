@@ -9,7 +9,7 @@ import { readPipeline, readScanHistory } from '../domains/pipeline.js';
 import { readShortlist } from '../domains/shortlist.js';
 import { localDate, readImmigrationOverview } from '../domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, type NormalizeTextKey } from '../domains/whatsNew.js';
-import { computeDashboard, readStatusLog } from '../domains/insights.js';
+import { computeDashboard, readStatusLog, statusLabeler } from '../domains/insights.js';
 import { activePin, parseFollowups, parseNextOverrides } from '../domains/followups.js';
 import { readText } from '../domains/files.js';
 import { inside } from '../lib/paths.js';
@@ -151,7 +151,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
   app.get('/api/insights/dashboard', async () => {
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     if (tracker.kind !== 'ok') return { kind: tracker.kind, path: tracker.path };
-    return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(tracker.path)) };
+    return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(tracker.path), await statusLabeler(cfg.codeRoot)) };
   });
 
   app.get('/api/modes', async () => listLaunchableModeIds().map((id) => getModePolicy(id)));

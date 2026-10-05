@@ -94,3 +94,23 @@ describe('the insights cache with CAREER_OPS_TRACKER outside the data root (R7-1
     }
   });
 });
+
+describe('the insights cache across days (R8-09)', () => {
+  // rejection-latency.mjs, weekly-digest.mjs, funnel-velocity.mjs and company-history.mjs all count from today, so a
+  // result computed yesterday is stale even when no input file changed.
+  it('serves the cached result for the rest of the local day and recomputes on the next one', async () => {
+    let runs = 0;
+    const exec: Exec = async () => ((runs += 1), { code: 0, stdout: '{"ok":true}', stderr: '' });
+    const cfg = testConfig();
+    // Local time in America/Los_Angeles (vitest pins TZ): 08:00 and 23:30 on 2026-10-05, then 00:30 on 2026-10-06.
+    const morning = Date.parse('2026-10-05T15:00:00.000Z');
+    const night = Date.parse('2026-10-06T06:30:00.000Z');
+    const nextDay = Date.parse('2026-10-06T07:30:00.000Z');
+    await readInsight(cfg, exec, 'rejectionLatency', { now: () => morning });
+    expect((await readInsight(cfg, exec, 'rejectionLatency', { now: () => night })).fromCache).toBe(true);
+    expect(runs).toBe(1);
+    const next = await readInsight(cfg, exec, 'rejectionLatency', { now: () => nextDay });
+    expect(next.fromCache).toBe(false);
+    expect(runs).toBe(2);
+  });
+});

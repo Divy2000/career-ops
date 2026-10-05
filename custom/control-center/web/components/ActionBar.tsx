@@ -37,3 +37,13 @@ export function Message({ message }: { message: { tone: 'ok' | 'danger'; text: s
     </p>
   );
 }
+
+/** A sync action's output (stdout and stderr) under the buttons that ran it. */
+export function ActionOutput({ text }: { text: string | null }) {
+  if (text === null) return null;
+  return (
+    <pre tabIndex={0} aria-label="Action output" className="log mono small">
+      {text}
+    </pre>
+  );
+}

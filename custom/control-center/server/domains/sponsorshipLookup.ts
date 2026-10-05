@@ -151,10 +151,8 @@ export async function lookupCompany(ctx: Ctx, query: string): Promise<LookupResu
   const alerts =
     alertsRead.kind === 'ok'
       ? parseTsv(alertsRead.text)
-          .filter((row) => {
-            const rowSlug = row.slug && SLUG_RE.test(row.slug) ? row.slug : slugOf(row.company ?? '');
-            return rowSlug !== null && slugs.includes(rowSlug);
-          })
+          // The slug column is whatever the writing session derived, so the company name, slugged like the query, matches too.
+          .filter((row) => [row.slug && SLUG_RE.test(row.slug) ? row.slug : null, slugOf(row.company ?? '')].some((s) => s !== null && slugs.includes(s)))
           .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
       : [];
 

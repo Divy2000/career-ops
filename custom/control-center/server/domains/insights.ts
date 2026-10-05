@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { importCore } from '../core/adapter.js';
 import { readText } from './files.js';
 import type { TrackerRow } from './tracker.js';
 
@@ -73,8 +74,23 @@ export function workModeOf(remote: string | null): keyof Dashboard['workMode'] {
   return 'unknown';
 }
 
+/** A status as written (any case, an alias, bold) to its states.yml label; unknown text stays as written. */
+export type StatusLabel = (status: string) => string;
+
+interface TrackerUtils {
+  loadCanonicalStates: (statesPath: string) => Array<{ id: string; label: string; aliases: string[] }>;
+  resolveCanonicalState: (input: string, states: Array<{ id: string; label: string; aliases: string[] }>) => string | null;
+}
+
+/** The states.yml rule set-status.mjs and funnel-velocity.mjs resolve statuses with (tracker-utils.mjs). */
+export async function statusLabeler(codeRoot: string): Promise<StatusLabel> {
+  const utils = await importCore<TrackerUtils>(codeRoot, 'tracker-utils.mjs');
+  const states = utils.loadCanonicalStates(path.join(codeRoot, 'templates', 'states.yml'));
+  return (status) => utils.resolveCanonicalState(status, states) ?? status;
+}
+
 /** Stage reached by an application: its current status, plus every stage the ledger shows it passed. */
-function stagesReached(row: TrackerRow, log: StatusLogRow[]): Set<string> {
+function stagesReached(row: TrackerRow, log: StatusLogRow[], label: StatusLabel): Set<string> {
   const reached = new Set<string>();
   const idx = (s: string) => (FUNNEL_STAGES as readonly string[]).indexOf(s);
   const mark = (s: string) => {
@@ -82,18 +98,18 @@ function stagesReached(row: TrackerRow, log: StatusLogRow[]): Set<string> {
     if (i === -1) return;
     for (let k = 0; k <= i; k++) reached.add(FUNNEL_STAGES[k]!);
   };
-  mark(row.status);
-  for (const t of log) if (t.num === row.num) mark(t.to);
+  mark(label(row.status));
+  for (const t of log) if (t.num === row.num) mark(label(t.to));
   if (row.score !== null || row.report !== null) reached.add('Evaluated');
   return reached;
 }
 
-export function computeDashboard(rows: TrackerRow[], log: StatusLogRow[]): Dashboard {
+export function computeDashboard(rows: TrackerRow[], log: StatusLogRow[], label: StatusLabel = (s) => s): Dashboard {
   const byStatus: Record<string, number> = {};
-  for (const r of rows) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
+  for (const r of rows) byStatus[label(r.status)] = (byStatus[label(r.status)] ?? 0) + 1;
   const scored = rows.filter((r) => r.score !== null);
   const funnelCounts = new Map<string, number>(FUNNEL_STAGES.map((s) => [s, 0]));
-  for (const r of rows) for (const s of stagesReached(r, log)) funnelCounts.set(s, (funnelCounts.get(s) ?? 0) + 1);
+  for (const r of rows) for (const s of stagesReached(r, log, label)) funnelCounts.set(s, (funnelCounts.get(s) ?? 0) + 1);
   const get = (s: string) => funnelCounts.get(s) ?? 0;
   const ratio = (a: number, b: number) => (b === 0 ? null : Math.round((a / b) * 1000) / 10);
   const weekly = new Map<string, number>();
@@ -109,7 +125,7 @@ export function computeDashboard(rows: TrackerRow[], log: StatusLogRow[]): Dashb
   for (const r of rows) workMode[workModeOf(r.summary?.remote ?? null)]++;
   const transitions = new Map<string, number>();
   for (const t of log) {
-    const key = `${t.from}>${t.to}`;
+    const key = `${label(t.from)}>${label(t.to)}`;
     transitions.set(key, (transitions.get(key) ?? 0) + 1);
   }
   return {

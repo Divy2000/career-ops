@@ -50,6 +50,19 @@ describe('GET /api/sponsorship/lookup', () => {
     expect(body.alerts[0]).toMatchObject({ company: 'Globex Payments', status: 'resumed', date: '2026-09-25' });
   });
 
+  it('Given an alert whose slug column was written by a different rule (AT&T as at-t), Then its company name still matches it (R8-05)', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'immigration', 'company-alerts.tsv');
+    const before = fs.readFileSync(file, 'utf8');
+    fs.appendFileSync(file, '2026-09-30\tAT&T\tat-t\tpaused\tAT&T pauses sponsorship\thttps://news.example/att\n');
+    try {
+      const body = (await lookup('AT&T')).json();
+      expect(body.alerts).toHaveLength(1);
+      expect(body.alerts[0]).toMatchObject({ company: 'AT&T', status: 'paused' });
+    } finally {
+      fs.writeFileSync(file, before);
+    }
+  });
+
   it('Given a staffing shop, Then the red flag and its share are passed through', async () => {
     const body = (await lookup('Vandelay Staffing Solutions LLC')).json();
     expect(body.check.friendlinessTier).toBe('staffing-shop');

@@ -7,7 +7,7 @@ import { useEngine, sendTurn, startTailoredCvSession, type Target } from '../../
 import { describeError, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
 import { CostPill, Message } from '../../components/ActionBar';
-import { Pill } from '../../components/ui';
+import { DataState, Pill } from '../../components/ui';
 import { prefillBlockers } from './prefill';
 import type { ApplyDocuments } from '@shared/api';
 
@@ -251,7 +251,7 @@ export function ApplyRowPage() {
         <h1 id="page-title">Apply: {q.data?.row.company ?? `row #${n}`}</h1>
         {q.data && <span className="muted">{q.data.row.role}</span>}
       </div>
-      {q.data ? <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} /> : <p className="muted">Loading the tracker row.</p>}
+      <DataState query={q}>{q.data && <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} />}</DataState>
     </section>
   );
 }

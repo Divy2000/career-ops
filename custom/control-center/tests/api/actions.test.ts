@@ -104,6 +104,17 @@ describe('action registry', () => {
     expect((await get('/api/runs/does-not-exist')).statusCode).toBe(404);
   });
 
+  it('Audit plugins runs the community plugin audit to the end instead of exiting with the usage text (R8-04)', async () => {
+    const res = await post('/api/actions/plugins.audit', { params: {} });
+    expect(res.statusCode, res.body).toBe(202);
+    const meta = await waitForRun(res.json().runId);
+    const lines = ((await get(`/api/runs/${res.json().runId}`)).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
+    expect(lines).not.toMatch(/Usage:/);
+    expect(meta, lines).toMatchObject({ actionId: 'plugins.audit', status: 'done', exitCode: 0 });
+    // This checkout has no plugins.local/, so there is nothing a community audit could flag.
+    expect(lines).toMatch(/No community plugins in plugins\.local\//);
+  });
+
   it('JD skill gap runs jd-skill-gap.mjs on the pasted JD and finishes, and asks for the JD instead of running without one (R7-15)', async () => {
     expect((await post('/api/actions/insights.jdSkillGap', { params: {} })).statusCode).toBe(400);
     const res = await post('/api/actions/insights.jdSkillGap', { params: { text: '## Requirements\n\n- 5+ years of experience with Python\n- Experience with Kafka and Kubernetes\n' } });
@@ -434,6 +445,54 @@ describe('Hired Wall answers (R7-01)', () => {
       expect(mark.statusCode, mark.body).toBe(200);
       const state = JSON.parse(fs.readFileSync(path.join(dataRoot, 'data', '.hired-share-state.json'), 'utf8'));
       expect(state.byReport['006'].status).toBe('later');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('Export vCard (R8-03)', () => {
+  // contacts.mjs --vcf writes the cards to a file inside the code checkout and prints one status line, so the
+  // action must hand back the cards themselves, built by contacts.mjs's own parseContacts and buildVcf.
+  const send = (app: TestApp, params: Record<string, unknown>) => app.app.inject({ method: 'POST', url: '/api/actions/followups.contactsVcf', headers: app.authedWrite, payload: { params } });
+
+  it('returns the vCard of data/contacts.tsv for a data root outside the checkout, and writes no file', async () => {
+    const app = await makeTestApp();
+    try {
+      expect(path.relative(app.cfg.codeRoot, app.cfg.dataRoot).startsWith('..')).toBe(true);
+      const res = await send(app, {});
+      expect(res.statusCode, res.body).toBe(200);
+      const vcf = res.json().result as string;
+      expect(vcf.startsWith('BEGIN:VCARD\r\nVERSION:3.0\r\n')).toBe(true);
+      expect(vcf.endsWith('END:VCARD\r\n')).toBe(true);
+      expect(vcf.match(/BEGIN:VCARD/g)).toHaveLength(2);
+      expect(vcf).toContain('FN:Pat Example\r\n');
+      expect(vcf).toContain('EMAIL;TYPE=INTERNET:pat@acme-robotics.example');
+      expect(fs.existsSync(path.join(app.cfg.dataRoot, 'output', 'contacts.vcf'))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('caller id is a switch that names each card after its company and type', async () => {
+    const app = await makeTestApp();
+    try {
+      const res = await send(app, { callerId: true });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().result).toContain('FN:Pat Example (Acme Robotics recruiter)\r\n');
+      expect((await send(app, { callerId: 'career-ops' })).statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('with no contacts says there is nothing to export instead of downloading an empty file', async () => {
+    const app = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(app.cfg.dataRoot, 'data', 'contacts.tsv'), '# name\tcompany\n');
+      const res = await send(app, {});
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error).toMatch(/No contacts to export/);
     } finally {
       await app.close();
     }

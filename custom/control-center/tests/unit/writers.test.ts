@@ -93,7 +93,8 @@ export const SPEC_ACTION_IDS = [
   'scan.portals', 'scan.network', 'scan.full', 'scan.hn', 'scan.interamt', 'scan.funded', 'scan.reposts',
   'portals.validate', 'portals.verify', 'portals.audit', 'portals.fixSlugs',
   'immigration.watch', 'immigration.freshness', 'immigration.h1b',
-  'docs.renderPdf', 'docs.coverPdf', 'docs.archivePosting', 'docs.liveness', 'docs.fetchJd', 'docs.prepareApplication', 'docs.appArtifactsInit', 'docs.imgToPdf',
+  // docs.appArtifactsInit is not an action: the pdf mode keys the bundle by the row's own company and role (R8-11).
+  'docs.renderPdf', 'docs.coverPdf', 'docs.archivePosting', 'docs.liveness', 'docs.fetchJd', 'docs.prepareApplication', 'docs.imgToPdf',
   'insights.stats', 'insights.funnelVelocity', 'insights.analyzePatterns', 'insights.salaryGap', 'insights.upskill', 'insights.companyHistory', 'insights.rejectionLatency', 'insights.processQuality', 'insights.weeklyDigest', 'insights.assessmentLog', 'insights.keywordMatch', 'insights.jdSkillGap', 'insights.storyProvenance', 'insights.inviteMatch', 'insights.linkedinJoin', 'insights.contacts',
   'followups.seed', 'followups.replyPaste', 'followups.replyWatch', 'followups.inviteMatch', 'followups.contactsVcf', 'followups.linkedinJoin',
   'plugins.list', 'plugins.run', 'plugins.audit',
@@ -144,7 +145,9 @@ describe('action registry covers section 3.3', () => {
       const extra = id === 'tracker.hiredShare' ? { anonymity: 'role' } : { mark: 'later' };
       expect(a.build(a.params.parse({ report: 12, ...extra }), ctx).args.slice(1, 3), id).toEqual(['--report', '12']);
       expect(a.build(a.params.parse({ report: '012', ...extra }), ctx).args.slice(1, 3), id).toEqual(['--report', '012']);
-      for (const bad of [0, -3, 1.5, '12a', '']) expect(a.params.safeParse({ report: bad, ...extra }).success, `${id} ${JSON.stringify(bad)}`).toBe(false);
+      // The numeric form has the text form's six-digit ceiling.
+      expect(a.params.safeParse({ report: 999999, ...extra }).success, `${id} 999999`).toBe(true);
+      for (const bad of [0, -3, 1.5, '12a', '', 1_000_000, '1000000']) expect(a.params.safeParse({ report: bad, ...extra }).success, `${id} ${JSON.stringify(bad)}`).toBe(false);
     }
     expect(findAction('pipeline.releaseReportNums')!.build({ range: '12-14' }, ctx).args.slice(1)).toEqual(['--release', '12-14']);
     expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
@@ -215,14 +218,15 @@ function sampleParams(id: string): Record<string, unknown> {
     'docs.liveness': { urls: ['https://x.example/1'] },
     'docs.fetchJd': { url: 'https://x.example/1' },
     'docs.prepareApplication': { url: 'https://x.example/1', pdf: 'output/a.pdf' },
-    'docs.appArtifactsInit': { n: 1 },
-    'docs.imgToPdf': { file: 'output/a.png' },
+    'docs.imgToPdf': { file: 'output/a.png', pdf: 'output/a.pdf' },
+    'insights.keywordMatch': { report: 1 },
+    'followups.seed': { appNum: 1 },
     'followups.replyPaste': { subject: 's', from: 'f', body: 'b' },
     'followups.inviteMatch': { text: 'hello' },
     'insights.inviteMatch': { text: 'hello' },
     'insights.jdSkillGap': { text: '- Experience with Python' },
     'projects.rank': { text: 'We need Python.' },
-    'followups.contactsVcf': { callerId: 'me' },
+    'followups.contactsVcf': { callerId: true },
     'plugins.run': { id: 'h1b-sponsor', hook: 'check', args: [] },
     'system.updateDismiss': { version: '1.2.3' },
   };

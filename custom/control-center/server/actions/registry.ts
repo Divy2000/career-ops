@@ -7,6 +7,8 @@ import type { Cost } from '../runner/store.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
+import { listReportFiles } from '../domains/reports.js';
+import { RunStore } from '../runner/store.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
 import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { writeTmpInput } from './tmp-inputs.js';
@@ -73,7 +75,7 @@ const positive = z.number().int().positive();
  * A tracker Report label as written ("012"); hired-share.mjs compares it as text, so "12" would miss "012".
  * A positive number is still accepted (sent as its plain digits) for callers that hold the report as a number.
  */
-const reportLabel = z.union([z.string().regex(/^\d{1,6}$/), z.number().int().positive()]);
+const reportLabel = z.union([z.string().regex(/^\d{1,6}$/), z.number().int().positive().max(999999)]);
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
 const outputPath = (ext: RegExp, what: string) =>
@@ -93,7 +95,31 @@ const tmpFile = (ctx: ActionContext, ext: string, content: string): string => {
   return file;
 };
 
+/**
+ * A finished portal audit's --json output as audit-portals.mjs --baseline reads it. The run log keeps one NDJSON event
+ * per output line, and the script pretty-prints its JSON over many lines, so the stdout lines are joined back up.
+ */
+function auditBaseline(dataRoot: string, runId: string): { json?: string; problem?: string } {
+  const store = new RunStore(dataRoot);
+  const meta = store.read(runId);
+  if (!meta || meta.actionId !== 'portals.audit' || meta.status !== 'done') return { problem: `Run ${runId} is not a finished portal audit, so it cannot be the baseline.` };
+  const text = store
+    .readRaw(runId)
+    .lines.filter((l) => l.stream === 'stdout')
+    .map((l) => l.line)
+    .join('\n');
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed) || (parsed && typeof parsed === 'object' && Array.isArray((parsed as { rows?: unknown }).rows))) return { json: text };
+  } catch {
+    /* not the --json output */
+  }
+  return { problem: `Run ${runId} did not print the audit rows as JSON, so it cannot be the baseline.` };
+}
+
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
+const CONTACTS_VCF = 'custom/control-center/server/actions/contacts-vcf.mjs';
+const PLUGIN_AUDIT_ALL = 'custom/control-center/server/actions/plugin-audit-all.mjs';
 
 export const ACTIONS: ActionDef[] = [
   // ---- tracker ----
@@ -177,7 +203,7 @@ export const ACTIONS: ActionDef[] = [
     build: (p, ctx) => node(ctx, 'shortlist', [...opt(p.minRank, '--min-rank'), ...opt(p.top, '--top')]),
   }),
   define({ id: 'pipeline.reserveReportNums', label: 'Reserve report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ count: positive.max(50) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--count', String(p.count)]) }),
-  define({ id: 'pipeline.releaseReportNums', label: 'Release report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ range: z.string().regex(/^\d+(-\d+)?(,\d+(-\d+)?)*$/) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]) }),
+  define({ id: 'pipeline.releaseReportNums', label: 'Release report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ range: z.string().regex(/^\d+(-\d+)?$/, 'one number (12) or one range (12-14), as reserve-report-num.mjs --release takes') }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]) }),
   // Batch evaluation is not an action: batch/batch-runner.sh runs its workers outside any guard, so Pipeline > Batch
   // starts one confined session per URL through POST /api/sessions/fanout instead.
   // ---- scan ----
@@ -241,7 +267,7 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: false,
-    params: z.object({ months: positive.max(36).default(6), sort: z.enum(['date', 'amount', 'name']).optional(), sources: safeToken.optional() }),
+    params: z.object({ months: positive.max(36).default(6), sort: z.enum(['date', 'score']).optional(), sources: safeToken.optional() }),
     build: (p, ctx) => node(ctx, 'companyFunded', ['--dry-run', '--json', '--months', String(p.months), ...opt(p.sort, '--sort'), ...opt(p.sources, '--sources')]),
   }),
   define({ id: 'scan.reposts', label: 'Detect reposts', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'detectReposts', ['--summary']) }),
@@ -256,7 +282,11 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: false,
     params: z.object({ company: company.optional(), smallThreshold: positive.max(1000).optional(), baselineRunId: z.string().regex(/^[\w-]+$/).optional() }),
-    build: (p, ctx) => node(ctx, 'auditPortals', ['--json', ...opt(p.company, '--company'), ...opt(p.smallThreshold, '--small-threshold'), ...(p.baselineRunId ? ['--baseline', path.join(ctx.dataRoot, 'data', 'control-center', 'runs', p.baselineRunId, 'raw.ndjson')] : [])]),
+    check: (p, ctx) => (p.baselineRunId ? (auditBaseline(ctx.dataRoot, p.baselineRunId).problem ?? null) : null),
+    build: (p, ctx) => {
+      const baseline = p.baselineRunId ? auditBaseline(ctx.dataRoot, p.baselineRunId).json : undefined;
+      return node(ctx, 'auditPortals', ['--json', ...opt(p.company, '--company'), ...opt(p.smallThreshold, '--small-threshold'), ...(baseline ? ['--baseline', tmpFile(ctx, 'json', baseline)] : [])]);
+    },
   }),
   define({
     id: 'portals.fixSlugs',
@@ -341,8 +371,20 @@ export const ACTIONS: ActionDef[] = [
       return { status: 502, error: `Prefill failed: prepare-application.mjs exited ${code} (last output: ${lines.at(-1) ?? 'none'}).` };
     },
   }),
-  define({ id: 'docs.appArtifactsInit', label: 'Initialize application artifacts', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive }), build: (p, ctx) => node(ctx, 'applicationArtifacts', ['--init', '--report', String(p.n)]) }),
-  define({ id: 'docs.imgToPdf', label: 'Image to PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ file: relOutput }), build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file)]) }),
+  // Initialize application artifacts is not an action: application-artifacts.mjs keys the bundle by the report's company
+  // and role text, which the pdf mode passes from the row it tailors; typed by hand they would name another folder.
+  define({
+    id: 'docs.imgToPdf',
+    label: 'Image to PDF',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ file: outputPath(/\.(png|jpe?g|gif|webp|bmp|svg)$/i, 'a png, jpg, gif, webp, bmp or svg image'), pdf: outputPath(/\.pdf$/i, 'a .pdf file'), force: z.boolean().default(false) }),
+    check: (p, ctx) => (resolveOutputFile(ctx.dataRoot, p.file) ? null : `The image ${p.file} does not exist.`),
+    // img-to-pdf.mjs <image-path> <output-path> [--force]: without --force it refuses to replace an existing PDF.
+    build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file), path.join(ctx.dataRoot, p.pdf), ...flag(p.force, '--force')]),
+  }),
   // ---- insights ----
   define({ id: 'insights.stats', label: 'Stats', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'stats', []) }),
   ...(
@@ -360,13 +402,37 @@ export const ACTIONS: ActionDef[] = [
     ] as Array<[string, string, CliId]>
   ).map(([id, label, cli]) => define({ id, label, cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, cli, ['--summary']) })),
   define({ id: 'insights.companyHistory', label: 'Company history', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company')]) }),
-  define({ id: 'insights.keywordMatch', label: 'Keyword match', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive.optional() }), build: (p, ctx) => node(ctx, 'keywordMatch', ['--json', ...(p.n ? [String(p.n)] : [])]) }),
+  define({
+    id: 'insights.keywordMatch',
+    label: 'Keyword match',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: true,
+    // keyword-match.mjs <report-file> --json: the report's file under reports/, read against cv.md.
+    params: z.object({ report: positive }),
+    check: (p, ctx) => (listReportFiles(ctx.dataRoot).has(p.report) ? null : `There is no file for report ${p.report} under reports/.`),
+    build: (p, ctx) => node(ctx, 'keywordMatch', [path.join(ctx.dataRoot, 'reports', listReportFiles(ctx.dataRoot).get(p.report)!), '--json']),
+    explainFailure: ({ code, stderr }) => ({ status: code === 1 ? 422 : 500, error: stderr.trim().split('\n').at(-1) || `keyword-match.mjs exited ${code}` }),
+  }),
   // jd-skill-gap.mjs needs a JD file (it exits 1 with its usage text without one): the pasted JD goes to a temp file.
   define({ id: 'insights.jdSkillGap', label: 'JD skill gap', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ text: z.string().min(1).max(50_000) }), build: (p, ctx) => node(ctx, 'jdSkillGap', [tmpFile(ctx, 'md', p.text), '--summary']) }),
   define({ id: 'insights.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),
   define({ id: 'insights.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
   // ---- follow-ups ----
-  define({ id: 'followups.seed', label: 'Seed follow-up cadence', cost: 'free', resources: ['followups'], claude: false, sync: false, params: z.object({ backfill: z.boolean().default(false) }), build: (p, ctx) => node(ctx, 'followupSeed', [...flag(p.backfill, '--backfill'), '--json']) }),
+  define({
+    id: 'followups.seed',
+    label: 'Seed follow-up cadence',
+    cost: 'free',
+    resources: ['followups'],
+    claude: false,
+    sync: false,
+    // followup-seed.mjs <appNum> | --backfill (never both): one Applied row by number, or every Applied row.
+    params: z
+      .object({ appNum: positive.optional(), backfill: z.boolean().default(false), dryRun: z.boolean().default(false) })
+      .refine((p) => p.backfill !== (p.appNum !== undefined), 'give an application number, or backfill every applied row, not both'),
+    build: (p, ctx) => node(ctx, 'followupSeed', [...(p.backfill ? ['--backfill'] : [String(p.appNum)]), ...flag(p.dryRun, '--dry-run'), '--json']),
+  }),
   define({
     id: 'followups.replyPaste',
     label: 'Paste a reply',
@@ -379,12 +445,26 @@ export const ACTIONS: ActionDef[] = [
   }),
   define({ id: 'followups.replyWatch', label: 'Reply watch digest', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'replyWatch', []) }),
   define({ id: 'followups.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),
-  define({ id: 'followups.contactsVcf', label: 'Export contacts (vCard)', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ callerId: safeToken }), build: (p, ctx) => node(ctx, 'contacts', ['--vcf', '--caller-id', p.callerId]) }),
+  define({
+    id: 'followups.contactsVcf',
+    label: 'Export contacts (vCard)',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: true,
+    // --caller-id is a switch (FN becomes "Jane Doe (Acme recruiter)"). The cards come back as the result, never a file.
+    params: z.object({ callerId: z.boolean().default(false) }),
+    build: (p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, CONTACTS_VCF), ...flag(p.callerId, '--caller-id')], cwd: ctx.codeRoot }),
+    explainFailure: ({ code, stderr }) => {
+      const last = stderr.trim().split('\n').at(-1) ?? '';
+      return code === 3 ? { status: 404, error: last } : { status: 500, error: `The vCard export failed (exit ${code}): ${last || 'no output'}` };
+    },
+  }),
   define({ id: 'followups.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
   // ---- plugins ----
   define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),
   define({ id: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }), build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]) }),
-  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'pluginAudit', []) }),
+  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
   // ---- system ----
   define({ id: 'system.doctor', label: 'Doctor', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'doctor', ['--json']) }),
   define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),

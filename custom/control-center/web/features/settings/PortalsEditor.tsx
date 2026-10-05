@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
-import { ActionButton, Message } from '../../components/ActionBar';
+import { ActionButton, ActionOutput, Message } from '../../components/ActionBar';
 import { useActions, useRunAction } from '../../lib/actions';
 import { isPlainObject } from '../../lib/yamlOpsClient';
 import { KeyEditor, type FieldRules } from './StructuredEditor';
@@ -153,15 +153,14 @@ function StructuredPortals() {
 
 function PortalsHealth() {
   const actions = useActions();
-  const { run, message, busy } = useRunAction();
-  const [result, setResult] = useState<unknown>(null);
+  const { run, message, busy, output } = useRunAction();
   return (
     <div className="card">
       <h2>Portal health</h2>
       <p className="muted small">Validate is free and instant. Verify and audit hit the ATS endpoints. Fix slugs runs as a dry run first; apply it from the second button.</p>
       <div className="row gap" style={{ flexWrap: 'wrap' }}>
         {['portals.validate', 'portals.verify', 'portals.audit'].map((id) => (
-          <ActionButton key={id} meta={actions.data?.find((a) => a.id === id)} disabled={busy !== null} params={id === 'portals.audit' ? { smallThreshold: 3 } : {}} onRun={(p) => void run(id, p).then((out) => out && 'result' in out && setResult(out.result))} />
+          <ActionButton key={id} meta={actions.data?.find((a) => a.id === id)} disabled={busy !== null} params={id === 'portals.audit' ? { smallThreshold: 3 } : {}} onRun={(p) => void run(id, p)} />
         ))}
         <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: false }} onRun={(p) => void run('portals.fixSlugs', p)}>
           Fix slugs (dry run)
@@ -171,7 +170,7 @@ function PortalsHealth() {
         </ActionButton>
       </div>
       <Message message={message} />
-      {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
+      <ActionOutput text={output} />
     </div>
   );
 }

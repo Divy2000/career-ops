@@ -58,6 +58,22 @@ describe('reports', () => {
     expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: 'full remote', comp: '$150k', tldr: 'Good fit.' });
   });
 
+  it('an empty Block A bullet stays empty instead of taking the next line (R8-07)', () => {
+    const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## A) Role Summary\n- Remote:\n- Comp: $150k\n';
+    expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: null, comp: '$150k' });
+  });
+
+  it('splits the title once, at the em dash or " -- " the templates write, so a role with " - " in it stays whole (R8-18)', () => {
+    const doc = (title: string) => `# ${title}\n\n**Score:** 4/5\n\n## A) Role Summary\n`;
+    expect(parseReport(doc('Bewertung: Acme -- Software Engineer - Platform'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
+    expect(parseReport(doc(`Evaluation: Acme ${EM_DASH} Software Engineer - Platform`), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
+    expect(parseReport(doc(`Evaluation: Acme - Labs ${EM_DASH} Engineer -- Data`), '011-acme.md', 11)).toMatchObject({ company: 'Acme - Labs', role: 'Engineer -- Data' });
+    // The templates write `{Company} <em dash> {Role}`, so a company name with " - " in it keeps its dash.
+    expect(parseReport(doc(`Evaluation: Deloitte - US ${EM_DASH} Senior Engineer`), '011-acme.md', 11)).toMatchObject({ company: 'Deloitte - US', role: 'Senior Engineer' });
+    // A hand-written title with only a plain dash still splits there.
+    expect(parseReport(doc('Evaluation: Acme - Engineer'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Engineer' });
+  });
+
   it('reads discard reasons and the cover letter PDF path', () => {
     const skip = readReport(root, 4);
     expect(skip.kind === 'ok' && skip.report.discardReasons).toEqual(['comp below floor', 'staffing agency']);

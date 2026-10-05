@@ -216,6 +216,17 @@ describe('fresh matches (whats-new port)', () => {
   });
 });
 
+describe('fresh matches hold only what the scanner added (R8-19)', () => {
+  it('leaves out a posting scan.mjs held back for a company cooldown, or recorded under any status but added', () => {
+    const row = (url: string, status: string) => ({ url, firstSeen: '2026-10-03', portal: 'greenhouse', title: 'Platform Engineer', company: 'Acme', status, location: 'Remote', postedAt: '' });
+    // scan.mjs records a held-back posting as `cooldown:<company>:<until>` (and its verify outcomes as skipped_*).
+    const history = [row('https://x.example/1', 'added'), row('https://x.example/2', 'cooldown:acme:2026-12-01'), row('https://x.example/3', 'skipped_title'), row('https://x.example/4', 'unreachable')];
+    const r = collectWhatsNew({ history, applications: [], norm: (v) => String(v).toLowerCase(), now: Date.parse('2026-10-04T12:00:00Z'), days: 7, limit: 10 });
+    expect(r.offers.map((o) => o.url)).toEqual(['https://x.example/1']);
+    expect(r.count).toBe(1);
+  });
+});
+
 describe('insights dashboard', () => {
   it('parses the status ledger and tolerates blank lines', () => {
     expect(parseStatusLog('1\t2026-09-20\t-\tEvaluated\tset-status\t\n\nbad\n')).toEqual([{ num: 1, date: '2026-09-20', from: '-', to: 'Evaluated', source: 'set-status', note: '' }]);

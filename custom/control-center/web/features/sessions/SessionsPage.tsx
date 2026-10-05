@@ -82,8 +82,10 @@ export function SessionsPage() {
         </label>
       </div>
       <DataState query={sessions}>
-        {rows.length === 0 ? (
+        {(sessions.data ?? []).length === 0 ? (
           <Empty>No sessions yet. Start one with New session or from any page's AI panel.</Empty>
+        ) : rows.length === 0 ? (
+          <Empty>No sessions match the filters.</Empty>
         ) : (
           <TableScroll label="Sessions">
             <table className="table">

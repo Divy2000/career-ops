@@ -9,7 +9,7 @@ import { readShortlist } from '../../server/domains/shortlist.js';
 import { parseReport } from '../../server/domains/reports.js';
 import { readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
-import { readScanHistory } from '../../server/domains/pipeline.js';
+import { parsePipeline, readScanHistory } from '../../server/domains/pipeline.js';
 import { activePin, parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
 import { pathToFileURL } from 'node:url';
 import { localDate } from '../../shared/local-date.js';
@@ -111,6 +111,19 @@ describe('localized report templates (modes/<lang>/)', () => {
       if (/^\*\*Date\s*:\*\*/m.test(t.header)) expect(r.date).toBe('2026-10-01');
     });
 
+    it(`a header line ${t.file} leaves empty (URL for a pasted JD) stays empty instead of taking the next line (R8-07)`, () => {
+      const filled = t.header
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/\{X(?:\.X)?\/5\}|\{X(?:\.X)?\}\/5/g, '4.2/5')
+        .replace(/\{YYYY-MM-DD\}/g, '2026-10-01')
+        .replace(/\{[^}]*\}/g, String.fromCharCode(0x2014))
+        .replace(/^\*\*URL(\s*):\*\*.*$/m, '**URL$1:**');
+      expect(filled, t.file).toMatch(/^\*\*URL\s*:\*\*$/m);
+      const r = parseReport(`${filled}\n\n---\n\n## A) Role Summary\n`, '010-acme.md', 10);
+      expect(r.url).toBeNull();
+      expect(r.via).toBeNull();
+    });
+
     it(`every header field a report from ${t.file} carries reaches the parsed report (date and archetype included)`, () => {
       // Each placeholder gets its own value, so a header line the parser drops cannot hide behind another's.
       let n = 0;
@@ -171,6 +184,26 @@ describe('active-interviews.md location (process-quality.mjs, rejection-latency.
   it('a missing file is reported at the documented path, and the editable file is that path', () => {
     expect(readInterviews(tempDir('cc-interviews-contract-')).active).toEqual({ kind: 'missing', path: 'data/active-interviews.md' });
     expect(USER_FILES.activeInterviews).toBe('data/active-interviews.md');
+  });
+});
+
+describe('pipeline.md rows (scan.mjs formatPipelineOffer)', () => {
+  // scan.mjs is a writer and never loads into the app, so its formatter runs in a child.
+  function format(offers: unknown[]): string[] {
+    const code = `const { formatPipelineOffer } = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'scan.mjs')).href)}); process.stdout.write(JSON.stringify(${JSON.stringify(offers)}.map(formatPipelineOffer)));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: tempDir('cc-format-offer-'), NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout) as string[];
+  }
+
+  it('a location with a colon stays the location, and the compensation after it stays the compensation (R8-16)', () => {
+    const lines = format([
+      { url: 'https://x.example/1', company: 'Acme', title: 'SWE', location: 'Remote: US', salary: { min: 120000, max: 160000, currency: 'USD' } },
+      { url: 'https://x.example/2', company: 'Acme', title: 'SWE', location: 'Hybrid: Berlin', postedAt: Date.parse('2026-09-30T00:00:00Z') },
+    ]);
+    const rows = parsePipeline(`## Pending\n\n${lines.join('\n')}\n`);
+    expect(rows[0]).toMatchObject({ location: 'Remote: US', compensation: '120000-160000 USD' });
+    expect(rows[1]).toMatchObject({ location: 'Hybrid: Berlin', compensation: null, postedAt: '2026-09-30' });
   });
 });
 

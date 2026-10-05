@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
 test.describe('deterministic writes through the action registry', () => {
@@ -56,6 +57,27 @@ test.describe('deterministic writes through the action registry', () => {
   });
 });
 
+test.describe('Hired from a filtered tracker tab (R8-10)', () => {
+  const setStatus = (page: Page, row: number, state: string) =>
+    page.request.post('/api/actions/tracker.setStatus', { data: { params: { row, state } }, headers: { 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
+
+  test('the Hired Wall dialog opens although the hired row leaves the Interview tab', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    try {
+      await page.goto('/tracker?tab=interview');
+      await page.getByRole('row', { name: /Globex Payments/ }).click();
+      await page.getByLabel('Change status').selectOption('Hired');
+      await expect(page.getByRole('row', { name: /Globex Payments/ })).toHaveCount(0);
+      const dialog = page.getByRole('dialog', { name: 'Hired celebration' });
+      await expect(dialog).toContainText('Congratulations on Globex Payments!');
+      await dialog.getByRole('button', { name: 'Close' }).click();
+      await expect(dialog).toHaveCount(0);
+    } finally {
+      expect((await setStatus(page, 3, 'Interview')).status()).toBe(200);
+    }
+  });
+});
+
 test.describe('Command palette actions with params', () => {
   test('Network scan (dry run) asks only for the ATS, offers sinceDays as a choice and sends it as a number the action accepts', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -82,6 +104,36 @@ test.describe('Command palette actions with params', () => {
     await expect.poll(() => sent.length).toBe(1);
     expect(sent[0]).toEqual({ params: { sinceDays: 7, ats: ['greenhouse'] } });
     await page.unrouteAll();
+  });
+});
+
+test.describe('Command palette shows what a sync action returned (R8-22)', () => {
+  test('Reserve report numbers shows the reserved range', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/runs');
+    let range: string | null = null;
+    try {
+      await page.keyboard.press('Control+k');
+      await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('Reserve report numbers');
+      await page.locator('[cmdk-item]', { hasText: 'Reserve report numbers' }).click();
+      const params = page.getByRole('dialog', { name: /Reserve report numbers/ });
+      await params.getByLabel('count').fill('3');
+      await params.getByRole('button', { name: 'Run' }).click();
+      const result = page.getByRole('dialog', { name: 'Reserve report numbers: output' });
+      await expect(result).toBeVisible();
+      range = (await result.getByLabel('Action output').textContent())?.trim() ?? null;
+      expect(range).toMatch(/^\d{3}-\d{3}$/);
+      const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
+      expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+      await result.getByRole('button', { name: 'Close' }).click();
+      await expect(result).toHaveCount(0);
+    } finally {
+      // Later specs count report numbers: the reservations go again.
+      if (range) {
+        const res = await page.request.post('/api/actions/pipeline.releaseReportNums', { data: { params: { range } }, headers: { 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
+        expect(res.status()).toBe(200);
+      }
+    }
   });
 });
 

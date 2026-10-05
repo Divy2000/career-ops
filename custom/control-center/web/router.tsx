@@ -44,7 +44,8 @@ const trackerRoute = createRoute({
   }),
 });
 
-const applicationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage });
+// A different row is a different page: without the remount, its tab and a delete preview carry over to the next row.
+const applicationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage, remountDeps: ({ params }) => params });
 
 const pipelineRoute = createRoute({
   getParentRoute: () => rootRoute,
