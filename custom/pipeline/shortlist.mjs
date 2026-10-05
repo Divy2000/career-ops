@@ -135,11 +135,11 @@ async function main() {
     '| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |',
     '|---|---|---|---|---|---|---|---|---|',
     ...shortlist.slice(0, top).map((s, i) =>
-      `| ${i + 1} | ${s.score} | ${s.rank} | ${cell(s.sponsor)} | ${cell(s.company)} | [${cell(s.title)}](${s.url}) | ${cell(s.location)} | ${s.posted ?? '-'} | ${cell(s.rankReason)} |`),
+      `| ${i + 1} | ${s.score} | ${s.rank} | ${cell(s.sponsor)} | ${cell(s.company)} | [${cell(s.title || s.url)}](${s.url}) | ${cell(s.location)} | ${s.posted ?? '-'} | ${cell(s.rankReason)} |`),
     '',
     `## Excluded by sponsorship alerts (${excluded.length})`,
     '',
-    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title)}](${s.url}) - ${cell(s.sponsor)}`) : ['- none']),
+    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title || s.url)}](${s.url}) - ${cell(s.sponsor)}`) : ['- none']),
     '',
   ].join('\n');
   await writeFile(OUT, md);

@@ -122,7 +122,8 @@ export function buildShortlist(rows, { tiers, alerts, minRank = 3, keep = () => 
   const best = new Map();
   for (const r of rows) {
     if (!r?.pending || r.rank === null || r.rank < minRank || !keep(r)) continue;
-    const dedupeKey = `${r.company.toLowerCase()}\u0000${r.title.toLowerCase()}`;
+    // A row with no company or title (a pasted URL) is only a duplicate of the same posting URL.
+    const dedupeKey = r.company && r.title ? `${r.company.toLowerCase()}\u0000${r.title.toLowerCase()}` : `url\u0000${r.url.replace(/#.*$/, '').replace(/\/+$/, '')}`;
     const prev = best.get(dedupeKey);
     if (!prev || r.rank > prev.rank) best.set(dedupeKey, r);
   }

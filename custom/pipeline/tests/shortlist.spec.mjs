@@ -42,3 +42,15 @@ test('the shortlist is written, empty, on a root with no data/pipeline.md yet (a
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^Ranked rows with rank >= 3: 0\./m);
   assert.equal(fs.existsSync(path.join(root, 'data', 'pipeline.md')), false);
 });
+
+test('URL-only pipeline rows each get a shortlist row whose link reads as the URL', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const urls = ['https://jobs.example.com/1', 'https://jobs.example.com/2', 'https://jobs.example.com/3'];
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${urls.map((u) => `- [ ] ${u} | rank: 4.0/5 — fit`).join('\n')}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
+  for (const u of urls) assert.ok(md.includes(`[${u}](${u})`), `${u} in\n${md}`);
+});
