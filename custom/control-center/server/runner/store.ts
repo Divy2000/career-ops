@@ -26,6 +26,8 @@ export interface RunMeta {
   wrapperStartedAt?: string | null;
   childStartedAt?: string | null;
   error: string | null;
+  /** Input files the app wrote for this run under data/control-center/tmp, removed when it ends (absent on older runs). */
+  tmpInputs?: string[];
 }
 
 export interface RawLine {

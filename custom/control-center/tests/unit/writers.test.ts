@@ -4,6 +4,7 @@ import path from 'node:path';
 import { applyInboxSkip, postingUrl } from '../../server/domains/inboxSkip.js';
 import { applyFollowupEdit } from '../../server/domains/followups-edit.mjs';
 import { ACTIONS, findAction } from '../../server/actions/registry.js';
+import { tmpInputDir } from '../../server/actions/tmp-inputs.js';
 import { copyFixtureRoot } from '../helpers/app.js';
 
 const PIPELINE = `# Pipeline\n\n## Pending\n\n- [ ] https://a.example/1 | A | Role\n- [x] https://a.example/2 | B | Role\n- not a checkbox\n\n## Done\n\n- [ ] https://a.example/1 | A | Role\n`;
@@ -99,7 +100,7 @@ export const SPEC_ACTION_IDS = [
 
 describe('action registry covers section 3.3', () => {
   // Builders may stage ephemeral input files under the data root, so it must exist.
-  const ctx = { codeRoot: '/code', dataRoot: copyFixtureRoot() };
+  const ctx = { codeRoot: '/code', dataRoot: copyFixtureRoot(), tmpInputs: [] as string[] };
   it.each(SPEC_ACTION_IDS)('%s is registered', (id) => {
     expect(findAction(id), id).toBeDefined();
   });
@@ -149,7 +150,7 @@ describe('action registry covers section 3.3', () => {
   });
   it('scan.network writes an ephemeral portals file from the filters and points CAREER_OPS_PORTALS at it', () => {
     const dataRoot = copyFixtureRoot();
-    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: ['intern'], locationAllow: ['Remote'], block: [], sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 }, { codeRoot: '/code', dataRoot });
+    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: ['intern'], locationAllow: ['Remote'], block: [], sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 }, { codeRoot: '/code', dataRoot, tmpInputs: [] });
     expect(cmd.args.slice(1)).toEqual(expect.arrayContaining(['--dry-run', '--json', '--since', '7', '--ats', 'greenhouse,lever', '--limit', '100']));
     const portals = cmd.env?.CAREER_OPS_PORTALS;
     expect(portals).toBeDefined();
@@ -158,6 +159,19 @@ describe('action registry covers section 3.3', () => {
     expect(text).toContain('- backend');
     expect(text).toContain('- intern');
     expect(text).toContain('- Remote');
+  });
+  it('every input file a build writes is collected for the run to remove, the network scan filters file named only in the env included', () => {
+    const dataRoot = copyFixtureRoot();
+    const scan = { codeRoot: '/code', dataRoot, tmpInputs: [] as string[] };
+    const cmd = findAction('scan.network')!.build({ roles: ['backend'], exclude: [], locationAllow: [], block: [], sinceDays: 7, ats: ['greenhouse'], limit: 100 }, scan);
+    expect(scan.tmpInputs).toEqual([cmd.env!.CAREER_OPS_PORTALS]);
+    for (const a of ACTIONS) {
+      const each = { codeRoot: '/code', dataRoot, tmpInputs: [] as string[] };
+      const before = new Set(fs.existsSync(tmpInputDir(dataRoot)) ? fs.readdirSync(tmpInputDir(dataRoot)) : []);
+      a.build(a.params.parse(sampleParams(a.id)), each);
+      const written = (fs.existsSync(tmpInputDir(dataRoot)) ? fs.readdirSync(tmpInputDir(dataRoot)) : []).filter((f) => !before.has(f)).map((f) => path.join(tmpInputDir(dataRoot), f));
+      expect(each.tmpInputs.sort(), a.id).toEqual(written.sort());
+    }
   });
 });
 

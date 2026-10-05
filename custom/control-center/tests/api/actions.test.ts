@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
+import type { RunMeta } from '../../server/runner/store.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -101,6 +102,25 @@ describe('action registry', () => {
     const list = (await get('/api/runs')).json();
     expect(list.map((r: { id: string }) => r.id)).toContain(runId);
     expect((await get('/api/runs/does-not-exist')).statusCode).toBe(404);
+  });
+
+  it('an async action records the input files it wrote with its run, the network scan filters file passed only in the env included', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    // Captured, not run: the network scan would fetch the public ATS dataset.
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      const res = await post('/api/actions/scan.network', { params: { roles: ['backend'], ats: ['greenhouse'] } });
+      expect(res.statusCode, res.body).toBe(202);
+      const filters = started[0]!.env!.CAREER_OPS_PORTALS!;
+      expect(started[0]!.cmd.args).not.toContain(filters);
+      expect(started[0]!.tmpInputs).toEqual([filters]);
+      fs.rmSync(filters);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('actions need the write headers like every other mutation', async () => {

@@ -137,6 +137,43 @@ describe('Runner', () => {
     expect(fs.existsSync(keep)).toBe(true);
   });
 
+  it('records the input files a run was given and removes them when it ends, also one only its environment names', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    // The network scan passes its filters file as CAREER_OPS_PORTALS, never as an argument.
+    const filters = writeTmpInput(root, 'yml', 'title_filter: {}\n');
+    const meta = runner.start(req(['0'], { env: { CAREER_OPS_PORTALS: filters }, tmpInputs: [filters] }));
+    expect(meta.cmd.args).not.toContain(filters);
+    expect(runner.store.read(meta.id)?.tmpInputs).toEqual([filters]);
+    await until(() => runner.store.read(meta.id)?.status === 'done');
+    expect(fs.existsSync(filters)).toBe(false);
+  });
+
+  it('a recorded input outside the tmp input folder is never removed', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const cv = path.join(root, 'cv.md');
+    fs.writeFileSync(cv, '# CV');
+    const meta = runner.start(req(['0'], { tmpInputs: [cv] }));
+    await until(() => runner.store.read(meta.id)?.status === 'done');
+    expect(fs.existsSync(cv)).toBe(true);
+  });
+
+  it('an input recorded for a run that is cancelled while queued is removed too', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const blocker = runner.start(req(['0', '1500'], { resources: ['tracker'] }));
+    const input = writeTmpInput(root, 'txt', 'pasted');
+    const queued = runner.start(req(['0'], { resources: ['tracker'], env: { INPUT: input }, tmpInputs: [input] }));
+    expect(runner.store.read(queued.id)?.status).toBe('queued');
+    expect(runner.cancel(queued.id)?.status).toBe('cancelled');
+    expect(fs.existsSync(input)).toBe(false);
+    await until(() => runner.store.read(blocker.id)?.status === 'done');
+  });
+
   it('marks a non-zero exit as failed', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);

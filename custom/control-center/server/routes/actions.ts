@@ -20,7 +20,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     if (!action) return reply.code(404).send({ error: `unknown action ${req.params.actionId}` });
     const parsed = action.params.safeParse(req.body?.params ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid params', issues: parsed.error.issues });
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot };
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, tmpInputs: [] as string[] };
     const problem = await action.check?.(parsed.data, ctx);
     if (problem) return reply.code(400).send({ error: problem });
     const cmd = action.build(parsed.data, ctx);
@@ -34,6 +34,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
         params: parsed.data,
         cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
         env: { ...coreEnv, ...cmd.env },
+        tmpInputs: ctx.tmpInputs,
       });
       return reply.code(202).send({ runId: meta.id });
     }
@@ -41,7 +42,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     try {
       r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: { ...coreEnv, ...cmd.env } });
     } finally {
-      removeTmpInputs(cfg.dataRoot, cmd.args);
+      removeTmpInputs(cfg.dataRoot, ctx.tmpInputs);
     }
     let result: unknown = r.stdout;
     try {

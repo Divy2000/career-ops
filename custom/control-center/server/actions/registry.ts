@@ -15,6 +15,8 @@ export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followu
 export interface ActionContext {
   codeRoot: string;
   dataRoot: string;
+  /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
+  tmpInputs: string[];
 }
 
 export interface Command {
@@ -77,7 +79,11 @@ const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) 
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 
 /** Ephemeral input files live under the data root, never in the repo, and go when the run ends (tmp-inputs.ts). */
-const tmpFile = (ctx: ActionContext, ext: string, content: string): string => writeTmpInput(ctx.dataRoot, ext, content);
+const tmpFile = (ctx: ActionContext, ext: string, content: string): string => {
+  const file = writeTmpInput(ctx.dataRoot, ext, content);
+  ctx.tmpInputs.push(file);
+  return file;
+};
 
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
 

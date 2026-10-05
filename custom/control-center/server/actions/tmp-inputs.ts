@@ -16,11 +16,11 @@ export function writeTmpInput(dataRoot: string, ext: string, content: string): s
   return file;
 }
 
-/** Removes every argument that names a file directly inside the tmp input dir; anything else is left alone. */
-export function removeTmpInputs(dataRoot: string, args: readonly string[]): void {
+/** Removes every path that names a file directly inside the tmp input dir (arguments or recorded inputs); anything else is left alone. */
+export function removeTmpInputs(dataRoot: string, paths: readonly string[]): void {
   const dir = tmpInputDir(dataRoot);
-  for (const arg of args) {
-    if (path.isAbsolute(arg) && path.dirname(path.resolve(arg)) === dir) fs.rmSync(arg, { force: true });
+  for (const p of paths) {
+    if (path.isAbsolute(p) && path.dirname(path.resolve(p)) === dir) fs.rmSync(p, { force: true });
   }
 }
 
