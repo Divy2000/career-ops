@@ -135,9 +135,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     }
   };
 
-  if (!open) return null;
+  // Closed is hidden, not unmounted: the panel holds the advisor session and delivers its envelopes only while mounted.
   return (
-    <aside ref={drawerRef} tabIndex={-1} className="drawer" role="dialog" aria-modal="false" aria-label="Ask">
+    <aside ref={drawerRef} tabIndex={-1} className="drawer" role="dialog" aria-modal="false" aria-label="Ask" hidden={!open}>
       <div className="row gap" style={{ justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0 }}>Ask</h2>
         <span className="faint small">Cmd+J toggles. Read-only advisor; every action below asks before it writes.</span>
