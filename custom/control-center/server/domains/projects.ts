@@ -1,6 +1,7 @@
 // Typed access to the projects library helpers (custom/projects/lib.mjs, a
 // contracted pure module). The library file itself is article-digest.md.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -170,21 +171,74 @@ export function documentsPath(dataRoot: string, rel: string): string | null {
 }
 
 /**
+ * The bytes of a checked documents/ source, read through one descriptor: the real path is opened without
+ * following a final symlink, the descriptor must be a regular file, and after the open the path must still
+ * resolve inside documents/ to that same file (dev and inode), so a swap after the check is refused.
+ */
+function readSourceOnce(dataRoot: string, found: string): Buffer | null {
+  let docsReal: string;
+  try {
+    docsReal = fs.realpathSync(path.resolve(dataRoot, 'documents'));
+  } catch {
+    return null;
+  }
+  const realAbs = path.join(docsReal, found);
+  let fd: number;
+  try {
+    fd = fs.openSync(realAbs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return null;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return null;
+    const now = fs.realpathSync(realAbs);
+    const onDisk = fs.lstatSync(now);
+    if (!now.startsWith(docsReal + path.sep) || onDisk.dev !== st.dev || onDisk.ino !== st.ino) return null;
+    return fs.readFileSync(fd);
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** intake's extractor reads a path, so a PDF is extracted from a private copy of the bytes already read. */
+async function extractPdfBytes(codeRoot: string, bytes: Buffer): Promise<PdfResult> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-extract-'));
+  try {
+    const copy = path.join(dir, 'source.pdf');
+    fs.writeFileSync(copy, bytes, { mode: 0o600 });
+    return await extractPdf(codeRoot, copy);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * The text of a documents/ source, extracted with intake.mjs's own exported helpers (the same extractor
  * `intake.mjs --commit` fingerprints), PDFs in a worker thread. Nothing is written: `intake.mjs --text`
  * would also create the documents/ scaffold folders.
  */
-export async function extractSourceText(codeRoot: string, dataRoot: string, rel: string): Promise<{ ok: true; rel: string; text: string } | { ok: false; error: string }> {
+export async function extractSourceText(
+  codeRoot: string,
+  dataRoot: string,
+  rel: string,
+  /** Test seam: runs between the containment check and the open, where a swap would have to happen. */
+  hooks: { beforeOpen?: () => void } = {},
+): Promise<{ ok: true; rel: string; text: string } | { ok: false; error: string }> {
   const found = documentsPath(dataRoot, rel);
   if (!found) return { ok: false, error: `not a file under documents/: ${rel}` };
+  hooks.beforeOpen?.();
+  const raw = readSourceOnce(dataRoot, found);
+  if (!raw) return { ok: false, error: `not a file under documents/: ${rel}` };
   const intake = await importCore<IntakeExtraction>(codeRoot, 'intake.mjs');
-  const abs = path.join(dataRoot, 'documents', found);
   const cls = intake.classifySource(found);
   let text: string;
   try {
-    if (cls.kind === 'direct') text = fs.readFileSync(abs, 'utf8');
+    if (cls.kind === 'direct') text = raw.toString('utf8');
     else if (cls.kind === 'pdf') {
-      const pdf = await extractPdf(codeRoot, abs);
+      const pdf = await extractPdfBytes(codeRoot, raw);
       if (!pdf.ok && pdf.missing) return { ok: false, error: 'no PDF text extractor found: install poppler (brew install poppler), which intake.mjs uses for PDFs' };
       if (!pdf.ok) return { ok: false, error: `could not read documents/${found}: ${pdf.error}` };
       text = pdf.text;

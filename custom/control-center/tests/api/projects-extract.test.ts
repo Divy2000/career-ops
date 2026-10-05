@@ -100,5 +100,35 @@ describe('a source must really live under documents/', () => {
     fs.symlinkSync(path.join(docs, 'cv', 'projects.md'), path.join(docs, 'projects', 'linked.md'));
     expect(await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/linked.md')).toEqual({ ok: true, rel: 'cv/projects.md', text: '## Kite Tracker\n- Tracked kites.\n' });
   });
+
+  it('refuses a source swapped for a symlink, or moved under a swapped folder, after the containment check', async () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-outside-'));
+    fs.writeFileSync(path.join(outsideDir, 'race.md'), 'SECRET outside documents\n');
+    const docs = path.join(t.cfg.dataRoot, 'documents');
+    const projects = path.join(docs, 'projects');
+    fs.mkdirSync(projects, { recursive: true });
+
+    fs.writeFileSync(path.join(projects, 'race.md'), '## Fine\n- Inside.\n');
+    const fileSwap = await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/race.md', {
+      beforeOpen: () => {
+        fs.rmSync(path.join(projects, 'race.md'));
+        fs.symlinkSync(path.join(outsideDir, 'race.md'), path.join(projects, 'race.md'));
+      },
+    });
+    expect(fileSwap.ok).toBe(false);
+    expect(JSON.stringify(fileSwap)).not.toContain('SECRET');
+
+    fs.rmSync(projects, { recursive: true, force: true });
+    fs.mkdirSync(projects);
+    fs.writeFileSync(path.join(projects, 'race.md'), '## Fine\n- Inside.\n');
+    const dirSwap = await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/race.md', {
+      beforeOpen: () => {
+        fs.rmSync(projects, { recursive: true });
+        fs.symlinkSync(outsideDir, projects);
+      },
+    });
+    expect(dirSwap.ok).toBe(false);
+    expect(JSON.stringify(dirSwap)).not.toContain('SECRET');
+  });
 });
 
