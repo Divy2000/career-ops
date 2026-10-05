@@ -421,3 +421,11 @@ test('given an edit whose bullets would land where they do not parse, when repla
   const md = '## Alpha\nKind: article\n```\nunclosed fence\n';
   assert.throws(() => replaceEntry(md, 'alpha', { title: 'Alpha', kind: 'article', bullets: ['One.'] }), /would not read back as entered/);
 });
+
+test('an entry whose id another entry shares (C# and C both read as c-compiler) is never edited or removed in the other one\'s place (SW-libs-03)', () => {
+  const text = '# Projects\n\n## C# Compiler\n- Wrote a C# front end.\n\n---\n\n## C Compiler\n- Wrote a C back end.\n';
+  const ids = parseLibrary(text).entries.map((e) => e.id);
+  assert.deepEqual(ids, ['c-compiler', 'c-compiler']);
+  assert.throws(() => removeEntry(text, 'c-compiler'), /2 projects share the id "c-compiler" \(C# Compiler, C Compiler\)/);
+  assert.throws(() => replaceEntry(text, 'c-compiler', { title: 'C Compiler', bullets: ['Rewritten.'] }), /2 projects share the id "c-compiler"/);
+});

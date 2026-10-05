@@ -188,6 +188,24 @@ describe('DELETE /api/projects/:id', () => {
   });
 });
 
+describe('projects that share an id (SW-libs-03)', () => {
+  it('Delete and Edit refuse an id two titles share (C# and C), name both and write nothing', async () => {
+    const original = read();
+    try {
+      fs.writeFileSync(file(), '# Projects\n\n## C# Compiler\n- Wrote a C# front end.\n\n---\n\n## C Compiler\n- Wrote a C back end.\n');
+      const before = await current();
+      const text = read();
+      for (const res of [await send('DELETE', '/api/projects/c-compiler', {}, before.etag), await send('PUT', '/api/projects/c-compiler', { title: 'C Compiler', bullets: ['Rewritten.'] }, before.etag)]) {
+        expect(res.statusCode, res.body).toBe(422);
+        expect(res.json().error).toMatch(/2 projects share the id "c-compiler" \(C# Compiler, C Compiler\); rename one/);
+      }
+      expect(read()).toBe(text);
+    } finally {
+      fs.writeFileSync(file(), original);
+    }
+  });
+});
+
 describe('POST /api/projects/validate and /convert', () => {
   it('validates library text without writing', async () => {
     const text = read();

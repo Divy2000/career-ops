@@ -301,10 +301,18 @@ const EDITED_FIELDS = ['title', 'url', 'tagline', 'tags', 'kind', 'dates', 'sour
 // bullets) in place; every other line of the block stays byte for byte. A
 // block whose bullets cannot be rewritten in place, or whose result would not
 // read back as entered, is refused.
+// The one entry with `id`. Punctuation folds away in ids (C#, C++ and C are all "c"), so two titles can share one: then
+// either could be meant, and acting on the first would edit or delete the other project.
+function uniqueIndex(entries, id) {
+  const matches = entries.flatMap((e, i) => (e.id === id ? [i] : []));
+  if (matches.length === 0) throw new Error(`no entry with id "${id}"`);
+  if (matches.length > 1) throw new Error(`${matches.length} projects share the id "${id}" (${matches.map((i) => entries[i].title).join(', ')}); rename one in article-digest.md first`);
+  return matches[0];
+}
+
 export function replaceEntry(text, id, entry) {
   const { entries } = parseWithLayout(text);
-  const index = entries.findIndex((e) => e.id === id);
-  if (index === -1) throw new Error(`no entry with id "${id}"`);
+  const index = uniqueIndex(entries, id);
   const target = entries[index];
   const refuse = (why) => new Error(`"${target.title}" cannot be edited here: ${why}`);
   if (target.editProblem) throw refuse(target.editProblem);
@@ -337,8 +345,7 @@ export function replaceEntry(text, id, entry) {
 // separator after it; the last one takes the separator before it.
 export function removeEntry(text, id) {
   const { entries } = parseLibrary(text);
-  const i = entries.findIndex((e) => e.id === id);
-  if (i === -1) throw new Error(`no entry with id "${id}"`);
+  const i = uniqueIndex(entries, id);
   const target = entries[i];
   const { starts, clean } = lineTable(text);
   let next = starts.findIndex((s) => s > target.end);
