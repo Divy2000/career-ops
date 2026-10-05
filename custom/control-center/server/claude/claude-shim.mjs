@@ -59,11 +59,12 @@ function main(argv) {
   if (!real || !path.isAbsolute(real)) refuse('claude-shim: CC_CLAUDE_BIN must name the real claude by absolute path');
   let realPath;
   try {
-    realPath = fs.realpathSync(real);
+    // .native asks the OS; fs.realpathSync collapses `..` on paper first, which through a symlinked folder is another file.
+    realPath = fs.realpathSync.native(real);
   } catch (err) {
     refuse(`claude-shim: CC_CLAUDE_BIN ${real} cannot be resolved (${err.message})`);
   }
-  if (realPath === fs.realpathSync(CLAUDE_SHIM_PATH)) refuse('claude-shim: CC_CLAUDE_BIN points at the shim itself');
+  if (realPath === fs.realpathSync.native(CLAUDE_SHIM_PATH)) refuse('claude-shim: CC_CLAUDE_BIN points at the shim itself');
   const env = { ...process.env, DISABLE_AUTOUPDATER: '1' };
   if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-v')) {
     const r = spawnSync(real, argv, { stdio: 'inherit', env });

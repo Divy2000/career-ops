@@ -36,7 +36,8 @@ export function claudeVersionGate(bin, approved = contractApprovedVersions()) {
   if (!version) throw new Error(`could not read the Claude Code version from ${bin} (exit ${r.status ?? r.error?.code}${r.stdout?.trim() ? `: ${JSON.stringify(r.stdout.trim().slice(0, 80))}` : ''})`);
   let real = bin;
   try {
-    real = fs.realpathSync(bin);
+    // .native asks the OS; fs.realpathSync collapses `..` on paper first, which through a symlinked folder is another file.
+    real = fs.realpathSync.native(bin);
   } catch {
     /* a bare name that spawn found on PATH: its spelling stands for it */
   }

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CLAUDE_SHIM_PATH, confinedArgv } from '../../server/claude/claude-shim.mjs';
+import { claudeVersionGate } from '../../server/claude/confinement.mjs';
 import { CONTRACT } from '../../server/core/adapter.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -115,6 +116,23 @@ describe('claude shim: running the real binary', () => {
     const lines = fs.readFileSync(refusals, 'utf8').trim().split('\n');
     expect(lines).toEqual(refused.map((r) => r.stderr.trim()));
     expect(lines[0]).toMatch(/^claude-shim: --allowedTools is not allowed/);
+    expect(real.calls()).toHaveLength(1);
+  });
+
+  it('a CC_CLAUDE_BIN that reaches claude through a symlinked folder and .. runs the file the kernel opens, under the identity the job checked', () => {
+    const real = realClaude(APPROVED);
+    const dir = path.dirname(real.bin);
+    // A sh entry point, as a native claude would be: node resolves its own script path on paper, so a node script cannot be reached this way.
+    fs.writeFileSync(path.join(dir, 'claude-sh'), `#!/bin/sh\nexec '${process.execPath}' '${real.bin}' "$@"\n`, { mode: 0o755 });
+    fs.mkdirSync(path.join(dir, 'bin'));
+    const links = tempDir('cc-shim-link-');
+    fs.symlinkSync(path.join(dir, 'bin'), path.join(links, 'link'));
+    // On paper this is <links>/claude-sh, which does not exist; the kernel follows link first and opens <dir>/claude-sh.
+    const via = `${links}/link/../claude-sh`;
+    const gate = claudeVersionGate(via, [APPROVED]);
+    expect(gate.identity).toBe(`${fs.realpathSync.native(path.join(dir, 'claude-sh'))}@${APPROVED}`);
+    const r = shim(['-p', 'x'], { CC_CLAUDE_BIN: via, CC_CLAUDE_EXPECT: gate.identity });
+    expect(r.status, r.stderr).toBe(0);
     expect(real.calls()).toHaveLength(1);
   });
 
