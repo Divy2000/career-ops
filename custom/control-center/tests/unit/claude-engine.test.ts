@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy } from '../../server/claude/modes.js';
+import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { checkBash, snapshotKey } from '../../server/claude/guard-policy.mjs';
+import { checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
@@ -23,10 +23,9 @@ describe('invocation builder', () => {
     expect(argv).toEqual(expect.arrayContaining(['--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--session-id', base.claudeSessionId, '--permission-mode', 'dontAsk', '--append-system-prompt', 'PREAMBLE', '--settings', base.settingsFile, '--strict-mcp-config']));
     expect(argv).not.toContain('--resume');
     expect(argv).not.toContain('--mcp-config');
-    const allowed = argv[argv.indexOf('--allowedTools') + 1]!;
-    expect(allowed).toContain(`Edit(//repo/career-ops/reports/**)`);
-    expect(allowed).toContain('Bash(node set-status.mjs:*)');
-    expect(allowed).toContain('WebFetch');
+    // Requirement change (BUG-06): allow rules live in the per-turn settings file, so a path with a space or comma is never split as an argument.
+    expect(argv).not.toContain('--allowedTools');
+    expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).toEqual(expect.arrayContaining(['Edit(//repo/career-ops/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch']));
     const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!;
     expect(disallowed.split(',')).toContain('Task');
   });
@@ -41,7 +40,9 @@ describe('invocation builder', () => {
     expect(buildDisallowedTools(getModePolicy('pdf/hm-audit')!)).not.toContain('Task');
     const ro = buildDisallowedTools(getModePolicy('advisor')!);
     for (const t of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Task', 'WebFetch', 'WebSearch']) expect(ro).toContain(t);
-    expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).toEqual(expect.arrayContaining(['Read', 'Glob', 'Grep', 'WebSearch']));
+    // Requirement change (BUG-06): Read, Glob and Grep come from --tools; a bare allow entry for them is gone.
+    expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).toEqual(['WebSearch']);
+    expect(buildTools(getModePolicy('ai-search')!)).toEqual(['Read', 'Glob', 'Grep', 'WebSearch']);
     expect(buildAllowedTools(getModePolicy('ai-search')!, codeRoot)).not.toContain('WebFetch');
   });
   it('builds the env with the Keychain token, an empty API key and the policy pointers, and never puts the token in argv', () => {
@@ -73,6 +74,124 @@ describe('invocation builder', () => {
     expect(text).toContain('Playwright');
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'es' })).toContain('Playwright is unavailable');
+  });
+});
+
+describe('invocation: read confinement', () => {
+  const tmp = (prefix: string) => fs.realpathSync(tempDir(prefix));
+  const oferta = getModePolicy('oferta')!;
+  const roots = { claudeBin: 'claude', codeRoot: '/code', dataRoot: '/data', sessionDir: '/guard/sessions/s1', policyFile: '/guard/sessions/s1/turns/1/policy.json', settingsFile: '/guard/sessions/s1/turns/1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: base.claudeSessionId, preamble: 'P', resume: false };
+
+  it('given oferta with roots /code and /data, the argv restricts the CLI to the class tools and disallows PowerShell and subagents', () => {
+    const argv = buildArgv({ ...roots, policy: oferta });
+    expect(argv).toContain('--restricted');
+    expect(argv[argv.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Edit,Write,NotebookEdit,Bash,WebFetch,WebSearch');
+    expect(argv).not.toContain('--allowedTools');
+    const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!.split(',');
+    for (const t of ['PowerShell', 'Agent', 'Task']) expect(disallowed).toContain(t);
+    expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+  });
+
+  it('every class gets exactly its tools: read-only gets the read tools, Bash only with Bash rules, Agent only for pdf/hm-audit', () => {
+    expect(buildTools(getModePolicy('advisor')!)).toEqual(['Read', 'Glob', 'Grep']);
+    expect(buildTools(getModePolicy('pdf/hm-audit')!)).toContain('Agent');
+    expect(buildDisallowedTools(getModePolicy('pdf/hm-audit')!)).not.toContain('Agent');
+    expect(buildTools(getModePolicy('devchat')!)).toEqual(['Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch']);
+    for (const mode of ['advisor', 'apply', 'devchat', 'cv-ingest', 'projects-ingest']) {
+      expect(buildTools(getModePolicy(mode)!), mode).not.toContain('PowerShell');
+      expect(buildDisallowedTools(getModePolicy(mode)!), mode).toContain('PowerShell');
+    }
+  });
+
+  it('no bare Read, Glob or Grep allow entry anywhere, in argv or in the settings permissions', () => {
+    for (const mode of ['oferta', 'advisor', 'devchat', 'pdf/hm-audit']) {
+      const allow = buildPermissions({ policy: getModePolicy(mode)!, codeRoot: '/code', dataRoot: '/data', guardRoot: '/guard' }).allow;
+      for (const t of ['Read', 'Glob', 'Grep']) expect(allow, mode).not.toContain(t);
+      expect(allow.some((r) => /^(Read|Glob|Grep)\(/.test(r)), mode).toBe(false);
+    }
+  });
+
+  it('the settings file carries the data root as a working directory, the deny list, the guard root and the write and Bash rules', () => {
+    const guard = tmp('cc-settings-');
+    const perms = buildPermissions({ policy: oferta, codeRoot: '/code', dataRoot: '/data root', guardRoot: '/guard' });
+    const file = writeSettingsFile(guard, { permissions: perms });
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as { permissions: { additionalDirectories: string[]; allow: string[]; deny: string[] }; hooks: unknown };
+    expect(settings.permissions.additionalDirectories).toEqual(['/data root']);
+    expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Edit(//code/reports/**)', 'Edit(//data root/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch', 'WebSearch']));
+    const deny = settings.permissions.deny;
+    for (const p of HOME_READ_DENY) expect(deny).toContain(`Read(${p})`);
+    expect(deny).toContain('Read(//guard/**)');
+    for (const g of READ_DENY) {
+      expect(deny).toContain(`Read(//code/${g})`);
+      expect(deny).toContain(`Read(//data root/${g})`);
+    }
+    expect(settings.hooks).toBeDefined();
+    // One root: no extra working directory.
+    expect(buildPermissions({ policy: oferta, codeRoot: '/code', dataRoot: '/code', guardRoot: '/guard' }).additionalDirectories).toEqual([]);
+  });
+
+  it('deny rules cover each root and the guard root under both the given and the real path', () => {
+    const realRoot = tmp('cc-spelled-');
+    const link = path.join(tmp('cc-spelled-link-'), 'via-link');
+    fs.symlinkSync(realRoot, link);
+    const deny = buildPermissions({ policy: oferta, codeRoot: link, dataRoot: link, guardRoot: link }).deny;
+    expect(deny).toContain(`Read(/${link}/**/.env)`);
+    expect(deny).toContain(`Read(/${realRoot}/**/.env)`);
+    expect(deny).toContain(`Read(/${link}/**)`);
+    expect(deny).toContain(`Read(/${realRoot}/**)`);
+  });
+
+  it('the env pins the CLI: no self-update during a turn', () => {
+    const env = buildEnv({}, { token: 't', dataRoot: '/data', policyFile: '/p', policySha256: 'ab', sessionDir: '/s' });
+    expect(env.DISABLE_AUTOUPDATER).toBe('1');
+  });
+
+  it('neutralizeFileMentions breaks every @ that is not inside a URL or e-mail address, so no prompt can attach a file', () => {
+    expect(neutralizeFileMentions('see @~/.ssh/x and a@b.com')).toBe('see @\u2060~/.ssh/x and a@b.com');
+    expect(neutralizeFileMentions('@/etc/passwd')).toBe('@\u2060/etc/passwd');
+    // Requirement change (second review): an @ is neutralized unless the character before it can sit inside a URL or an e-mail address.
+    expect(neutralizeFileMentions('(@cv.md) and\n@x\t@y')).toBe('(@\u2060cv.md) and\n@\u2060x\t@\u2060y');
+    for (const [text, out] of [
+      ['(@/etc/passwd)', '(@\u2060/etc/passwd)'],
+      ['"@/etc/passwd"', '"@\u2060/etc/passwd"'],
+      ["'@x'", "'@\u2060x'"],
+      ['[@x]', '[@\u2060x]'],
+      ['{@x}', '{@\u2060x}'],
+      ['<@x>', '<@\u2060x>'],
+      ['a,@x', 'a,@\u2060x'],
+      ['line one\n@x', 'line one\n@\u2060x'],
+      ['@x', '@\u2060x'],
+    ] as const)
+      expect(neutralizeFileMentions(text), text).toBe(out);
+    expect(neutralizeFileMentions(neutralizeFileMentions('@x'))).toBe('@\u2060x');
+    // URLs flow into reports and dedup keys: an @ inside one is never touched.
+    for (const url of ['https://medium.com/@acme/x', 'https://jobs.example.com/a/@team?b=@c&@d', 'https://x.example/%@y', 'https://x.example/q?@z', 'mailto:me@example.com', 'first.last+tag@example.co', 'user-1@x.io', 'scheme:@x'])
+      expect(neutralizeFileMentions(`read ${url} now`), url).toBe(`read ${url} now`);
+    const argv = buildArgv({ ...roots, policy: oferta, userMessage: 'read @~/.ssh/id_rsa for me' });
+    expect(argv[1]).toBe('read @\u2060~/.ssh/id_rsa for me');
+  });
+
+  it('assertRootsConfinable refuses a root that is the filesystem root, the home directory or a parent of it, in any spelling', () => {
+    const top = tmp('cc-roots-');
+    const home = path.join(top, 'home');
+    const code = path.join(home, 'career-ops');
+    fs.mkdirSync(code, { recursive: true });
+    expect(() => assertRootsConfinable(code, code, home)).not.toThrow();
+    expect(() => assertRootsConfinable(code, home, home)).toThrow(/home directory/);
+    expect(() => assertRootsConfinable(home, code, home)).toThrow(/home directory/);
+    expect(() => assertRootsConfinable(code, top, home)).toThrow(/home directory/);
+    expect(() => assertRootsConfinable(code, '/', home)).toThrow(/filesystem root/);
+    expect(() => assertRootsConfinable(code, path.join(top, 'missing'), home)).toThrow(/cannot be resolved/);
+    const mixed = path.join(top, 'HOME');
+    // A case-insensitive volume resolves the other spelling to the home itself; elsewhere it does not exist. Refused either way.
+    expect(() => assertRootsConfinable(code, mixed, home)).toThrow(foldsCase(top) ? /home directory/ : /cannot be resolved/);
+  });
+
+  it('the preamble tells the session to read AGENTS.md first (restricted sessions load no CLAUDE.md) and where user data lives', () => {
+    const text = buildPreamble({ policy: oferta, outputLanguage: 'en', codeRoot: '/code', dataRoot: '/data root' });
+    expect(text).toMatch(/2\. Read AGENTS\.md before anything else/);
+    expect(text).toContain('User data lives in /data root; read user files there by absolute path.');
+    expect(buildPreamble({ policy: oferta, outputLanguage: 'en', codeRoot: '/code', dataRoot: '/code' })).not.toContain('User data lives in');
   });
 });
 
@@ -268,6 +387,154 @@ describe('guard hook', () => {
     expect(r.status).toBe(0);
     const lines = fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { path: string });
     expect(lines.at(-1)!.path).toBe('reports/002-new.md');
+  });
+});
+
+describe('guard hook: read confinement', () => {
+  const base = fs.realpathSync(tempDir('cc-hook-read-'));
+  const code = path.join(base, 'code');
+  const data = path.join(base, 'data');
+  const outside = path.join(base, 'outside');
+  for (const d of [code, data, outside]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(code, 'cv.md'), 'cv\n');
+  fs.writeFileSync(path.join(code, '.env'), 'SECRET=1\n');
+  fs.writeFileSync(path.join(outside, 's.txt'), 'outside\n');
+  const guardDir = (name: string) => {
+    const d = path.join(base, 'guard', name);
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const evaluate = (() => {
+    const dir = guardDir('oferta');
+    return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy('oferta')! }) };
+  })();
+  const pre = (tool: string, input: Record<string, unknown>, which = evaluate) => hookRun(which.dir, which.pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: code, session_id: 's' });
+
+  it('Read outside the roots, of a secret file, or through ~ exits 2; a read inside a root exits 0', () => {
+    expect(pre('Read', { file_path: path.join(code, 'cv.md') }).status).toBe(0);
+    const out = pre('Read', { file_path: path.join(outside, 's.txt') });
+    expect(out.status).toBe(2);
+    expect(out.stderr).toMatch(/outside the repo and data roots/);
+    expect(pre('Read', { file_path: path.join(code, '.env') }).status).toBe(2);
+    expect(pre('Read', { file_path: '~/.ssh/id_ed25519' }).status).toBe(2);
+    expect(pre('Read', {}).status).toBe(2);
+  });
+
+  it('Glob and Grep inside the roots exit 0; outside, or with a pattern that climbs out, exit 2', () => {
+    expect(pre('Glob', { pattern: '**/*.md', path: code }).status).toBe(0);
+    expect(pre('Grep', { pattern: 'Score', path: data, glob: '*.md' }).status).toBe(0);
+    expect(pre('Glob', { pattern: '*', path: outside }).status).toBe(2);
+    expect(pre('Glob', { pattern: '../outside/*', path: code }).status).toBe(2);
+    expect(pre('Grep', { pattern: 'x', glob: '{/etc,a}/*' }).status).toBe(2);
+  });
+
+  it('WebFetch of file:, of a loopback address, or of a name that does not resolve exits 2; a public literal address exits 0', () => {
+    for (const url of ['file:///etc/passwd', 'http://127.0.0.1:1/', 'http://localhost/', 'http://[::1]/', 'https://nothing.invalid/']) {
+      const r = pre('WebFetch', { url, prompt: 'x' });
+      expect(r.status, url).toBe(2);
+    }
+    expect(pre('WebFetch', { url: 'https://nothing.invalid/', prompt: 'x' }).stderr).toMatch(/could not resolve/);
+    expect(pre('WebFetch', { url: 'https://93.184.216.34/', prompt: 'x' }).status).toBe(0);
+  });
+
+  it('a Bash script URL argument goes through the same DNS check', () => {
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://nothing.invalid/x' }).stderr).toMatch(/could not resolve/);
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://93.184.216.34/x' }).status).toBe(0);
+    expect(pre('Bash', { command: 'node check-liveness.mjs file:///etc/passwd' }).status).toBe(2);
+  });
+
+  it('a Bash command naming more than 4 hosts exits 2 before any lookup', () => {
+    const urls = ['a', 'b', 'c', 'd', 'e'].map((h) => `https://${h}.nothing.invalid/x`).join(' ');
+    const r = pre('Bash', { command: `node check-liveness.mjs ${urls}` });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/5 different hosts/);
+  });
+
+  it('names the files the audited scripts read URLs from, in both flag forms', () => {
+    expect(urlListFilesIn('node check-liveness.mjs --file output/urls.txt')).toEqual([{ file: 'output/urls.txt', format: 'lines' }]);
+    expect(urlListFilesIn('node check-liveness.mjs --file=output/urls.txt')).toEqual([{ file: 'output/urls.txt', format: 'lines' }]);
+    expect(urlListFilesIn('node verify-portals.mjs --file alt.yml --strict')).toEqual([{ file: 'alt.yml', format: 'text' }]);
+    expect(urlListFilesIn('node audit-portals.mjs --summary --file=alt.yml')).toEqual([{ file: 'alt.yml', format: 'text' }]);
+    expect(urlListFilesIn('node discover-ats.mjs --in companies.yml --summary')).toEqual([{ file: 'companies.yml', format: 'text' }]);
+    expect(urlListFilesIn('node check-liveness.mjs https://jobs.example.com/1')).toEqual([]);
+    expect(urlListFilesIn('node merge-tracker.mjs --file x')).toEqual([]);
+    expect(URL_LIST_MAX_BYTES).toBe(256 * 1024);
+  });
+
+  it('check-liveness --file: the URLs inside the list file get the same checks as URL arguments', () => {
+    const list = (name: string, text: string) => {
+      fs.writeFileSync(path.join(code, name), text);
+      return name;
+    };
+    const liveness = (file: string) => pre('Bash', { command: `node check-liveness.mjs --file ${file}` });
+    const loopback = liveness(list('loopback.txt', '# one posting\nhttps://93.184.216.34/jobs/1\nhttp://127.0.0.1/\n'));
+    expect(loopback.status).toBe(2);
+    expect(loopback.stderr).toMatch(/127\.0\.0\.1/);
+    expect(pre('Bash', { command: `node check-liveness.mjs --file=${list('inline.txt', 'http://169.254.169.254/latest\n')}` }).status).toBe(2);
+    expect(liveness(list('public.txt', '# public postings\nhttps://93.184.216.34/jobs/1\n\nhttps://93.184.216.34/jobs/2\nhttps://8.8.8.8/x\n')).status).toBe(0);
+    expect(liveness(list('scheme.txt', 'file:///etc/passwd\n')).stderr).toMatch(/not an http/);
+    expect(liveness(list('word.txt', 'https://93.184.216.34/a\nnot-a-url\n')).stderr).toMatch(/not an http/);
+    expect(liveness(list('dns.txt', 'https://nothing.invalid/x\n')).stderr).toMatch(/could not resolve/);
+    expect(liveness(list('big.txt', `https://93.184.216.34/${'x'.repeat(URL_LIST_MAX_BYTES)}\n`)).stderr).toMatch(/larger than/);
+    expect(liveness('missing.txt').stderr).toMatch(/cannot read/);
+    expect(liveness(path.join(outside, 's.txt')).status).toBe(2);
+  });
+
+  it('verify-portals --file, audit-portals --file and discover-ats --in: every URL in the YAML is checked', () => {
+    const policyFor = (mode: string) => {
+      const dir = guardDir(mode);
+      return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)! }) };
+    };
+    // Each script under the mode that runs it, so a refusal can only come from the URL check.
+    const scan = policyFor('scan');
+    const discover = policyFor('discover');
+    const yml = (name: string, text: string) => {
+      fs.writeFileSync(path.join(code, name), text);
+      return name;
+    };
+    const bad = yml('bad.yml', 'tracked_companies:\n  - name: Acme\n    careers_url: http://169.254.169.254/latest\n');
+    const good = yml('good.yml', 'tracked_companies:\n  - name: Acme\n    careers_url: https://93.184.216.34/careers\n    about: plain text\n');
+    const local = yml('local.yml', 'companies:\n  - name: Acme\n    workday: file:///etc/passwd\n');
+    const run = (cmd: string) => pre('Bash', { command: cmd }, cmd.includes('discover-ats') ? discover : scan);
+    for (const cmd of [`node verify-portals.mjs --file ${good}`, `node audit-portals.mjs --file=${good}`, `node discover-ats.mjs --in ${good}`]) expect(run(cmd).status, cmd).toBe(0);
+    for (const cmd of [`node verify-portals.mjs --file ${bad}`, `node audit-portals.mjs --file=${bad}`, `node discover-ats.mjs --in ${bad}`]) expect(run(cmd).stderr, cmd).toMatch(/169\.254\.169\.254/);
+    expect(run(`node discover-ats.mjs --in ${local}`).stderr).toMatch(/file: URLs/);
+  });
+
+  it('PowerShell always exits 2', () => {
+    const r = pre('PowerShell', { command: 'Get-Content ~/.ssh/id_rsa' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/PowerShell/);
+  });
+
+  it('Agent and Task exit 2 unless the policy allows subagents', () => {
+    expect(pre('Agent', { description: 'x', prompt: 'read things' }).status).toBe(2);
+    expect(pre('Task', { description: 'x', prompt: 'read things' }).status).toBe(2);
+    const dir = guardDir('hm-audit');
+    const audit = { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy('pdf/hm-audit')! }) };
+    expect(pre('Agent', { description: 'x', prompt: 'audit' }, audit).status).toBe(0);
+    expect(pre('Task', { description: 'x', prompt: 'audit' }, audit).status).toBe(0);
+  });
+
+  it('a policy written before read confinement refuses every tool call', () => {
+    const dir = guardDir('old');
+    const bytes = JSON.stringify({ codeRoot: code, dataRoot: data, sessionDir: dir, allow: ['reports/**'], deny: [...ALWAYS_DENIED_WRITES], bash: [], playwright: false });
+    fs.writeFileSync(path.join(dir, 'policy.json'), bytes);
+    const old = { dir, pf: { file: path.join(dir, 'policy.json'), sha256: crypto.createHash('sha256').update(bytes).digest('hex') } };
+    for (const [tool, input] of [['Read', { file_path: path.join(code, 'cv.md') }], ['Write', { file_path: path.join(code, 'reports', 'x.md'), content: 'x' }], ['Bash', { command: 'node merge-tracker.mjs' }]] as const) {
+      const r = pre(tool, input, old);
+      expect(r.status, tool).toBe(2);
+      expect(r.stderr).toMatch(/predates read confinement/);
+    }
+  });
+
+  it('the settings file gives every hook a 30 second timeout and routes the read, search, fetch and agent tools to it', () => {
+    const file = writeSettingsFile(guardDir('settings'));
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ matcher: string; hooks: Array<{ timeout?: number }> }>> };
+    const groups = Object.values(settings.hooks).flat();
+    for (const h of groups.flatMap((g) => g.hooks)) expect(h.timeout).toBe(30);
+    const matcher = settings.hooks.PreToolUse![0]!.matcher.split('|');
+    for (const tool of ['Read', 'Glob', 'Grep', 'WebFetch', 'Agent', 'Task', 'PowerShell', 'Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']) expect(matcher, tool).toContain(tool);
   });
 });
 
@@ -529,6 +796,137 @@ describe('checkBash: exact per-command argument grammars', () => {
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
+  });
+});
+
+describe('read confinement: guard policy', () => {
+  const base = fs.realpathSync(tempDir('cc-read-'));
+  const code = path.join(base, 'code');
+  const data = path.join(base, 'data root');
+  const outside = path.join(base, 'outside');
+  const results = path.join(base, 'claude', 'tool-results');
+  for (const d of [code, data, outside, results, path.join(data, 'Data')]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(code, 'cv.md'), 'code cv\n');
+  fs.writeFileSync(path.join(data, 'cv.md'), 'data cv\n');
+  fs.writeFileSync(path.join(code, '.env'), 'SECRET=1\n');
+  fs.writeFileSync(path.join(data, 'Data', '.ENV'), 'SECRET=1\n');
+  fs.writeFileSync(path.join(outside, 's.txt'), 'outside\n');
+  fs.writeFileSync(path.join(results, 'big.txt'), 'oversized output\n');
+  fs.symlinkSync(outside, path.join(code, 'link-out'));
+  fs.symlinkSync(path.join(outside, 's.txt'), path.join(data, 'file-link'));
+  const policy = { codeRoot: code, dataRoot: data, allow: getModePolicy('oferta')!.writeGlobs, deny: [...ALWAYS_DENIED_WRITES], readDeny: [...READ_DENY], readOnlyRoots: [results], search: true };
+  const read = (file_path: string, cwd: string | undefined = code) => checkRead(policy, { file_path }, cwd);
+
+  it('given an evaluate policy, a read outside both roots is denied', () => {
+    expect(read(path.join(outside, 's.txt'))).toMatch(/outside the repo and data roots/);
+    expect(read('/etc/hosts')).toMatch(/outside the repo and data roots/);
+    expect(read(path.join(code, '..', 'outside', 's.txt'))).toMatch(/outside/);
+  });
+
+  it('a symlink inside a root that points outside is denied, by its real path', () => {
+    expect(read(path.join(code, 'link-out', 's.txt'))).toMatch(/outside the repo and data roots/);
+    expect(read(path.join(data, 'file-link'))).toMatch(/outside the repo and data roots/);
+  });
+
+  it('~ paths, .env and Data/.ENV are denied', () => {
+    expect(read('~/x')).toMatch(/use the absolute path/);
+    expect(read('~')).toMatch(/use the absolute path/);
+    expect(read(path.join(code, '.env'))).toMatch(/protected secret file/);
+    expect(read('.env')).toMatch(/protected secret file/);
+    // Deny globs compare case-insensitively: an over-deny on a case-sensitive volume, by design.
+    expect(read(path.join(data, 'Data', '.ENV'))).toMatch(/protected secret file/);
+  });
+
+  it('cv.md relative to the code root is allowed from the code root and denied from any other cwd', () => {
+    expect(read('cv.md')).toBeNull();
+    expect(locateRead(policy, 'cv.md')).toMatchObject({ abs: path.join(code, 'cv.md'), root: 'code', rel: 'cv.md' });
+    expect(read('cv.md', data)).toMatch(/relative path/);
+    expect(read('cv.md', outside)).toMatch(/relative path/);
+  });
+
+  it('the data root cv.md by absolute path is allowed and located in the data root', () => {
+    expect(read(path.join(data, 'cv.md'))).toBeNull();
+    expect(read(path.join(data, 'cv.md'), outside)).toBeNull();
+    expect(locateRead(policy, path.join(data, 'cv.md'))).toMatchObject({ abs: path.join(data, 'cv.md'), root: 'data', rel: 'cv.md' });
+  });
+
+  it('the root itself is allowed', () => {
+    expect(locateRead(policy, code)).toMatchObject({ rel: '', root: 'code' });
+    expect(locateRead(policy, data)).toMatchObject({ rel: '', root: 'data' });
+    expect(read(code)).toBeNull();
+  });
+
+  it('a read in a read-only root is allowed while a write there is denied', () => {
+    expect(read(path.join(results, 'big.txt'))).toBeNull();
+    expect(locateRead(policy, path.join(results, 'big.txt'))).toMatchObject({ root: 'readonly' });
+    const dir = tempDir('cc-read-guard-');
+    const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy('oferta')!, readOnlyRoots: [results] });
+    const write = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(results, 'big.txt'), content: 'x' }, cwd: code });
+    expect(write.status).toBe(2);
+    expect(write.stderr).toMatch(/outside the repo and data roots/);
+  });
+
+  it('a policy without a read-deny list refuses every read', () => {
+    const { readDeny: _readDeny, ...old } = policy;
+    expect(checkRead(old, { file_path: path.join(code, 'cv.md') }, code)).toMatch(/policy/);
+  });
+
+  it('Glob and Grep: the path passes the read checks, and patterns cannot climb out, start at ~ or brace in an absolute path', () => {
+    const search = (tool: string, input: Record<string, unknown>, cwd: string = code) => checkSearch(policy, tool, input, cwd);
+    expect(search('Glob', { pattern: '**/*.md' })).toBeNull();
+    expect(search('Glob', { pattern: '**/*.md', path: data })).toBeNull();
+    expect(search('Glob', { pattern: `${data}/reports/*.md` })).toBeNull();
+    expect(search('Grep', { pattern: 'Score', path: code, glob: '*.md' })).toBeNull();
+    expect(search('Grep', { pattern: 'Score' })).toBeNull();
+    expect(search('Glob', { pattern: '*', path: outside })).toMatch(/outside/);
+    expect(search('Grep', { pattern: 'x', path: path.join(code, 'link-out') })).toMatch(/outside/);
+    expect(search('Grep', { pattern: 'x', path: path.join(code, '.env') })).toMatch(/protected secret file/);
+    expect(search('Glob', { pattern: '*', path: '~/.ssh' })).toMatch(/absolute path/);
+    expect(search('Glob', { pattern: '*' }, outside)).toMatch(/repo root/);
+    for (const pattern of ['../outside/*', '**/../../x', 'a\\..\\b', '~/.ssh/*', '{/etc,src}/*', 'src/{a,/etc}/*', '{~,x}/*', 'a,~/x', `${outside}/*`, '/etc/*', '/*'])
+      expect(search('Glob', { pattern }), pattern).toEqual(expect.any(String));
+    for (const glob of ['../outside/*', '~/x', '{/etc,a}', `${outside}/*`]) expect(search('Grep', { pattern: 'x', glob }), glob).toEqual(expect.any(String));
+  });
+
+  it('Glob and Grep are refused when the policy does not grant search', () => {
+    expect(checkSearch({ ...policy, search: false }, 'Glob', { pattern: '*' }, code)).toMatch(/not granted/);
+    const { search: _search, ...old } = policy;
+    expect(checkSearch(old, 'Grep', { pattern: 'x' }, code)).toMatch(/not granted/);
+  });
+});
+
+describe('checkBash: URL arguments and protected inputs', () => {
+  const root = fs.realpathSync(tempDir('cc-bash-url-'));
+  fs.writeFileSync(path.join(root, '.env'), 'SECRET=1\n');
+  const p = getModePolicy('oferta')!;
+  const oferta = { codeRoot: root, dataRoot: root, allow: p.writeGlobs, deny: [...ALWAYS_DENIED_WRITES], readDeny: [...READ_DENY], bash: p.bashPrefixes };
+
+  it('file:, view-source:, data: and the other local or non-http schemes are refused as script arguments', () => {
+    for (const cmd of [
+      'node archive-posting.mjs file:///etc/passwd',
+      'node archive-posting.mjs file:/x',
+      'node archive-posting.mjs FILE:///etc/passwd',
+      'node check-liveness.mjs view-source:file:///etc/passwd',
+      'node check-liveness.mjs --url=file:///etc/passwd',
+      'node archive-posting.mjs data:text/html,x',
+      'node archive-posting.mjs javascript:alert',
+      'node archive-posting.mjs chrome://settings',
+      'node archive-posting.mjs ftp://x.example/y',
+      'node archive-posting.mjs ws://x.example/y',
+      'node generate-pdf.mjs file:///etc/passwd output/x.pdf',
+    ])
+      expect(checkBash(cmd, oferta, root), cmd).toEqual(expect.any(String));
+  });
+
+  it('http and https arguments must name a public host', () => {
+    for (const cmd of ['node check-liveness.mjs http://127.0.0.1/', 'node check-liveness.mjs http://localhost:8080/x', 'node check-liveness.mjs https://[::1]/', 'node archive-posting.mjs http://169.254.169.254/latest/meta-data', 'node check-liveness.mjs http://intranet/x', 'node check-liveness.mjs http://0x7f.1/'])
+      expect(checkBash(cmd, oferta, root), cmd).toEqual(expect.any(String));
+    expect(checkBash('node check-liveness.mjs https://jobs.example.com/x/1', oferta, root)).toBeNull();
+  });
+
+  it('a protected secret file is refused as a script input', () => {
+    expect(checkBash('node jd-skill-gap.mjs .env', oferta, root)).toMatch(/protected/);
+    expect(checkBash('node jd-skill-gap.mjs jds/acme.md --summary', oferta, root)).toBeNull();
   });
 });
 

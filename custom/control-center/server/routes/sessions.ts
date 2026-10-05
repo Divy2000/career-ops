@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
-import { BusyError, NotFoundError, type SessionManager } from '../claude/manager.js';
+import { BusyError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
 import { listModeIds } from '../claude/modes.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
@@ -69,7 +69,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       return await fn();
     } catch (err) {
       if (err instanceof NotFoundError) return reply.code(404).send({ error: err.message });
-      if (err instanceof BusyError) return reply.code(409).send({ error: err.message });
+      if (err instanceof BusyError || err instanceof OutdatedSessionError) return reply.code(409).send({ error: err.message });
       throw err;
     }
   };

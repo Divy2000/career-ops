@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { getModePolicy } from '../../server/claude/modes.js';
-import { buildArgv } from '../../server/claude/invocation.js';
+import { buildArgv, buildPermissions } from '../../server/claude/invocation.js';
 import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
@@ -34,8 +34,12 @@ describe('Dev Chat', () => {
     expect(p.writeGlobs).toEqual(expect.arrayContaining(['custom/**', 'data/**', 'modes/_custom.md']));
     expect(p.bashPrefixes).toEqual(expect.arrayContaining([['git', 'status'], ['npm', '--prefix', 'custom/control-center', 'run', 'test']]));
     const argv = buildArgv({ claudeBin: 'claude', codeRoot: '/r', dataRoot: '/r', sessionDir: '/s', policyFile: '/s/p.json', settingsFile: '/s/s.json', policy: p, userMessage: 'x', claudeSessionId: 'u', resume: false, preamble: 'P' });
-    expect(argv[argv.indexOf('--allowedTools') + 1]).toContain('Bash(git status:*)');
-    expect(argv[argv.indexOf('--allowedTools') + 1]).toContain('Edit(//r/custom/**)');
+    // Requirement change (BUG-06): Dev Chat is confined like every class; its rules are in the per-turn settings file, not argv.
+    expect(argv).toContain('--restricted');
+    expect(argv[argv.indexOf('--tools') + 1]!.split(',')).toEqual(expect.arrayContaining(['Read', 'Edit', 'Write', 'Bash']));
+    const allow = buildPermissions({ policy: p, codeRoot: '/r', dataRoot: '/r', guardRoot: '/g' }).allow;
+    expect(allow).toContain('Bash(git status:*)');
+    expect(allow).toContain('Edit(//r/custom/**)');
   });
 
   it('a Dev Chat turn writes inside its scope, is blocked on the blacklist and the supervisor, and the change set lists diffs per turn', async () => {
@@ -99,7 +103,8 @@ describe('Dev Chat', () => {
     const { meta } = await settle(id);
     expect(meta.status).toBe('done');
     const guardDir = path.join(t.cfg.guardRoot, 'sessions', id);
-    for (const rel of ['settings.json', 'files.ndjson', 'turns/1/policy.json', 'turns/1/turn.json']) expect(fs.existsSync(path.join(guardDir, rel)), rel).toBe(true);
+    // Requirement change (BUG-06): the settings file is per turn, next to the turn's policy.
+    for (const rel of ['turns/1/settings.json', 'files.ndjson', 'turns/1/policy.json', 'turns/1/turn.json']) expect(fs.existsSync(path.join(guardDir, rel)), rel).toBe(true);
     expect(fs.readdirSync(path.join(guardDir, 'turns', '1', 'before')).length).toBeGreaterThan(0);
     const dataDir = t.sessions.store.dirOf(id);
     for (const name of ['policy.json', 'settings.json', 'files.ndjson', 'before', 'turns']) expect(fs.existsSync(path.join(dataDir, name)), name).toBe(false);
@@ -108,7 +113,7 @@ describe('Dev Chat', () => {
       expect(rel.startsWith('..') || path.isAbsolute(rel), root).toBe(true);
     }
     const run = (await get(`/api/runs/${meta.turns[0].runId}`)).json();
-    expect(run.meta.cmd.args[run.meta.cmd.args.indexOf('--settings') + 1]).toBe(path.join(guardDir, 'settings.json'));
+    expect(run.meta.cmd.args[run.meta.cmd.args.indexOf('--settings') + 1]).toBe(path.join(guardDir, 'turns', '1', 'settings.json'));
   });
 
   it('records the post-turn hashes, refuses (409) a revert over a later edit and while the session runs, and reverts once the bytes match again', async () => {

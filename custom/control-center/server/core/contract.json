@@ -723,11 +723,13 @@
   },
   "claude": {
     "version": "2.1.288 (Claude Code)",
+    "approvedVersions": [
+      "2.1.289"
+    ],
     "flags": [
       "--session-id",
       "--append-system-prompt",
       "--settings",
-      "--allowedTools",
       "--disallowedTools",
       "--permission-mode",
       "--include-partial-messages",
@@ -737,7 +739,9 @@
       "--output-format",
       "--verbose",
       "--mcp-config",
-      "--model"
+      "--model",
+      "--restricted",
+      "--tools"
     ],
     "acceptedButNotInHelp": [
       "--max-turns"
@@ -814,6 +818,235 @@
       ],
       "costUsdProbeA": 0.0645934,
       "costUsdProbeB": 0.0838954
+    },
+    "readProbe": {
+      "version": "2.1.289",
+      "probedAt": "2026-10-05T05:30:59.446Z",
+      "model": "haiku",
+      "shape": {
+        "flags": [
+          "--restricted",
+          "--tools",
+          "--disallowedTools",
+          "--permission-mode",
+          "dontAsk",
+          "--settings",
+          "--strict-mcp-config"
+        ],
+        "alwaysDisallowed": [
+          "PowerShell"
+        ],
+        "settingsKeys": [
+          "permissions.additionalDirectories",
+          "permissions.allow",
+          "permissions.deny",
+          "hooks.PreToolUse",
+          "hooks.PostToolUse"
+        ],
+        "hookTimeout": 30,
+        "preToolUseMatcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Glob|Grep|WebFetch|Agent|Task|PowerShell|mcp__playwright__browser_click|mcp__playwright__browser_press_key"
+      },
+      "cases": {
+        "C1": "pass",
+        "C2": "pass",
+        "C3": "pass",
+        "C4": "pass",
+        "C5": "pass",
+        "C6": "pass",
+        "C7": "pass",
+        "C8": "pass",
+        "C9": "pass",
+        "C11": "pass",
+        "C12": "pass",
+        "C14": "info",
+        "C15": "info",
+        "C16": "info",
+        "C17": "pass",
+        "C10": "pass",
+        "C18": "pass",
+        "C19": "info",
+        "C20": "pass",
+        "C13": "pass",
+        "C0": "pass"
+      },
+      "info": {
+        "initToolsToday": [
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskStop",
+          "TaskUpdate",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Workflow",
+          "Write"
+        ],
+        "tildeHookPath": "/Users/divypatel/.cc-probe-1280d47c/h1.txt",
+        "claudeMdLoaded": false,
+        "c9ControlLeaked": true,
+        "mentionRawLeakedOutside": false,
+        "mentionRawLeakedHome": false,
+        "agentHookKeys": [
+          "agent_id",
+          "agent_type",
+          "cwd",
+          "hook_event_name",
+          "permission_mode",
+          "prompt_id",
+          "session_id",
+          "tool_input",
+          "tool_name",
+          "tool_use_id",
+          "transcript_path"
+        ],
+        "hookTimeoutBlocks": false,
+        "settingsFileRulesWork": true,
+        "argvRulesWork": null,
+        "searchFollowsSymlinks": {
+          "glob": false,
+          "grep": false
+        },
+        "outsideGlobListed": false,
+        "toolResultsPath": "$HOME/.claude/projects/-Volumes-ExternalSSD-cc-tmp-cc-reads-probe-XXXXXX-code/08ff4d72-2c8e-44ed-9774-071b052f6d8a/tool-results/bcydzt9pm.txt",
+        "cliReadsOtherToolResults": false,
+        "cliReadsOtherTranscripts": false,
+        "cliReadsConfigDirFiles": false,
+        "webFetchRaw": {
+          "localHits": [
+            {
+              "kind": "tcp",
+              "family": "v4"
+            },
+            {
+              "kind": "tcp",
+              "family": "v4"
+            }
+          ],
+          "canaries": {
+            "CW1": false,
+            "CDU": false,
+            "CLOCAL": false
+          },
+          "perUrl": [
+            {
+              "url": "file:///Volumes/ExternalSSD/cc-tmp/cc-reads-probe-XXXXXX/outside/w1.txt",
+              "result": [
+                "error: Invalid URL"
+              ]
+            },
+            {
+              "url": "data:text/plain;base64,<canary>",
+              "result": [
+                "error: Invalid URL"
+              ]
+            },
+            {
+              "url": "http://127.0.0.1:PORT/a",
+              "result": [
+                "error: error:100000f7:SSL routines:OPENSSL_internal:WRONG_VERSION_NUMBER"
+              ]
+            },
+            {
+              "url": "http://localhost:PORT/b",
+              "result": [
+                "error: WebFetch cannot fetch localhost or other hostnames without a dot. To reach a local server, use Bash with curl instead."
+              ]
+            },
+            {
+              "url": "http://[::1]:PORT/c",
+              "result": [
+                "error: WebFetch cannot fetch localhost or other hostnames without a dot. To reach a local server, use Bash with curl instead."
+              ]
+            },
+            {
+              "url": "http://localtest.me:PORT/d",
+              "result": [
+                "error: error:100000f7:SSL routines:OPENSSL_internal:WRONG_VERSION_NUMBER"
+              ]
+            },
+            {
+              "url": "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%3APORT%2Fe",
+              "result": [
+                "ok: REDIRECT DETECTED: The URL redirects to a location that was not fetched automati"
+              ]
+            }
+          ]
+        },
+        "searchLeaksDeniedContent": false,
+        "tildeResult": "PreToolUse:Read hook error: ['/opt/homebrew/Cellar/node/26.4.0/bin/node' '/Users/divypatel/.cc-auth/custom/control-center/server/claude/guard-hook.mjs' || exit 2]: Read: /Users/divypatel/.cc-probe-1280d47c/h1.txt is outside the repo and data roots; sessions read only inside them\n"
+      },
+      "history": [
+        {
+          "probedAt": "2026-10-05T04:49:22.881Z",
+          "cases": [
+            "C1",
+            "C2",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "C9",
+            "C11",
+            "C12",
+            "C14",
+            "C15",
+            "C16",
+            "C17"
+          ],
+          "runs": 14,
+          "note": "full battery; C13 there was invalid (WebFetch had no allow rule) and C10 used a single-line fixture, both superseded"
+        },
+        {
+          "probedAt": "2026-10-05T04:53:16.223Z",
+          "cases": [
+            "C10",
+            "C18",
+            "C19"
+          ],
+          "runs": 2,
+          "note": "C10 with a multi-line fixture; C13 raw half only"
+        },
+        {
+          "probedAt": "2026-10-05T04:58:20.168Z",
+          "cases": [
+            "C20"
+          ],
+          "runs": 1
+        },
+        {
+          "probedAt": "2026-10-05T05:30:59.446Z",
+          "cases": [
+            "C10",
+            "C12",
+            "C13",
+            "C8"
+          ],
+          "runs": 4
+        }
+      ]
     }
   },
   "playwrightMcp": {

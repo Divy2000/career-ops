@@ -3,6 +3,8 @@
 // effects on import, so the hook entry itself can run unconditionally.
 import fs from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
+import dns from 'node:dns';
 
 const NETWORK_BINS = new Set(['curl', 'wget', 'nc', 'ncat', 'ssh', 'scp', 'sftp', 'ftp', 'telnet', 'rsync']);
 
@@ -63,6 +65,246 @@ export function locate(policy, target) {
     if (rel) return { rel, abs: path.resolve(root, rel), root: root === policy.codeRoot ? 'code' : 'data' };
   }
   return null;
+}
+
+// ---- Reads: Read, Glob, Grep ----
+
+function isWithin(root, abs) {
+  const rel = path.relative(root, abs);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** The session cwd is the code root, compared by real path (the same rule Bash uses). */
+function isCodeRoot(policy, cwd) {
+  return resolveReal(path.resolve(String(cwd))) === fs.realpathSync.native(policy.codeRoot);
+}
+
+/**
+ * Where a read lands, by its real path: inside the data root, the code root or a read-only root (the
+ * session's own oversized tool results), the root itself included. Relative paths resolve against the
+ * code root (the session cwd). A symlink that leads outside every root is null.
+ */
+export function locateRead(policy, target) {
+  const abs = resolveReal(path.isAbsolute(target) ? target : path.resolve(policy.codeRoot, target));
+  const roots = [...new Set([policy.dataRoot || policy.codeRoot, policy.codeRoot])].map((r) => ({ real: fs.realpathSync.native(r), kind: r === policy.codeRoot ? 'code' : 'data' }));
+  for (const r of policy.readOnlyRoots ?? []) roots.push({ real: resolveReal(r), kind: 'readonly' });
+  for (const { real, kind } of roots) if (isWithin(real, abs)) return { rel: path.relative(real, abs).split(path.sep).join('/'), abs, root: kind };
+  return null;
+}
+
+/** Null when a read of `input.file_path` is allowed, else the reason. */
+export function checkRead(policy, input, cwd, label = 'Read') {
+  if (!Array.isArray(policy.readDeny)) return `${label}: the session policy predates read confinement, so every read is refused`;
+  const target = input?.file_path;
+  if (typeof target !== 'string' || !target) return `${label}: no file path`;
+  if (target.startsWith('~')) return `${label}: ${target} starts with ~; use the absolute path`;
+  // After a symlink, .. resolves differently on disk than on paper: refuse it rather than guess which the tool opens.
+  if (target.split(/[\\/]/).includes('..')) return `${label}: ${target} has a .. segment; use the absolute path`;
+  if (!path.isAbsolute(target) && cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${label}: ${target} is a relative path, it resolves against the repo root and the session is not running from it; use the absolute path`;
+  const found = locateRead(policy, target);
+  if (!found) return `${label}: ${target} is outside the repo and data roots; sessions read only inside them`;
+  if (matches(found.rel, policy.readDeny)) return `${label}: ${found.rel} is a protected secret file (.env, keys, credentials) and sessions never read it`;
+  return null;
+}
+
+const SEARCH_ESCAPES = ['{/', ',/', '{~', ',~'];
+
+/** A Glob pattern or Grep glob: no climbing out, no home, no brace alternative that starts an absolute or home path. */
+function checkSearchPattern(policy, value, label) {
+  const p = value.replace(/\\/g, '/');
+  if (p.includes('..')) return `${label}: ${value} contains ..; search inside the repo and data roots`;
+  if (p.startsWith('~')) return `${label}: ${value} starts with ~; search inside the repo and data roots`;
+  const escape = SEARCH_ESCAPES.find((e) => p.includes(e));
+  if (escape) return `${label}: ${value} contains ${escape}; brace alternatives may not start a new path`;
+  if (p.startsWith('/')) {
+    const meta = p.search(/[*?[\]{}]/);
+    const head = meta === -1 ? p : p.slice(0, meta);
+    const prefix = head.slice(0, head.lastIndexOf('/')) || '/';
+    if (!locateRead(policy, prefix)) return `${label}: ${value} searches ${prefix}, outside the repo and data roots`;
+  }
+  return null;
+}
+
+/** Glob and Grep (granted to every class): the search path passes the read checks, the patterns stay inside it. */
+export function checkSearch(policy, tool, input, cwd) {
+  if (policy.search !== true) return `${tool}: not granted to sessions`;
+  const dir = input?.path;
+  if (dir !== undefined && dir !== null && dir !== '') {
+    if (typeof dir !== 'string') return `${tool}: path must be a string`;
+    const why = checkRead(policy, { file_path: dir }, cwd, tool);
+    if (why) return why;
+  } else {
+    if (!Array.isArray(policy.readDeny)) return `${tool}: the session policy predates read confinement, so every search is refused`;
+    if (cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${tool}: the session must run from the repo root`;
+  }
+  const key = tool === 'Glob' ? 'pattern' : 'glob';
+  const value = input?.[key];
+  if (value === undefined || value === null || value === '') return tool === 'Glob' ? `${tool}: no pattern` : null;
+  if (typeof value !== 'string') return `${tool}: ${key} must be a string`;
+  return checkSearchPattern(policy, value, `${tool} ${key}`);
+}
+
+// ---- URLs: WebFetch, and URL arguments of scripts ----
+
+const V4_BLOCKED = [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+].map(([a, bits]) => [v4ToInt(a), bits]);
+
+function v4ToInt(s) {
+  return s.split('.').reduce((n, o) => n * 256 + Number(o), 0);
+}
+
+function publicV4(n) {
+  return !V4_BLOCKED.some(([base, bits]) => Math.floor(n / 2 ** (32 - bits)) === Math.floor(base / 2 ** (32 - bits)));
+}
+
+/** Eight 16-bit groups of an address net.isIP already accepted as IPv6 (a trailing dotted IPv4 included). */
+function v6Groups(s) {
+  let str = s.toLowerCase();
+  const dotted = str.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const n = v4ToInt(dotted[1]);
+    str = `${str.slice(0, -dotted[1].length)}${Math.floor(n / 65536).toString(16)}:${(n % 65536).toString(16)}`;
+  }
+  const [l, r] = str.split('::');
+  const left = l ? l.split(':') : [];
+  const right = r === undefined ? null : r ? r.split(':') : [];
+  const groups = right === null ? left : [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+  return groups.map((g) => parseInt(g, 16));
+}
+
+function publicV6(s) {
+  const g = v6Groups(s);
+  const embedded = (hi, lo) => g[hi] * 65536 + g[lo];
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return publicV4(embedded(6, 7)); // ::ffff:0:0/96, IPv4-mapped
+  if (g.slice(0, 6).every((x) => x === 0)) return false; // ::/96: unspecified, loopback, IPv4-compatible
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return publicV4(embedded(6, 7)); // NAT64
+  if (g[0] === 0x2002) return publicV4(embedded(1, 2)); // 6to4
+  if ((g[0] & 0xe000) !== 0x2000) return false; // outside global unicast: ULA, link-local, site-local, multicast, discard
+  if (g[0] === 0x2001 && g[1] < 0x200) return false; // 2001::/23 protocol assignments (Teredo, ORCHID, benchmarking)
+  if (g[0] === 0x2001 && g[1] === 0x0db8) return false; // documentation
+  if (g[0] === 0x3fff && g[1] < 0x1000) return false; // 3fff::/20 documentation
+  return true;
+}
+
+/** A globally routable unicast address; loopback, private, CGNAT, link-local (metadata), multicast and reserved are not. */
+export function isPublicAddress(ip) {
+  const s = String(ip).replace(/%.*$/, '');
+  const v = net.isIP(s);
+  if (v === 4) return publicV4(v4ToInt(s));
+  if (v === 6) return publicV6(s);
+  return false;
+}
+
+function hostOf(u) {
+  return u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+/**
+ * What the URL alone shows: http or https only, and no local host name or non-public literal address. The
+ * WHATWG parser already turns forms such as 2130706433 and 0x7f.1 into dotted IPv4.
+ */
+export function checkUrlLiteral(raw, label = 'WebFetch') {
+  let u;
+  try {
+    u = new URL(String(raw));
+  } catch {
+    return `${label}: ${raw} is not a valid URL`;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return `${label}: only http and https URLs may be fetched (${u.protocol})`;
+  const host = hostOf(u);
+  if (!host) return `${label}: ${raw} has no host`;
+  if (net.isIP(host)) return isPublicAddress(host) ? null : `${label}: ${host} is a private, loopback or link-local address`;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || !host.includes('.')) return `${label}: ${host} is a local host name`;
+  return null;
+}
+
+const lookupAll = (host) => dns.promises.lookup(host, { all: true, verbatim: true });
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+    Promise.resolve(promise).then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
+ * One deadline for every lookup a single tool call needs. A hook still running at its own timeout (30 s) does
+ * not block, so the DNS check must always answer, and refuse, well before that.
+ */
+export const DNS_BUDGET_MS = 20_000;
+/** Distinct names one call may need resolved: each lookup takes a getaddrinfo thread, and libuv's pool has four. */
+export const MAX_URL_HOSTS = 4;
+/** Distinct destinations (names and literal addresses) one call may name; literal addresses need no lookup. */
+export const MAX_URL_DESTINATIONS = 16;
+
+/**
+ * Null when every URL may be fetched: each passes checkUrlLiteral, the call names at most MAX_URL_DESTINATIONS
+ * distinct hosts of which at most MAX_URL_HOSTS need a lookup, and every address each name resolves to is public. All names are resolved in parallel under
+ * one shared budget; a lookup that fails, answers nothing or is still pending when the budget ends is refused.
+ */
+export async function checkFetchUrls(urls, lookup = lookupAll, opts = {}) {
+  const label = opts.label ?? 'WebFetch';
+  const hosts = new Set();
+  for (const raw of urls) {
+    const literal = checkUrlLiteral(raw, label);
+    if (literal) return literal;
+    hosts.add(hostOf(new URL(String(raw))));
+  }
+  if (hosts.size > MAX_URL_DESTINATIONS) return `${label}: ${hosts.size} different destinations in one call; at most ${MAX_URL_DESTINATIONS} are checked, so the call is refused`;
+  const names = [...hosts].filter((h) => !net.isIP(h));
+  const maxHosts = opts.maxHosts ?? MAX_URL_HOSTS;
+  if (names.length > maxHosts) return `${label}: ${names.length} different hosts to resolve in one call; at most ${maxHosts} are resolved, so the call is refused`;
+  if (names.length === 0) return null;
+  const budget = opts.budgetMs ?? opts.timeoutMs ?? DNS_BUDGET_MS;
+  const verdict = (host) =>
+    Promise.resolve()
+      .then(() => lookup(host))
+      .then(
+        (addrs) => {
+          if (!Array.isArray(addrs) || addrs.length === 0) return `could not resolve ${host} (no addresses)`;
+          const bad = addrs.map((a) => a && a.address).find((a) => typeof a !== 'string' || !isPublicAddress(a));
+          return bad === undefined ? null : `${host} resolves to ${bad}, a private, loopback or link-local address`;
+        },
+        (err) => `could not resolve ${host} (${err && err.message})`,
+      );
+  let reasons;
+  try {
+    reasons = await withTimeout(Promise.all(names.map(verdict)), budget);
+  } catch (err) {
+    return `${label}: could not resolve ${names.join(', ')} (${err && err.message}); refused`;
+  }
+  const reason = reasons.find((r) => r !== null);
+  if (!reason) return null;
+  return `${label}: ${reason}${reason.startsWith('could not resolve') ? '; refused' : ''}`;
+}
+
+/** checkFetchUrls for one URL (WebFetch). */
+export function checkFetchUrl(raw, lookup = lookupAll, opts = {}) {
+  return checkFetchUrls([raw], lookup, opts);
 }
 
 // ---- Bash ----
@@ -198,6 +440,7 @@ function readable(policy, value, label) {
   const found = locate(policy, value);
   if (!found) return `${label}: ${value} is outside the repo and data roots`;
   if (matches(found.rel, policy.deny)) return `${label}: ${found.rel} is protected and may not be passed to a command`;
+  if (matches(found.rel, policy.readDeny ?? [])) return `${label}: ${found.rel} is a protected secret file and may not be passed to a command`;
   return null;
 }
 
@@ -320,7 +563,99 @@ function checkWriterScript(policy, script, spec, args, label) {
 // A dash token a script will parse as a flag: a name without path characters, or a number.
 const FLAG_SHAPE = /^(--?[A-Za-z][A-Za-z0-9_-]*(=.*)?|-\d+(\.\d+)?)$/;
 
+// Schemes a Playwright- or fetch-based script would open locally, or that are not plain web fetches.
+const LOCAL_SCHEME = /^(file|view-source|chrome|chrome-extension|about|blob|filesystem|jar|ftp|ws|wss|data|javascript):/i;
+
+/** URL arguments and inline flag values: no local or non-web scheme, and http(s) only to a public-looking host. */
+function checkUrlArgs(args, label) {
+  for (const a of args) {
+    for (const v of [a, inlineValue(a)]) {
+      if (v === null) continue;
+      const scheme = v.match(LOCAL_SCHEME);
+      if (scheme) return `${label}: ${scheme[1].toLowerCase()}: URLs may not be passed to a script`;
+      if (/^https?:/i.test(v)) {
+        const why = checkUrlLiteral(v, label);
+        if (why) return why;
+      }
+    }
+  }
+  return null;
+}
+
+/** The http(s) arguments and inline flag values of a command, for the hook's DNS check after checkBash. */
+export function httpUrlsIn(command) {
+  const out = [];
+  for (const t of tokenize(command) ?? []) for (const v of [t, inlineValue(t)]) if (v !== null && /^https?:/i.test(v)) out.push(v);
+  return out;
+}
+
+/**
+ * Flags whose value names a file the script reads URLs from and then opens or fetches, from an audit of every
+ * script a session may run: a 'lines' file is opened line by line, each line as a URL; a 'text' file (a portals
+ * or company YAML) carries URLs among other fields. Each one gets the same URL checks as an argument.
+ */
+const URL_LIST_FLAGS = {
+  'check-liveness.mjs': { '--file': 'lines' },
+  'audit-portals.mjs': { '--file': 'text' },
+  'verify-portals.mjs': { '--file': 'text' },
+  'discover-ats.mjs': { '--in': 'text' },
+};
+/** A list file larger than this is refused rather than partly checked. */
+export const URL_LIST_MAX_BYTES = 256 * 1024;
+const URL_IN_TEXT = /https?:\/\/[^\s'"<>`)\]}]+/gi;
+// A local scheme used as a value (file:///x, about:blank), not a YAML key followed by a space.
+const LOCAL_SCHEME_IN_TEXT = /(?:^|[^A-Za-z0-9+.-])(file|view-source|chrome|chrome-extension|about|blob|filesystem|jar|ftp|ws|wss|data|javascript):(?=\S)/im;
+
+/** The URL list files a command names, with how each is read; empty for every other script. */
+export function urlListFilesIn(command) {
+  const tokens = tokenize(command) ?? [];
+  const spec = tokens[0] === 'node' ? URL_LIST_FLAGS[tokens[1]] : undefined;
+  if (!spec) return [];
+  const out = [];
+  for (let i = 2; i < tokens.length; i++) {
+    for (const [flag, format] of Object.entries(spec)) {
+      if (tokens[i] === flag && tokens[i + 1] !== undefined) out.push({ file: tokens[i + 1], format });
+      else if (tokens[i].startsWith(`${flag}=`)) out.push({ file: tokens[i].slice(flag.length + 1), format });
+    }
+  }
+  return out;
+}
+
+/**
+ * The URLs a list file holds, or the reason the call is refused: the file must pass the read checks, be a
+ * regular file no larger than URL_LIST_MAX_BYTES, and hold only web URLs (every line of a 'lines' file must be one).
+ */
+export function readUrlList(policy, file, cwd, format, label = 'Bash') {
+  const why = checkRead(policy, { file_path: file }, cwd, label);
+  if (why) return { reason: why };
+  const { abs } = locateRead(policy, file);
+  let text;
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return { reason: `${label}: ${file} is not a regular file, so its URLs cannot be checked` };
+    if (st.size > URL_LIST_MAX_BYTES) return { reason: `${label}: ${file} is larger than ${URL_LIST_MAX_BYTES} bytes, so its URLs cannot be checked` };
+    text = fs.readFileSync(abs, 'utf8');
+  } catch (err) {
+    return { reason: `${label}: cannot read ${file} to check its URLs (${(err && err.code) || (err && err.message)})` };
+  }
+  if (format === 'lines') {
+    const urls = [];
+    for (const [i, raw] of text.split('\n').entries()) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      if (!/^https?:\/\//i.test(line)) return { reason: `${label}: line ${i + 1} of ${file} is not an http or https URL (${line.slice(0, 80)})` };
+      urls.push(line);
+    }
+    return { urls };
+  }
+  const local = text.match(LOCAL_SCHEME_IN_TEXT);
+  if (local) return { reason: `${label}: ${file} holds ${local[1].toLowerCase()}: URLs, which may not reach a script` };
+  return { urls: text.match(URL_IN_TEXT) ?? [] };
+}
+
 function checkScript(policy, script, args, label) {
+  const urlWhy = checkUrlArgs(args, label);
+  if (urlWhy) return urlWhy;
   const writer = WRITER_SCRIPTS[script];
   if (writer) return checkWriterScript(policy, script, writer, args, label);
   // Scripts that write only to their own fixed files: path arguments are read inside the roots and never protected.
