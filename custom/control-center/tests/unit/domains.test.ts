@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, listLogDates, daysBetween, withJobState, localDate } from '../../server/domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, evaluatedKeys, isEvaluated } from '../../server/domains/whatsNew.js';
-import { computeDashboard, parseStatusLog, readStatusLog, workModeOf } from '../../server/domains/insights.js';
+import { computeDashboard, loadFunnelStages, parseStatusLog, readStatusLog, workModeOf } from '../../server/domains/insights.js';
 import { readTracker } from '../../server/domains/tracker.js';
 import { readScanHistory } from '../../server/domains/pipeline.js';
 import { importCore } from '../../server/core/adapter.js';
@@ -243,18 +243,19 @@ describe('insights dashboard', () => {
   it('computes totals, funnel, rates, buckets and breakdowns from fixtures', async () => {
     const t = await readTracker(DEFAULT_CODE_ROOT, root);
     if (t.kind !== 'ok') throw new Error('fixture tracker unreadable');
-    const d = computeDashboard(t.rows, readStatusLog(t.path));
+    const d = computeDashboard(t.rows, readStatusLog(t.path), await loadFunnelStages(DEFAULT_CODE_ROOT));
     expect(d.totals).toMatchObject({ applications: 6, scored: 5, averageScore: 3.9 });
     expect(d.totals.byStatus).toMatchObject({ Applied: 1, Interview: 1, SKIP: 1, Rejected: 1 });
+    // funnel-stages.mjs: the Rejected #5 applied and got a reply; the SKIP #4 is outside the funnel (SW-web-b-08).
     expect(d.funnel).toEqual([
       { stage: 'Evaluated', count: 5 },
-      { stage: 'Applied', count: 3 },
-      { stage: 'Responded', count: 2 },
+      { stage: 'Applied', count: 4 },
+      { stage: 'Responded', count: 3 },
       { stage: 'Interview', count: 1 },
       { stage: 'Offer', count: 0 },
       { stage: 'Hired', count: 0 },
     ]);
-    expect(d.rates).toEqual({ evaluatedToApplied: 60, appliedToInterview: 33.3, interviewToOffer: 0 });
+    expect(d.rates).toEqual({ evaluatedToApplied: 80, appliedToInterview: 25, interviewToOffer: 0 });
     expect(d.scoreBuckets.map((b) => b.count)).toEqual([1, 1, 2, 1]);
     expect(d.workMode).toEqual({ remote: 2, hybrid: 1, onsite: 2, unknown: 1 });
     expect(d.archetypes[0]).toMatchObject({ archetype: 'Backend Platform Engineer', count: 4 });
@@ -263,8 +264,8 @@ describe('insights dashboard', () => {
     expect(d.stageTransitions[0]).toMatchObject({ from: '-', to: 'Evaluated', count: 3 });
   });
 
-  it('computes an all-zero dashboard for an empty tracker without dividing by zero', () => {
-    const d = computeDashboard([], []);
+  it('computes an all-zero dashboard for an empty tracker without dividing by zero', async () => {
+    const d = computeDashboard([], [], await loadFunnelStages(DEFAULT_CODE_ROOT));
     expect(d.totals).toMatchObject({ applications: 0, scored: 0, averageScore: null });
     expect(d.rates).toEqual({ evaluatedToApplied: null, appliedToInterview: null, interviewToOffer: null });
     expect(d.funnel.every((f) => f.count === 0)).toBe(true);

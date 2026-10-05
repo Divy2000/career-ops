@@ -89,28 +89,40 @@ export async function statusLabeler(codeRoot: string): Promise<StatusLabel> {
   return (status) => utils.resolveCanonicalState(status, states) ?? status;
 }
 
-/** Stage reached by an application: its current status, plus every stage the ledger shows it passed. */
-function stagesReached(row: TrackerRow, log: StatusLogRow[], label: StatusLabel): Set<string> {
-  const reached = new Set<string>();
-  const idx = (s: string) => (FUNNEL_STAGES as readonly string[]).indexOf(s);
-  const mark = (s: string) => {
-    const i = idx(s);
-    if (i === -1) return;
-    for (let k = 0; k <= i; k++) reached.add(FUNNEL_STAGES[k]!);
-  };
-  mark(label(row.status));
-  for (const t of log) if (t.num === row.num) mark(label(t.to));
-  if (row.score !== null || row.report !== null) reached.add('Evaluated');
-  return reached;
+/** Upstream funnel-stages.mjs, the cumulative-stage contract stats.mjs reads its funnel with. */
+export interface FunnelStages {
+  /** Highest stage rank (Applied 1, Responded and Rejected 2, Interview 3, Offer 4, Hired 5) per row; SKIP rows left out. */
+  recoverFunnelStages: (statusByNum: Map<number, string>, ledger: Array<{ num: number; from: string; to: string }>) => Map<number, number>;
 }
 
-export function computeDashboard(rows: TrackerRow[], log: StatusLogRow[], label: StatusLabel = (s) => s): Dashboard {
+export const loadFunnelStages = (codeRoot: string) => importCore<FunnelStages>(codeRoot, 'funnel-stages.mjs');
+
+/**
+ * Stage counts as funnel-stages.mjs reads them: a ledger line counts both its from and its to state, Rejected proves an
+ * application and a reply, and a current SKIP row is outside the funnel. Evaluated, which the contract has no rank for,
+ * is every row in the funnel that was evaluated (a score, a report or the Evaluated status) or got further.
+ */
+function funnelCounts(rows: TrackerRow[], log: StatusLogRow[], stages: FunnelStages, label: StatusLabel): Map<string, number> {
+  const reached = stages.recoverFunnelStages(new Map(rows.map((r) => [r.num, label(r.status)])), log.map(({ num, from, to }) => ({ num, from: label(from), to: label(to) })));
+  const counts = new Map<string, number>(FUNNEL_STAGES.map((s) => [s, 0]));
+  for (const r of rows) {
+    const rank = reached.get(r.num);
+    if (rank === undefined) continue;
+    const evaluated = rank >= 1 || r.score !== null || r.report !== null || label(r.status) === 'Evaluated';
+    if (evaluated) counts.set('Evaluated', counts.get('Evaluated')! + 1);
+    FUNNEL_STAGES.slice(1).forEach((stage, i) => {
+      if (rank >= i + 1) counts.set(stage, counts.get(stage)! + 1);
+    });
+  }
+  return counts;
+}
+
+export function computeDashboard(rows: TrackerRow[], log: StatusLogRow[], stages: FunnelStages, label: StatusLabel = (s) => s): Dashboard {
   const byStatus: Record<string, number> = {};
   for (const r of rows) byStatus[label(r.status)] = (byStatus[label(r.status)] ?? 0) + 1;
   const scored = rows.filter((r) => r.score !== null);
-  const funnelCounts = new Map<string, number>(FUNNEL_STAGES.map((s) => [s, 0]));
-  for (const r of rows) for (const s of stagesReached(r, log, label)) funnelCounts.set(s, (funnelCounts.get(s) ?? 0) + 1);
-  const get = (s: string) => funnelCounts.get(s) ?? 0;
+  const counts = funnelCounts(rows, log, stages, label);
+  const get = (s: string) => counts.get(s) ?? 0;
   const ratio = (a: number, b: number) => (b === 0 ? null : Math.round((a / b) * 1000) / 10);
   const weekly = new Map<string, number>();
   for (const t of log) weekly.set(isoWeek(t.date), (weekly.get(isoWeek(t.date)) ?? 0) + 1);
