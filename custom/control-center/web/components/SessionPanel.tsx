@@ -128,7 +128,9 @@ export function SessionPanel(props: SessionPanelProps) {
   // A session id passed by the host wins; otherwise the panel tracks the one it started.
   const [localId, setSessionId] = useState<string | null>(null);
   const sessionId = props.sessionId ?? localId;
-  const [prompt, setPrompt] = useState(props.initialPrompt ?? '');
+  // The host's prompt follows its inputs (Apply builds it from the posting URL) until the user types their own.
+  const [editedPrompt, setPrompt] = useState<string | null>(null);
+  const prompt = editedPrompt ?? props.initialPrompt ?? '';
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
