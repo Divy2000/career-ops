@@ -783,6 +783,34 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(scan, 'node discover-new-companies.mjs --out data/new.yml');
   });
 
+  it('application-answers --report: the section is written only inside the write scope; --read and --read-draft only read the report', () => {
+    const apply = { ...policyFor('apply', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    ok(apply, 'node application-answers.mjs --report output/r.md --input output/a.json --state filled --date 2026-10-05');
+    ok(apply, 'node application-answers.mjs --input output/a.json --report output/r.md');
+    // The review trigger: the script appends the answers it is given to whatever file --report names.
+    for (const target of ['modes/_custom.md', 'modes/_shared.md', 'AGENTS.md', 'cv.md', 'config/profile.yml', 'custom/control-center/server/claude/guard-hook.mjs', 'reports/001-acme.md', 'data/applications.md', '../outside.md', '/etc/hosts'])
+      no(apply, `node application-answers.mjs --report ${target} --input output/a.json --state filled`);
+    // Its parser takes the next token as the value even when it starts with a single dash, and path.resolve drops -x/..
+    no(apply, 'node application-answers.mjs --report -x/../modes/_custom.md --input output/a.json');
+    // The last --report wins in the script, so every one is checked.
+    no(apply, 'node application-answers.mjs --report output/r.md --report modes/_custom.md --input output/a.json');
+    // It has no --flag=value form: --report=x would be a key named "report=x" taking the next token.
+    no(apply, 'node application-answers.mjs --report=output/r.md --input output/a.json');
+    no(apply, 'node application-answers.mjs --input output/a.json --report');
+    no(apply, 'node application-answers.mjs --report output/r.md --input output/a.json --out modes/_custom.md');
+    no(apply, 'node application-answers.mjs modes/_custom.md --report output/r.md --input output/a.json');
+    no(apply, 'node application-answers.mjs --report output/r.md --input /etc/passwd');
+    no(apply, 'node application-answers.mjs --report output/r.md --input .env');
+    // The read modes print a section and write nothing, so the report is only read (inside the roots, never a secret).
+    ok(apply, 'node application-answers.mjs --report reports/001-acme.md --read --strict');
+    ok(apply, 'node application-answers.mjs --report reports/001-acme.md --read-draft');
+    ok(apply, 'node application-answers.mjs --read --report reports/001-acme.md');
+    no(apply, 'node application-answers.mjs --report /etc/hosts --read');
+    no(apply, 'node application-answers.mjs --report .env --read-draft');
+    no(apply, 'node application-answers.mjs --report reports/001-acme.md --read=1');
+    expect(checkBash('node application-answers.mjs --report modes/_custom.md --input output/a.json', apply, root)).toMatch(/modes\/_custom\.md is outside the write scope/);
+  });
+
   it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
     ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
     no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');

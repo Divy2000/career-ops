@@ -342,7 +342,9 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
  * - positionals: the role of each positional, in order (no more are accepted);
  * - indexed: the script reads positionals by raw argv index, so no flag may sit
  *   in any of those slots (with fewer paths given, a trailing flag would be read
- *   as the missing path); modes: a first token that switches to other roles.
+ *   as the missing path); modes: a first token that switches to other roles;
+ * - readOnlyWith: switches that make the script write nothing (its read modes),
+ *   so with any of them present its outputs are only read.
  * Roles: 'input' (read inside the roots), 'output' (inside the write scope),
  * 'value' (plain). Any other dash token is refused: these parsers would treat it
  * as a path (path.resolve turns -x/../cv.md into cv.md).
@@ -352,7 +354,11 @@ const ARTIFACT_FLAGS = { '--report': 'value', '--company': 'value', '--role': 'v
 const HIRED_FLAGS = { '--report': 'value', '--anonymity': 'value', '--story': 'value', '--weeks': 'value', '--feature': 'value', '--mark': 'value', '--root': 'output' };
 const RENDER_VALUES = { '--format': 'value', '--report': 'value', '--kind': 'value', '--max-pages': 'value' };
 const DIGEST_FLAGS = { '--from': 'value', '--to': 'value', '--dir': 'input' };
+// Every other --flag takes the next token as its value; there is no --flag=value form.
+const ANSWERS_FLAGS = { '--report': 'output', '--input': 'input', '--state': 'value', '--date': 'value' };
 const WRITER_SCRIPTS = {
+  // Upserts the answers it is given into --report; --read and --read-draft only print a section of it.
+  'application-answers.mjs': { switches: ['--read', '--read-draft', '--strict', '--help', '-h'], next: ANSWERS_FLAGS, positionals: [], readOnlyWith: ['--read', '--read-draft'] },
   'generate-pdf.mjs': {
     switches: ['--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--strict-pages', '--skip-fact-check'],
     eq: { '--format': 'value', '--report': 'value', '--kind': 'value', '--max-pages': 'value' },
@@ -503,7 +509,9 @@ function latexCompileSiblings(input) {
 }
 
 function checkWriterScript(policy, script, spec, args, label) {
-  const check = (role, value) => (role === 'output' ? writable(policy, value, label) : role === 'input' ? readable(policy, value, label) : null);
+  // A read-mode switch is never consumed as a value: like the scripts, the walk below refuses a value that starts with --.
+  const readOnly = (spec.readOnlyWith ?? []).some((s) => args.includes(s));
+  const check = (role, value) => (role === 'output' && !readOnly ? writable(policy, value, label) : role === 'input' || role === 'output' ? readable(policy, value, label) : null);
   let roles = spec.positionals;
   let rest = args;
   if (spec.modes && args[0] !== undefined && Object.hasOwn(spec.modes, args[0])) {
