@@ -231,11 +231,13 @@ describe('guideDocs: the version 2 view of either format', () => {
         {
           id: 'today',
           title: 'Today',
+          short: 'Today',
           summary: 'The daily shortlist.',
           subsections: [
             {
               id: 'today',
               title: 'Today',
+              short: 'Today',
               summary: '',
               route: '/today',
               chapter: 1,
@@ -272,6 +274,7 @@ describe('guideDocs: the version 2 view of either format', () => {
     expect(out.sections[0]!.subsections[0]).toEqual({
       id: 'launch',
       title: 'Launch and sign in',
+      short: 'Launch and sign in',
       summary: 'Open the app with the printed token.',
       route: null,
       chapter: null,
@@ -281,5 +284,47 @@ describe('guideDocs: the version 2 view of either format', () => {
         { type: 'media', kind: 'gif', file: 'c.dark.webp', fileLight: 'c.light.webp', poster: 'c.dark.png', posterLight: 'c.light.png', alt: 'A status change.', caption: 'Pick a status.', width: 960, height: 540 },
       ],
     });
+  });
+});
+
+describe('short labels for the contents', () => {
+  const docs = (value: unknown) => {
+    const r = parse(value);
+    if (!r.ok) throw new Error(r.error);
+    return guideDocs(r.guide);
+  };
+
+  it('given a version 2 guide whose section and subsection have short, when parsed and adapted, then short is accepted and exposed', () => {
+    const out = docs(guide(sec({ short: 'Basics', subsections: [sub({ short: 'Launch & login' })] })));
+    expect(out.sections[0]).toMatchObject({ short: 'Basics', subsections: [{ short: 'Launch & login' }] });
+  });
+
+  it('given a section and subsection without short, when adapted, then short equals the title', () => {
+    const out = docs(guide(sec()));
+    expect(out.sections[0]).toMatchObject({ short: 'Getting started', subsections: [{ short: 'Launch and sign in' }] });
+  });
+
+  it('given a version 1 guide, when adapted, then every short equals its title', () => {
+    const out = docs({ sections: ['Alpha', 'Beta'].map((title) => ({ id: title.toLowerCase(), title, summary: 's', gif: 'a.gif', steps: ['x'] })) });
+    expect(out.sections.map((s: { short: string; subsections: Array<{ short: string }> }) => [s.short, s.subsections[0]!.short])).toEqual([
+      ['Alpha', 'Alpha'],
+      ['Beta', 'Beta'],
+    ]);
+  });
+
+  it('accepts a short label of exactly 24 characters', () => {
+    expect(parse(guide(sec({ short: 'x'.repeat(24), subsections: [sub({ short: 'y'.repeat(24) })] }))).ok).toBe(true);
+  });
+
+  it.each([
+    ['an empty subsection short', withSub({ short: '' }), /sections\.0\.subsections\.0\.short/],
+    ['a blank subsection short', withSub({ short: '   ' }), /sections\.0\.subsections\.0\.short/],
+    ['a subsection short of 25 characters', withSub({ short: 'x'.repeat(25) }), /sections\.0\.subsections\.0\.short/],
+    ['a blank section short', guide(sec({ short: ' ' })), /sections\.0\.short/],
+    ['a section short of 25 characters', guide(sec({ short: 'x'.repeat(25) })), /sections\.0\.short/],
+  ])('rejects %s, naming the field', (_label, value, message) => {
+    const r = parse(value);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(message);
   });
 });

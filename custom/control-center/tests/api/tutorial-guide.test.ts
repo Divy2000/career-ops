@@ -161,11 +161,13 @@ describe('GET /api/tutorials with a version 2 guide', () => {
         {
           id: 'start',
           title: 'Getting started',
+          short: 'Getting started',
           summary: 'First steps.',
           subsections: [
             {
               id: 'launch',
               title: 'Launch',
+              short: 'Launch',
               summary: 'Open the app.',
               route: '/today',
               chapter: 1,

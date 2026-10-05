@@ -71,6 +71,8 @@ const internalRoute = z
   });
 
 const text = (max) => z.string().min(1).max(max);
+/** The label the contents panel shows in place of a long title. */
+const shortLabel = z.string().min(1).max(24).refine((s) => s.trim() !== '', 'must not be blank');
 
 const sectionSchema = z.object({
   id: z.string().regex(ID_RE, 'must be 1 to 64 letters, digits, - or _'),
@@ -129,6 +131,7 @@ const blockSchema = z.discriminatedUnion('type', [textBlock, stepsBlock, tipsBlo
 const subsectionSchema = z.strictObject({
   id: idField,
   title: text(120),
+  short: shortLabel.optional(),
   summary: text(600),
   route: internalRoute.optional(),
   chapter: z.number().int().min(0).optional(),
@@ -137,6 +140,7 @@ const subsectionSchema = z.strictObject({
 const sectionV2Schema = z.strictObject({
   id: idField,
   title: text(120),
+  short: shortLabel.optional(),
   summary: text(300),
   subsections: z.array(subsectionSchema).min(1).max(MAX_SUBSECTIONS_PER_SECTION),
 });
@@ -241,10 +245,12 @@ export function guideDocs(guide) {
       sections: guide.sections.map((s) => ({
         id: s.id,
         title: s.title,
+        short: s.short ?? s.title,
         summary: s.summary,
         subsections: s.subsections.map((u) => ({
           id: u.id,
           title: u.title,
+          short: u.short ?? u.title,
           summary: u.summary,
           route: u.route ?? null,
           chapter: u.chapter ?? null,
@@ -259,11 +265,13 @@ export function guideDocs(guide) {
     sections: guide.sections.map((s) => ({
       id: s.id,
       title: s.title,
+      short: s.title,
       summary: s.summary,
       subsections: [
         {
           id: s.id,
           title: s.title,
+          short: s.title,
           summary: '',
           route: s.route ?? null,
           chapter: s.chapter ?? null,

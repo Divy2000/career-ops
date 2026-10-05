@@ -108,6 +108,8 @@ export type GuideBlockView =
 export interface GuideSubsectionView {
   id: string;
   title: string;
+  /** The contents label: the guide's short label, or the title when it has none. */
+  short: string;
   /** Empty for an adapted legacy section, whose summary is the first text block. */
   summary: string;
   route: string | null;
@@ -118,6 +120,7 @@ export interface GuideSubsectionView {
 export interface GuideDocsSectionView {
   id: string;
   title: string;
+  short: string;
   summary: string;
   subsections: GuideSubsectionView[];
 }

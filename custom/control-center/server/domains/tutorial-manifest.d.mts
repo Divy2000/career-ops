@@ -67,6 +67,8 @@ export type GuideBlock = GuideTextBlock | GuideStepsBlock | GuideTipsBlock | Gui
 export interface GuideSubsection {
   id: string;
   title: string;
+  /** 1 to 24 characters for the contents panel; the title stands in when it is absent. */
+  short?: string;
   summary: string;
   route?: string;
   chapter?: number;
@@ -75,6 +77,7 @@ export interface GuideSubsection {
 export interface GuideSectionV2 {
   id: string;
   title: string;
+  short?: string;
   summary: string;
   subsections: GuideSubsection[];
 }
@@ -112,6 +115,8 @@ export type GuideBlockDoc = GuideTextBlock | GuideStepsBlock | GuideTipsBlock | 
 export interface GuideSubsectionDoc {
   id: string;
   title: string;
+  /** The contents label: the guide's short label, or the title when it has none. */
+  short: string;
   summary: string;
   route: string | null;
   chapter: number | null;
@@ -120,6 +125,7 @@ export interface GuideSubsectionDoc {
 export interface GuideSectionDoc {
   id: string;
   title: string;
+  short: string;
   summary: string;
   subsections: GuideSubsectionDoc[];
 }
