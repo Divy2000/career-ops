@@ -50,6 +50,33 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();
   });
 
+  test('Enter on a focused link or sort button in the tracker table does what that control does, not what the selected row does (SW-web-a-01)', async ({ page }) => {
+    await page.goto('/tracker');
+    await expect(page.locator('tbody tr')).not.toHaveCount(0);
+    await page.getByRole('link', { name: 'Open Acme Robotics' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();
+
+    await page.goto('/tracker');
+    await page.getByRole('row', { name: /Globex Payments/ }).getByRole('cell', { name: 'Globex Payments', exact: true }).click();
+    await expect(page.getByRole('complementary', { name: 'Preview' }).getByRole('heading', { name: 'Globex Payments' })).toBeVisible();
+    await page.getByRole('button', { name: /^Company/ }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('th[aria-sort="ascending"]')).toHaveText(/Company/);
+    await expect(page).toHaveURL(/\/tracker\?/);
+    await page.getByRole('link', { name: 'Open Northwind Analytics' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { level: 1, name: 'Northwind Analytics' })).toBeVisible();
+
+    // The table itself still takes the shortcuts: j selects the first row and Enter opens it.
+    await page.goto('/tracker');
+    const first = (await page.locator('tbody tr').first().getByRole('cell').nth(2).textContent())!;
+    await page.getByLabel('Tracker rows, use j and k to move, x to select').focus();
+    await page.keyboard.press('j');
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { level: 1, name: first })).toBeVisible();
+  });
+
   test('Application shows the verdict, report sections, timeline and sponsorship', async ({ page }) => {
     await page.goto('/tracker/1');
     await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();

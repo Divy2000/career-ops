@@ -140,7 +140,9 @@ export function TrackerPage() {
     });
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+    // A focused control inside the table (an Open link, a sort button, a checkbox) keeps its own keys: Enter there
+    // activates it instead of opening the selected row.
+    if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('a, button, input, select, textarea, summary, [contenteditable="true"]')) return;
     const idx = visible.findIndex((r) => r.num === selected);
     const pick = (i: number) => setSelected(visible[Math.max(0, Math.min(visible.length - 1, i))]?.num ?? null);
     switch (e.key) {
