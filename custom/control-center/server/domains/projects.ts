@@ -2,7 +2,9 @@
 // contracted pure module). The library file itself is article-digest.md.
 import fs from 'node:fs';
 import path from 'node:path';
-import { importCore } from '../core/adapter.js';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
+import { coreModulePath, importCore } from '../core/adapter.js';
 
 export type ProjectKind = 'project' | 'publication' | 'article';
 
@@ -111,7 +113,38 @@ export interface RankResult {
 
 interface IntakeExtraction {
   classifySource: (relPath: string) => { kind: 'direct' | 'pdf' | 'unsupported'; reason?: string };
-  detectPdfExtractor: () => { name: string; extract: (absPath: string) => string } | null;
+}
+
+const EXTRACT_WORKER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'extract-worker.mjs');
+/** intake's own extractor timeout is 30 s; the worker is stopped a little after it. */
+const EXTRACT_TIMEOUT_MS = 35_000;
+/** Code roots whose PDF extractor has answered its probe; a missing one is probed again next time (it may get installed). */
+const probedRoots = new Set<string>();
+
+type PdfResult = { ok: true; text: string } | { ok: false; missing?: true; error?: string };
+
+/** intake's PDF extractor in a worker thread, so a slow pdftotext never blocks the event loop. */
+function extractPdf(codeRoot: string, abs: string): Promise<PdfResult> {
+  return new Promise((resolve) => {
+    const worker = new Worker(EXTRACT_WORKER, { workerData: { intakePath: coreModulePath(codeRoot, 'intake.mjs'), abs, probed: probedRoots.has(codeRoot) } });
+    let settled = false;
+    const done = (r: PdfResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      resolve(r);
+    };
+    const timer = setTimeout(() => done({ ok: false, error: `text extraction took longer than ${EXTRACT_TIMEOUT_MS / 1000} s` }), EXTRACT_TIMEOUT_MS);
+    worker.once('message', (m: { ok: boolean; text?: string; missing?: boolean; error?: string }) => {
+      if (m.ok) {
+        probedRoots.add(codeRoot);
+        done({ ok: true, text: m.text ?? '' });
+      } else done(m.missing ? { ok: false, missing: true } : { ok: false, error: m.error ?? 'extraction failed' });
+    });
+    worker.once('error', (err: Error) => done({ ok: false, error: String(err.message).split('\n')[0] }));
+    worker.once('exit', (code) => done({ ok: false, error: `the extraction worker exited with code ${code}` }));
+  });
 }
 
 /** The prompt carries the text in argv (macOS ARG_MAX is 1 MiB), so a document's text is capped well below it. */
@@ -133,8 +166,8 @@ export function documentsPath(dataRoot: string, rel: string): string | null {
 
 /**
  * The text of a documents/ source, extracted with intake.mjs's own exported helpers (the same extractor
- * `intake.mjs --commit` fingerprints). In process, so nothing is written: `intake.mjs --text` would also
- * create the documents/ scaffold folders.
+ * `intake.mjs --commit` fingerprints), PDFs in a worker thread. Nothing is written: `intake.mjs --text`
+ * would also create the documents/ scaffold folders.
  */
 export async function extractSourceText(codeRoot: string, dataRoot: string, rel: string): Promise<{ ok: true; rel: string; text: string } | { ok: false; error: string }> {
   const found = documentsPath(dataRoot, rel);
@@ -146,9 +179,10 @@ export async function extractSourceText(codeRoot: string, dataRoot: string, rel:
   try {
     if (cls.kind === 'direct') text = fs.readFileSync(abs, 'utf8');
     else if (cls.kind === 'pdf') {
-      const extractor = intake.detectPdfExtractor();
-      if (!extractor) return { ok: false, error: 'no PDF text extractor found: install poppler (brew install poppler), which intake.mjs uses for PDFs' };
-      text = extractor.extract(abs);
+      const pdf = await extractPdf(codeRoot, abs);
+      if (!pdf.ok && pdf.missing) return { ok: false, error: 'no PDF text extractor found: install poppler (brew install poppler), which intake.mjs uses for PDFs' };
+      if (!pdf.ok) return { ok: false, error: `could not read documents/${found}: ${pdf.error}` };
+      text = pdf.text;
     } else return { ok: false, error: `documents/${found}: ${cls.reason ?? 'unsupported source'}` };
   } catch (err) {
     return { ok: false, error: `could not read documents/${found}: ${String((err as Error).message).split('\n')[0]}` };

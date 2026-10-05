@@ -44,6 +44,12 @@ export function cliExitCodes(id: CliId): Record<string, number> {
 const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
 
 /** Dynamic import of a pure core module listed in the contract (no writers). */
+/** Absolute path of a contracted core module, for code that must load it outside this process (a worker thread). */
+export function coreModulePath(codeRoot: string, module: CoreModule): string {
+  if (!contract.exports.some((e) => e.module === module)) throw new Error(`${module} is not a contracted core module`);
+  return path.join(codeRoot, module);
+}
+
 export function importCore<T extends object>(codeRoot: string, module: CoreModule): Promise<T> {
   if (!contract.exports.some((e) => e.module === module)) {
     return Promise.reject(new Error(`${module} is not a contracted core module`));
