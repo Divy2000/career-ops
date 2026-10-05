@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
@@ -26,6 +28,28 @@ test.describe('Settings', () => {
     await page.getByRole('tab', { name: 'Updates' }).click();
     await expect(page.getByRole('link', { name: 'Latest upstream-sync PR' })).toHaveAttribute('href', /Divy2000\/career-ops\/pulls/);
     // The rejected save's error toast may still be fading out; its mid-animation blend is not a page color (as in polish.spec.ts).
+    const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
+    expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+  });
+
+  test('Health shows what Validate portals.yml found on stdout and what the tracker sync check wrote to stderr (R8-06)', async ({ page }) => {
+    const portals = path.join(process.env.CC_E2E_TMP!, 'root', 'portals.yml');
+    const original = fs.readFileSync(portals, 'utf8');
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/settings?tab=health');
+    const output = page.getByLabel('Action output');
+    // tracker.mjs sync --check reports on stderr only, and exits 0 on a clean tracker.
+    await page.getByRole('button', { name: /Tracker sync check/ }).click();
+    await expect(output).toContainText('No corruption detected');
+    try {
+      fs.writeFileSync(portals, 'tracked_companies:\n  - careers_url: not a url\n    enabled: true\n');
+      await page.getByRole('button', { name: /Validate portals\.yml/ }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'portals.validate exited 1' })).toBeVisible();
+      await expect(output).toContainText('error: tracked_companies[0].careers_url: invalid URL: not a url');
+      await expect(output).toContainText('2 errors, 0 warnings');
+    } finally {
+      fs.writeFileSync(portals, original);
+    }
     const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });

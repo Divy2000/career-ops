@@ -3,7 +3,7 @@ import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useSystemStatus } from '../../lib/queries';
 import { useEngine } from '../../lib/sessions';
 import { useActions, useRunAction } from '../../lib/actions';
-import { ActionButton, Message } from '../../components/ActionBar';
+import { ActionButton, ActionOutput, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
 import { UserFileEditor } from '../profile/ProfilePage';
 import { PortalsTab } from './PortalsEditor';
@@ -76,8 +76,7 @@ function EngineTab() {
 
 function HealthTab() {
   const actions = useActions();
-  const { run, message, busy } = useRunAction();
-  const [result, setResult] = useState<unknown>(null);
+  const { run, message, busy, output } = useRunAction();
   const ids = ['system.doctor', 'tracker.verify', 'tracker.syncCheck', 'portals.validate', 'portals.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.reconcile'];
   return (
     <div className="card">
@@ -89,17 +88,13 @@ function HealthTab() {
             meta={actions.data?.find((a) => a.id === id)}
             disabled={busy !== null}
             params={['tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.reconcile'].includes(id) ? { dryRun: true } : {}}
-            onRun={(p) =>
-              void run(id, p).then((out) => {
-                if (out && 'result' in out) setResult(out.result);
-              })
-            }
+            onRun={(p) => void run(id, p)}
           />
         ))}
       </div>
       <p className="muted small">Normalize, dedup, merge and reconcile run as dry runs here; use Runs to re-run them for real.</p>
       <Message message={message} />
-      {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
+      <ActionOutput text={output} />
     </div>
   );
 }
