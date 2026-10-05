@@ -346,6 +346,13 @@ describe('cached insights scripts', () => {
     const reposts = await get('/api/insights/detectReposts');
     expect(reposts.statusCode, reposts.body).toBe(200);
   });
+
+  it('answers 404 for names inherited from Object, which are not scripts', async () => {
+    for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      const res = await get(`/api/insights/${name}`);
+      expect(res.statusCode, `${name}: ${res.body}`).toBe(404);
+    }
+  });
 });
 
 describe('contacts and interviews reads', () => {
