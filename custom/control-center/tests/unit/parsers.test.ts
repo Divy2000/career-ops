@@ -68,6 +68,8 @@ describe('reports', () => {
     expect(parseReport(doc('Bewertung: Acme -- Software Engineer - Platform'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
     expect(parseReport(doc(`Evaluation: Acme ${EM_DASH} Software Engineer - Platform`), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
     expect(parseReport(doc(`Evaluation: Acme - Labs ${EM_DASH} Engineer -- Data`), '011-acme.md', 11)).toMatchObject({ company: 'Acme - Labs', role: 'Engineer -- Data' });
+    // The templates write `{Company} <em dash> {Role}`, so a company name with " - " in it keeps its dash.
+    expect(parseReport(doc(`Evaluation: Deloitte - US ${EM_DASH} Senior Engineer`), '011-acme.md', 11)).toMatchObject({ company: 'Deloitte - US', role: 'Senior Engineer' });
     // A hand-written title with only a plain dash still splits there.
     expect(parseReport(doc('Evaluation: Acme - Engineer'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Engineer' });
   });
