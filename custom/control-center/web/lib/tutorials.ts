@@ -23,6 +23,23 @@ export function chapterIndexAt(chapters: Chapter[], time: number): number {
   return index;
 }
 
+/** The part `?part=` names; an unknown or missing id opens the first part, so an old or mistyped link still plays. */
+export function resolvePart<P extends { id: string }>(parts: readonly P[], id: string | undefined): P {
+  return parts.find((p) => p.id === id) ?? parts[0]!;
+}
+
+/** The part that plays after `id`, or null after the last one. */
+export function nextPart<P extends { id: string }>(parts: readonly P[], id: string): P | null {
+  const at = parts.findIndex((p) => p.id === id);
+  return at === -1 ? null : (parts[at + 1] ?? null);
+}
+
+/** Where a guide's chapter number (counted across every part, in order) plays: its part and its start within that part. */
+export function chapterTarget(chapters: ReadonlyArray<Chapter & { part: string }>, index: number): { part: string; start: number } | null {
+  const c = chapters[index];
+  return c ? { part: c.part, start: c.start } : null;
+}
+
 /** Keeps the paragraphs that contain `term`, each under the heading it belongs to. Authoring comments never match. */
 export function filterTranscript(md: string, term: string): { text: string; matches: number | null } {
   const needle = term.trim().toLowerCase();

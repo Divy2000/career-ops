@@ -19,11 +19,23 @@ describe('writeDemoTutorials', () => {
     const { tutorials } = listTutorials(dir);
     const demo = tutorials.find((t) => t.id === 'demo-tour')!;
     expect(demo.warnings).toEqual([]);
-    expect(demo.videoLight).toMatchObject({ file: 'demo-tour-light.mp4' });
-    expect(demo.videoLight!.bytes).toBeGreaterThan(1000);
-    expect(demo.posterLight).toMatchObject({ file: 'poster-light.jpg' });
+    expect(demo.parts[0]!.videoLight).toMatchObject({ file: 'demo-tour-light.mp4' });
+    expect(demo.parts[0]!.videoLight!.bytes).toBeGreaterThan(1000);
+    expect(demo.parts[0]!.posterLight).toMatchObject({ file: 'poster-light.jpg' });
     const second = tutorials.find((t) => t.id === 'second-tour')!;
-    expect(second.videoLight).toBeNull();
+    expect(second.parts[0]!.videoLight).toBeNull();
+  });
+
+  it('writes a tour in three parts, each with its light video, subtitles and posters, that the listing accepts with its guide', () => {
+    writeDemoTutorials(dir);
+    const tour = listTutorials(dir).tutorials.find((t) => t.id === 'parts-tour')!;
+    expect(tour.warnings).toEqual([]);
+    expect(tour.parts.map((p) => [p.id, p.duration, p.videoLight?.file, p.subtitles?.format, p.posterLight?.file])).toEqual([
+      ['a', 30, 'a-light.mp4', 'srt', 'a-poster-light.jpg'],
+      ['b', 2, 'b-light.mp4', 'srt', 'b-poster-light.jpg'],
+      ['c', 2, 'c-light.mp4', 'srt', 'c-poster-light.jpg'],
+    ]);
+    expect(tour.guideDocs?.sections[0]?.subsections.map((u) => tour.chapters[u.chapter!]?.part)).toEqual(['a', 'c']);
   });
 
   it('makes the light video a different file from the dark one', () => {

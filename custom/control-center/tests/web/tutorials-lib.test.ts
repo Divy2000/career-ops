@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chapterIndexAt, filterTranscript, formatTimestamp, keyAction } from '../../web/lib/tutorials';
+import { chapterIndexAt, chapterTarget, filterTranscript, formatTimestamp, keyAction, nextPart, resolvePart } from '../../web/lib/tutorials';
 
 describe('formatTimestamp', () => {
   it.each([
@@ -116,5 +116,34 @@ describe('keyAction', () => {
     expect(key(' ', { target: 'button' })).toBeNull();
     expect(key(' ', { target: 'link' })).toBeNull();
     expect(key('k', { target: 'button' })).toBe('toggle');
+  });
+});
+
+describe('parts', () => {
+  const parts = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const chapters = [
+    { title: 'A one', start: 0, part: 'a' },
+    { title: 'A two', start: 40, part: 'a' },
+    { title: 'B one', start: 0, part: 'b' },
+    { title: 'C one', start: 0, part: 'c' },
+    { title: 'C two', start: 75.5, part: 'c' },
+  ];
+
+  it('resolvePart opens the named part, and the first one for an unknown or missing id', () => {
+    expect(resolvePart(parts, 'b')).toBe(parts[1]);
+    expect(resolvePart(parts, 'nope')).toBe(parts[0]);
+    expect(resolvePart(parts, undefined)).toBe(parts[0]);
+  });
+
+  it('nextPart is the part after the given one, and null after the last', () => {
+    expect(nextPart(parts, 'a')).toBe(parts[1]);
+    expect(nextPart(parts, 'c')).toBeNull();
+    expect(nextPart(parts, 'nope')).toBeNull();
+  });
+
+  it('chapterTarget turns a guide chapter number (global, in part order) into its part and its start within that part', () => {
+    expect(chapterTarget(chapters, 4)).toEqual({ part: 'c', start: 75.5 });
+    expect(chapterTarget(chapters, 2)).toEqual({ part: 'b', start: 0 });
+    expect(chapterTarget(chapters, 5)).toBeNull();
   });
 });

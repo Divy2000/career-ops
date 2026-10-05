@@ -169,7 +169,10 @@ const blockEntries = (b: GuideBlockView): Entry[] => {
   }
 };
 
-const subEntries = (u: GuideSubsectionView): Entry[] => [{ field: 'title', text: u.title }, ...(u.summary ? [{ field: 'summary' as const, text: u.summary }] : []), ...u.blocks.flatMap(blockEntries)];
+// The short label is the name the reader sees in the contents, so it counts as a title.
+const titleEntries = (unit: { title: string; short: string }): Entry[] => [{ field: 'title', text: unit.title }, ...(unit.short !== unit.title ? [{ field: 'title' as const, text: unit.short }] : [])];
+
+const subEntries = (u: GuideSubsectionView): Entry[] => [...titleEntries(u), ...(u.summary ? [{ field: 'summary' as const, text: u.summary }] : []), ...u.blocks.flatMap(blockEntries)];
 
 /** Every word must occur somewhere in the unit; the excerpt comes from the entry that holds the most distinct words. */
 function match(entries: Entry[], terms: string[]): Entry | null {
@@ -202,7 +205,7 @@ export function searchGuide(docs: GuideDocs, term: string): SearchResult {
   let total = 0;
   for (const s of docs.sections) {
     const hits: SearchHit[] = [];
-    const own = match([{ field: 'title', text: s.title }, { field: 'summary', text: s.summary }], terms);
+    const own = match([...titleEntries(s), { field: 'summary', text: s.summary }], terms);
     if (own) {
       const text = own.field === 'title' ? titleExcerpt(s.summary, [], s.title) : own.text;
       hits.push({ sectionId: s.id, sectionTitle: s.title, subId: null, subTitle: null, field: own.field, excerpt: excerptAround(text, terms) });

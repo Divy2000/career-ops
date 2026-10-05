@@ -1,20 +1,22 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { createMediaSwap, drawFreezeFrame, type MediaSwap } from '../../lib/media-swap';
 import { useTheme } from '../../lib/theme';
-import type { Tutorial } from '@shared/api';
+import type { TutorialPart } from '@shared/api';
 
 /**
- * Which recording the <video> carries, decided by the resolved theme (dark when there is no light one), and the swap between
+ * Which recording of a part the <video> carries, decided by the resolved theme (dark when there is no light one), and the swap between
  * them when the theme changes. The element is never re-created: its src is only ever set here, imperatively, after the first render.
  */
-export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover: RefObject<HTMLCanvasElement | null>, tutorial: Tutorial, pendingSeek: number | null) {
+export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover: RefObject<HTMLCanvasElement | null>, part: TutorialPart, pendingSeek: number | null) {
   const { resolved } = useTheme();
-  const dark = tutorial.video.url;
-  const wanted = resolved === 'light' && tutorial.videoLight ? tutorial.videoLight.url : dark;
+  const dark = part.video.url;
+  const wanted = resolved === 'light' && part.videoLight ? part.videoLight.url : dark;
   const [initialSrc] = useState(wanted);
   const shown = useRef(initialSrc);
   const swap = useRef<MediaSwap | null>(null);
   const pending = useRef(pendingSeek);
+  /** The time of the swap's own restoring seek until its `seeking` event is seen: that one seek is not the viewer's. */
+  const restoreAt = useRef<number | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,6 +33,7 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
         if (canvas && drawFreezeFrame(el, canvas)) canvas.dataset.state = 'on';
       },
       release: () => {
+        restoreAt.current = null;
         if (cover.current) cover.current.dataset.state = 'off';
       },
       warn: setWarning,
@@ -38,6 +41,9 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
         shown.current = src;
       },
       pendingSeek: () => pending.current,
+      onRestore: (time) => {
+        restoreAt.current = time;
+      },
     });
     swap.current = controller;
     return () => {
@@ -52,10 +58,27 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
     else setWarning(null);
   }, [wanted, dark]);
 
+  /** While a swap waits for the new file (the element reads 0 then), the place it will restore; otherwise null, and the element's time holds. */
+  const position = useCallback(() => swap.current?.position() ?? null, []);
+  /** A seek by the viewer, through the swap controller (it exists whenever the element does): during a swap it replaces the place the swap restores. */
+  const seek = useCallback((time: number) => swap.current?.seekTo(time), []);
+  /** A seek the element made that is not the swap's restore (the native scrubber included): a swap under way keeps it as the place. */
+  const noteSeek = useCallback((time: number) => swap.current?.noteSeek(time), []);
+  /** True once, for the `seeking` event of the swap's own restoring seek; any other seek is the viewer's. */
+  const isRestoreSeek = useCallback((time: number) => {
+    if (restoreAt.current === null || Math.abs(time - restoreAt.current) > 0.05) return false;
+    restoreAt.current = null;
+    return true;
+  }, []);
+
   return {
     initialSrc,
+    position,
+    seek,
+    noteSeek,
+    isRestoreSeek,
     warning,
-    poster: (resolved === 'light' && tutorial.posterLight ? tutorial.posterLight : tutorial.poster)?.url,
-    lightMissing: resolved === 'light' && tutorial.videoLight === null,
+    poster: (resolved === 'light' && part.posterLight ? part.posterLight : part.poster)?.url,
+    lightMissing: resolved === 'light' && part.videoLight === null,
   };
 }

@@ -22,7 +22,7 @@ import {
 } from '../../web/lib/guide';
 import type { GuideBlockView, GuideDocs, GuideSubsectionView } from '../../shared/api';
 
-const sub = (id: string, title: string, blocks: GuideBlockView[], over: Partial<GuideSubsectionView> = {}): GuideSubsectionView => ({ id, title, summary: '', route: null, chapter: null, blocks, ...over });
+const sub = (id: string, title: string, blocks: GuideBlockView[], over: Partial<GuideSubsectionView> = {}): GuideSubsectionView => ({ id, title, short: title, summary: '', route: null, chapter: null, blocks, ...over });
 const text = (t: string): GuideBlockView => ({ type: 'text', text: t });
 const image = (caption: string | null): GuideBlockView => ({ type: 'media', kind: 'image', alt: 'A screenshot nobody searches', caption, width: 10, height: 10, url: '/a.png', urlLight: '/a.light.png', posterUrl: null, posterLightUrl: null });
 
@@ -33,6 +33,7 @@ const docs: GuideDocs = {
     {
       id: 'start',
       title: 'Getting started',
+      short: 'Basics',
       summary: 'Launch the app and find your way around.',
       subsections: [
         sub('launch', 'Launch and sign in', [text('Run the launcher, then open the printed link.'), { type: 'steps', items: ['Open a terminal.', 'Run npm start.'] }, image('Today right after sign in.')], { summary: 'Open the app with the token.' }),
@@ -42,6 +43,7 @@ const docs: GuideDocs = {
     {
       id: 'tracking',
       title: 'Tracking',
+      short: 'Tracking',
       summary: 'Keep the tracker current.',
       subsections: [sub('status', 'Change a status', [text('Pick a row, then the new status.')], { route: '/tracker', chapter: 1 }), sub('safety', 'Safety of the data', [text('Nothing leaves the machine.')])],
     },
@@ -80,7 +82,7 @@ describe('resolveLocation (deep links)', () => {
   });
 
   it('lands a version 1 link, whose section and subsection share an id', () => {
-    const legacy: GuideDocs = { version: 1, legacy: true, sections: [{ id: 'today', title: 'Today', summary: 's', subsections: [sub('today', 'Today', [text('s')])] }] };
+    const legacy: GuideDocs = { version: 1, legacy: true, sections: [{ id: 'today', title: 'Today', short: 'Today', summary: 's', subsections: [sub('today', 'Today', [text('s')])] }] };
     expect(resolveLocation(legacy, 'today', undefined)).toEqual({ sectionId: 'today', subId: null });
     expect(resolveLocation(legacy, 'today', 'today')).toEqual({ sectionId: 'today', subId: 'today' });
   });
@@ -192,6 +194,16 @@ describe('searchGuide', () => {
     expect(hits('data')).toEqual(['tracking/safety:title']);
   });
 
+  it('given a subsection whose short label is "Layout", when searching "layout", then it is a title hit', () => {
+    const labelled: GuideDocs = { ...docs, sections: [{ ...docs.sections[0]!, subsections: [sub('layout', 'Where things are on screen', [text('The sidebar holds every page.')], { short: 'Layout' })] }] };
+    const found = searchGuide(labelled, 'layout').groups.flatMap((g) => g.hits);
+    expect(found).toEqual([expect.objectContaining({ subId: 'layout', field: 'title', excerpt: 'The sidebar holds every page.' })]);
+  });
+
+  it('given a section whose short label is "Basics", when searching "basics", then the section itself is a title hit', () => {
+    expect(hits('basics')).toEqual(['start/*:title']);
+  });
+
   it('matches a section by its title or summary and points at the section itself', () => {
     expect(hits('keep the tracker')).toEqual(['tracking/*:summary']);
     expect(hits('getting started')).toEqual(['start/*:title']);
@@ -239,7 +251,7 @@ describe('searchGuide', () => {
   });
 
   it('falls back to the first text block, then to the title itself, when a title match has no summary', () => {
-    const bare: GuideDocs = { version: 2, legacy: false, sections: [{ id: 's', title: 'Section', summary: '', subsections: [sub('a', 'Needle one', [text('First text.')]), sub('b', 'Needle two', [{ type: 'steps', items: ['Only steps.'] }])] }] };
+    const bare: GuideDocs = { version: 2, legacy: false, sections: [{ id: 's', title: 'Section', short: 'Section', summary: '', subsections: [sub('a', 'Needle one', [text('First text.')]), sub('b', 'Needle two', [{ type: 'steps', items: ['Only steps.'] }])] }] };
     const hits = searchGuide(bare, 'needle').groups[0]!.hits;
     expect(hits.map((h) => h.excerpt)).toEqual(['First text.', 'Needle two']);
   });
@@ -399,8 +411,8 @@ describe('loadReviewed (and the move from the old per-section marks)', () => {
     version: 1,
     legacy: true,
     sections: [
-      { id: 'today', title: 'Today', summary: 's', subsections: [sub('today', 'Today', [text('s')])] },
-      { id: 'tracker', title: 'Tracker', summary: 's', subsections: [sub('tracker', 'Tracker', [text('s')])] },
+      { id: 'today', title: 'Today', short: 'Today', summary: 's', subsections: [sub('today', 'Today', [text('s')])] },
+      { id: 'tracker', title: 'Tracker', short: 'Tracker', summary: 's', subsections: [sub('tracker', 'Tracker', [text('s')])] },
     ],
   };
   const OLD = 'cc.tutorials.guide.reviewed.tour';

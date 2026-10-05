@@ -42,6 +42,8 @@ export interface SwapHooks {
   onSource(src: string): void;
   /** A seek the page still has to apply (the Quick guide's "Watch in video"); it beats the playhead. */
   pendingSeek?(): number | null;
+  /** Called just before the swap seeks the new file to `time`, so the page can tell that seek from one the viewer made. */
+  onRestore?(time: number): void;
 }
 
 interface Snapshot {
@@ -57,12 +59,24 @@ interface Snapshot {
 export interface MediaSwap {
   /** Load `src`; if it fails, load `fallback` (null: give up). A swap under way keeps its original snapshot. */
   swapTo(src: string, fallback: string | null): void;
+  /** While the new file loads (the element reads 0 then), the place the swap will restore; otherwise null. */
+  position(): number | null;
+  /** The viewer moved the playhead to `time`: a swap under way restores there from now on, and the element moves now unless its new file is still loading. */
+  seekTo(time: number): void;
+  /**
+   * The element seeked to `time` by some other way (the native scrubber): a swap under way restores there from now on. It only records
+   * the place, never moves the element, so calling it from the element's own seeking event cannot loop. Ignored while the new file loads,
+   * when the element has no real position.
+   */
+  noteSeek(time: number): void;
   dispose(): void;
 }
 
 export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
   let snapshot: Snapshot | null = null;
   let stop: (() => void) | null = null;
+  /** Between setting a new src and its metadata: the element's position means nothing yet and the snapshot's time is the place. */
+  let awaitingFile = false;
 
   const take = (): Snapshot => ({
     time: hooks.pendingSeek?.() ?? media.currentTime,
@@ -88,6 +102,7 @@ export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
     stop?.();
     stop = null;
     snapshot = null;
+    awaitingFile = false;
   };
 
   const load = (src: string, fallback: string | null, s: Snapshot) => {
@@ -135,6 +150,7 @@ export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
     };
 
     const onMetadata = () => {
+      awaitingFile = false;
       if (Number.isFinite(s.duration) && Math.abs(media.duration - s.duration) > ALIGN_TOLERANCE_SECONDS) hooks.warn(MISALIGNED_WARNING);
       restoreSettings(s);
       const target = Number.isFinite(media.duration) ? Math.min(s.time, media.duration) : s.time;
@@ -142,12 +158,14 @@ export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
       listen('error', onError);
       if (target > 0) {
         listen('seeked', awaitFrame);
+        hooks.onRestore?.(target);
         media.currentTime = target;
       } else awaitFrame();
     };
 
     listen('loadedmetadata', onMetadata);
     listen('error', onError);
+    awaitingFile = true;
     media.src = src;
     hooks.onSource(src);
   };
@@ -157,6 +175,18 @@ export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
       snapshot ??= take();
       hooks.freeze();
       load(src, fallback, snapshot);
+    },
+    position() {
+      return awaitingFile && snapshot ? snapshot.time : null;
+    },
+    seekTo(time) {
+      // A swap under way keeps the new place, so a revert to the fallback or a swap back restores it, not the old one.
+      if (snapshot) snapshot.time = time;
+      // While the new file loads the element has no position to move; the restore applies the place once it is parsed.
+      if (!awaitingFile) media.currentTime = time;
+    },
+    noteSeek(time) {
+      if (snapshot && !awaitingFile) snapshot.time = time;
     },
     dispose() {
       if (!stop) return;

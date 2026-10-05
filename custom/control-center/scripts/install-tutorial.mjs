@@ -4,7 +4,7 @@
 //   node custom/control-center/scripts/install-tutorial.mjs <source-folder> [options]
 //
 // The source folder is either
-//   - a folder that already has tutorial.json: it is validated and copied as-is, or
+//   - a folder that already has tutorial.json (one video, or a tutorial in parts): it is validated and copied as-is, or
 //   - a recording folder: tutorial.json is built from chapters/toc.json ([{ number, id, title, start, duration }]),
 //     the .mp4 (and its light-theme twin <name>-light.mp4), the .vtt or .srt, an optional poster.jpg (and poster-light.jpg) and tutorial/script.md.
 //     An optional guide/guide.json (the guide) is added too, with the images, clips and posters it names sitting next to it in guide/.
@@ -24,7 +24,8 @@ Options:
   --description <text>  tutorial description
   --video <file>        the .mp4 to use when the folder has several
   --video-light <file>  the light-theme .mp4 (default: <video name>-light.mp4 when it exists)
-  --strict-dims         check the width and height a version 2 guide declares against the PNG, GIF and WebP headers
+  --strict-dims         check the width and height a version 2 guide declares against the image headers,
+                        and that each part's dark and light posters have the same size
   --force               replace a tutorial that is already installed
   --dry-run             print what would be installed and write nothing`;
 
@@ -123,8 +124,9 @@ const u32le = (b, at) => (u24le(b, at) | (b[at + 3] << 24)) >>> 0;
 const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
 
 /**
- * Width and height from the header of a PNG, GIF or WebP (lossy, lossless, extended and animated: the extended
- * canvas size is the image size). `bytes` needs only the first 30 bytes. Throws with a reason that continues "guide image file "x" ...".
+ * Width and height from the header of a PNG, GIF, WebP (lossy, lossless, extended and animated: the extended
+ * canvas size is the image size) or JPEG. A PNG, GIF or WebP needs only the first 30 bytes; a JPEG needs every segment up to its
+ * frame header. Throws with a reason that continues "guide image file "x" ...".
  */
 export function imageSize(bytes, ext) {
   switch (ext.toLowerCase()) {
@@ -139,8 +141,11 @@ export function imageSize(bytes, ext) {
       return { width: u16le(bytes, 6), height: u16le(bytes, 8) };
     case '.webp':
       return webpSize(bytes);
+    case '.jpg':
+    case '.jpeg':
+      return jpegSize(bytes);
     default:
-      throw new Error(`cannot check the size of a ${ext.toLowerCase()} file (--strict-dims reads PNG, GIF and WebP headers)`);
+      throw new Error(`cannot check the size of a ${ext.toLowerCase()} file (--strict-dims reads PNG, GIF, WebP and JPEG headers)`);
   }
 }
 
@@ -170,15 +175,74 @@ function webpSize(bytes) {
   }
 }
 
-const readHead = (file) => {
+// Every start-of-frame marker (baseline, extended, progressive, lossless, and their arithmetic-coded forms). C4, C8 and CC are not frames.
+const JPEG_FRAMES = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+// Markers that stand alone, without a length: TEM and the restart markers.
+const JPEG_STANDALONE = new Set([0x01, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7]);
+
+/** How far into a JPEG the frame header is looked for: well past any real run of EXIF, ICC and XMP segments, short of reading a whole large file. */
+const JPEG_SEARCH_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Walks the segments after SOI to the first frame header, which holds the height and then the width. `read(offset, length)` returns
+ * the bytes there (fewer at the end of the data), so a file is read segment header by segment header and skipped by length,
+ * never loaded whole.
+ */
+function jpegSizeFrom(read) {
+  const start = read(0, 3);
+  if (start.length < 3 || start[0] !== 0xff || start[1] !== 0xd8 || start[2] !== 0xff) throw new Error('is not a JPEG file');
+  const cutOff = () => new Error('ends before its frame header');
+  let at = 2;
+  for (;;) {
+    if (at >= JPEG_SEARCH_BYTES) throw new Error(`has no frame header in its first ${JPEG_SEARCH_BYTES / 1024 / 1024} MB`);
+    const head = read(at, 4);
+    if (head.length < 2) throw cutOff();
+    if (head[0] !== 0xff) throw new Error('is not a valid JPEG file (a segment marker is missing)');
+    const marker = head[1];
+    // A marker may be preceded by any number of 0xFF fill bytes.
+    if (marker === 0xff) {
+      at += 1;
+      continue;
+    }
+    if (JPEG_STANDALONE.has(marker)) {
+      at += 2;
+      continue;
+    }
+    if (marker === 0xda || marker === 0xd9) throw new Error('has no frame header before its image data');
+    if (head.length < 4) throw cutOff();
+    const length = head.readUInt16BE(2);
+    if (length < 2) throw new Error('is not a valid JPEG file (a segment has a bad length)');
+    if (JPEG_FRAMES.has(marker)) {
+      // The length counts itself (2), then precision (1), height (2), width (2), the component count (1) and 3 bytes per component.
+      if (length < 8) throw new Error('is not a valid JPEG file (its frame header is too short)');
+      const frame = read(at + 2, length);
+      if (frame.length < length) throw cutOff();
+      const components = frame[7];
+      if (components < 1) throw new Error('is not a valid JPEG file (its frame header lists no components)');
+      if (length !== 8 + 3 * components) {
+        throw new Error(`is not a valid JPEG file (its frame header length ${length} does not fit ${components} component${components === 1 ? '' : 's'})`);
+      }
+      return { width: frame.readUInt16BE(5), height: frame.readUInt16BE(3) };
+    }
+    at += 2 + length;
+  }
+}
+
+const jpegSize = (bytes) => jpegSizeFrom((offset, length) => bytes.subarray(offset, offset + length));
+
+/** The size of an image file on disk: a JPEG is walked in place, the other formats need only their first bytes. */
+function imageSizeOfFile(file, ext) {
   const fd = fs.openSync(file, 'r');
   try {
-    const head = Buffer.alloc(64);
-    return head.subarray(0, fs.readSync(fd, head, 0, head.length, 0));
+    const read = (offset, length) => {
+      const buf = Buffer.alloc(length);
+      return buf.subarray(0, fs.readSync(fd, buf, 0, length, offset));
+    };
+    return ['.jpg', '.jpeg'].includes(ext.toLowerCase()) ? jpegSizeFrom(read) : imageSize(read(0, 64), ext);
   } finally {
     fs.closeSync(fd);
   }
-};
+}
 
 /** Every file of every media block must have the size the block declares (--strict-dims). Legacy guides declare no sizes. */
 function checkDimensions(guide, guideRoot) {
@@ -191,7 +255,7 @@ function checkDimensions(guide, guideRoot) {
         for (const [kind, name] of files) {
           let size;
           try {
-            size = imageSize(readHead(path.join(guideRoot, name)), extOf(name));
+            size = imageSizeOfFile(path.join(guideRoot, name), extOf(name));
           } catch (err) {
             throw new Error(`guide ${kind} file "${name}" ${err.message}`, { cause: err });
           }
@@ -202,6 +266,35 @@ function checkDimensions(guide, guideRoot) {
       }
     }
   }
+}
+
+/** A part's dark and light posters must have the same size, or the poster would jump when the theme changes (--strict-dims). */
+function checkPosters(source, part) {
+  const label = partLabel(part);
+  if (part.poster === undefined || part.posterLight === undefined) return;
+  const sizeOf = (kind, name) => {
+    try {
+      return imageSizeOfFile(path.join(source, name), extOf(name));
+    } catch (err) {
+      throw new Error(`${label}${kind} file "${name}" ${err.message}`, { cause: err });
+    }
+  };
+  const dark = sizeOf('poster', part.poster);
+  const light = sizeOf('light poster', part.posterLight);
+  if (dark.width !== light.width || dark.height !== light.height) {
+    throw new Error(`${label}posters differ in size: "${part.poster}" is ${dark.width}x${dark.height} but "${part.posterLight}" is ${light.width}x${light.height}`);
+  }
+}
+
+/** How a message names a part: only a manifest in parts has named parts (the one part of a single video declares no duration). */
+const partLabel = (p) => (p.duration === null ? '' : `part "${p.id}" `);
+
+/** The files of every part, each kind prefixed with its part's label. */
+function partCopies(manifest) {
+  return manifest.parts.flatMap((p) => {
+    const named = [['video', p.video], ['light video', p.videoLight], ['subtitles', p.subtitles], ['poster', p.poster], ['light poster', p.posterLight]];
+    return named.filter(([, name]) => name !== undefined).map(([kind, name]) => ({ kind: `${partLabel(p)}${kind}`, name }));
+  });
 }
 
 /** guide.json and the files it names, from `guideRoot`: validated like the server does, before anything is copied. */
@@ -262,11 +355,10 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const named = [['video', manifest.video], ['light video', manifest.videoLight], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['light poster', manifest.posterLight], ['transcript', manifest.transcript]];
-  const copies = named
-    .filter(([, name]) => name !== undefined)
-    .map(([kind, name]) => ({ kind, from: path.join(source, built && kind === 'transcript' && scriptFrom ? scriptFrom : name), to: name }));
+  const copies = partCopies(manifest).map(({ kind, name }) => ({ kind, from: path.join(source, name), to: name }));
+  if (manifest.transcript !== undefined) copies.push({ kind: 'transcript', from: path.join(source, built && scriptFrom ? scriptFrom : manifest.transcript), to: manifest.transcript });
   for (const c of copies) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
+  if (opts.strictDims === true) for (const p of manifest.parts) checkPosters(source, p);
   if (manifest.guide !== undefined) {
     for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
       const same = copies.find((o) => o.to === c.to);
@@ -305,6 +397,12 @@ export function installTutorial(opts) {
   return result;
 }
 
+/** `m:ss`, the way the Tutorials page shows a length. */
+const formatLength = (seconds) => {
+  const s = Math.floor(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
 const VALUE_FLAGS = { '--data-root': 'dataRoot', '--id': 'id', '--title': 'title', '--description': 'description', '--video': 'video', '--video-light': 'videoLight' };
 
 function parseArgs(argv) {
@@ -341,6 +439,8 @@ function main(argv) {
     const r = installTutorial({ ...parsed.opts, dataRoot });
     console.log(`${r.dryRun ? 'Dry run: would install' : 'Installed'} ${r.id} into ${r.dest}`);
     console.log(`  built tutorial.json from the recording folder: ${r.built ? 'yes' : 'no, copied as-is'}`);
+    console.log(`  parts: ${r.manifest.parts.length}`);
+    for (const [i, p] of r.manifest.parts.entries()) console.log(`    ${i + 1}. ${p.id}  ${p.short}  ${p.duration === null ? 'length not declared' : formatLength(p.duration)}`);
     console.log(`  chapters: ${r.manifest.chapters.length}`);
     for (const f of r.files) console.log(`  ${f}`);
     if (!r.dryRun) console.log('Open Control Center > Tutorials to watch it.');

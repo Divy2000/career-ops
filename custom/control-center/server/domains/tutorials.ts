@@ -3,7 +3,7 @@
 // that must resolve, after symlinks, to a regular file inside its own tutorial folder.
 import fs from 'node:fs';
 import path from 'node:path';
-import { ID_RE, MAX_GUIDE_BYTES, extOf, guideDocs, guideFileRefs, isGuideV2, parseGuide, parseManifest, type GuideBlockDoc, type ManifestResult, type TutorialManifest } from './tutorial-manifest.mjs';
+import { ID_RE, MAX_GUIDE_BYTES, extOf, guideDocs, guideFileRefs, isGuideV2, parseGuide, parseManifest, type GuideBlockDoc, type ManifestResult, type TutorialManifest, type TutorialPartManifest } from './tutorial-manifest.mjs';
 import { inside } from '../lib/paths.js';
 
 export const TUTORIALS_REL = path.join('data', 'control-center', 'tutorials');
@@ -108,6 +108,8 @@ export type GuideBlockView =
 export interface GuideSubsectionView {
   id: string;
   title: string;
+  /** The contents label: the guide's short label, or the title when it has none. */
+  short: string;
   /** Empty for an adapted legacy section, whose summary is the first text block. */
   summary: string;
   route: string | null;
@@ -118,6 +120,7 @@ export interface GuideSubsectionView {
 export interface GuideDocsSectionView {
   id: string;
   title: string;
+  short: string;
   summary: string;
   subsections: GuideSubsectionView[];
 }
@@ -131,18 +134,33 @@ export interface GuideDocs {
   sections: GuideDocsSectionView[];
 }
 
-export interface Tutorial {
+/** One part of a tutorial: its own recording and files. A single-video tutorial has one part, "main". */
+export interface TutorialPart {
   id: string;
   title: string;
-  description: string;
+  /** The playlist label: the part's short label, or its title. */
+  short: string;
+  /** The length the manifest declares, in seconds; null for the one part of a single-video tutorial. */
+  duration: number | null;
   video: TutorialFile & { bytes: number };
   /** The recording rendered for the light theme (same timeline as `video`), or null when there is none or it was dropped. */
   videoLight: (TutorialFile & { bytes: number }) | null;
   subtitles: (TutorialFile & { format: 'srt' | 'vtt' }) | null;
   poster: TutorialFile | null;
   posterLight: TutorialFile | null;
-  transcript: TutorialFile | null;
+  /** Starts counted from the start of this part. */
   chapters: Array<{ title: string; start: number }>;
+}
+
+export interface Tutorial {
+  id: string;
+  title: string;
+  description: string;
+  /** At least one, in playing order. */
+  parts: TutorialPart[];
+  transcript: TutorialFile | null;
+  /** Every part's chapters in part order, each with its part id; a guide's chapter number indexes this list. */
+  chapters: Array<{ title: string; start: number; part: string }>;
   /** The legacy quick guide, or null when none is named, it is invalid (the reason is then in `warnings`) or it is a version 2 guide (see `guideDocs`). */
   guide: TutorialGuide | null;
   /** The guide as documentation, for a version 1 (adapted) or version 2 guide; null when none is named or it is invalid. */
@@ -254,6 +272,48 @@ function loadGuide(folder: string, dir: string, manifest: TutorialManifest & { g
   };
 }
 
+/** How a message names a part: only a tutorial in parts has named parts (the one part of a single video declares no duration). */
+const partLabel = (p: TutorialPartManifest) => (p.duration === null ? '' : `part "${p.id}" `);
+
+type SizedFile = TutorialFile & { bytes: number };
+
+/** An optional file of a tutorial: null when it is not named, or when it is missing or outside the folder (then with a warning). */
+function optionalFile(dir: string, folder: string, kind: string, name: string | undefined, warnings: string[]): SizedFile | null {
+  if (name === undefined) return null;
+  const r = resolveFile(dir, name);
+  if (r.ok) return { file: name, url: mediaUrl(folder, name), bytes: r.size };
+  warnings.push(`${kind} file ${refusal(name, r)}, so it is ignored`);
+  return null;
+}
+
+const plain = (f: SizedFile | null): TutorialFile | null => f && { file: f.file, url: f.url };
+
+type PartLoad = { ok: true; part: TutorialPart } | { ok: false; error: string };
+
+/** A part's files: its video must be there; an optional file that is missing is dropped with a warning. */
+function loadPart(dir: string, folder: string, p: TutorialPartManifest, warnings: string[]): PartLoad {
+  const label = partLabel(p);
+  const video = resolveFile(dir, p.video);
+  if (!video.ok) return { ok: false, error: `${label}video file ${refusal(p.video, video)}` };
+  const optional = (kind: string, name: string | undefined) => optionalFile(dir, folder, `${label}${kind}`, name, warnings);
+  const subtitles = optional('subtitles', p.subtitles);
+  return {
+    ok: true,
+    part: {
+      id: p.id,
+      title: p.title,
+      short: p.short,
+      duration: p.duration,
+      video: { file: p.video, url: mediaUrl(folder, p.video), bytes: video.size },
+      videoLight: optional('light video', p.videoLight),
+      subtitles: subtitles && { ...plain(subtitles)!, format: extOf(subtitles.file) === '.srt' ? 'srt' : 'vtt' },
+      poster: plain(optional('poster', p.poster)),
+      posterLight: plain(optional('light poster', p.posterLight)),
+      chapters: p.chapters,
+    },
+  };
+}
+
 export function listTutorials(dataRoot: string): TutorialsRead {
   const directory = tutorialsDir(dataRoot);
   const result: TutorialsRead = { directory, tutorials: [], warnings: [] };
@@ -289,42 +349,30 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       continue;
     }
     const m = parsed.manifest;
-    const video = resolveFile(dir, m.video);
-    if (!video.ok) {
-      skip(folder, `video file "${m.video}" ${video.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}`);
+    const warnings: string[] = [];
+    const loaded = m.parts.map((p) => loadPart(dir, folder, p, warnings));
+    const failed = loaded.find((l) => !l.ok);
+    if (failed && !failed.ok) {
+      skip(folder, failed.error);
       continue;
     }
-    const warnings: string[] = [];
-    const optional = (kind: string, name: string | undefined): (TutorialFile & { bytes: number }) | null => {
-      if (name === undefined) return null;
-      const r = resolveFile(dir, name);
-      if (r.ok) return { file: name, url: mediaUrl(folder, name), bytes: r.size };
-      warnings.push(`${kind} file "${name}" ${r.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}, so it is ignored`);
-      return null;
-    };
-    const plain = (f: (TutorialFile & { bytes: number }) | null): TutorialFile | null => f && { file: f.file, url: f.url };
-    const videoLight = optional('light video', m.videoLight);
-    const subtitles = optional('subtitles', m.subtitles);
+    const parts = loaded.flatMap((l) => (l.ok ? [l.part] : []));
     let guide: TutorialGuide | null = null;
     let docs: GuideDocs | null = null;
     if (m.guide !== undefined) {
-      const loaded = loadGuide(folder, dir, { ...m, guide: m.guide });
-      if (loaded.ok) {
-        guide = loaded.guide;
-        docs = loaded.docs;
+      const read = loadGuide(folder, dir, { ...m, guide: m.guide });
+      if (read.ok) {
+        guide = read.guide;
+        docs = read.docs;
       }
-      else warnings.push(`${loaded.error}, so the quick guide is hidden`);
+      else warnings.push(`${read.error}, so the quick guide is hidden`);
     }
     result.tutorials.push({
       id: m.id,
       title: m.title,
       description: m.description,
-      video: { file: m.video, url: mediaUrl(folder, m.video), bytes: video.size },
-      videoLight,
-      subtitles: subtitles && { ...plain(subtitles)!, format: extOf(subtitles.file) === '.srt' ? 'srt' : 'vtt' },
-      poster: plain(optional('poster', m.poster)),
-      posterLight: plain(optional('light poster', m.posterLight)),
-      transcript: plain(optional('transcript', m.transcript)),
+      parts,
+      transcript: plain(optionalFile(dir, folder, 'transcript', m.transcript, warnings)),
       chapters: m.chapters,
       guide,
       guideDocs: docs,

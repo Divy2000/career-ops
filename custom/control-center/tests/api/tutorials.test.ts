@@ -75,11 +75,17 @@ describe('GET /api/tutorials', () => {
       id: 'demo',
       title: 'Demo tutorial',
       description: 'Walks through the app.',
-      video: { url: '/api/tutorials/demo/media/demo.mp4', bytes: 1000 },
-      subtitles: { url: '/api/tutorials/demo/media/demo.srt' },
-      poster: { url: '/api/tutorials/demo/media/poster.jpg' },
+      parts: [
+        {
+          id: 'main',
+          video: { url: '/api/tutorials/demo/media/demo.mp4', bytes: 1000 },
+          subtitles: { url: '/api/tutorials/demo/media/demo.srt' },
+          poster: { url: '/api/tutorials/demo/media/poster.jpg' },
+          chapters: [{ title: 'First', start: 0 }, { title: 'Second', start: 30 }],
+        },
+      ],
       transcript: { url: '/api/tutorials/demo/media/script.md' },
-      chapters: [{ title: 'First', start: 0 }, { title: 'Second', start: 30 }],
+      chapters: [{ title: 'First', start: 0, part: 'main' }, { title: 'Second', start: 30, part: 'main' }],
       warnings: [],
     });
   });
@@ -99,9 +105,9 @@ describe('GET /api/tutorials', () => {
 
   it('keeps a tutorial whose optional files are missing and says which were dropped', async () => {
     const entry = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'missing-extras');
-    expect(entry.poster).toBeNull();
+    expect(entry.parts[0].poster).toBeNull();
     expect(entry.transcript).toBeNull();
-    expect(entry.subtitles).toBeNull();
+    expect(entry.parts[0].subtitles).toBeNull();
     expect(entry.warnings).toHaveLength(3);
     expect(entry.warnings.join(' ')).toMatch(/poster.*nope\.jpg/);
   });
@@ -109,25 +115,29 @@ describe('GET /api/tutorials', () => {
   it('lists videoLight and posterLight with media urls and the light video size', async () => {
     const themed = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'themed');
     expect(themed).toMatchObject({
-      video: { file: 't.mp4', url: '/api/tutorials/themed/media/t.mp4', bytes: 100 },
-      videoLight: { file: 't-light.mp4', url: '/api/tutorials/themed/media/t-light.mp4', bytes: 250 },
-      poster: { url: '/api/tutorials/themed/media/poster.jpg' },
-      posterLight: { file: 'poster-light.jpg', url: '/api/tutorials/themed/media/poster-light.jpg' },
+      parts: [
+        {
+          video: { file: 't.mp4', url: '/api/tutorials/themed/media/t.mp4', bytes: 100 },
+          videoLight: { file: 't-light.mp4', url: '/api/tutorials/themed/media/t-light.mp4', bytes: 250 },
+          poster: { url: '/api/tutorials/themed/media/poster.jpg' },
+          posterLight: { file: 'poster-light.jpg', url: '/api/tutorials/themed/media/poster-light.jpg' },
+        },
+      ],
       warnings: [],
     });
   });
 
   it('lists videoLight and posterLight as null for a tutorial that has no light version', async () => {
     const demo = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'demo');
-    expect(demo.videoLight).toBeNull();
-    expect(demo.posterLight).toBeNull();
+    expect(demo.parts[0].videoLight).toBeNull();
+    expect(demo.parts[0].posterLight).toBeNull();
   });
 
   it('drops a light video and poster that are missing, with a warning each, and keeps the dark video', async () => {
     const entry = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'missing-light');
-    expect(entry.videoLight).toBeNull();
-    expect(entry.posterLight).toBeNull();
-    expect(entry.video.file).toBe('m.mp4');
+    expect(entry.parts[0].videoLight).toBeNull();
+    expect(entry.parts[0].posterLight).toBeNull();
+    expect(entry.parts[0].video.file).toBe('m.mp4');
     expect(entry.warnings).toHaveLength(2);
     expect(entry.warnings.join(' ')).toMatch(/light video.*m-light\.mp4.*not found.*ignored/);
     expect(entry.warnings.join(' ')).toMatch(/light poster.*nope-light\.jpg.*not found.*ignored/);
@@ -135,7 +145,7 @@ describe('GET /api/tutorials', () => {
 
   it('drops a light video that is a symlink out of the folder and never serves it', async () => {
     const entry = (await get('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'escape-light');
-    expect(entry.videoLight).toBeNull();
+    expect(entry.parts[0].videoLight).toBeNull();
     expect(entry.warnings.join(' ')).toMatch(/light video.*escape\.mp4.*outside the tutorial folder/);
     const res = await media('escape-light', 'escape.mp4');
     expect(res.statusCode).toBe(404);
