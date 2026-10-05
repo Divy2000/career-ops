@@ -146,6 +146,19 @@ describe('pipeline', () => {
     expect(rows.some((r) => r.url === 'not a checkbox line')).toBe(false);
   });
 
+  it('keeps a bare pasted URL row and a URL row with only labeled segments, with company and role empty', () => {
+    const rows = parsePipeline('## Pending\n\n- [ ] https://jobs.example.com/posting/123\n- [ ] https://jobs.example.com/posting/124 | posted: 2026-06-18 | note: from a friend\n- [ ] https://jobs.example.com/posting/125 | Acme\n- [ ] not a url\n');
+    expect(rows.map((r) => r.url)).toEqual(['https://jobs.example.com/posting/123', 'https://jobs.example.com/posting/124', 'https://jobs.example.com/posting/125']);
+    expect(rows[0]).toMatchObject({ company: '', role: '', location: null, postedAt: null, section: 'pending', done: false, seniority: null, line: 3 });
+    expect(rows[1]).toMatchObject({ company: '', role: '', location: null, postedAt: '2026-06-18', note: 'from a friend' });
+    expect(rows[2]).toMatchObject({ company: 'Acme', role: '' });
+  });
+
+  it('reads a word-colon cell in the company or role column as text, not as a label', () => {
+    const [row] = parsePipeline('## Pending\n- [ ] https://a.example/1 | Remote: EMEA Inc | Engineer: Backend\n');
+    expect(row).toMatchObject({ company: 'Remote: EMEA Inc', role: 'Engineer: Backend' });
+  });
+
   it('joins first-seen and source from scan history and distinguishes a missing file', () => {
     const p = readPipeline(root);
     expect(p.kind).toBe('ok');

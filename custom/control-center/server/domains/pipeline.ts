@@ -23,6 +23,9 @@ export type PipelineRead = { kind: 'missing'; path: string } | { kind: 'ok'; pat
 
 const CHECKBOX_RE = /^\s*-\s*\[([ xX])\]\s*(.+)$/;
 const LABELED = /^([a-z][\w-]*):\s*(.*)$/i;
+// Labels the writers emit (scan.mjs PIPELINE_LABELED_SEGMENT_RE). They ride on any row shape, so they count from the
+// second cell; any other `word:` cell is a label only past the role, where it cannot be a company or a title.
+const KNOWN_LABEL = /^(?:posted|trust|note|rank):\s/i;
 const EM_DASH = String.fromCharCode(0x2014);
 const EN_DASH = String.fromCharCode(0x2013);
 // `rank: 3.2/5 <dash> reason`; the dash written by rank-pipeline is U+2014, hand edits use - or :.
@@ -82,18 +85,19 @@ export function parsePipeline(md: string): PipelineRow[] {
     const positional: string[] = [];
     const labels = new Map<string, string>();
     cells.forEach((cell, idx) => {
-      const lm = idx >= 3 ? cell.match(LABELED) : null;
+      const lm = idx >= 3 || (idx >= 1 && KNOWN_LABEL.test(cell)) ? cell.match(LABELED) : null;
       if (lm) labels.set(lm[1]!.toLowerCase(), lm[2]!.trim());
       else positional.push(cell);
     });
-    if (positional.length < 3 || !/^https?:\/\//i.test(positional[0]!)) return;
+    // Upstream rows are 1 to 5 columns: a bare pasted URL is valid, its company and role are just unknown.
+    if (!/^https?:\/\//i.test(positional[0]!)) return;
     const rankCell = labels.get('rank');
     const { rank, reason } = rankCell ? parseRankCell(rankCell) : { rank: null, reason: null };
     const posted = labels.get('posted');
     rows.push({
       url: positional[0]!,
-      company: positional[1]!,
-      role: positional[2]!,
+      company: positional[1] ?? '',
+      role: positional[2] ?? '',
       location: positional[3] || null,
       compensation: positional[4] || null,
       done: m[1]!.toLowerCase() === 'x',
@@ -104,7 +108,7 @@ export function parsePipeline(md: string): PipelineRow[] {
       note: labels.get('note') ?? null,
       firstSeen: null,
       source: 'other',
-      seniority: seniorityOf(positional[2]!),
+      seniority: seniorityOf(positional[2] ?? ''),
       line: i + 1,
     });
   });
