@@ -58,3 +58,21 @@ describe('live invalidation', () => {
     expect(fetches).toEqual({ chip: 2, log: 2, today: 2 });
   });
 });
+
+describe('live invalidation of the Sponsorship lookup', () => {
+  function LookupProbe() {
+    useLiveInvalidation();
+    // Sponsorship > Lookup (LookupTab.tsx): the saved check for one company.
+    useQuery({ queryKey: ['sponsorship', 'lookup', 'Acme'], queryFn: () => ((fetches.lookup = (fetches.lookup ?? 0) + 1), { ok: true }) });
+    return null;
+  }
+
+  it('a change under data/immigration/ (a sponsorship check saving its result) refetches the lookup', async () => {
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }) }, createElement(LookupProbe))));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(fetches.lookup).toBe(1);
+    await act(async () => FakeEventSource.last!.emit('data.changed', { domain: 'immigration', paths: ['data/immigration/company-checks/acme.md'] }));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(fetches.lookup).toBe(2);
+  });
+});

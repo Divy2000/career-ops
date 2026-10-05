@@ -7,7 +7,7 @@ export const DOMAIN_KEYS: Record<string, string[][]> = {
   reports: [['tracker'], ['insights']],
   pipeline: [['pipeline']],
   shortlist: [['shortlist']],
-  immigration: [['immigration']],
+  immigration: [['immigration'], ['sponsorship']],
   followups: [['followups'], ['tracker']],
   config: [['config'], ['system']],
   runs: [['runs']],
