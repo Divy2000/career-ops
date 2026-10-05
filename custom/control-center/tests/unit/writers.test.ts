@@ -138,6 +138,14 @@ describe('action registry covers section 3.3', () => {
     expect(rank.args.slice(1)).toEqual(['--limit', '20', '--model', 'haiku', '--dry-run']);
     expect(findAction('tracker.hiredShare')!.build({ report: '012', anonymity: 'role', story: 'It worked' }, ctx).args.slice(1)).toEqual(['--report', '012', '--anonymity', 'role', '--story', 'It worked']);
     expect(findAction('tracker.hiredMark')!.build({ report: '012', mark: 'later' }, ctx).args.slice(1)).toEqual(['--report', '012', '--mark', 'later']);
+    // A caller holding the report as a number (12, an unpadded `[12]` row) still works; a padded label stays text.
+    for (const id of ['tracker.hiredShare', 'tracker.hiredMark']) {
+      const a = findAction(id)!;
+      const extra = id === 'tracker.hiredShare' ? { anonymity: 'role' } : { mark: 'later' };
+      expect(a.build(a.params.parse({ report: 12, ...extra }), ctx).args.slice(1, 3), id).toEqual(['--report', '12']);
+      expect(a.build(a.params.parse({ report: '012', ...extra }), ctx).args.slice(1, 3), id).toEqual(['--report', '012']);
+      for (const bad of [0, -3, 1.5, '12a', '']) expect(a.params.safeParse({ report: bad, ...extra }).success, `${id} ${JSON.stringify(bad)}`).toBe(false);
+    }
     expect(findAction('pipeline.releaseReportNums')!.build({ range: '12-14' }, ctx).args.slice(1)).toEqual(['--release', '12-14']);
     expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
     expect(findAction('immigration.h1b')!.build({ company: 'Acme', mode: 'json' }, ctx).args.slice(1)).toEqual(['Acme', '--json']);
