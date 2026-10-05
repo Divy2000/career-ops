@@ -46,7 +46,7 @@ describe('read endpoints', () => {
     try {
       fs.appendFileSync(
         path.join(own.cfg.dataRoot, 'data', 'applications.md'),
-        '| 7 | 2026-10-01 | ? | Hays | Recruiter role | 3.0/5 | Applied | — | — | agency, employer not named |\n| 8 | 2026-10-02 | ? | Randstad | Data role | 3.1/5 | Applied | — | — | agency |\n',
+        '| 7 | 2026-10-01 | ? | Hays | Recruiter role | 3.0/5 | Applied | ❌ | - | agency, employer not named |\n| 8 | 2026-10-02 | ? | Randstad | Data role | 3.1/5 | Applied | ❌ | - | agency |\n',
       );
       const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
       expect(res.statusCode, res.body).toBe(200);
