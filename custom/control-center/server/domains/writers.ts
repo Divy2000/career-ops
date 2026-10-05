@@ -36,7 +36,10 @@ const listed = new Set(seen);
 // Every URL history has a row for, whatever its status.
 const recorded = new Set();
 if (req.history && fs.existsSync(SCAN_HISTORY_PATH)) {
-  for (const line of fs.readFileSync(SCAN_HISTORY_PATH, 'utf8').split('\\n').slice(1)) {
+  const lines = fs.readFileSync(SCAN_HISTORY_PATH, 'utf8').split('\\n');
+  // scan.mjs also accepts a headerless (legacy) history: skip line 1 only when it is the header.
+  if (lines[0]?.startsWith('url\\t')) lines.shift();
+  for (const line of lines) {
     const url = line.split('\\t')[0];
     if (url) recorded.add(normalizeUrlForDedup(url));
   }

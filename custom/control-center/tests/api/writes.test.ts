@@ -99,6 +99,20 @@ describe('pipeline writes', () => {
     expect(rowsFor(halfway)).toHaveLength(1);
     expect(readData('data/pipeline.md').split(`${halfway} `).length - 1).toBe(1);
   });
+  it('a headerless scan-history (legacy) keeps its first row: a listed URL recorded there gets no second history row', async () => {
+    const listed = 'https://boards.example.com/legacy/1';
+    const historyPath = path.join(t.cfg.dataRoot, 'data', 'scan-history.tsv');
+    const before = readData('data/scan-history.tsv');
+    try {
+      fs.writeFileSync(historyPath, `${listed}\t2026-09-01\tgreenhouse\tBackend Engineer\tLegacy Co\tadded\n`);
+      fs.writeFileSync(path.join(t.cfg.dataRoot, 'data', 'pipeline.md'), readData('data/pipeline.md').replace('## Pending\n\n', `## Pending\n\n- [ ] ${listed} | Legacy Co | Backend Engineer\n`));
+      const r = await post('/api/pipeline/add', { offers: [{ url: listed, company: 'Legacy Co', title: 'Backend Engineer' }] });
+      expect(r.json()).toEqual({ added: 0, skipped: 1 });
+      expect(readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${listed}\t`))).toHaveLength(1);
+    } finally {
+      fs.writeFileSync(historyPath, before);
+    }
+  });
   it('Network scan results with no location, a very long location and more rows than one request takes are all added', async () => {
     const postings: ScanPostingInput[] = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: 'Remote', source: 'greenhouse' }));
     postings[0]!.location = null;
