@@ -143,6 +143,9 @@ test.describe('deterministic writes from the pages', () => {
     await page.goto('/discover');
     await expect(page.getByRole('heading', { level: 1, name: 'Discover' })).toBeVisible();
     await expect(page.getByRole('form', { name: 'Network scan filters' })).toBeVisible();
+    const sources = page.getByRole('group', { name: 'ATS sources' }).getByRole('checkbox');
+    await expect(sources).toHaveCount(6);
+    expect(await sources.evaluateAll((boxes) => boxes.map((b) => b.closest('label')!.textContent!.trim()))).toEqual(['greenhouse', 'lever', 'ashby', 'workday', 'icims', 'bamboohr']);
     await page.getByRole('tab', { name: 'Fresh' }).click();
     await expect(page).toHaveURL(/tab=fresh/);
     await expect(page.getByRole('table', { name: 'Fresh matches' })).toBeVisible();

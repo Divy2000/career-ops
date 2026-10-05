@@ -10,10 +10,10 @@ import { AiSearchTab } from './AiSearchTab';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
+import { NETWORK_SCAN_SOURCES, type NetworkScanSource } from '@shared/network-scan';
 
 const route = getRouteApi('/discover');
 export type DiscoverTab = 'network' | 'portal' | 'ai' | 'fresh' | 'funded' | 'reposts';
-const ATS = ['greenhouse', 'lever', 'ashby', 'workable', 'smartrecruiters', 'recruitee', 'personio', 'bamboohr'];
 
 export interface ScanPosting {
   url: string;
@@ -161,7 +161,7 @@ function NetworkScan() {
   const [exclude, setExclude] = useState('intern');
   const [locations, setLocations] = useState('Remote');
   const [sinceDays, setSinceDays] = useState<1 | 3 | 7 | 14 | 30>(7);
-  const [ats, setAts] = useState<string[]>(['greenhouse', 'lever']);
+  const [ats, setAts] = useState<NetworkScanSource[]>(['greenhouse', 'lever']);
   const [limit, setLimit] = useState(100);
   const [runId, setRunId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -226,7 +226,7 @@ function NetworkScan() {
         </div>
         <fieldset className="row gap" style={{ border: 0, padding: 0, margin: 0 }}>
           <legend className="muted">ATS sources</legend>
-          {ATS.map((a) => (
+          {NETWORK_SCAN_SOURCES.map((a) => (
             <label key={a} className="row gap">
               <input type="checkbox" checked={ats.includes(a)} onChange={(e) => setAts(e.target.checked ? [...ats, a] : ats.filter((x) => x !== a))} /> {a}
             </label>
