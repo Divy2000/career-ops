@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, getRouteApi } from '@tanstack/react-router';
+import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
 import { useSessions } from '../../lib/sessions';
@@ -134,6 +134,11 @@ export function SessionDetailPage() {
   const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`) });
   const [deleted, setDeleted] = useState(false);
   const confirm = useConfirm();
+  const navigate = useNavigate();
+  // A fork is a new session: the page follows it instead of showing the source.
+  const openSession = (next: string) => {
+    if (next !== id) void navigate({ to: '/sessions/$id', params: { id: next } });
+  };
   const remove = async () => {
     if (!(await confirm({ title: 'Delete this session?', body: 'The transcript and its events are removed. Runs it started are kept.', confirmLabel: 'Delete', danger: true }))) return;
     await apiSend('DELETE', `/api/sessions/${id}`, {});
@@ -165,7 +170,7 @@ export function SessionDetailPage() {
                 Delete
               </button>
             </div>
-            <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} />
+            <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} onSessionId={openSession} />
             <div className="card">
               <h2>Turns</h2>
               <TableScroll label="Turns">

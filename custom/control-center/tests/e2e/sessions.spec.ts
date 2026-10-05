@@ -160,6 +160,25 @@ test.describe('AI sessions through the fake Claude', () => {
   });
 });
 
+test.describe('Fork on a session page', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('opens the forked session, which says where it came from', async ({ page }) => {
+    const res = await page.request.post('/api/sessions', { data: { mode: 'interview/practice', target: { type: 'app', value: '3' }, prompt: 'Practice' }, headers: { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}` } });
+    expect(res.status(), await res.text()).toBe(202);
+    const { id } = (await res.json()) as { id: string };
+    await page.goto(`/sessions/${id}`);
+    await expect(page.getByText('needs your reply', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.getByLabel('Reply to the session').fill('Try a different angle');
+    await page.getByRole('button', { name: 'Fork', exact: true }).click();
+    await expect(page).not.toHaveURL(new RegExp(`/sessions/${id}$`));
+    await expect(page).toHaveURL(/\/sessions\/s[\w-]+$/);
+    await expect(page.getByText(`forked from ${id}`)).toBeVisible();
+    const forkId = new URL(page.url()).pathname.split('/').at(-1)!;
+    await expect(page.locator(`[data-session-id="${forkId}"]`)).toBeVisible();
+  });
+});
+
 test.describe('Cancel stops a running session or run from the page', () => {
   test.beforeEach(async ({ page }) => login(page));
 
