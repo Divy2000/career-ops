@@ -44,6 +44,12 @@ describe('PartHeading', () => {
     expect(text('.tut__description')).toBe('A tour in three parts.');
   });
 
+  it('given a parts manifest with exactly one part that has its own description, when rendered, then that description shows, with no part line', async () => {
+    await render({ tutorial, part: part('Where new roles land.'), number: 1, total: 1 });
+    expect(text('.tut__description')).toBe('Where new roles land.');
+    expect(text('.tut__eyebrow')).toBeNull();
+  });
+
   it('given neither the part nor the tutorial has a description, when rendered, then no description line is drawn', async () => {
     await render({ tutorial: { title: 'Parts tour', description: '' }, part: part(null), number: 1, total: 2 });
     expect(host.querySelector('.tut__description')).toBeNull();

@@ -11,12 +11,13 @@ interface Props {
 }
 
 /**
- * The heading under the video. In parts it reads "Part N of M" over the part title and describes the part, falling back to the
- * tutorial description when the part has none; with one video it is the tutorial's title and description.
+ * The heading under the video: the part's description, or the tutorial's when the part has none. With several parts it reads
+ * "Part N of M" over the part title; with one it carries the tutorial title.
  */
 export function PartHeading({ tutorial, part, number, total, action }: Props) {
   const inParts = total > 1;
-  const description = (inParts ? part.description : null) || tutorial.description;
+  // A single video's part already carries the tutorial description, so the part's own always comes first, whatever the count.
+  const description = part.description || tutorial.description;
   return (
     <>
       {inParts && (
