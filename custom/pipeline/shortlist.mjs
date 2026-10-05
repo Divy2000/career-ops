@@ -6,7 +6,7 @@
 //
 //   node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -78,6 +78,8 @@ async function loadTiers(companies, today) {
     }
     looked++;
   }
+  // data/immigration exists only once the daily job or a sponsorship check ran.
+  await mkdir(path.dirname(TIER_CACHE), { recursive: true });
   await writeFile(TIER_CACHE, JSON.stringify(cache, null, 2) + '\n');
   return { tiers: new Map(companies.map((c) => [c, cache[c].tier])), looked };
 }
