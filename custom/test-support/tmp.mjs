@@ -29,13 +29,21 @@ export function suiteEnv(base, tmp) {
   return { ...env, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
 }
 
+/**
+ * Whether a `node --test` run's stdout reports at least one test. Node 22 prints TAP ("# tests N") when stdout
+ * is not a TTY and Node 23+ prints the spec reporter's "ℹ tests N", so both summaries count.
+ */
+export function suiteRanTests(stdout) {
+  return /^(?:#|ℹ) tests [1-9]/m.test(stdout);
+}
+
 /** Runs every *.spec.mjs in `testsDir` except `exclude` with the temp dir pointing at a fresh one; returns the run and what it left behind. */
 export function runSuiteInFreshTmp(testsDir, exclude) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tmp-guard-'));
   try {
     const files = fs.readdirSync(testsDir).filter((f) => f.endsWith('.spec.mjs') && f !== exclude).map((f) => path.join(testsDir, f));
     const r = spawnSync(process.execPath, ['--test', ...files], { env: suiteEnv(process.env, tmp), encoding: 'utf8', timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
-    if (files.length && !/ℹ tests [1-9]/.test(`${r.stdout}`)) throw new Error(`the suite did not run in the child:\n${r.stdout}\n${r.stderr}`.slice(-4000));
+    if (files.length && !suiteRanTests(`${r.stdout}`)) throw new Error(`the suite did not run in the child:\n${r.stdout}\n${r.stderr}`.slice(-4000));
     return { status: r.status, output: `${r.stdout}\n${r.stderr}`, leftovers: fs.readdirSync(tmp).sort() };
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
