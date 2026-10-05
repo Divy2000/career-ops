@@ -262,7 +262,8 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const named = [['video', manifest.video], ['light video', manifest.videoLight], ['subtitles', manifest.subtitles], ['poster', manifest.poster], ['light poster', manifest.posterLight], ['transcript', manifest.transcript]];
+  const [main] = manifest.parts;
+  const named = [['video', main.video], ['light video', main.videoLight], ['subtitles', main.subtitles], ['poster', main.poster], ['light poster', main.posterLight], ['transcript', manifest.transcript]];
   const copies = named
     .filter(([, name]) => name !== undefined)
     .map(([kind, name]) => ({ kind, from: path.join(source, built && kind === 'transcript' && scriptFrom ? scriptFrom : name), to: name }));

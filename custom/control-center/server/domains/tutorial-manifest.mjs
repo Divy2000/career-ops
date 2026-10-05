@@ -287,12 +287,87 @@ export function guideDocs(guide) {
   };
 }
 
-/** Validates a parsed tutorial.json that lives in folder `folder`; chapters come back sorted by start. */
+// The parts form: the recording is split into parts, each its own video with its own files, length and chapters.
+const MAX_PARTS = 50;
+/** The fields that belong to a part when a manifest has parts; at the top level they are refused. */
+const PART_FIELDS = ['video', 'videoLight', 'subtitles', 'poster', 'posterLight', 'chapters'];
+const PART_FILES = ['video', 'videoLight', 'subtitles', 'poster', 'posterLight'];
+
+const partSchema = z.strictObject({
+  id: idField,
+  title: text(120),
+  short: shortLabel.optional(),
+  video: plainName('video', ['.mp4']),
+  videoLight: plainName('videoLight', ['.mp4']).optional(),
+  subtitles: plainName('subtitles', ['.srt', '.vtt']).optional(),
+  poster: plainName('poster', ['.jpg', '.jpeg', '.png']).optional(),
+  posterLight: plainName('posterLight', ['.jpg', '.jpeg', '.png']).optional(),
+  duration: z.number().finite().positive(),
+  chapters: z.array(chapterSchema).min(1).max(500),
+});
+
+const partsManifestSchema = z.object({
+  id: idField,
+  title: z.string().min(1).max(200),
+  description: z.string().max(4000).default(''),
+  transcript: plainName('transcript', ['.md']).optional(),
+  guide: plainName('guide', ['.json']).optional(),
+  parts: z.array(partSchema).min(1).max(MAX_PARTS),
+});
+
+const byStart = (chapters) => [...chapters].sort((a, b) => a.start - b.start);
+const defined = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+const flatten = (parts) => parts.flatMap((p) => p.chapters.map((c) => ({ ...c, part: p.id })));
+
+/** Ids are unique, no file is named twice (without case: one file on a case-insensitive disk), and every chapter starts inside its part. */
+function checkParts(parts) {
+  const ids = new Set();
+  const files = new Map();
+  for (const [i, p] of parts.entries()) {
+    if (ids.has(p.id)) return `parts.${i}.id: duplicate part id "${p.id}"`;
+    ids.add(p.id);
+    for (const field of PART_FILES) {
+      const name = p[field];
+      if (name === undefined) continue;
+      const at = `parts.${i}.${field}`;
+      const used = files.get(name.toLowerCase());
+      if (used !== undefined) return `${at}: "${name}" is already used by ${used}; every part file must be a different file`;
+      files.set(name.toLowerCase(), at);
+    }
+    for (const [j, c] of p.chapters.entries()) {
+      if (c.start >= p.duration) return `parts.${i}.chapters.${j}.start: ${c.start} is not before the part's duration (${p.duration})`;
+    }
+  }
+  return null;
+}
+
+function parsePartsManifest(value, folder) {
+  if ('video' in value) return fail('video: a manifest has either video or parts, not both; with parts, move it into a part');
+  const misplaced = PART_FIELDS.find((f) => f in value);
+  if (misplaced) return fail(`${misplaced}: with parts, move it into a part`);
+  const parsed = partsManifestSchema.safeParse(value);
+  if (!parsed.success) return fail(describeIssues(parsed.error));
+  if (parsed.data.id !== folder) return fail(`id: must equal the folder name (${folder})`);
+  const problem = checkParts(parsed.data.parts);
+  if (problem) return fail(problem);
+  const { parts: raw, ...rest } = parsed.data;
+  const parts = raw.map((p) => ({ ...p, short: p.short ?? p.title, chapters: byStart(p.chapters) }));
+  return { ok: true, manifest: { ...rest, parts, chapters: flatten(parts) } };
+}
+
+/**
+ * Validates a parsed tutorial.json that lives in folder `folder`. Either form comes back as parts (a single-video manifest is one part,
+ * "main", named after the tutorial, with no declared duration), each with its chapters sorted by start, and `chapters` flattened across
+ * the parts in order, each with its part id and its start counted from the start of that part.
+ */
 export function parseManifest(value, folder) {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value) && 'parts' in value) return parsePartsManifest(value, folder);
   const parsed = manifestSchema.safeParse(value);
   if (!parsed.success) {
     return { ok: false, error: describeIssues(parsed.error) };
   }
   if (parsed.data.id !== folder) return { ok: false, error: `id: must equal the folder name (${folder})` };
-  return { ok: true, manifest: { ...parsed.data, chapters: [...parsed.data.chapters].sort((a, b) => a.start - b.start) } };
+  const { video, videoLight, subtitles, poster, posterLight, chapters, ...rest } = parsed.data;
+  const main = defined({ id: 'main', title: rest.title, short: rest.title, video, videoLight, subtitles, poster, posterLight, duration: null, chapters: byStart(chapters) });
+  return { ok: true, manifest: { ...rest, parts: [main], chapters: flatten([main]) } };
 }

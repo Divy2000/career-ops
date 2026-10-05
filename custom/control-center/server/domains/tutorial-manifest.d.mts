@@ -1,15 +1,28 @@
-export interface TutorialManifest {
+/** One part of a tutorial: its own video and files, its length and its chapters (starts counted from the start of the part). */
+export interface TutorialPartManifest {
   id: string;
   title: string;
-  description: string;
+  /** The playlist label: the part's short label, or its title when it has none. */
+  short: string;
   video: string;
   videoLight?: string;
   subtitles?: string;
   poster?: string;
   posterLight?: string;
+  /** Seconds; null for the one part of a single-video manifest, which declares no length. */
+  duration: number | null;
+  chapters: Array<{ title: string; start: number }>;
+}
+export interface TutorialManifest {
+  id: string;
+  title: string;
+  description: string;
   transcript?: string;
   guide?: string;
-  chapters: Array<{ title: string; start: number }>;
+  /** At least one; a single-video manifest is one part with id "main". */
+  parts: TutorialPartManifest[];
+  /** Every part's chapters in part order; a guide's chapter number indexes this list. */
+  chapters: Array<{ title: string; start: number; part: string }>;
 }
 export type ManifestResult = { ok: true; manifest: TutorialManifest } | { ok: false; error: string };
 export const ID_RE: RegExp;

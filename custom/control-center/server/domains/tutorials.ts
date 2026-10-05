@@ -292,9 +292,14 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       continue;
     }
     const m = parsed.manifest;
-    const video = resolveFile(dir, m.video);
+    if (m.parts.length > 1) {
+      skip(folder, 'this tutorial is split into parts, which this Control Center cannot play yet');
+      continue;
+    }
+    const main = m.parts[0]!;
+    const video = resolveFile(dir, main.video);
     if (!video.ok) {
-      skip(folder, `video file "${m.video}" ${video.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}`);
+      skip(folder, `video file "${main.video}" ${video.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}`);
       continue;
     }
     const warnings: string[] = [];
@@ -306,8 +311,8 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       return null;
     };
     const plain = (f: (TutorialFile & { bytes: number }) | null): TutorialFile | null => f && { file: f.file, url: f.url };
-    const videoLight = optional('light video', m.videoLight);
-    const subtitles = optional('subtitles', m.subtitles);
+    const videoLight = optional('light video', main.videoLight);
+    const subtitles = optional('subtitles', main.subtitles);
     let guide: TutorialGuide | null = null;
     let docs: GuideDocs | null = null;
     if (m.guide !== undefined) {
@@ -322,13 +327,13 @@ export function listTutorials(dataRoot: string): TutorialsRead {
       id: m.id,
       title: m.title,
       description: m.description,
-      video: { file: m.video, url: mediaUrl(folder, m.video), bytes: video.size },
+      video: { file: main.video, url: mediaUrl(folder, main.video), bytes: video.size },
       videoLight,
       subtitles: subtitles && { ...plain(subtitles)!, format: extOf(subtitles.file) === '.srt' ? 'srt' : 'vtt' },
-      poster: plain(optional('poster', m.poster)),
-      posterLight: plain(optional('light poster', m.posterLight)),
+      poster: plain(optional('poster', main.poster)),
+      posterLight: plain(optional('light poster', main.posterLight)),
       transcript: plain(optional('transcript', m.transcript)),
-      chapters: m.chapters,
+      chapters: main.chapters,
       guide,
       guideDocs: docs,
       warnings,

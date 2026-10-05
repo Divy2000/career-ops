@@ -119,7 +119,7 @@ describe('installTutorial from a recording folder (toc.json, srt, script.md)', (
     recordingFolder();
     write('other.mp4', 'V2');
     expect(() => installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'T' })).toThrow(/more than one \.mp4.*--video/);
-    expect(installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'T', video: 'other.mp4' }).manifest.video).toBe('other.mp4');
+    expect(installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'T', video: 'other.mp4' }).manifest.parts[0]!.video).toBe('other.mp4');
     fs.rmSync(path.join(src(), 'other.mp4'));
     fs.rmSync(path.join(src(), 'my-recording.mp4'));
     expect(() => installTutorial({ source: src(), dataRoot, id: 'second', title: 'T' })).toThrow(/no \.mp4/);

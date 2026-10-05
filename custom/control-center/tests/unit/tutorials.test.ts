@@ -61,7 +61,17 @@ describe('parseManifest', () => {
 
   it('accepts a full manifest and sorts chapters by start', () => {
     const m = parseManifest({ ...ok, subtitles: 'demo.srt', poster: 'poster.jpg', transcript: 'script.md', chapters: [{ title: 'B', start: 30 }, { title: 'A', start: 0 }] }, 'demo');
-    expect(m).toEqual({ ok: true, manifest: { ...ok, subtitles: 'demo.srt', poster: 'poster.jpg', transcript: 'script.md', chapters: [{ title: 'A', start: 0 }, { title: 'B', start: 30 }] } });
+    expect(m).toEqual({
+      ok: true,
+      manifest: {
+        id: 'demo',
+        title: 'Demo',
+        description: 'A demo.',
+        transcript: 'script.md',
+        parts: [{ id: 'main', title: 'Demo', short: 'Demo', video: 'demo.mp4', subtitles: 'demo.srt', poster: 'poster.jpg', duration: null, chapters: [{ title: 'A', start: 0 }, { title: 'B', start: 30 }] }],
+        chapters: [{ title: 'A', start: 0, part: 'main' }, { title: 'B', start: 30, part: 'main' }],
+      },
+    });
   });
 
   it('accepts a guide file name and keeps it', () => {
@@ -82,13 +92,13 @@ describe('parseManifest', () => {
 
   it('accepts videoLight and posterLight and keeps them', () => {
     const m = parseManifest({ ...ok, poster: 'poster.jpg', videoLight: 'demo-light.mp4', posterLight: 'poster-light.png' }, 'demo');
-    expect(m).toMatchObject({ ok: true, manifest: { videoLight: 'demo-light.mp4', posterLight: 'poster-light.png' } });
+    expect(m).toMatchObject({ ok: true, manifest: { parts: [{ videoLight: 'demo-light.mp4', posterLight: 'poster-light.png' }] } });
   });
 
   it('leaves videoLight and posterLight out when the manifest does not name them', () => {
     const m = parseManifest(ok, 'demo');
-    expect(m.ok && 'videoLight' in m.manifest).toBe(false);
-    expect(m.ok && 'posterLight' in m.manifest).toBe(false);
+    expect(m.ok && 'videoLight' in m.manifest.parts[0]!).toBe(false);
+    expect(m.ok && 'posterLight' in m.manifest.parts[0]!).toBe(false);
   });
 
   it.each([
@@ -107,7 +117,7 @@ describe('parseManifest', () => {
 
   it('defaults the description and chapters', () => {
     const m = parseManifest({ id: 'demo', title: 'Demo', video: 'demo.mp4' }, 'demo');
-    expect(m).toEqual({ ok: true, manifest: { id: 'demo', title: 'Demo', description: '', video: 'demo.mp4', chapters: [] } });
+    expect(m).toEqual({ ok: true, manifest: { id: 'demo', title: 'Demo', description: '', parts: [{ id: 'main', title: 'Demo', short: 'Demo', video: 'demo.mp4', duration: null, chapters: [] }], chapters: [] } });
   });
 
   it.each([
@@ -131,6 +141,148 @@ describe('parseManifest', () => {
     const m = parseManifest(value, 'demo');
     expect(m.ok).toBe(false);
     if (!m.ok) expect(m.error).toMatch(message);
+  });
+});
+
+describe('parseManifest with parts', () => {
+  const part = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    title: `Part ${id}`,
+    video: `${id}.mp4`,
+    duration: 100,
+    chapters: [{ title: `${id} one`, start: 0 }],
+    ...over,
+  });
+  const base = { id: 'tour', title: 'Tour', description: 'In parts.' };
+  const parse = (over: Record<string, unknown>) => parseManifest({ ...base, ...over }, 'tour');
+  const error = (over: Record<string, unknown>) => {
+    const m = parse(over);
+    return m.ok ? null : m.error;
+  };
+
+  it('given a manifest with 2 parts, when parsed, then parts are normalized with the short-label fallback and chapters are flattened with part ids in order', () => {
+    const m = parse({
+      transcript: 'script.md',
+      parts: [
+        part('start', { short: 'Start here', videoLight: 'start-light.mp4', subtitles: 'start.vtt', poster: 'start.jpg', posterLight: 'start-light.jpg', chapters: [{ title: 'Launch', start: 40 }, { title: 'Intro', start: 0 }] }),
+        part('intel', { duration: 286.5 }),
+      ],
+    });
+    expect(m).toEqual({
+      ok: true,
+      manifest: {
+        id: 'tour',
+        title: 'Tour',
+        description: 'In parts.',
+        transcript: 'script.md',
+        parts: [
+          {
+            id: 'start',
+            title: 'Part start',
+            short: 'Start here',
+            video: 'start.mp4',
+            videoLight: 'start-light.mp4',
+            subtitles: 'start.vtt',
+            poster: 'start.jpg',
+            posterLight: 'start-light.jpg',
+            duration: 100,
+            chapters: [{ title: 'Intro', start: 0 }, { title: 'Launch', start: 40 }],
+          },
+          { id: 'intel', title: 'Part intel', short: 'Part intel', video: 'intel.mp4', duration: 286.5, chapters: [{ title: 'intel one', start: 0 }] },
+        ],
+        chapters: [
+          { title: 'Intro', start: 0, part: 'start' },
+          { title: 'Launch', start: 40, part: 'start' },
+          { title: 'intel one', start: 0, part: 'intel' },
+        ],
+      },
+    });
+  });
+
+  it('given both video and parts, when parsed, then it is an error', () => {
+    expect(error({ video: 'tour.mp4', parts: [part('a')] })).toMatch(/video.*either video or parts/);
+  });
+
+  it.each(['videoLight', 'subtitles', 'poster', 'posterLight', 'chapters'])('given parts plus a top-level %s, when parsed, then the error says to move it into a part', (field) => {
+    const value = { videoLight: 'x-light.mp4', subtitles: 'x.vtt', poster: 'x.jpg', posterLight: 'x-light.jpg', chapters: [] }[field];
+    expect(error({ [field]: value, parts: [part('a')] })).toMatch(new RegExp(`${field}: .*move it into a part`));
+  });
+
+  it('given a repeated part id, when parsed, then it is an error naming the id', () => {
+    expect(error({ parts: [part('a'), part('a', { video: 'other.mp4' })] })).toMatch(/parts\.1\.id: duplicate part id "a"/);
+  });
+
+  it('given a file name used twice with different case, when parsed, then it is an error naming both places', () => {
+    expect(error({ parts: [part('a', { poster: 'Shared.jpg' }), part('b', { posterLight: 'shared.JPG' })] })).toMatch(/parts\.1\.posterLight: "shared\.JPG" is already used by parts\.0\.poster/);
+  });
+
+  it.each([
+    ['at', 100],
+    ['past', 130],
+  ])('given a chapter start %s the part duration, when parsed, then it is an error', (_label, start) => {
+    expect(error({ parts: [part('a', { chapters: [{ title: 'One', start: 0 }, { title: 'Late', start }] })] })).toMatch(/parts\.0\.chapters\.1\.start: .*before the part's duration \(100\)/);
+  });
+
+  it.each([
+    ['an empty part list', { parts: [] }, /parts/],
+    ['a part without chapters', { parts: [part('a', { chapters: [] })] }, /parts\.0\.chapters/],
+    ['a part without a video', { parts: [part('a', { video: undefined })] }, /parts\.0\.video/],
+    ['a part without a duration', { parts: [part('a', { duration: undefined })] }, /parts\.0\.duration/],
+    ['a zero duration', { parts: [part('a', { duration: 0 })] }, /parts\.0\.duration/],
+    ['an unknown part key', { parts: [part('a', { extra: 1 })] }, /extra/],
+    ['a part id that is not slug-safe', { parts: [part('a b')] }, /parts\.0\.id/],
+    ['a part title of 121 characters', { parts: [part('a', { title: 'x'.repeat(121) })] }, /parts\.0\.title/],
+    ['a blank short label', { parts: [part('a', { short: '  ' })] }, /parts\.0\.short/],
+    ['a short label of 25 characters', { parts: [part('a', { short: 'x'.repeat(25) })] }, /parts\.0\.short/],
+    ['a part video that climbs out', { parts: [part('a', { video: '../a.mp4' })] }, /parts\.0\.video/],
+    ['a part poster that is a gif', { parts: [part('a', { poster: 'a.gif' })] }, /parts\.0\.poster/],
+  ])('rejects %s', (_label, over, message) => {
+    expect(error(over)).toMatch(message);
+  });
+
+  it('given today\'s single-video manifest, when parsed, then it becomes one part "main" that keeps every media field', () => {
+    const m = parseManifest(
+      { id: 'demo', title: 'Demo', description: 'A demo.', video: 'demo.mp4', videoLight: 'demo-light.mp4', subtitles: 'demo.srt', poster: 'p.jpg', posterLight: 'p-light.jpg', transcript: 'script.md', guide: 'guide.json', chapters: [{ title: 'B', start: 30 }, { title: 'A', start: 0 }] },
+      'demo',
+    );
+    expect(m).toEqual({
+      ok: true,
+      manifest: {
+        id: 'demo',
+        title: 'Demo',
+        description: 'A demo.',
+        transcript: 'script.md',
+        guide: 'guide.json',
+        parts: [
+          {
+            id: 'main',
+            title: 'Demo',
+            short: 'Demo',
+            video: 'demo.mp4',
+            videoLight: 'demo-light.mp4',
+            subtitles: 'demo.srt',
+            poster: 'p.jpg',
+            posterLight: 'p-light.jpg',
+            duration: null,
+            chapters: [{ title: 'A', start: 0 }, { title: 'B', start: 30 }],
+          },
+        ],
+        chapters: [
+          { title: 'A', start: 0, part: 'main' },
+          { title: 'B', start: 30, part: 'main' },
+        ],
+      },
+    });
+  });
+
+  it('given a guide chapter index equal to the total chapter count, when parsed, then it is rejected; total - 1 is accepted', () => {
+    const m = parse({ parts: [part('a', { chapters: [{ title: 'One', start: 0 }, { title: 'Two', start: 10 }] }), part('b')] });
+    if (!m.ok) throw new Error(m.error);
+    const total = m.manifest.chapters.length;
+    expect(total).toBe(3);
+    const guide = (chapter: number) => ({ sections: [{ id: 's', title: 'S', summary: 's', gif: 's.gif', steps: ['x'], chapter }] });
+    expect(parseGuide(guide(total), { chapterCount: total }).ok).toBe(false);
+    expect(parseGuide(guide(total - 1), { chapterCount: total }).ok).toBe(true);
   });
 });
 
