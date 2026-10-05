@@ -585,7 +585,8 @@ describe('session output that cannot be processed fails only that session (R5-02
   it('a final answer with an envelope named after an Object property is reported as invalid and the session finishes', async () => {
     const { meta, events } = await withScenario(scenarioFile({ events: [INIT, result('Done.\n<<cc:constructor {}>>', 0.02)] }), async () => settle((await post('/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id));
     expect(invalid(events)).toEqual([expect.objectContaining({ kind: 'constructor', error: 'unknown envelope kind constructor' })]);
-    expect(meta.status).not.toBe('running');
+    // settle() returns only finished statuses, so name the one this turn must reach (SW-tests-22).
+    expect(meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
     expect((await get('/api/sessions')).statusCode).toBe(200);
   });
 
@@ -602,7 +603,7 @@ describe('session output that cannot be processed fails only that session (R5-02
       b = await makeTestApp({ dataRoot, guardRoot });
       const { meta, events } = await settleOn(b, id);
       expect(invalid(events)).toEqual([expect.objectContaining({ kind: 'constructor' })]);
-      expect(meta.status).not.toBe('running');
+      expect(meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
     } finally {
       await b?.close();
       await a.close().catch(() => undefined);
