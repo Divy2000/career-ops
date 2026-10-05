@@ -5,7 +5,7 @@ import { parseReport, readReport, listReportFiles, parseScore, splitSections, is
 import { readTracker, postedFromNotes, pdfPresent } from '../../server/domains/tracker.js';
 import { parsePipeline, parseRankCell, readPipeline, seniorityOf, sourceOf } from '../../server/domains/pipeline.js';
 import { parseShortlist, readShortlist } from '../../server/domains/shortlist.js';
-import { parseFollowupsTable, parseNextOverrides } from '../../server/domains/followups.js';
+import { parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
 import { parseTsv, readText } from '../../server/domains/files.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { copyFixtureRoot } from '../helpers/app.js';
@@ -230,7 +230,7 @@ describe('shortlist', () => {
 describe('follow-ups file', () => {
   it('parses table rows and pin directives', () => {
     const text = fs.readFileSync(path.join(root, 'data', 'follow-ups.md'), 'utf8');
-    const entries = parseFollowupsTable(text);
+    const entries = parseFollowups(text);
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ num: 1, appNum: 1, date: '2026-09-28', channel: 'Email' });
     const pins = parseNextOverrides(text);

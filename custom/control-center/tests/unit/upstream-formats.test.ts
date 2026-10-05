@@ -10,7 +10,7 @@ import { parseReport } from '../../server/domains/reports.js';
 import { readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
 import { readScanHistory } from '../../server/domains/pipeline.js';
-import { activePin } from '../../server/domains/followups.js';
+import { activePin, parseFollowups } from '../../server/domains/followups.js';
 import { pathToFileURL } from 'node:url';
 import { localDate } from '../../shared/local-date.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -197,5 +197,32 @@ process.stdout.write(JSON.stringify(${JSON.stringify(cases)}.map((last) => m.res
     const ours = cases.map((last) => activePin(pin, last === null ? [] : [{ date: last }, { date: '2026-09-01' }])?.date ?? null);
     expect(ours).toEqual(cadence);
     expect(cadence).toEqual(['2026-10-10', '2026-10-10', '2026-10-10', null]);
+  });
+});
+
+describe('follow-ups.md log lines (followup-cadence.mjs parseFollowups)', () => {
+  it('the app reads the same follow-ups as the cadence, table rows and legacy bullets alike', () => {
+    const D = String.fromCharCode(0x2014);
+    const text = [
+      '# Follow-ups',
+      '',
+      '| num | appNum | date | company | role | channel | contact | notes |',
+      '|---|---|---|---|---|---|---|---|',
+      '| 1 | 1 | 2026-09-28 | Acme Robotics | Senior Backend Engineer | Email | Pat Example | asked about timeline |',
+      '| 2 | 3 | 2026-09-30 | Globex | Staff Engineer | LinkedIn | Sam | |',
+      '| x | 3 | 2026-09-30 | Globex | Staff Engineer | LinkedIn | Sam | not a row |',
+      `- 2026-10-02 \u00b7 #1 Acme Robotics ${D} nudged again`,
+      '- 2026-10-03 \u00b7 #6 Vandelay Systems',
+      `- 2026-10-04 \u00b7 Unattributed Co ${D} no app number`,
+      `- next #1 2026-10-10 (set 2026-10-01) ${D} recruiter asked`,
+      '',
+    ].join('\n');
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'followup-cadence.mjs')).href)});
+process.stdout.write(JSON.stringify(m.parseFollowups(${JSON.stringify(text)})));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const cadence = JSON.parse(r.stdout) as unknown[];
+    expect(cadence).toHaveLength(4);
+    expect(parseFollowups(text)).toEqual(cadence);
   });
 });

@@ -1,5 +1,6 @@
 export interface FollowupEntry {
-  num: number;
+  /** null for a legacy bullet line, which has no row number. */
+  num: number | null;
   appNum: number;
   date: string;
   company: string;
@@ -9,26 +10,29 @@ export interface FollowupEntry {
   notes: string;
 }
 
-/** Table rows of data/follow-ups.md (`| num | appNum | date | company | role | channel | contact | notes |`). */
-export function parseFollowupsTable(text: string): FollowupEntry[] {
+// followup-cadence.mjs BULLET_RE: legacy bullets early web builds wrote, `- YYYY-MM-DD \u00b7 #NUM Company <em dash> note`.
+const BULLET_RE = new RegExp(`^-\\s+(\\d{4}-\\d{2}-\\d{2})\\s+\u00b7\\s+#(\\d+)\\s+(.+?)(?:\\s+${String.fromCharCode(0x2014)}\\s+(.*))?$`);
+
+/**
+ * The follow-ups logged in data/follow-ups.md, read exactly as followup-cadence.mjs parseFollowups reads them:
+ * table rows (`| num | appNum | date | company | role | channel | contact | notes |`) and legacy bullets.
+ */
+export function parseFollowups(text: string): FollowupEntry[] {
   const out: FollowupEntry[] = [];
   for (const line of text.split('\n')) {
-    if (!line.startsWith('|')) continue;
-    const parts = line.split('|').map((s) => s.trim());
-    if (parts.length < 8) continue;
-    const num = parseInt(parts[1]!, 10);
-    const appNum = parseInt(parts[2]!, 10);
-    if (Number.isNaN(num) || Number.isNaN(appNum)) continue;
-    out.push({
-      num,
-      appNum,
-      date: parts[3] ?? '',
-      company: parts[4] ?? '',
-      role: parts[5] ?? '',
-      channel: parts[6] ?? '',
-      contact: parts[7] ?? '',
-      notes: parts[8] ?? '',
-    });
+    if (line.startsWith('|')) {
+      const parts = line.split('|').map((s) => s.trim());
+      if (parts.length < 8) continue;
+      const num = parseInt(parts[1]!, 10);
+      if (Number.isNaN(num)) continue;
+      const appNum = parseInt(parts[2]!, 10);
+      if (Number.isNaN(appNum)) continue;
+      out.push({ num, appNum, date: parts[3]!, company: parts[4]!, role: parts[5]!, channel: parts[6]!, contact: parts[7]!, notes: parts[8] || '' });
+      continue;
+    }
+    const m = line.match(BULLET_RE);
+    if (!m) continue;
+    out.push({ num: null, appNum: parseInt(m[2]!, 10), date: m[1]!, company: m[3]!, role: '', channel: 'Other', contact: '', notes: m[4] || '' });
   }
   return out;
 }

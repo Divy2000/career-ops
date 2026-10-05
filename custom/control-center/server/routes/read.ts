@@ -10,7 +10,7 @@ import { readShortlist } from '../domains/shortlist.js';
 import { localDate, readImmigrationOverview } from '../domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, type NormalizeTextKey } from '../domains/whatsNew.js';
 import { computeDashboard, readStatusLog } from '../domains/insights.js';
-import { activePin, parseFollowupsTable, parseNextOverrides } from '../domains/followups.js';
+import { activePin, parseFollowups, parseNextOverrides } from '../domains/followups.js';
 import { readText } from '../domains/files.js';
 import { inside } from '../lib/paths.js';
 import { execNoShell, type Exec } from './system.js';
@@ -85,7 +85,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
     const report = row.report !== null ? readReport(cfg.dataRoot, row.report) : { kind: 'none' as const };
     const followupsRead = readText(path.join(cfg.dataRoot, 'data', 'follow-ups.md'));
-    const followups = followupsRead.kind === 'ok' ? parseFollowupsTable(followupsRead.text).filter((f) => f.appNum === n) : [];
+    const followups = followupsRead.kind === 'ok' ? parseFollowups(followupsRead.text).filter((f) => f.appNum === n) : [];
     const pin = followupsRead.kind === 'ok' ? activePin(parseNextOverrides(followupsRead.text).get(n) ?? null, followups) : null;
     const statusLog = readStatusLog(tracker.path).filter((s) => s.num === n);
     const { normalizeTextKey } = await importCore<{ normalizeTextKey: NormalizeTextKey }>(cfg.codeRoot, 'tracker-parse.mjs');
