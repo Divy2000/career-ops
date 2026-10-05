@@ -33,16 +33,50 @@ export interface InsightRead {
   fromCache: boolean;
 }
 
-const INPUTS = ['cv.md', 'article-digest.md', 'data/applications.md', 'data/status-log.tsv', 'data/scan-history.tsv', 'data/pipeline.md', 'data/follow-ups.md', 'data/blacklist.md', 'reports', 'interview-prep', 'interview-prep/sessions', 'jds', 'config/profile.yml'];
+const INPUT_FILES = [
+  'cv.md',
+  'article-digest.md',
+  'portals.yml',
+  'config/profile.yml',
+  'config/benchmarks.yml',
+  'data/applications.md',
+  'data/status-log.tsv',
+  'data/scan-history.tsv',
+  'data/pipeline.md',
+  'data/follow-ups.md',
+  'data/blacklist.md',
+  'data/assessments.tsv',
+  'data/salary-observations.tsv',
+  'data/active-interviews.md',
+  'active-interviews.md',
+];
+/** Folders whose files the scripts read; each file counts, since editing one in place leaves its folder's time alone. */
+const INPUT_DIRS = ['reports', 'interview-prep', 'interview-prep/sessions', 'jds'];
+
+const mtimeOf = (file: string): string => {
+  try {
+    return String(Math.round(fs.statSync(file).mtimeMs));
+  } catch {
+    return '-';
+  }
+};
+
+function dirKey(dir: string): string {
+  let names: string[];
+  try {
+    names = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return '-';
+  }
+  return names.map((n) => `${n}@${mtimeOf(path.join(dir, n))}`).join(',');
+}
 
 export function inputsKey(dataRoot: string): string {
-  return INPUTS.map((rel) => {
-    try {
-      return `${rel}:${Math.round(fs.statSync(path.join(dataRoot, rel)).mtimeMs)}`;
-    } catch {
-      return `${rel}:-`;
-    }
-  }).join('|');
+  return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`)].join('|');
 }
 
 const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'data', 'control-center', 'insights', `${script}.json`);
