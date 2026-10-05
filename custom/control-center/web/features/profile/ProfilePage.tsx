@@ -5,6 +5,7 @@ import { SessionPanel } from '../../components/SessionPanel';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { DataState, FilePicker, Pill, Tabs } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
+import { describeError } from '../../lib/actions';
 import { ProjectsLibrary } from './ProjectsLibrary';
 
 interface UserFile {
@@ -124,6 +125,8 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const [draft, setDraft] = useState('');
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<UserFile | null>(null);
   // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
   const currentUpload = useRef<string | null>(null);
   const showUpload = (p: string | null) => {
@@ -160,8 +163,19 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     showUpload(body.path);
   };
   const save = async () => {
-    const current = await apiGet<UserFile>('/api/files/user/cv');
-    await apiSend('PUT', '/api/files/user/cv', { text: draft }, current.etag ? { 'If-Match': current.etag } : {});
+    setNote(null);
+    setSaveError(null);
+    try {
+      const current = await apiGet<UserFile>('/api/files/user/cv');
+      await apiSend('PUT', '/api/files/user/cv', { text: draft }, current.etag ? { 'If-Match': current.etag } : {});
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setConflict((err.body as { current: UserFile }).current);
+        setSaveError('cv.md changed on disk while it was being saved. Review the current version below, then save again to overwrite it.');
+      } else setSaveError(`Could not save cv.md: ${describeError(err)}`);
+      return;
+    }
+    setConflict(null);
     setNote('cv.md saved. Run a network scan from Discover to find matches.');
     await qc.invalidateQueries({ queryKey: ['config'] });
     onImported?.();
@@ -185,6 +199,17 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
           </span>
         )}
       </div>
+      {saveError && (
+        <p role="alert" className="danger-text">
+          {saveError}
+        </p>
+      )}
+      {conflict && (
+        <details open>
+          <summary>Current cv.md on disk</summary>
+          <pre tabIndex={0} className="log mono small">{conflict.text}</pre>
+        </details>
+      )}
     </div>
   );
 }
