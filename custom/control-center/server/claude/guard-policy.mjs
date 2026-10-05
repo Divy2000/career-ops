@@ -256,12 +256,14 @@ function withTimeout(promise, ms) {
  * not block, so the DNS check must always answer, and refuse, well before that.
  */
 export const DNS_BUDGET_MS = 20_000;
-/** Distinct hosts one call may name: each needs a getaddrinfo thread, and libuv's pool has four. */
+/** Distinct names one call may need resolved: each lookup takes a getaddrinfo thread, and libuv's pool has four. */
 export const MAX_URL_HOSTS = 4;
+/** Distinct destinations (names and literal addresses) one call may name; literal addresses need no lookup. */
+export const MAX_URL_DESTINATIONS = 16;
 
 /**
- * Null when every URL may be fetched: each passes checkUrlLiteral, the call names at most MAX_URL_HOSTS
- * distinct hosts, and every address each name resolves to is public. All names are resolved in parallel under
+ * Null when every URL may be fetched: each passes checkUrlLiteral, the call names at most MAX_URL_DESTINATIONS
+ * distinct hosts of which at most MAX_URL_HOSTS need a lookup, and every address each name resolves to is public. All names are resolved in parallel under
  * one shared budget; a lookup that fails, answers nothing or is still pending when the budget ends is refused.
  */
 export async function checkFetchUrls(urls, lookup = lookupAll, opts = {}) {
@@ -272,9 +274,10 @@ export async function checkFetchUrls(urls, lookup = lookupAll, opts = {}) {
     if (literal) return literal;
     hosts.add(hostOf(new URL(String(raw))));
   }
-  const maxHosts = opts.maxHosts ?? MAX_URL_HOSTS;
-  if (hosts.size > maxHosts) return `${label}: ${hosts.size} different hosts in one call; at most ${maxHosts} are checked, so the call is refused`;
+  if (hosts.size > MAX_URL_DESTINATIONS) return `${label}: ${hosts.size} different destinations in one call; at most ${MAX_URL_DESTINATIONS} are checked, so the call is refused`;
   const names = [...hosts].filter((h) => !net.isIP(h));
+  const maxHosts = opts.maxHosts ?? MAX_URL_HOSTS;
+  if (names.length > maxHosts) return `${label}: ${names.length} different hosts to resolve in one call; at most ${maxHosts} are resolved, so the call is refused`;
   if (names.length === 0) return null;
   const budget = opts.budgetMs ?? opts.timeoutMs ?? DNS_BUDGET_MS;
   const verdict = (host) =>

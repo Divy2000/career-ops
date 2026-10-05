@@ -34,6 +34,7 @@ export function isPublicAddress(ip: string): boolean;
 export function checkUrlLiteral(raw: string, label?: string): string | null;
 export const DNS_BUDGET_MS: number;
 export const MAX_URL_HOSTS: number;
+export const MAX_URL_DESTINATIONS: number;
 export function checkFetchUrls(urls: string[], lookup?: DnsLookup, opts?: { label?: string; budgetMs?: number; timeoutMs?: number; maxHosts?: number }): Promise<string | null>;
 export function checkFetchUrl(raw: string, lookup?: DnsLookup, opts?: { label?: string; budgetMs?: number; timeoutMs?: number; maxHosts?: number }): Promise<string | null>;
 export function httpUrlsIn(command: string): string[];

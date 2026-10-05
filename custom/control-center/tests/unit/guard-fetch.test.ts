@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkFetchUrl, checkFetchUrls, checkUrlLiteral, DNS_BUDGET_MS, httpUrlsIn, isPublicAddress, MAX_URL_HOSTS } from '../../server/claude/guard-policy.mjs';
+import { checkFetchUrl, checkFetchUrls, checkUrlLiteral, DNS_BUDGET_MS, httpUrlsIn, isPublicAddress, MAX_URL_DESTINATIONS, MAX_URL_HOSTS } from '../../server/claude/guard-policy.mjs';
 import { HOOK_TIMEOUT_S } from '../../server/claude/invocation.js';
 
 type Lookup = (host: string) => Promise<Array<{ address: string; family: number }>>;
@@ -146,5 +146,44 @@ describe('DNS budget: every lookup of one call shares one deadline, well inside 
     };
     expect(await checkFetchUrls(['https://jobs.example.com/1', 'http://127.0.0.1/'], counting)).toMatch(/127\.0\.0\.1/);
     expect(lookups).toBe(0);
+  });
+});
+
+describe('host caps: names that need DNS are capped tightly, literal addresses only by a generous total', () => {
+  const ip = (n: number) => `https://93.184.216.${n}/x`;
+  const counter = () => {
+    const c = { lookups: 0 };
+    const lookup: Lookup = async () => {
+      c.lookups++;
+      return [{ address: '93.184.216.34', family: 4 }];
+    };
+    return { c, lookup };
+  };
+
+  it('given 5 public literal addresses, allows them without a lookup', async () => {
+    const { c, lookup } = counter();
+    expect(await checkFetchUrls([1, 2, 3, 4, 5].map(ip), lookup, { label: 'Bash' })).toBeNull();
+    expect(c.lookups).toBe(0);
+  });
+
+  it('4 names plus 12 literal addresses (16 destinations) pass; a 17th destination is refused before any lookup', async () => {
+    expect(MAX_URL_DESTINATIONS).toBe(16);
+    const names = ['a', 'b', 'c', 'd'].map((h) => `https://${h}.example.org/x`);
+    const twelve = Array.from({ length: 12 }, (_, i) => ip(i + 1));
+    const ok = counter();
+    expect(await checkFetchUrls([...names, ...twelve], ok.lookup, { label: 'Bash' })).toBeNull();
+    expect(ok.c.lookups).toBe(4);
+    const over = counter();
+    expect(await checkFetchUrls([...names, ...twelve, ip(13)], over.lookup, { label: 'Bash' })).toMatch(/17 different destinations/);
+    expect(over.c.lookups).toBe(0);
+    const ips = counter();
+    expect(await checkFetchUrls(Array.from({ length: 17 }, (_, i) => ip(i + 1)), ips.lookup, { label: 'Bash' })).toMatch(/17 different destinations/);
+    expect(ips.c.lookups).toBe(0);
+  });
+
+  it('5 names are still refused before any lookup, however few literal addresses come with them', async () => {
+    const { c, lookup } = counter();
+    expect(await checkFetchUrls([...['a', 'b', 'c', 'd', 'e'].map((h) => `https://${h}.example.org/x`), ip(1)], lookup, { label: 'Bash' })).toMatch(/5 different hosts to resolve/);
+    expect(c.lookups).toBe(0);
   });
 });
