@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -100,12 +100,23 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const [draft, setDraft] = useState('');
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const onEnvelope = useCallback((kind: string, payload: unknown) => {
-    if (kind === 'cv') setDraft((payload as { markdown: string }).markdown);
-  }, []);
+  // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
+  const currentUpload = useRef<string | null>(null);
+  const showUpload = (p: string | null) => {
+    currentUpload.current = p;
+    setUploadPath(p);
+  };
+  const envelopeFor = useCallback(
+    (forPath: string) => (kind: string, payload: unknown) => {
+      if (kind === 'cv' && currentUpload.current === forPath) setDraft((payload as { markdown: string }).markdown);
+    },
+    [],
+  );
+  const onEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
   const onFile = async (file: File) => {
     setNote(null);
     if (/\.(md|txt|markdown)$/i.test(file.name)) {
+      showUpload(null);
       setDraft(await file.text());
       return;
     }
@@ -115,7 +126,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       setNote(`Upload failed (${res.status}). PDF and DOCX only.`);
       return;
     }
-    setUploadPath(((await res.json()) as { path: string }).path);
+    showUpload(((await res.json()) as { path: string }).path);
   };
   const save = async () => {
     const current = await apiGet<UserFile>('/api/files/user/cv');
@@ -131,7 +142,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       <div className="row gap import-card__controls">
         <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf,.docx" onFile={(f) => void onFile(f)} />
       </div>
-      {uploadPath && <SessionPanel mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
+      {uploadPath && <SessionPanel key={uploadPath} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
       <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="# Your name ..." />
       <div className="row gap">
         <button type="button" disabled={!draft.trim()} onClick={() => void save()}>
