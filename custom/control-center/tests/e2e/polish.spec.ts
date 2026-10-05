@@ -22,13 +22,18 @@ test.describe('P3 editors and P6 polish', () => {
   test('structured portals editor toggles a tracked company through yaml ops and keeps the file comment', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'tracked_companies' })).toBeVisible();
-    await page.getByLabel('enabled of Northwind Analytics').uncheck();
+    // Northwind has no enabled key, as upstream allows (it defaults on): its cell is blank, and typing false sets it.
+    const enabled = page.getByLabel('enabled of Northwind Analytics');
+    await expect(enabled).toHaveValue('');
+    await enabled.fill('false');
+    await enabled.press('Enter');
     await expect(page.getByText('1 pending change')).toBeVisible();
     await page.getByRole('button', { name: 'Validate and save' }).click();
     await expect(page.getByRole('status')).toContainText('Saved portals.yml');
     const saved = await (await page.request.get('/api/config/portals')).json();
     expect(saved.raw.startsWith('# Synthetic portals config for tests')).toBe(true);
-    expect(saved.raw).toMatch(/slug: northwind\n\s+enabled: false/);
+    expect(saved.raw).toMatch(/provider: lever\n\s+enabled: false/);
+    expect(saved.doc.tracked_companies[1].enabled).toBe(false);
     await axeClean(page);
   });
 

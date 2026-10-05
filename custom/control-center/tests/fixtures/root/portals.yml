@@ -15,7 +15,6 @@ location_filter:
 tracked_companies:
   - name: Acme Robotics
     careers_url: https://jobs.example.com/acme
-    provider: greenhouse
     enabled: true
   - name: Northwind Analytics
     careers_url: https://boards.example.com/northwind
