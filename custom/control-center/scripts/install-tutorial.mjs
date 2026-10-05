@@ -180,42 +180,62 @@ const JPEG_FRAMES = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xc
 // Markers that stand alone, without a length: TEM and the restart markers.
 const JPEG_STANDALONE = new Set([0x01, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7]);
 
-/** Walks the segments after SOI to the first frame header, which holds the height and then the width. */
-function jpegSize(bytes) {
-  if (bytes.length < 3 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) throw new Error('is not a JPEG file');
-  const cutOff = () => new Error(`ends before its frame header (only the first ${HEAD_BYTES / 1024} KB are read)`);
+/** How far into a JPEG the frame header is looked for: well past any real run of EXIF, ICC and XMP segments, short of reading a whole large file. */
+const JPEG_SEARCH_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Walks the segments after SOI to the first frame header, which holds the height and then the width. `read(offset, length)` returns
+ * the bytes there (fewer at the end of the data), so a file is read segment header by segment header and skipped by length,
+ * never loaded whole.
+ */
+function jpegSizeFrom(read) {
+  const start = read(0, 3);
+  if (start.length < 3 || start[0] !== 0xff || start[1] !== 0xd8 || start[2] !== 0xff) throw new Error('is not a JPEG file');
+  const cutOff = () => new Error('ends before its frame header');
   let at = 2;
   for (;;) {
-    if (at >= bytes.length) throw cutOff();
-    if (bytes[at] !== 0xff) throw new Error('is not a valid JPEG file (a segment marker is missing)');
-    while (at < bytes.length && bytes[at] === 0xff) at++;
-    if (at >= bytes.length) throw cutOff();
-    const marker = bytes[at++];
-    if (JPEG_STANDALONE.has(marker)) continue;
+    if (at >= JPEG_SEARCH_BYTES) throw new Error(`has no frame header in its first ${JPEG_SEARCH_BYTES / 1024 / 1024} MB`);
+    const head = read(at, 4);
+    if (head.length < 2) throw cutOff();
+    if (head[0] !== 0xff) throw new Error('is not a valid JPEG file (a segment marker is missing)');
+    const marker = head[1];
+    // A marker may be preceded by any number of 0xFF fill bytes.
+    if (marker === 0xff) {
+      at += 1;
+      continue;
+    }
+    if (JPEG_STANDALONE.has(marker)) {
+      at += 2;
+      continue;
+    }
     if (marker === 0xda || marker === 0xd9) throw new Error('has no frame header before its image data');
-    if (at + 2 > bytes.length) throw cutOff();
-    const length = bytes.readUInt16BE(at);
+    if (head.length < 4) throw cutOff();
+    const length = head.readUInt16BE(2);
     if (length < 2) throw new Error('is not a valid JPEG file (a segment has a bad length)');
     if (JPEG_FRAMES.has(marker)) {
-      if (at + 7 > bytes.length) throw cutOff();
-      return { width: bytes.readUInt16BE(at + 5), height: bytes.readUInt16BE(at + 3) };
+      const frame = read(at + 2, 7);
+      if (frame.length < 7) throw cutOff();
+      return { width: frame.readUInt16BE(5), height: frame.readUInt16BE(3) };
     }
-    at += length;
+    at += 2 + length;
   }
 }
 
-/** Enough of a file for any header imageSize reads: a JPEG's EXIF and ICC segments can push its frame header well past the start. */
-const HEAD_BYTES = 64 * 1024;
+const jpegSize = (bytes) => jpegSizeFrom((offset, length) => bytes.subarray(offset, offset + length));
 
-const readHead = (file) => {
+/** The size of an image file on disk: a JPEG is walked in place, the other formats need only their first bytes. */
+function imageSizeOfFile(file, ext) {
   const fd = fs.openSync(file, 'r');
   try {
-    const head = Buffer.alloc(HEAD_BYTES);
-    return head.subarray(0, fs.readSync(fd, head, 0, head.length, 0));
+    const read = (offset, length) => {
+      const buf = Buffer.alloc(length);
+      return buf.subarray(0, fs.readSync(fd, buf, 0, length, offset));
+    };
+    return ['.jpg', '.jpeg'].includes(ext.toLowerCase()) ? jpegSizeFrom(read) : imageSize(read(0, 64), ext);
   } finally {
     fs.closeSync(fd);
   }
-};
+}
 
 /** Every file of every media block must have the size the block declares (--strict-dims). Legacy guides declare no sizes. */
 function checkDimensions(guide, guideRoot) {
@@ -228,7 +248,7 @@ function checkDimensions(guide, guideRoot) {
         for (const [kind, name] of files) {
           let size;
           try {
-            size = imageSize(readHead(path.join(guideRoot, name)), extOf(name));
+            size = imageSizeOfFile(path.join(guideRoot, name), extOf(name));
           } catch (err) {
             throw new Error(`guide ${kind} file "${name}" ${err.message}`, { cause: err });
           }
@@ -247,7 +267,7 @@ function checkPosters(source, part) {
   if (part.poster === undefined || part.posterLight === undefined) return;
   const sizeOf = (kind, name) => {
     try {
-      return imageSize(readHead(path.join(source, name)), extOf(name));
+      return imageSizeOfFile(path.join(source, name), extOf(name));
     } catch (err) {
       throw new Error(`${label}${kind} file "${name}" ${err.message}`, { cause: err });
     }

@@ -496,6 +496,8 @@ describe('imageSize', () => {
     ['a progressive JPEG with APP segments before SOF2', jpeg(1920, 1080), '.jpg', { width: 1920, height: 1080 }],
     ['a baseline JPEG (SOF0) named .jpeg', jpeg(1280, 720, 0xc0), '.jpeg', { width: 1280, height: 720 }],
     ['a JPEG whose APP1 segment is 40 KB', jpeg(640, 360, 0xc2, 40_000), '.JPG', { width: 640, height: 360 }],
+    ['a JPEG with 0xFF fill bytes before a marker', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xff, 0xff]), jpeg(800, 600).subarray(3)]), '.jpg', { width: 800, height: 600 }],
+    ['a JPEG with a standalone TEM marker before its segments', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0x01]), jpeg(320, 240).subarray(2)]), '.jpg', { width: 320, height: 240 }],
   ])('reads the size of %s', (_label, bytes, ext, expected) => {
     expect(imageSize(bytes, ext)).toEqual(expected);
   });
@@ -792,6 +794,19 @@ describe('installTutorial with a tutorial in parts', () => {
   it('given --strict-dims and posters of equal size, when installed, then it passes', () => {
     folder();
     expect(installTutorial({ source: src(), dataRoot, strictDims: true, dryRun: true }).files).toContain('intel-poster-light.jpg');
+  });
+
+  it('given --strict-dims and posters whose frame header follows a full-size 64 KB APP1 segment, when installed, then their sizes are read and it passes', () => {
+    const big = jpeg(1920, 1080, 0xc2, 65_527);
+    expect(big.indexOf(Buffer.from([0xff, 0xc2]))).toBeGreaterThan(64 * 1024);
+    folder({ posters: { 'intel-poster.jpg': big, 'intel-poster-light.jpg': jpeg(1920, 1080, 0xc0, 65_527) } });
+    expect(installTutorial({ source: src(), dataRoot, strictDims: true, dryRun: true }).files).toContain('intel-poster.jpg');
+  });
+
+  it('given --strict-dims and a poster with no frame header in its first 16 MB, when installed, then it stops looking and says so', () => {
+    const app = segment(0xe1, Buffer.alloc(65_533));
+    folder({ posters: { 'intel-poster.jpg': Buffer.concat([Buffer.from([0xff, 0xd8]), ...Array.from({ length: 257 }, () => app), jpeg(10, 10).subarray(2)]) } });
+    expect(() => installTutorial({ source: src(), dataRoot, strictDims: true, dryRun: true })).toThrow(/part "intel" poster file "intel-poster\.jpg" has no frame header in its first 16 MB/);
   });
 
   it('given --strict-dims and a poster that is not a JPEG, when installed, then the error names the part and the file', () => {
