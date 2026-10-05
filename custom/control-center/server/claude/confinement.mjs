@@ -1,8 +1,16 @@
-// Read confinement shared by the session invocation builder (invocation.ts, modes.ts) and the daily job's headless
-// policy pass (custom/immigration/run-daily.sh), which runs outside the app. Plain .mjs with no dependencies, so
-// that script can import it with nothing but node. Dev Chat cannot edit it (server/claude/** is protected).
+// Confinement shared by the session invocation builder (invocation.ts, modes.ts) and the daily job's headless
+// policy pass (custom/immigration/run-daily.sh), which runs outside the app: read deny rules, the guard policy file
+// and the guard hook wiring. Plain .mjs with no dependencies, so that script can import it with nothing but node.
+// Dev Chat cannot edit it (server/claude/** is protected).
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+
+export const GUARD_HOOK_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'guard-hook.mjs');
+
+/** Denied for every non Dev Chat session and for the daily policy pass, regardless of class (enforced by the hook). */
+export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
 
 /**
  * Secret files no session may read, relative to each root and matched case-insensitively (an over-deny on
@@ -79,6 +87,46 @@ export function buildReadDenyRules(roots, guardRoot) {
   if (guardRoot !== undefined) for (const g of spellings(guardRoot)) out.push(`Read(${absRule(g)}/**)`);
   for (const root of [...new Set(roots)]) for (const spelled of spellings(root)) for (const glob of READ_DENY) out.push(`Read(${absRule(spelled)}/${glob})`);
   return [...new Set(out)];
+}
+
+/** POSIX single-quoting: the hook command runs through a shell, and checkouts can live under paths with spaces. */
+export function shellQuote(s) {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Claude Code blocks a tool call only when a hook exits 2; any other failure
+ * (a split path, a missing file, a crash before the hook's own try/catch) is
+ * non-blocking. `|| exit 2` turns every failure into a block.
+ */
+export function guardHookCommand(nodePath = process.execPath, hookPath = GUARD_HOOK_PATH) {
+  return `${shellQuote(nodePath)} ${shellQuote(hookPath)} || exit 2`;
+}
+
+/** Tools the guard hook sees before they run. The matcher holds only names and `|`, so the CLI matches each name exactly. */
+export const PRE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Glob|Grep|WebFetch|Agent|Task|PowerShell|mcp__playwright__browser_click|mcp__playwright__browser_press_key';
+/**
+ * A hook that times out does not block (Claude Code docs, probe C14): the CLI flags and the settings
+ * permissions are the gate, and the hook is the second layer. 30 s bounds its DNS lookups with room to spare.
+ */
+export const HOOK_TIMEOUT_S = 30;
+
+/** The settings `hooks` block: the guard before every matched tool call and after every write. */
+export function guardHooks(command = guardHookCommand()) {
+  const hook = { type: 'command', command, timeout: HOOK_TIMEOUT_S };
+  return {
+    PreToolUse: [{ matcher: PRE_TOOL_MATCHER, hooks: [hook] }],
+    PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [hook] }],
+  };
+}
+
+/** Writes the guard policy JSON into `dir` and returns its path and the sha256 of its exact bytes (CC_POLICY_SHA256). */
+export function writeGuardPolicy(dir, policy) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'policy.json');
+  const bytes = JSON.stringify(policy, null, 2);
+  fs.writeFileSync(file, bytes);
+  return { file, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
 /**

@@ -50,7 +50,7 @@ step() {
 }
 
 policy_watch() {
-  local watch_json prompt batch settings_dir rc
+  local watch_json prompt batch settings_dir policy_sha rc
   watch_json="$(node custom/immigration/watch.mjs)" || return 1
   echo "$watch_json"
   # One immutable batch file per run: only what THIS run gave the AI is acked.
@@ -68,28 +68,34 @@ process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceA
   # data root, the settings file (outside both, removed after the pass) denies the home credential
   # stores and the secret files in them, and the only writes allowed are under $IMM, by absolute
   # path rule (leading //) so the AI writes where watch.mjs reads. A data root that is the home
-  # directory, or contains it, is refused.
+  # directory, or contains it, is refused. The session guard hook runs on every tool call with a
+  # policy pinned by its sha256: WebFetch only to public addresses (never loopback, private or the
+  # cloud metadata address), reads inside the roots and never of secret files, writes only under
+  # data/immigration/.
   settings_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
-  if ! ROOT="$ROOT" DATA="$DATA" IMM="$IMM" OUT="$settings_dir/settings.json" node --input-type=module -e '
+  if ! policy_sha="$(ROOT="$ROOT" DATA="$DATA" IMM="$IMM" DIR="$settings_dir" node --input-type=module -e '
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-const { absRule, assertRootsConfinable, buildReadDenyRules, spellings } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
-const { ROOT, DATA, IMM, OUT } = process.env;
-assertRootsConfinable(ROOT, DATA, os.homedir());
-const code = new Set(spellings(ROOT));
-const data = spellings(DATA);
+const c = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
+const { ROOT, DATA, IMM, DIR } = process.env;
+c.assertRootsConfinable(ROOT, DATA, os.homedir());
+const code = new Set(c.spellings(ROOT));
+const data = c.spellings(DATA);
 const permissions = {
   additionalDirectories: data.some((d) => code.has(d)) ? [] : data,
-  allow: ["WebSearch", "WebFetch", `Read(${absRule(IMM)}/**)`, `Edit(${absRule(IMM)}/**)`, `Read(${absRule(path.join(DATA, "config", "profile.yml"))})`],
-  deny: buildReadDenyRules([ROOT, DATA]),
+  allow: ["WebSearch", "WebFetch", `Read(${c.absRule(IMM)}/**)`, `Edit(${c.absRule(IMM)}/**)`, `Read(${c.absRule(path.join(DATA, "config", "profile.yml"))})`],
+  deny: c.buildReadDenyRules([ROOT, DATA]),
 };
-fs.writeFileSync(OUT, JSON.stringify({ permissions }, null, 2));
-'; then
+const policy = c.writeGuardPolicy(DIR, { codeRoot: ROOT, dataRoot: DATA, sessionDir: DIR, allow: ["data/immigration/**"], deny: c.ALWAYS_DENIED_WRITES, bash: [], playwright: false, readDeny: c.READ_DENY, readOnlyRoots: [], allowsAgent: false, search: false });
+fs.writeFileSync(path.join(DIR, "settings.json"), JSON.stringify({ permissions, hooks: c.guardHooks() }, null, 2));
+process.stdout.write(policy.sha256);
+')"; then
     rm -rf "$settings_dir"
     return 1
   fi
   rc=0
+  CC_POLICY_FILE="$settings_dir/policy.json" CC_POLICY_SHA256="$policy_sha" CC_SESSION_DIR="$settings_dir" \
   "${CC_CLAUDE_BIN:-claude}" -p "$prompt" \
     --restricted \
     --tools "Read,Edit,Write,WebFetch,WebSearch" \

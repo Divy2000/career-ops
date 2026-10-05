@@ -3,6 +3,7 @@
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
 import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
+import { ALWAYS_DENIED_WRITES } from './confinement.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -190,8 +191,8 @@ export { HOME_READ_DENY, READ_DENY } from './confinement.mjs';
  */
 export const SESSION_POLICY_VERSION = 2;
 
-/** Denied for every non Dev Chat session, regardless of class (enforced by the hook). */
-export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
+// Denied for every non Dev Chat session and the daily policy pass (enforced by the hook); lives in confinement.mjs.
+export { ALWAYS_DENIED_WRITES };
 /**
  * Dev Chat keeps the tracker and blacklist rules and additionally protects the
  * app's own state, the guard and its policy code, recovery, dependencies, and

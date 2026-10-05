@@ -2,16 +2,14 @@
 // values, policy and settings files per session, env with the Keychain token.
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ALWAYS_DENIED_WRITES, READ_DENY, type ModePolicy } from './modes.js';
-import { buildReadDenyRules, spellings } from './confinement.mjs';
+import { buildReadDenyRules, guardHookCommand, guardHooks, spellings, writeGuardPolicy } from './confinement.mjs';
 
 // Shared with the daily job's policy pass (custom/immigration/run-daily.sh).
-export { assertRootsConfinable, buildReadDenyRules } from './confinement.mjs';
+export { assertRootsConfinable, buildReadDenyRules, GUARD_HOOK_PATH, guardHookCommand, HOOK_TIMEOUT_S, PRE_TOOL_MATCHER, shellQuote } from './confinement.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const GUARD_HOOK_PATH = path.join(here, 'guard-hook.mjs');
 export const PLAYWRIGHT_MCP_PATH = path.join(here, 'playwright-mcp.json');
 
 export const WRITE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] as const;
@@ -242,48 +240,17 @@ export function writePolicyFile(dir: string, opts: { codeRoot: string; dataRoot?
     allowsAgent: opts.policy.allowsTask,
     search: true,
   };
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, 'policy.json');
-  const bytes = JSON.stringify(policy, null, 2);
-  fs.writeFileSync(file, bytes);
-  return { file, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  return writeGuardPolicy(dir, policy);
 }
-
-/** POSIX single-quoting: the hook command runs through a shell, and checkouts can live under paths with spaces. */
-export function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * Claude Code blocks a tool call only when a hook exits 2; any other failure
- * (a split path, a missing file, a crash before the hook's own try/catch) is
- * non-blocking. `|| exit 2` turns every failure into a block.
- */
-export function guardHookCommand(nodePath: string = process.execPath, hookPath: string = GUARD_HOOK_PATH): string {
-  return `${shellQuote(nodePath)} ${shellQuote(hookPath)} || exit 2`;
-}
-
-/** Tools the guard hook sees before they run. The matcher holds only names and `|`, so the CLI matches each name exactly. */
-export const PRE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Glob|Grep|WebFetch|Agent|Task|PowerShell|mcp__playwright__browser_click|mcp__playwright__browser_press_key';
-/**
- * A hook that times out does not block (Claude Code docs, probe C14): the CLI flags and the settings
- * permissions are the gate, and the hook is the second layer. 30 s bounds its DNS lookups with room to spare.
- */
-export const HOOK_TIMEOUT_S = 30;
 
 /**
  * Per-turn session settings: the permissions (working directories, allow and deny rules; in a file, so no rule
  * is split as an argument) and the PreToolUse/PostToolUse guard hook (inline hooks are accepted per P0).
  */
 export function writeSettingsFile(sessionDir: string, opts: { nodePath?: string; hookPath?: string; permissions?: SessionPermissions } = {}): string {
-  const command = guardHookCommand(opts.nodePath, opts.hookPath);
-  const hook = { type: 'command', command, timeout: HOOK_TIMEOUT_S };
   const settings = {
     ...(opts.permissions ? { permissions: opts.permissions } : {}),
-    hooks: {
-      PreToolUse: [{ matcher: PRE_TOOL_MATCHER, hooks: [hook] }],
-      PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [hook] }],
-    },
+    hooks: guardHooks(guardHookCommand(opts.nodePath, opts.hookPath)),
   };
   fs.mkdirSync(sessionDir, { recursive: true });
   const file = path.join(sessionDir, 'settings.json');

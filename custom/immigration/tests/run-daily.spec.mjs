@@ -52,7 +52,7 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
     fs.writeFileSync(path.join(root, rel), text, { mode });
   };
   for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'path-resolver.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
-  put('custom/control-center/server/claude/confinement.mjs', readFileSync(CONFINEMENT, 'utf8'));
+  for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
   const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
@@ -61,15 +61,11 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
   fs.writeFileSync(path.join(bin, 'security'), '#!/bin/bash\necho fake-keychain-token\n', { mode: 0o755 });
   const record = path.join(T, 'claude-calls.ndjson');
   const fakeClaude = path.join(bin, 'fake-claude');
-  fs.writeFileSync(
-    fakeClaude,
-    `#!${process.execPath}\nconst fs = require('fs');\nconst argv = process.argv.slice(2);\nconst at = argv.indexOf('--settings');\nconst settings = at === -1 ? null : JSON.parse(fs.readFileSync(argv[at + 1], 'utf8'));\nfs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({ argv, cwd: process.cwd(), settings, token: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) }) + '\\n');\nconsole.log('SUMMARY: 0 policy changes, 0 company alerts');\n`,
-    { mode: 0o755 },
-  );
-  const run = () => {
+  fs.writeFileSync(fakeClaude, `#!${process.execPath}\n${readFileSync(path.join(HERE, 'fixtures', 'fake-claude.mjs'), 'utf8')}`, { mode: 0o755 });
+  const run = (extraEnv = {}) => {
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
     assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-claude\}/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
-    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude };
+    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, ...extraEnv };
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
@@ -121,7 +117,7 @@ test('the settings allow reads only of the immigration folder and the profile, w
   assert.equal(permissions.allow.some((rule) => /^(Read|Edit|Write|Bash)$/.test(rule) || rule.startsWith('Bash')), false);
   for (const p of HOME_READ_DENY) assert.ok(permissions.deny.includes(`Read(${p})`), `deny lacks Read(${p})`);
   for (const root of [w.root, w.data]) for (const g of READ_DENY) assert.ok(permissions.deny.includes(`Read(/${root}/${g})`), `deny lacks ${g} under ${root}`);
-  assert.deepEqual(Object.keys(r.calls[0].settings), ['permissions']);
+  assert.deepEqual(Object.keys(r.calls[0].settings), ['permissions', 'hooks']);
 });
 
 test('a data root inside the checkout adds no extra working directory', () => {
@@ -141,5 +137,41 @@ test('a data root that is the home directory is refused: claude never runs, the 
   assert.match(r.steps, /^custom\/pipeline\/shortlist\.mjs/m);
   assert.doesNotMatch(r.steps, /^watch --ack/m, 'a refused pass acknowledges nothing');
   assert.notEqual(r.status, 0);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('the policy pass runs under the guard hook: loopback and metadata fetches, writes outside data/immigration and home secrets are refused', () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  const probes = [
+    { tool: 'WebFetch', input: { url: 'http://127.0.0.1:4317/api/system/status', prompt: 'x' }, want: 2 },
+    { tool: 'WebFetch', input: { url: 'http://169.254.169.254/latest/meta-data/', prompt: 'x' }, want: 2 },
+    { tool: 'WebFetch', input: { url: 'http://localhost/', prompt: 'x' }, want: 2 },
+    { tool: 'WebFetch', input: { url: 'https://93.184.216.34/notice', prompt: 'x' }, want: 0 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'policy-digest.md'), content: 'x' }, want: 0 },
+    { tool: 'Edit', input: { file_path: path.join(imm, 'policy-changes.tsv'), old_string: 'a', new_string: 'b' }, want: 0 },
+    { tool: 'Write', input: { file_path: path.join(w.data, 'cv.md'), content: 'x' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(w.data, 'data', 'blacklist.md'), content: 'x' }, want: 2 },
+    { tool: 'Read', input: { file_path: path.join(w.home, '.ssh', 'id_ed25519') }, want: 2 },
+    { tool: 'Read', input: { file_path: path.join(w.data, 'config', 'profile.yml') }, want: 0 },
+  ];
+  const r = w.run({ FAKE_HOOK_PROBES: JSON.stringify(probes.map(({ tool, input }) => ({ tool, input }))) });
+  assert.equal(r.status, 0, r.log);
+  const call = r.calls[0];
+  for (const [i, p] of probes.entries()) assert.deepEqual(call.hookRuns[i].statuses, [p.want], `${p.tool} ${JSON.stringify(p.input)}: ${call.hookRuns[i].stderr}`);
+  assert.match(call.hookRuns[0].stderr, /private, loopback or link-local/);
+  // The hook runs only on a policy whose bytes the pass pinned, written outside both roots with the pass's settings.
+  assert.equal(call.policyShaMatches, true);
+  assert.ok(!call.sessionDir.startsWith(w.data) && !call.sessionDir.startsWith(w.root), call.sessionDir);
+  assert.deepEqual(call.policy.allow, ['data/immigration/**']);
+  assert.deepEqual(call.policy.bash, []);
+  assert.equal(call.policy.codeRoot, w.root);
+  assert.equal(call.policy.dataRoot, w.data);
+  assert.ok(call.policy.deny.includes('data/blacklist.md'));
+  const pre = call.settings.hooks.PreToolUse[0];
+  for (const tool of ['WebFetch', 'Read', 'Write', 'Edit']) assert.ok(pre.matcher.split('|').includes(tool), `${tool} is not hooked`);
+  assert.match(pre.hooks[0].command, /guard-hook\.mjs' \|\| exit 2$/);
+  assert.equal(pre.hooks[0].timeout, 30);
+  assert.ok(call.settings.hooks.PostToolUse[0].matcher.split('|').includes('Write'));
   assert.deepEqual(r.leftovers, []);
 });

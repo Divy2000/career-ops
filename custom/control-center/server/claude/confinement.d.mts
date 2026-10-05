@@ -5,3 +5,16 @@ export function absRule(p: string): string;
 export function spellings(p: string): string[];
 export function buildReadDenyRules(roots: string[], guardRoot?: string): string[];
 export function assertRootsConfinable(codeRoot: string, dataRoot: string, home: string): void;
+export const GUARD_HOOK_PATH: string;
+export const ALWAYS_DENIED_WRITES: string[];
+export function shellQuote(s: string): string;
+export function guardHookCommand(nodePath?: string, hookPath?: string): string;
+export const PRE_TOOL_MATCHER: string;
+export const HOOK_TIMEOUT_S: number;
+export interface GuardHook {
+  type: 'command';
+  command: string;
+  timeout: number;
+}
+export function guardHooks(command?: string): { PreToolUse: Array<{ matcher: string; hooks: GuardHook[] }>; PostToolUse: Array<{ matcher: string; hooks: GuardHook[] }> };
+export function writeGuardPolicy(dir: string, policy: object): { file: string; sha256: string };
