@@ -57,7 +57,8 @@ export function parseBlacklist(md: string): BlacklistParsed {
   const headerCells = splitCells(lines[headerIdx]!);
   const header = headerCells.map((h) => h.toLowerCase());
   const col = (names: string[]) => header.findIndex((h) => names.includes(h));
-  const iCompany = col(['company']);
+  // Found the way the header line is ("Company", "Company name"): an exact-only match would read no rows, and the next save would drop them all.
+  const iCompany = col(['company']) >= 0 ? col(['company']) : header.findIndex((h) => h.includes('company'));
   const iSince = col(['since', 'added', 'date']);
   const iScope = col(['scope']);
   const iReason = col(['reason', 'notes', 'why']);

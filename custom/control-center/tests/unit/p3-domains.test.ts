@@ -92,6 +92,15 @@ Some intro text about the file.
     ]);
     expect(parsed.preamble).toContain('Some intro text about the file.');
   });
+  it('reads a table whose company column is headed "Company name", so a save keeps its rows', () => {
+    const md = '# Blacklist\n\n| Company name | Reason |\n|---|---|\n| Spam Staffing Ltd | body-shop |\n| Acme Recruiting | spam |\n';
+    const parsed = parseBlacklist(md);
+    expect(parsed.rows.map((r) => r.company)).toEqual(['Spam Staffing Ltd', 'Acme Recruiting']);
+    expect(parsed.extraColumns).toEqual([]);
+    const saved = renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, parsed.extraColumns);
+    expect(parseBlacklist(saved).rows).toEqual(parsed.rows);
+  });
+
   it('maps the legacy three-column table (Company, Reason, Added) to company scope', () => {
     const parsed = parseBlacklist('# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Spam Staffing Ltd | body-shop | 2026-09-01 |\n');
     expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop' }]);
