@@ -16,7 +16,8 @@ export function JsonView({ value, depth = 0 }: { value: unknown; depth?: number 
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="faint">none</span>;
     if (value.every(isPlainObject)) {
-      const cols = [...new Set(value.flatMap((r) => Object.keys(r).filter((k) => isScalar(r[k]))))];
+      // Every key gets a column: a nested value (a repost's appearances, a company's evidence) renders inside its cell.
+      const cols = [...new Set(value.flatMap((r) => Object.keys(r)))];
       return (
         <div className="table-wrap">
           <table className="table table--compact">
