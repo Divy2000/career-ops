@@ -38,12 +38,12 @@ function realTarget(abs: string): string {
 }
 
 /**
- * Replaces the file at `abs` atomically: a temp file next to it, then one rename. The real path (symlinks followed,
- * a cv.md linked to a synced copy included) must stay inside one of the `within` roots, or the write is refused
- * with OutsideRootsError and nothing changes, neither the link nor its target. Inside, the temp file goes next to
- * the real target, which is replaced and keeps its mode, so a link stays a link.
+ * The real path `abs` writes to (symlinks followed, a cv.md linked to a synced copy included), which must stay inside
+ * one of the `within` roots: a path that leaves them, or whose target cannot be worked out, is refused with a 403
+ * OutsideRootsError. Writers that cannot use writeFileAtomic (a core script, a child process) check here first and
+ * write to the path it returns, so a link stays a link.
  */
-export function writeFileAtomic(abs: string, text: string, opts: { within: Array<{ root: string; name: string }> }): void {
+export function containedTarget(abs: string, opts: { within: Array<{ root: string; name: string }> }): string {
   const shown = path.relative(path.resolve(opts.within[0]!.root), path.resolve(abs)) || abs;
   let real: string;
   try {
@@ -57,6 +57,17 @@ export function writeFileAtomic(abs: string, text: string, opts: { within: Array
     const name = roots.map((r) => r.name).join(' and ');
     throw new OutsideRootsError(`${shown} leads to ${real}, outside the ${name}; nothing was written. Point the link inside the ${name}, or replace it with the file itself.`);
   }
+  return real;
+}
+
+/**
+ * Replaces the file at `abs` atomically: a temp file next to it, then one rename. The real path must stay inside one
+ * of the `within` roots (containedTarget), or the write is refused and nothing changes, neither the link nor its
+ * target. Inside, the temp file goes next to the real target, which is replaced and keeps its mode, so a link stays a
+ * link.
+ */
+export function writeFileAtomic(abs: string, text: string, opts: { within: Array<{ root: string; name: string }> }): void {
+  const real = containedTarget(abs, opts);
   fs.mkdirSync(path.dirname(real), { recursive: true });
   const tmp = `${real}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
   fs.writeFileSync(tmp, text);
