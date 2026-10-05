@@ -3,6 +3,7 @@ import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
+import { localDate } from '../../shared/local-date.js';
 
 async function login(page: Page) {
   await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -73,16 +74,18 @@ test.describe('deterministic writes from the pages', () => {
 
   test('Follow-ups page logs a follow-up and pins a date', async ({ page }) => {
     await page.goto('/followups');
-    // Acme (#1) stays Applied across the suite; Vandelay is discarded by actions.spec and leaves the cadence.
+    // Acme (#1) stays in the cadence across the suite (Applied, or Responded once sessions.spec has run); Vandelay is
+    // discarded by actions.spec and leaves it. The new entry's number depends on what earlier runs logged, so it is read back.
     await page.getByRole('button', { name: 'Log follow-up for Acme Robotics' }).click();
     await page.getByLabel('Notes').fill('e2e note');
     await page.getByRole('button', { name: 'Save follow-up' }).click();
-    await expect(page.getByRole('status')).toHaveText(/Logged follow-up #3/);
+    await expect(page.getByRole('status')).toHaveText(/^Logged follow-up #\d+ for Acme Robotics$/);
+    const logged = Number((await page.getByRole('status').textContent())!.match(/#(\d+)/)![1]);
     await page.getByRole('button', { name: 'Pin next follow-up for Acme Robotics in 7 days' }).click();
     await expect(page.getByRole('status')).toHaveText(/pinned to/);
     const detail = await (await page.request.get('/api/tracker/1')).json();
     expect(detail.timeline.pin).not.toBeNull();
-    expect(detail.timeline.followups.some((f: { notes: string }) => f.notes === 'e2e note')).toBe(true);
+    expect(detail.timeline.followups.find((f: { num: number | null }) => f.num === logged)).toMatchObject({ appNum: 1, notes: 'e2e note' });
   });
 
   test('Application Documents tab lists PDFs with Re-render and the danger zone previews a delete', async ({ page }) => {
@@ -97,6 +100,30 @@ test.describe('deterministic writes from the pages', () => {
     expect(tracker.rows.some((r: { num: number }) => r.num === 1)).toBe(true);
     const axe = await (await axeBuilder(page)).analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+  });
+
+  test('the danger zone deletes a row once the preview is confirmed, and returns to the tracker without it (SW-tests-15)', async ({ page }) => {
+    const tracker = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'applications.md');
+    const original = fs.readFileSync(tracker, 'utf8');
+    fs.writeFileSync(tracker, `${original.trimEnd()}\n| 98 | 2026-10-05 | Delete E2E Co | - | Throwaway Role | - | Evaluated | - | - | e2e |\n`);
+    try {
+      const before = ((await (await page.request.get('/api/tracker')).json()).rows as Array<{ num: number }>).map((r) => r.num);
+      expect(before).toContain(98);
+      await page.goto('/tracker/98');
+      await expect(page.getByRole('heading', { level: 1, name: 'Delete E2E Co' })).toBeVisible();
+      await page.getByRole('tab', { name: 'Documents' }).click();
+      await page.getByRole('button', { name: 'Preview delete (dry run)' }).click();
+      await expect(page.getByLabel('Delete preview')).toContainText('Would remove application 98');
+      expect(fs.readFileSync(tracker, 'utf8')).toContain('Delete E2E Co');
+      await page.getByRole('button', { name: 'Confirm delete #98' }).click();
+      await expect(page).toHaveURL(/\/tracker(\?|$)/);
+      await expect(page.getByRole('heading', { level: 1, name: 'Tracker' })).toBeVisible();
+      await expect(page.getByRole('cell', { name: 'Delete E2E Co' })).toHaveCount(0);
+      const after = ((await (await page.request.get('/api/tracker')).json()).rows as Array<{ num: number }>).map((r) => r.num);
+      expect(after).toEqual(before.filter((n) => n !== 98));
+    } finally {
+      fs.writeFileSync(tracker, original);
+    }
   });
 
   test("a delete preview made on one row does not arm the delete of the row Back returns to", async ({ page }) => {
@@ -170,6 +197,29 @@ test.describe('deterministic writes from the pages', () => {
     expect(answers).toEqual([]);
   });
 
+  test('Network scan results arrive after the event stream drops mid-scan: the page reconnects and shows each line once (SW-web-a-04)', async ({ page }) => {
+    const progress = { line: 'scanning greenhouse', stream: 'stderr', seq: 1, ts: '2026-10-05T12:00:00.000Z' };
+    const postings = [{ url: 'https://boards.example.com/resume/1', company: 'Resume Co', title: 'Platform Engineer', location: 'Remote', postedAt: null, source: 'greenhouse' }];
+    const summary = { line: JSON.stringify({ postings }), stream: 'stdout', seq: 2, ts: '2026-10-05T12:00:01.000Z' };
+    const frame = (l: typeof progress) => `id: ${l.seq}\nevent: line\ndata: ${JSON.stringify(l)}\n\n`;
+    await page.route('**/api/actions/scan.network', (route) => route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ runId: 'e2e-network-scan-drop' }) }));
+    // Until the run ends, every connection ends after line 1 (a server reload, a laptop waking up). The browser reconnects
+    // on its own; each reply replays line 1 (the interception cannot see Last-Event-ID), which must still show once.
+    let running = true;
+    await page.route('**/api/runs/e2e-network-scan-drop/events', async (route) => {
+      const body = running ? `retry: 100\n\n${frame(progress)}` : `${frame(progress)}${frame(summary)}event: run.done\ndata: {"status":"done"}\n\n`;
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+    });
+    await page.goto('/discover');
+    await page.getByRole('button', { name: /Run network scan/ }).click();
+    const log = page.getByLabel('Scan log');
+    await expect(log).toContainText('scanning greenhouse');
+    running = false;
+    await expect(page.getByRole('button', { name: 'Add all (1)' })).toBeVisible();
+    await expect(page.getByText('scan done')).toBeVisible();
+    await expect(log.getByText('scanning greenhouse')).toHaveCount(1);
+  });
+
   test('Discover renders the network scan form and the Fresh tab', async ({ page }) => {
     await page.goto('/discover');
     await expect(page.getByRole('heading', { level: 1, name: 'Discover' })).toBeVisible();
@@ -177,10 +227,20 @@ test.describe('deterministic writes from the pages', () => {
     const sources = page.getByRole('group', { name: 'ATS sources' }).getByRole('checkbox');
     await expect(sources).toHaveCount(6);
     expect(await sources.evaluateAll((boxes) => boxes.map((b) => b.closest('label')!.textContent!.trim()))).toEqual(['greenhouse', 'lever', 'ashby', 'workday', 'icims', 'bamboohr']);
-    await page.getByRole('tab', { name: 'Fresh' }).click();
-    await expect(page).toHaveURL(/tab=fresh/);
-    await expect(page.getByRole('table', { name: 'Fresh matches' })).toBeVisible();
-    const axe = await (await axeBuilder(page)).analyze();
-    expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    // Fresh lists what the scanner added in the last 7 days by the server's clock, so the fixture's own dated rows age out
+    // (SW-tests-03): this one is first seen today.
+    const history = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'scan-history.tsv');
+    const original = fs.readFileSync(history, 'utf8');
+    fs.appendFileSync(history, `https://careers.example.com/fresh-e2e/1\t${localDate()}\tgreenhouse\tReliability Engineer\tFresh E2E Co\tadded\tRemote\tf-e2e\t\t0.7\t\tfresh e2e co\n`);
+    try {
+      await page.getByRole('tab', { name: 'Fresh' }).click();
+      await expect(page).toHaveURL(/tab=fresh/);
+      const table = page.getByRole('table', { name: 'Fresh matches' });
+      await expect(table.getByRole('row', { name: /Fresh E2E Co/ })).toContainText(`Reliability Engineer${localDate()}`);
+      const axe = await (await axeBuilder(page)).analyze();
+      expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    } finally {
+      fs.writeFileSync(history, original);
+    }
   });
 });

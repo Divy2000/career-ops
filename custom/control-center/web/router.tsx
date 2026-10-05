@@ -3,7 +3,7 @@ import { Shell } from './components/Shell';
 import { TodayPage } from './features/today/TodayPage';
 import { TrackerPage, type TrackerSearch, type TrackerTab, type SortKey } from './features/tracker/TrackerPage';
 import { ApplicationPage } from './features/tracker/ApplicationPage';
-import { PipelinePage, type PipelineTab } from './features/pipeline/PipelinePage';
+import { PipelinePage, type PipelineSearch } from './features/pipeline/PipelinePage';
 import { SponsorshipPage, type SponsorshipTab } from './features/sponsorship/SponsorshipPage';
 import { InsightsPage, type InsightsTab } from './features/insights/InsightsPage';
 import { FollowupsPage, type FollowupsTab } from './features/followups/FollowupsPage';
@@ -51,7 +51,10 @@ const pipelineRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/pipeline',
   component: PipelinePage,
-  validateSearch: (s: Loose): { tab: PipelineTab } => ({ tab: oneOf(['inbox', 'shortlist', 'batch'] as const, s.tab, 'inbox') }),
+  validateSearch: (s: Loose): PipelineSearch => ({
+    tab: oneOf(['inbox', 'shortlist', 'batch'] as const, s.tab, 'inbox'),
+    ...(typeof s.q === 'string' && s.q ? { q: s.q.slice(0, 200) } : {}),
+  }),
 });
 
 const sponsorshipRoute = createRoute({

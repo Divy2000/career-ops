@@ -41,16 +41,22 @@ export function ScorePill({ score }: { score: number | null }) {
   );
 }
 
+/** A DOL tier, or a company check's verdict (sponsoring | paused | stopped | restricted | unclear, the sponsorship check template). */
 export function sponsorTone(tier: string | null | undefined): 'ok' | 'info' | 'neutral' | 'warn' | 'danger' {
   switch ((tier ?? '').toLowerCase()) {
     case 'strong':
+    case 'sponsoring':
       return 'ok';
     case 'moderate':
       return 'info';
     case 'weak':
+    case 'unclear':
       return 'warn';
     case 'none':
     case 'staffing-shop':
+    case 'paused':
+    case 'stopped':
+    case 'restricted':
       return 'danger';
     default:
       return 'neutral';

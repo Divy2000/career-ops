@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
 import { DocumentsTab } from '@web/features/tracker/DocumentsTab';
+import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,7 +33,8 @@ async function mount(row: number, report: number | null, rerenderBlock: string |
   root = createRoot(host);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(DocumentsTab, { n: row })))));
-  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  // Both the listing and the action metadata: without the metadata no Re-render button renders at all.
+  await until(() => host.querySelector('table[aria-label="Generated documents"]') && qc.getQueryState(['actions'])?.status === 'success', 'the documents listing and the actions');
   return posts;
 }
 
@@ -50,7 +52,7 @@ describe('DocumentsTab re-render', () => {
     const posts = await mount(9, 1);
     expect(rerenderButton().disabled).toBe(false);
     await act(async () => rerenderButton().click());
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await until(() => posts.length > 0, 'the re-render request');
     expect(posts).toEqual([{ params: { row: 9, report: 1, html: 'output/acme-robotics-cv.html', pdf: 'output/acme-robotics-cv.pdf', format: 'letter' } }]);
   });
 

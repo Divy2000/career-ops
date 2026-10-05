@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLiveInvalidation } from '@web/lib/sse';
+import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,7 +55,7 @@ describe('live invalidation', () => {
   it('a daily.status event refetches the job-log status, so a run that died without its done line stops reading running, on Today too', async () => {
     expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
     await act(async () => FakeEventSource.last!.emit('daily.status', { running: false }));
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2, 'all three refetches');
     expect(fetches).toEqual({ chip: 2, log: 2, today: 2 });
   });
 });
@@ -69,10 +70,9 @@ describe('live invalidation of the Sponsorship lookup', () => {
 
   it('a change under data/immigration/ (a sponsorship check saving its result) refetches the lookup', async () => {
     await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }) }, createElement(LookupProbe))));
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
-    expect(fetches.lookup).toBe(1);
+    await until(() => fetches.lookup === 1, 'the first lookup fetch');
     await act(async () => FakeEventSource.last!.emit('data.changed', { domain: 'immigration', paths: ['data/immigration/company-checks/acme.md'] }));
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await until(() => fetches.lookup === 2, 'the lookup refetch');
     expect(fetches.lookup).toBe(2);
   });
 });

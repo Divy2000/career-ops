@@ -7,6 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
+import { addNote } from './addNote';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
@@ -128,12 +129,16 @@ function useRunLines(runId: string | null) {
     if (!runId) return;
     const es = new EventSource(`/api/runs/${runId}/events`);
     const forRun = (update: (prev: RunTailState) => RunTailState) => setState((prev) => update(prev.runId === runId ? prev : { runId, lines: [], status: null }));
-    es.addEventListener('line', (ev) => forRun((prev) => ({ ...prev, lines: [...prev.lines, JSON.parse((ev as MessageEvent).data) as RawLine] })));
+    es.addEventListener('line', (ev) => {
+      const line = JSON.parse((ev as MessageEvent).data) as RawLine;
+      forRun((prev) => (prev.lines.some((l) => l.seq === line.seq) ? prev : { ...prev, lines: [...prev.lines, line] }));
+    });
     es.addEventListener('run.done', (ev) => {
       forRun((prev) => ({ ...prev, status: (JSON.parse((ev as MessageEvent).data) as { status: string }).status }));
       es.close();
     });
-    es.onerror = () => es.close();
+    // No close on error: the browser reconnects with Last-Event-ID and the server replays the lines after it, so a
+    // dropped stream (a server reload, a laptop waking up) still ends with the scan's results.
     return () => es.close();
   }, [runId]);
   return state.runId === runId ? { lines: state.lines, status: state.status } : { lines: [], status: null };
@@ -182,7 +187,7 @@ function NetworkScan() {
         added += r.added;
         skipped += r.skipped;
       }
-      setMessage({ tone: 'ok', text: `Added ${added} to the pipeline${skipped ? `; ${skipped} ${skipped === 1 ? 'was' : 'were'} already there` : ''}` });
+      setMessage({ tone: 'ok', text: addNote(added, skipped) });
     } catch (err) {
       setMessage({ tone: 'danger', text: `${added ? `Added ${added}, then could not add the rest` : 'Could not add'}: ${describeError(err)}` });
     }

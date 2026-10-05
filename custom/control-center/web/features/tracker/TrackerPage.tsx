@@ -89,6 +89,12 @@ export function filterRows(rows: TrackerRow[], tab: TrackerTab, q: string): Trac
   return rows.filter((r) => match(r) && (!needle || `${r.company} ${r.role} ${r.notes}`.toLowerCase().includes(needle)));
 }
 
+/** The states.yml labels in lifecycle order, then any status states.yml does not know, so every row lands in a group. */
+export function statusGroups(rows: TrackerRow[]): Array<{ status: string; rows: TrackerRow[] }> {
+  const unknown = [...new Set(rows.map((r) => r.status).filter((s) => !STATUS_ORDER.includes(s)))];
+  return [...STATUS_ORDER, ...unknown].map((s) => ({ status: s, rows: rows.filter((r) => r.status === s) })).filter((g) => g.rows.length);
+}
+
 const route = getRouteApi('/tracker');
 const COLS_KEY = 'cc.tracker.cols';
 
@@ -140,7 +146,9 @@ export function TrackerPage() {
     });
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+    // A focused control inside the table (an Open link, a sort button, a checkbox) keeps its own keys: Enter there
+    // activates it instead of opening the selected row.
+    if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('a, button, input, select, textarea, summary, [contenteditable="true"]')) return;
     const idx = visible.findIndex((r) => r.num === selected);
     const pick = (i: number) => setSelected(visible[Math.max(0, Math.min(visible.length - 1, i))]?.num ?? null);
     switch (e.key) {
@@ -183,7 +191,7 @@ export function TrackerPage() {
     e.preventDefault();
   };
 
-  const groups = search.view === 'grouped' ? STATUS_ORDER.map((s) => ({ status: s, rows: visible.filter((r) => r.status === s) })).filter((g) => g.rows.length) : [{ status: null, rows: visible }];
+  const groups = search.view === 'grouped' ? statusGroups(visible) : [{ status: null, rows: visible }];
   const allVisibleChecked = visible.length > 0 && visible.every((r) => checked.has(r.num));
 
   return (

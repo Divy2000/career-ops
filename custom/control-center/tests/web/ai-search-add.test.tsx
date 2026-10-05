@@ -17,7 +17,7 @@ vi.mock('@web/components/SessionPanel', () => ({
   },
 }));
 
-type Offer = { url: string; company: string; title: string; location?: string };
+type Offer = { url: string; company: string; title: string; location?: string; portal?: string; postedAt?: string };
 let posted: Array<{ offers: Offer[] }>;
 let addResponse: (body: { offers: Offer[] }) => Response;
 let host: HTMLElement;
@@ -87,6 +87,35 @@ describe('Discover > AI search: add', () => {
     expect(first!.location!.startsWith('Office 1, Somewhere')).toBe(true);
     expect(second!.title.length).toBeLessThanOrEqual(PIPELINE_OFFER_LIMITS.title);
     expect(second).not.toHaveProperty('location');
+  });
+
+  it('an offer the server skips as already listed (its URL differs only by tracking parameters) is reported as already there, not added (SW-web-a-05)', async () => {
+    addResponse = (body) => json(200, { added: 0, skipped: body.offers.length });
+    await act(async () => emitEnvelope!('offer', { url: 'https://boards.greenhouse.io/acme/jobs/123?gh_src=x', company: 'Acme', title: 'Backend Engineer' }, 1));
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(status()).toBe('Added 0 to the pipeline; 1 was already there');
+    const row = host.querySelector('tbody tr')!;
+    expect(row.textContent).toContain('already there');
+    expect(row.textContent).not.toMatch(/\badded\b/);
+    expect(row.querySelector('button')!.disabled).toBe(true);
+  });
+
+  it('a batch the server adds only partly says how many were added and how many were already there (SW-web-a-05)', async () => {
+    addResponse = () => json(200, { added: 1, skipped: 1 });
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/new', company: 'Acme', title: 'SRE' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/old?utm_source=x', company: 'Globex', title: 'SRE' }, 1));
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(status()).toBe('Added 1 to the pipeline; 1 was already there');
+    expect([...host.querySelectorAll('tbody tr')].map((tr) => tr.querySelectorAll('td')[3]!.textContent)).toEqual(['in pipeline', 'in pipeline']);
+  });
+
+  it('sends the offer source and posted day, so the pipeline row and scan history keep them (SW-web-a-05)', async () => {
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/4', company: 'Hooli', title: 'SRE', source: 'greenhouse', postedAt: '2026-10-01' }, 1));
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(posted[0]!.offers).toEqual([{ url: 'https://jobs.example.com/4', company: 'Hooli', title: 'SRE', portal: 'greenhouse', postedAt: '2026-10-01' }]);
   });
 
   it('a refused add shows the server reason, not just the status line', async () => {
