@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, listLogDates, daysBetween } from '../../server/domains/immigration.js';
+import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, listLogDates, daysBetween, withJobState } from '../../server/domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, evaluatedKeys, isEvaluated } from '../../server/domains/whatsNew.js';
 import { computeDashboard, parseStatusLog, readStatusLog, workModeOf } from '../../server/domains/insights.js';
 import { readTracker } from '../../server/domains/tracker.js';
@@ -29,6 +29,51 @@ describe('immigration overview', () => {
     expect(parseDailyLog('=== 2026-10-03 08:00:00 start\n--- 08:00:01 policy watch\n', '2026-10-03').status).toBe('running');
     expect(parseDailyLog('', '2026-10-03').status).toBe('empty');
     expect(listLogDates(root)).toEqual(['2026-10-03']);
+  });
+
+  it('a dated log holds every run of that day: a clean re-run after a failed one reads ok, with its own times and steps', () => {
+    const text = [
+      '=== 2026-10-05 08:00:00 start',
+      '--- 08:00:01 policy watch',
+      '--- 08:04:03 rank top 100',
+      '!!! step failed: rank top 100',
+      '=== 2026-10-05 08:09:01 done (failed=1)',
+      '=== 2026-10-05 10:15:00 start',
+      '--- 10:15:01 policy watch',
+      '--- 10:18:00 rank top 100',
+      '=== 2026-10-05 10:24:30 done (failed=0)',
+      '',
+    ].join('\n');
+    const log = parseDailyLog(text, '2026-10-05');
+    expect(log).toMatchObject({ status: 'ok', failedSteps: [], failedCount: 0, startedAt: '2026-10-05 10:15:00', finishedAt: '2026-10-05 10:24:30' });
+    expect(log.steps).toEqual([
+      { name: 'policy watch', time: '10:15:01', failed: false },
+      { name: 'rank top 100', time: '10:18:00', failed: false },
+    ]);
+  });
+
+  it('a re-run in progress reads running from its own start, not with the earlier run\'s done time', () => {
+    const text = '=== 2026-10-05 08:00:00 start\n--- 08:00:01 policy watch\n=== 2026-10-05 08:09:01 done (failed=0)\n=== 2026-10-05 10:15:00 start\n--- 10:15:01 policy watch\n';
+    expect(parseDailyLog(text, '2026-10-05')).toMatchObject({ status: 'running', startedAt: '2026-10-05 10:15:00', finishedAt: null, failedCount: null, failedSteps: [] });
+  });
+
+  it('a run with no done line reads interrupted once the job is known not to run, and stays running while it runs or nobody knows', async () => {
+    const log = parseDailyLog('=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n', '2026-10-05');
+    expect((await withJobState(log, async () => false)).status).toBe('interrupted');
+    expect((await withJobState(log, async () => true)).status).toBe('running');
+    expect((await withJobState(log, async () => null)).status).toBe('running');
+  });
+
+  it('asks whether the job runs only for a run with no done line', async () => {
+    let asked = 0;
+    const probe = async () => {
+      asked++;
+      return false;
+    };
+    const done = parseDailyLog('=== 2026-10-05 08:00:00 start\n=== 2026-10-05 08:09:01 done (failed=0)\n', '2026-10-05');
+    expect(await withJobState(done, probe)).toEqual(done);
+    expect(await withJobState(parseDailyLog('', '2026-10-05'), probe)).toMatchObject({ status: 'empty' });
+    expect(asked).toBe(0);
   });
 
   it('parses company files and the whole overview through the core lib', async () => {

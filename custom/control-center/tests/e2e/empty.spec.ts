@@ -87,3 +87,20 @@ test.describe('no tutorials', () => {
     await (await axeBuilder(page)).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
   });
 });
+
+test.describe('a daily run that never wrote its done line', () => {
+  const unfinished = path.join(EMPTY_ROOT, 'data', 'immigration', 'logs', '2026-10-05.log');
+  test.beforeEach(() => fs.writeFileSync(unfinished, '=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n'));
+  test.afterEach(() => fs.rmSync(unfinished, { force: true }));
+
+  test('Today, the header chip and the log browser say interrupted, not ok or running, once the job is not running', async ({ page }) => {
+    await login(page);
+    await expect(page.getByText('Daily job 2026-10-05: interrupted')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Daily job 2026-10-05: interrupted' })).toBeVisible();
+    await page.goto('/runs');
+    const logs = page.locator('[aria-labelledby="log-browser-heading"]');
+    await expect(logs.getByLabel('Log date')).toHaveValue('2026-10-05');
+    await expect(logs.getByText('interrupted', { exact: true })).toBeVisible();
+    await expect(logs.getByText('2026-10-05 08:00:00 to n/a')).toBeVisible();
+  });
+});

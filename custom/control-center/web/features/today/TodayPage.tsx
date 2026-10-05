@@ -31,6 +31,7 @@ function DailyJobChip() {
   if (!log) return <Pill tone="warn">Daily job: no log yet</Pill>;
   if (log.status === 'failed') return <Pill tone="danger" title={`Failed steps: ${log.failedSteps.join(', ')}`}>Daily job {log.date}: failed ({log.failedSteps.join(', ') || 'see log'})</Pill>;
   if (log.status === 'running') return <Pill tone="info">Daily job {log.date}: running</Pill>;
+  if (log.status === 'interrupted') return <Pill tone="warn" title="The last run has no done line and run-daily.sh is not running: it was cancelled, killed or stopped early. See Runs & Schedule > Job logs.">Daily job {log.date}: interrupted</Pill>;
   return <Pill tone="ok">Daily job {log.date}: ok</Pill>;
 }
 

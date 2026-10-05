@@ -88,7 +88,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   daily.start();
   closers.push(async () => daily.stop());
   await app.register(systemRoutes, { cfg, exec });
-  await app.register(readRoutes, { cfg, bus, exec });
+  await app.register(readRoutes, { cfg, bus, exec, daily });
   await app.register(actionRoutes, { cfg, runner, bus, exec });
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
@@ -110,7 +110,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });
   await app.register(configRoutes, { cfg, bus, exec });
   const schedule = new ScheduleService({ exec: maybeFakeLaunchd(cfg, exec), agentsDir: cfg.launchAgentsDir, uid: process.getuid?.() ?? 0, codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, dataRootFromEnv: cfg.dataRootFromEnv, claudeBin: cfg.claudeBin });
-  await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings });
+  await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings, daily });
 
   if (cfg.watch) {
     const watcher = startWatcher(cfg.dataRoot, bus);

@@ -28,7 +28,8 @@ export interface DailyLog {
   date: string;
   startedAt: string | null;
   finishedAt: string | null;
-  status: 'ok' | 'failed' | 'running' | 'empty';
+  /** interrupted: the last run has no done line and the job is known not to be running (cancelled, killed or exited early). */
+  status: 'ok' | 'failed' | 'running' | 'interrupted' | 'empty';
   steps: DailyLogStep[];
   failedSteps: string[];
   failedCount: number | null;
@@ -90,15 +91,20 @@ export function parseCompanyFile(md: string, slug: string, filePath: string, rea
   };
 }
 
+const RUN_START = /^===\s+(\S+\s+\S+)\s+start/;
+
+/** A dated log gets one block per run of that day (run-daily.sh appends); only the last run counts. */
 export function parseDailyLog(text: string, date: string): DailyLog {
+  const lines = text.split('\n');
+  const lastStart = lines.findLastIndex((line) => RUN_START.test(line));
   const steps: DailyLogStep[] = [];
   const failedSteps: string[] = [];
   let startedAt: string | null = null;
   let finishedAt: string | null = null;
   let failedCount: number | null = null;
-  for (const line of text.split('\n')) {
+  for (const line of lines.slice(Math.max(lastStart, 0))) {
     let m: RegExpMatchArray | null;
-    if ((m = line.match(/^===\s+(\S+\s+\S+)\s+start/))) startedAt = m[1]!;
+    if ((m = line.match(RUN_START))) startedAt = m[1]!;
     else if ((m = line.match(/^===\s+(\S+\s+\S+)\s+done\s*\(failed=(\d+)\)/))) {
       finishedAt = m[1]!;
       failedCount = Number(m[2]);
@@ -112,6 +118,12 @@ export function parseDailyLog(text: string, date: string): DailyLog {
   }
   const status: DailyLog['status'] = !startedAt ? 'empty' : !finishedAt ? 'running' : failedSteps.length || (failedCount ?? 0) > 0 ? 'failed' : 'ok';
   return { date, startedAt, finishedAt, status, steps, failedSteps, failedCount };
+}
+
+/** A run with no done line is running only while the job runs; the probe is asked only then, and null (unknown) keeps it running. */
+export async function withJobState<T extends DailyLog>(log: T, jobRunning: () => Promise<boolean | null>): Promise<T> {
+  if (log.status !== 'running') return log;
+  return (await jobRunning()) === false ? { ...log, status: 'interrupted' } : log;
 }
 
 export function listLogDates(dataRoot: string, logDir = path.join('data', 'immigration', 'logs')): string[] {
@@ -152,7 +164,8 @@ function readJson(p: string): unknown {
   }
 }
 
-export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = new Date().toISOString().slice(0, 10)): Promise<ImmigrationOverview> {
+/** dailyRunning answers whether run-daily.sh runs now (null: unknown); it is asked only when the latest run has no done line. */
+export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = new Date().toISOString().slice(0, 10), dailyRunning: () => Promise<boolean | null> = async () => null): Promise<ImmigrationOverview> {
   const lib = await importCore<ImmigrationLib>(codeRoot, 'custom/immigration/lib.mjs');
   const imm = path.join(dataRoot, 'data', 'immigration');
   const digestRead = readText(path.join(imm, 'policy-digest.md'));
@@ -181,6 +194,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   }
   const logDates = listLogDates(dataRoot);
   const pending = pendingOf(readJson(path.join(imm, 'pending.json')));
+  const latestLog = logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null;
   return {
     digest,
     policyChanges: changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : [],
@@ -191,7 +205,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,
     pendingError: pending.error,
-    dailyLog: logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null,
+    dailyLog: latestLog && (await withJobState(latestLog, dailyRunning)),
     logDates,
   };
 }

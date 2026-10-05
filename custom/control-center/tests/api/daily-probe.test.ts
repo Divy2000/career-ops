@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { makeTestApp, testConfig, type TestApp } from '../helpers/app.js';
 import { maybeFakeDailyProbe } from '../../server/system/daily.js';
 import { configFromEnv } from '../../server/config.js';
@@ -30,6 +32,32 @@ describe('daily job detection', () => {
   it('asks the host through pgrep when no override is set', async () => {
     t = await makeTestApp({}, { exec: hostSays(true), dailyPollMs: 30 });
     expect(await dailyRunning(t)).toBe(true);
+  });
+});
+
+describe('a daily run with no done line', () => {
+  const UNFINISHED = '=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n';
+  async function statuses(app: TestApp): Promise<{ today: string; latest: string; one: string; weekly: string }> {
+    const logs = path.join(app.cfg.dataRoot, 'data', 'immigration', 'logs');
+    fs.writeFileSync(path.join(logs, '2026-10-05.log'), UNFINISHED);
+    const weeklyDir = path.join(app.cfg.dataRoot, 'data', 'upstream-sync');
+    fs.mkdirSync(weeklyDir, { recursive: true });
+    fs.writeFileSync(path.join(weeklyDir, '2026-10-04.log'), UNFINISHED);
+    const get = async (url: string) => (await app.app.inject({ method: 'GET', url, headers: app.authed })).json();
+    return {
+      today: (await get('/api/immigration/overview')).dailyLog.status,
+      latest: (await get('/api/schedule/logs')).latest.status,
+      one: (await get('/api/schedule/logs/2026-10-05')).status,
+      weekly: (await get('/api/schedule/logs/2026-10-04?job=upstream-sync')).status,
+    };
+  }
+  it('reads interrupted on the Today chip and in the log browser when run-daily.sh is not running', async () => {
+    t = await makeTestApp({ fakeDaily: 'idle' }, { exec: hostSays(true), dailyPollMs: 60_000 });
+    expect(await statuses(t)).toEqual({ today: 'interrupted', latest: 'interrupted', one: 'interrupted', weekly: 'running' });
+  });
+  it('reads running while run-daily.sh runs, even before the next poll', async () => {
+    t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
+    expect(await statuses(t)).toEqual({ today: 'running', latest: 'running', one: 'running', weekly: 'running' });
   });
 });
 
