@@ -105,9 +105,10 @@ export function parseDailyLog(text: string, date: string): DailyLog {
   for (const line of lines.slice(Math.max(lastStart, 0))) {
     let m: RegExpMatchArray | null;
     if ((m = line.match(RUN_START))) startedAt = m[1]!;
-    else if ((m = line.match(/^===\s+(\S+\s+\S+)\s+done\s*\(failed=(\d+)\)/))) {
+    // run-daily.sh ends with `done (failed=N)`; the weekly sync.sh with a bare `done` or `done (up to date)`.
+    else if ((m = line.match(/^===\s+(\S+\s+\S+)\s+done\b(?:\s*\(failed=(\d+)\))?/))) {
       finishedAt = m[1]!;
-      failedCount = Number(m[2]);
+      failedCount = m[2] === undefined ? null : Number(m[2]);
     } else if ((m = line.match(/^---\s+(\d{2}:\d{2}:\d{2})\s+(.+)$/))) steps.push({ name: m[2]!.trim(), time: m[1]!, failed: false });
     else if ((m = line.match(/^!!!\s+step failed:\s+(.+)$/))) {
       const name = m[1]!.trim();

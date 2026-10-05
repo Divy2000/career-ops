@@ -76,6 +76,11 @@ describe('immigration overview', () => {
     expect(asked).toBe(0);
   });
 
+  it('reads the weekly sync\'s done lines, which carry no failed count, as a finished run', () => {
+    expect(parseDailyLog('=== 2026-10-04 03:00:00 start\n--- merging upstream/main\n=== 2026-10-04 03:20:00 done\n', '2026-10-04')).toMatchObject({ status: 'ok', finishedAt: '2026-10-04 03:20:00', failedCount: null });
+    expect(parseDailyLog('=== 2026-10-04 03:00:00 start\n=== 2026-10-04 03:00:09 done (up to date)\n', '2026-10-04')).toMatchObject({ status: 'ok', finishedAt: '2026-10-04 03:00:09', failedCount: null });
+  });
+
   it('parses company files and the whole overview through the core lib', async () => {
     const cf = parseCompanyFile('# Acme\n\nchecked_at: 2026-09-28\nverdict: strong\ndol_tier: strong\npolicy_changes_seen: 2\n', 'acme', '/x', (md) => md.match(/checked_at:\s*(\S+)/)?.[1] ?? null);
     expect(cf).toMatchObject({ name: 'Acme', checkedAt: '2026-09-28', verdict: 'strong', dolTier: 'strong', policyChangesSeen: 2 });
