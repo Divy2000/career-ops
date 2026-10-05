@@ -1,8 +1,6 @@
 // Static action registry: the only way the client runs anything. Every entry
 // builds an argv array; the client never sends a command string.
-import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { z } from 'zod';
 import YAML from 'yaml';
 import type { Cost } from '../runner/store.js';
@@ -10,6 +8,7 @@ import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
+import { writeTmpInput } from './tmp-inputs.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
 
@@ -77,14 +76,8 @@ const outputPath = (ext: RegExp, what: string) =>
 const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) only').max(2048);
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 
-/** Ephemeral input files live under the data root, never in the repo. */
-function tmpFile(ctx: ActionContext, ext: string, content: string): string {
-  const dir = path.join(ctx.dataRoot, 'data', 'control-center', 'tmp');
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`);
-  fs.writeFileSync(file, content);
-  return file;
-}
+/** Ephemeral input files live under the data root, never in the repo, and go when the run ends (tmp-inputs.ts). */
+const tmpFile = (ctx: ActionContext, ext: string, content: string): string => writeTmpInput(ctx.dataRoot, ext, content);
 
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
 

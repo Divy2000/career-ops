@@ -9,6 +9,7 @@ import { actionRoutes } from './routes/actions.js';
 import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
+import { sweepStaleInputs } from './actions/tmp-inputs.js';
 import { writeRoutes } from './routes/writes.js';
 import { DailyJobWatch, maybeFakeDailyProbe } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
@@ -24,6 +25,9 @@ import { settingsRoutes } from './routes/settings.js';
 import { ScheduleService } from './system/schedule.js';
 import { maybeFakeLaunchd } from './system/fake-launchd.js';
 import { readSettings, type AppSettings } from './domains/settings.js';
+
+/** Action input files and CV uploads a crash or restart left behind are removed after a day. */
+const STALE_INPUT_MS = 24 * 3_600_000;
 
 export interface AppDeps {
   /** Injectable process runner (tests fake pgrep, launchctl and plutil). */
@@ -84,6 +88,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const activate = () => {
     if (activated) return;
     activated = true;
+    sweepStaleInputs(cfg.dataRoot, STALE_INPUT_MS);
     runner.reconcile();
     sessions.reconcile();
   };

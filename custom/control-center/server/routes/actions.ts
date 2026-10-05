@@ -3,6 +3,7 @@ import type { ServerConfig } from '../config.js';
 import { actionMetadata, findAction } from '../actions/registry.js';
 import type { Runner } from '../runner/runner.js';
 import { execNoShell, type Exec } from './system.js';
+import { removeTmpInputs } from '../actions/tmp-inputs.js';
 
 const SYNC_TIMEOUT_MS = 30_000;
 
@@ -35,7 +36,12 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       });
       return reply.code(202).send({ runId: meta.id });
     }
-    const r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: { ...coreEnv, ...cmd.env } });
+    let r: Awaited<ReturnType<Exec>>;
+    try {
+      r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: { ...coreEnv, ...cmd.env } });
+    } finally {
+      removeTmpInputs(cfg.dataRoot, cmd.args);
+    }
     let result: unknown = r.stdout;
     try {
       result = JSON.parse(r.stdout);

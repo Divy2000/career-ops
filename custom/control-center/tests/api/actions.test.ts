@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 
 let t: TestApp;
@@ -50,6 +50,24 @@ describe('action registry', () => {
     expect(tracker.rows.find((r: { num: number }) => r.num === 2).status).toBe('Applied');
     const log = fs.readFileSync(path.join(t.cfg.dataRoot, 'data', 'status-log.tsv'), 'utf8').trim().split('\n');
     expect(log.at(-1)).toMatch(/^2\t\d{4}-\d{2}-\d{2}\tEvaluated\tApplied\tweb/);
+  });
+
+  it('deletes the input file a sync action wrote (pasted text) once the run returns, success or failure', async () => {
+    const tmp = path.join(t.cfg.dataRoot, 'data', 'control-center', 'tmp');
+    const left = () => (fs.existsSync(tmp) ? fs.readdirSync(tmp) : []);
+    const ok = await post('/api/actions/projects.rank', { params: { text: 'We need Python and Kafka experience.' } });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(left()).toEqual([]);
+    const library = path.join(t.cfg.dataRoot, 'article-digest.md');
+    const before = fs.readFileSync(library, 'utf8');
+    fs.writeFileSync(library, '## Empty\nTags: go\n');
+    try {
+      const failing = await post('/api/actions/projects.rank', { params: { text: 'Python.' } });
+      expect(failing.statusCode).toBe(422);
+      expect(left()).toEqual([]);
+    } finally {
+      fs.writeFileSync(library, before);
+    }
   });
 
   it('maps set-status exit codes to HTTP statuses', async () => {
@@ -264,5 +282,25 @@ describe('Apply documents classification and suggestion', () => {
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
     out('output/006-vandelay-systems-senior-python-engineer/cv/source/original.pdf');
     expect((await docs(6)).suggestedPdf).toBe('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
+  });
+});
+
+describe('stale action inputs', () => {
+  it('are swept at startup: input files and CV uploads older than a day go, newer ones stay', async () => {
+    const dataRoot = copyFixtureRoot();
+    const dir = (name: string) => path.join(dataRoot, 'data', 'control-center', name);
+    const files = { oldInput: path.join(dir('tmp'), 'old.txt'), newInput: path.join(dir('tmp'), 'new.txt'), oldUpload: path.join(dir('uploads'), '1-cv.pdf') };
+    for (const f of Object.values(files)) {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, 'x');
+    }
+    const past = new Date(Date.now() - 2 * 24 * 3_600_000);
+    for (const f of [files.oldInput, files.oldUpload]) fs.utimesSync(f, past, past);
+    const app = await makeTestApp({ dataRoot });
+    try {
+      expect(Object.values(files).map((f) => fs.existsSync(f))).toEqual([false, true, false]);
+    } finally {
+      await app.close();
+    }
   });
 });
