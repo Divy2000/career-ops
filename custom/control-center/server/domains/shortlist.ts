@@ -5,7 +5,12 @@ export interface ShortlistRow {
   rank: number;
   score: number | null;
   relevance: number | null;
+  /** The label as written: the DOL tier, then `; <alert> <date>` for a non-blocking alert (sponsorAdjustment). */
   sponsor: string;
+  /** The tier alone, for its color. */
+  sponsorTier: string;
+  /** The alert note after the tier (`resumed 2026-10-01`), or null. */
+  sponsorNote: string | null;
   company: string;
   role: string;
   url: string | null;
@@ -58,6 +63,13 @@ function excludedRow(line: string): ExcludedRow | null {
   return { company: m[1]!.trim(), role: m[2]!, url: m[3] || null, alert: alert ? alert[1]! : label, date: alert ? alert[2]! : null, headline: alert ? alert[3]! : '' };
 }
 
+// custom/pipeline/lib.mjs sponsorAdjustment labels a kept row `<tier>` or `<tier>; <status> <date>`.
+function sponsorParts(label: string): { sponsorTier: string; sponsorNote: string | null } {
+  const at = label.indexOf(';');
+  if (at === -1) return { sponsorTier: label.trim(), sponsorNote: null };
+  return { sponsorTier: label.slice(0, at).trim(), sponsorNote: label.slice(at + 1).trim() || null };
+}
+
 export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 'ok' }>, 'kind' | 'path' | 'etag'> {
   const date = md.match(/^#\s+Shortlist\s*-\s*(\d{4}-\d{2}-\d{2})/m)?.[1] ?? null;
   const summary = md.split('\n').find((l) => /^Ranked rows/i.test(l)) ?? null;
@@ -95,6 +107,7 @@ export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 
         score: num(c[1]),
         relevance: num(c[2]),
         sponsor: c[3] ?? '',
+        ...sponsorParts(c[3] ?? ''),
         company: c[4] ?? '',
         role: link ? link[1]! : roleCell,
         url: link ? link[2]! : null,

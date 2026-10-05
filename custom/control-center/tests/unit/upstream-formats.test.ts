@@ -49,6 +49,26 @@ describe('custom/pipeline/shortlist.mjs output', () => {
   });
 });
 
+describe('custom/pipeline/shortlist.mjs sponsor label (SW-libs-07)', () => {
+  it('splits a shortlisted company\'s DOL tier from its non-blocking alert note, so the tier keeps its color', () => {
+    const root = tempDir('cc-shortlist-contract-');
+    const today = localDate();
+    fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/acme/1 | Acme Robotics | Platform Engineer | Remote | ${rankCell('4.0', 'good fit')}\n- [ ] https://jobs.example.com/globex/2 | Globex Payments | Backend Engineer | Remote | ${rankCell('3.8', 'fit')}\n`);
+    fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+    fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Acme Robotics': { tier: 'strong', matched: 'X', checked: today }, 'Globex Payments': { tier: 'moderate', matched: 'Y', checked: today } }));
+    fs.writeFileSync(path.join(root, 'data', 'immigration', 'company-alerts.tsv'), `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme Robotics\tacme-robotics\tresumed\tAcme resumes sponsorship\thttps://news.example/2\n`);
+    const r = spawnSync(process.execPath, [path.join(DEFAULT_CODE_ROOT, 'custom', 'pipeline', 'shortlist.mjs')], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const s = readShortlist(root);
+    if (s.kind !== 'ok') throw new Error(s.kind);
+    expect(s.rows.map((row) => [row.company, row.sponsor, row.sponsorTier, row.sponsorNote])).toEqual([
+      ['Acme Robotics', 'strong; resumed 2026-10-01', 'strong', 'resumed 2026-10-01'],
+      ['Globex Payments', 'moderate', 'moderate', null],
+    ]);
+  });
+});
+
 describe('oferta report format (modes/oferta.md, examples/sample-report.md)', () => {
   it('the template still asks for a Block A table', () => {
     const mode = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'modes', 'oferta.md'), 'utf8');
