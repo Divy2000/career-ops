@@ -104,6 +104,17 @@ describe('action registry', () => {
     expect((await get('/api/runs/does-not-exist')).statusCode).toBe(404);
   });
 
+  it('Audit plugins runs the community plugin audit to the end instead of exiting with the usage text (R8-04)', async () => {
+    const res = await post('/api/actions/plugins.audit', { params: {} });
+    expect(res.statusCode, res.body).toBe(202);
+    const meta = await waitForRun(res.json().runId);
+    const lines = ((await get(`/api/runs/${res.json().runId}`)).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
+    expect(lines).not.toMatch(/Usage:/);
+    expect(meta, lines).toMatchObject({ actionId: 'plugins.audit', status: 'done', exitCode: 0 });
+    // This checkout has no plugins.local/, so there is nothing a community audit could flag.
+    expect(lines).toMatch(/No community plugins in plugins\.local\//);
+  });
+
   it('JD skill gap runs jd-skill-gap.mjs on the pasted JD and finishes, and asks for the JD instead of running without one (R7-15)', async () => {
     expect((await post('/api/actions/insights.jdSkillGap', { params: {} })).statusCode).toBe(400);
     const res = await post('/api/actions/insights.jdSkillGap', { params: { text: '## Requirements\n\n- 5+ years of experience with Python\n- Experience with Kafka and Kubernetes\n' } });

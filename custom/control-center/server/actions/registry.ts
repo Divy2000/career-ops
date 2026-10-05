@@ -95,6 +95,7 @@ const tmpFile = (ctx: ActionContext, ext: string, content: string): string => {
 
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
 const CONTACTS_VCF = 'custom/control-center/server/actions/contacts-vcf.mjs';
+const PLUGIN_AUDIT_ALL = 'custom/control-center/server/actions/plugin-audit-all.mjs';
 
 export const ACTIONS: ActionDef[] = [
   // ---- tracker ----
@@ -399,7 +400,7 @@ export const ACTIONS: ActionDef[] = [
   // ---- plugins ----
   define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),
   define({ id: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }), build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]) }),
-  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'pluginAudit', []) }),
+  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
   // ---- system ----
   define({ id: 'system.doctor', label: 'Doctor', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'doctor', ['--json']) }),
   define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),
