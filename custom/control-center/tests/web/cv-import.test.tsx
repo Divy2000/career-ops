@@ -23,6 +23,9 @@ vi.mock('@web/components/SessionPanel', () => ({
 
 let host: HTMLElement;
 let root: Root;
+// Uploads of a name in `holdNames` wait until the test releases them, so a slow upload can finish after a newer pick.
+let holdNames: Set<string>;
+let held: Map<string, () => void>;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -34,7 +37,12 @@ async function mount() {
     vi.fn(async (input: RequestInfo | URL) => {
       const upload = String(input).match(/^\/api\/cv\/upload\?name=(.+)$/);
       if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'the CV parser reads PDF only: export it to PDF, or pick a .md or .txt file to load the text directly' });
-      if (upload) return json(200, { path: `/data/uploads/${decodeURIComponent(upload[1]!)}`, bytes: 3 });
+      if (upload) {
+        const name = decodeURIComponent(upload[1]!);
+        const respond = () => json(200, { path: `/data/uploads/${name}`, bytes: 3 });
+        if (holdNames.has(name)) return new Promise<Response>((resolve) => held.set(name, () => resolve(respond())));
+        return respond();
+      }
       return json(404, { error: 'not stubbed' });
     }),
   );
@@ -64,6 +72,8 @@ beforeEach(() => {
   panels.mounts.length = 0;
   panels.unmounts.length = 0;
   panels.onEnvelope.clear();
+  holdNames = new Set();
+  held = new Map();
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -113,5 +123,32 @@ describe('Import CV: one parser session per uploaded file', () => {
   it('offers only PDF, Markdown and text files', async () => {
     await mount();
     expect(host.querySelector<HTMLInputElement>('input[type="file"][aria-label="CV file"]')!.accept).toBe('.md,.txt,.markdown,.pdf');
+  });
+
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  };
+
+  it('ignores a slow PDF upload that finishes after a Markdown file was picked: no parser comes back and the loaded text stays', async () => {
+    holdNames.add('a.pdf');
+    await mount();
+    await choose('a.pdf', 'application/pdf');
+    await choose('cv.md', 'text/markdown', '# Picked Markdown');
+    await act(async () => held.get('a.pdf')!());
+    await settle();
+    expect(panelsShown()).toEqual([]);
+    expect(panels.mounts).toEqual([]);
+    expect(draft()).toBe('# Picked Markdown');
+  });
+
+  it('ignores a slow PDF upload that finishes after a newer PDF was picked: only the newer one gets a parser', async () => {
+    holdNames.add('a.pdf');
+    await mount();
+    await choose('a.pdf', 'application/pdf');
+    await choose('b.pdf', 'application/pdf');
+    await act(async () => held.get('a.pdf')!());
+    await settle();
+    expect(panelsShown()).toEqual(['/data/uploads/b.pdf']);
+    expect(panels.mounts).toEqual(['/data/uploads/b.pdf']);
   });
 });

@@ -113,21 +113,27 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     [],
   );
   const onEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
+  // Bumped by every file pick; an upload or read that finishes under an older pick is dropped (as the projects import does).
+  const generation = useRef(0);
   const onFile = async (file: File) => {
+    const mine = ++generation.current;
+    const current = () => generation.current === mine;
     setNote(null);
+    showUpload(null);
     if (/\.(md|txt|markdown)$/i.test(file.name)) {
-      showUpload(null);
-      setDraft(await file.text());
+      const text = await file.text();
+      if (current()) setDraft(text);
       return;
     }
     const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
     const res = await fetch(`/api/cv/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
-    if (!res.ok) {
-      const reason = ((await res.json().catch(() => ({}))) as { error?: string }).error;
-      setNote(`Upload failed (${res.status}): ${reason ?? 'PDF only'}.`);
+    const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
+    if (!current()) return;
+    if (!res.ok || !body?.path) {
+      setNote(`Upload failed (${res.status}): ${body?.error ?? 'PDF only'}.`);
       return;
     }
-    showUpload(((await res.json()) as { path: string }).path);
+    showUpload(body.path);
   };
   const save = async () => {
     const current = await apiGet<UserFile>('/api/files/user/cv');
