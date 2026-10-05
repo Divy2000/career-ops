@@ -25,6 +25,22 @@ const md = (w, name, data) => w.write(`src/${name}`, data);
 // A freshly seeded modes/_custom.md: the template with the projects-library rule in place of its first "none yet" line.
 const seededCustom = () => read(INSTALL_DIR, 'templates', '_custom.md').replace('(none yet -- add yours above)', read(INSTALL_DIR, 'templates', '_custom-projects.md').trimEnd());
 
+// ---------------------------------------------------------------- the harness itself
+
+test('the world snapshot sees a change inside a fake checkout as well as anywhere else under the world', () => {
+  const { w, D } = fresh();
+  w.makeCheckout(D, { files: { 'modes/_profile.md': 'mine\n' } });
+  const before = w.snapshot();
+  assert.ok(Object.keys(before).includes(`${path.relative(w.T, D)}/modes/_profile.md`), 'files inside the checkout are in the snapshot');
+  fs.writeFileSync(path.join(D, 'modes', '_profile.md'), 'changed\n');
+  assert.notDeepEqual(w.snapshot(), before);
+  fs.writeFileSync(path.join(D, 'modes', '_profile.md'), 'mine\n');
+  assert.deepEqual(w.snapshot(), before);
+  fs.mkdirSync(path.join(D, 'nested', 'deeper', '.git'), { recursive: true });
+  fs.writeFileSync(path.join(D, 'nested', 'deeper', 'new.txt'), 'x');
+  assert.ok(Object.keys(w.snapshot()).includes(`${path.relative(w.T, D)}/nested/deeper/new.txt`), 'a checkout inside a checkout is snapshotted too');
+});
+
 // ---------------------------------------------------------------- usage and contract
 
 test('--help prints every flag of the contract and the exit codes, exit 0, and touches nothing', () => {

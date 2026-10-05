@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { isNestedCheckout } from '../../../lib/mjs-files.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEED = path.join(HERE, '..', 'seed.mjs');
@@ -25,8 +26,9 @@ const tree = (dir) => {
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name);
-      if (e.isDirectory()) walk(f);
-      else out[path.relative(dir, f)] = fs.readFileSync(f).toString('base64');
+      if (e.isDirectory()) {
+        if (!isNestedCheckout(f)) walk(f);
+      } else out[path.relative(dir, f)] = fs.readFileSync(f).toString('base64');
     }
   };
   walk(dir);
