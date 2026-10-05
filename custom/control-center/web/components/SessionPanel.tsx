@@ -121,6 +121,8 @@ export interface SessionPanelProps {
   startLabel?: string;
   replyLabel?: string;
   blacklistAllowed?: boolean;
+  /** Called once the server accepted a start or a turn sent with this panel's props (blacklistAllowed included). */
+  onSent?: () => void;
 }
 
 /** Prompt box plus live session for one mode. Host pages embed it; the Sessions page shows the same thing standalone. */
@@ -150,6 +152,7 @@ export function SessionPanel(props: SessionPanelProps) {
     setError(null);
     try {
       const m = await startSession({ mode: props.mode, target: props.target, prompt: text, blacklistAllowed: props.blacklistAllowed });
+      props.onSent?.();
       seen.current = 0;
       setSessionId(m.id);
       props.onSessionId?.(m.id);
@@ -179,7 +182,10 @@ export function SessionPanel(props: SessionPanelProps) {
         seen.current = 0;
         setSessionId(m.id);
         props.onSessionId?.(m.id);
-      } else await sendTurn(sessionId, text, props.blacklistAllowed);
+      } else {
+        await sendTurn(sessionId, text, props.blacklistAllowed);
+        props.onSent?.();
+      }
       setReply('');
     } catch (err) {
       setError(describeError(err));

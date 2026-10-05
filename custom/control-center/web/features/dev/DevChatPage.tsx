@@ -157,6 +157,8 @@ export function DevChatPage() {
   const actions = useActions();
   const { run, message } = useRunAction();
   const onStatus = useCallback((s: string) => setStatus(s), []);
+  // The unlock covers the one turn it was sent with; the next turn needs the box ticked again.
+  const onSent = useCallback(() => setBlacklist(false), []);
   const live = sessionId !== null && !isTerminal(status);
   return (
     <section aria-labelledby="page-title">
@@ -172,7 +174,7 @@ export function DevChatPage() {
       <Message message={message} />
       <p className="muted small">Scope: the user layer (cv.md, profile, portals, data/, reports/, output/, interview-prep/) and custom/**. Never the supervisor, node_modules, applications.md, or the blacklist unless you tick the box.</p>
       <div className="split">
-        <SessionPanel key="devchat" mode="devchat" title="Dev Chat" placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} blacklistAllowed={blacklist} startLabel="Send" />
+        <SessionPanel key="devchat" mode="devchat" title="Dev Chat" placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
         <div className="stack">
           <ReloadStatusCard />
           <ChangesPanel sessionId={sessionId} live={live} />
