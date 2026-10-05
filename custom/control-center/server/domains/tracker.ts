@@ -3,6 +3,7 @@ import { importCore } from '../core/adapter.js';
 import { readText } from './files.js';
 import { parseScore, readReport, summaryOf, type ReportSummary } from './reports.js';
 import { parseFollowups } from './followups.js';
+import { statusLabeler } from './insights.js';
 
 export const STATUS_ORDER = ['Interview', 'Offer', 'Hired', 'Responded', 'Applied', 'Evaluated', 'Rejected', 'Discarded', 'SKIP'] as const;
 export type TrackerStatus = (typeof STATUS_ORDER)[number];
@@ -14,6 +15,7 @@ export interface TrackerRow {
   role: string;
   score: number | null;
   scoreRaw: string;
+  /** The states.yml label (any case, bold or alias resolved, as set-status.mjs does); a status it does not know stays as written. */
   status: string;
   pdf: boolean;
   pdfRaw: string;
@@ -55,7 +57,7 @@ export function pdfPresent(cell: string): boolean {
 }
 
 export async function readTracker(codeRoot: string, dataRoot: string): Promise<TrackerRead> {
-  const [tp, pr] = await Promise.all([importCore<TrackerParse>(codeRoot, 'tracker-parse.mjs'), importCore<PathResolver>(codeRoot, 'path-resolver.mjs')]);
+  const [tp, pr, label] = await Promise.all([importCore<TrackerParse>(codeRoot, 'tracker-parse.mjs'), importCore<PathResolver>(codeRoot, 'path-resolver.mjs'), statusLabeler(codeRoot)]);
   const trackerPath = pr.resolveTrackerPath(dataRoot);
   const read = readText(trackerPath);
   if (read.kind === 'missing') return { kind: 'missing', path: trackerPath };
@@ -84,7 +86,7 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
       role: raw.role ?? '',
       score: parseScore(raw.score) ?? summary?.score ?? null,
       scoreRaw: raw.score ?? '',
-      status: raw.status ?? '',
+      status: label(raw.status ?? ''),
       pdf: pdfPresent(raw.pdf ?? ''),
       pdfRaw: raw.pdf ?? '',
       report: reportNum,

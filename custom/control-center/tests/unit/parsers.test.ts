@@ -118,6 +118,15 @@ describe('tracker', () => {
     expect(umbrella).toMatchObject({ score: null, scoreRaw: EM_DASH, pdf: false, report: null, reportState: 'none', lastContact: null });
   });
 
+  it('reads a status by its states.yml label, any case, bold or alias, and keeps an unknown one as written (SW-web-a-02)', async () => {
+    const r = copyFixtureRoot();
+    const row = (n: number, status: string) => `| ${n} | 2026-09-2${n} | Co ${n} | - | Engineer | 4.0/5 | ${status} | - | - | |`;
+    const statuses = ['applied', 'aplicado', '**Skip**', 'evaluada', 'Mystery'];
+    fs.writeFileSync(path.join(r, 'data', 'applications.md'), `# Applications Tracker\n\n| # | Date | Company | Via | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|---|\n${statuses.map((s, i) => row(i + 1, s)).join('\n')}\n`);
+    const t = await readTracker(DEFAULT_CODE_ROOT, r);
+    expect(t.kind === 'ok' && t.rows.map((x) => x.status)).toEqual(['Applied', 'Applied', 'SKIP', 'Evaluated', 'Mystery']);
+  });
+
   it('returns missing for an absent tracker and malformed for a tracker without a table', async () => {
     const empty = copyFixtureRoot();
     fs.rmSync(path.join(empty, 'data', 'applications.md'));
