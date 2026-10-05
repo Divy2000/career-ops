@@ -75,11 +75,9 @@ describe('mode registry', () => {
     expect(ENVELOPE_MODES.has('projects-ingest')).toBe(true);
   });
 
-  it('projects-ingest reads its document through intake.mjs, like the intake mode; other read-only sessions do not get it', () => {
-    expect(getModePolicy('projects-ingest')?.scripts).toEqual(['intake.mjs']);
-    expect(getModePolicy('projects-ingest')?.bashRules).toEqual(['Bash(node intake.mjs:*)']);
-    expect(getModePolicy('advisor')?.scripts).toEqual([]);
-    expect(getModePolicy('cv-ingest')?.scripts).toEqual([]);
+  it('projects-ingest runs no command at all: the app hands it the extracted text', () => {
+    expect(getModePolicy('projects-ingest')?.scripts).toEqual([]);
+    expect(getModePolicy('projects-ingest')?.bashRules).toEqual([]);
   });
 
   it('no class ever grants the always-denied files', () => {

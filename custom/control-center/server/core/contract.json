@@ -701,6 +701,13 @@
         "findCvEntry",
         "titleKey"
       ]
+    },
+    {
+      "module": "intake.mjs",
+      "names": [
+        "classifySource",
+        "detectPdfExtractor"
+      ]
     }
   ],
   "batchRunner": {

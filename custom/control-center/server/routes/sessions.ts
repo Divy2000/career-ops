@@ -6,6 +6,7 @@ import { listModeIds } from '../claude/modes.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import { rememberFact } from '../domains/memory.js';
 import { readSettings } from '../domains/settings.js';
+import { extractSourceText } from '../domains/projects.js';
 
 const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
 const prompt = z.string().min(1).max(20_000);
@@ -33,7 +34,14 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (refused) return reply.code(403).send({ error: refused });
     // App settings supply the default model when the client sends none (empty means the CLI default).
     const chosenModel = parsed.data.model ?? (readSettings(opts.cfg.dataRoot).settings.modelDefault || null);
-    const meta = await manager.start({ ...parsed.data, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
+    let userPrompt = parsed.data.prompt;
+    // projects-ingest runs no command: the app extracts its documents/ source (as intake does) and the text rides in the first message.
+    if (parsed.data.mode === 'projects-ingest') {
+      const doc = parsed.data.target.type === 'text' && parsed.data.target.value ? await extractSourceText(opts.cfg.codeRoot, opts.cfg.dataRoot, parsed.data.target.value) : { ok: false as const, error: 'projects-ingest needs the documents/ path of the source as its target' };
+      if (!doc.ok) return reply.code(422).send({ error: doc.error });
+      userPrompt = `${userPrompt}\n\n<document source="documents/${doc.rel}">\n${doc.text.replace(/<\/document/gi, '<\\/document')}\n</document>`;
+    }
+    const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: parsed.data.reportNum ?? null });
     return reply.code(202).send(meta);
   });
 

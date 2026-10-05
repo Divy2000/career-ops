@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { makePdf } from '../helpers/pdf.js';
 
 let t: TestApp;
 beforeEach(async () => {
@@ -227,14 +228,23 @@ describe('PDF uploads enter as intake sources under documents/projects', () => {
   const docs = (...p: string[]) => path.join(t.cfg.dataRoot, 'documents', ...p);
 
   it('stores the PDF under documents/projects, reuses an identical copy and never overwrites a different one', async () => {
-    const res = await upload('My Projects.pdf', Buffer.from('%PDF-1 a'));
+    const a = makePdf(['Kite Tracker', 'Tracked kites.']);
+    const b = makePdf(['Chess Engine', 'Wrote it.']);
+    const res = await upload('My Projects.pdf', a);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ path: 'projects/My_Projects.pdf', file: 'documents/projects/My_Projects.pdf', bytes: 8 });
-    expect(fs.readFileSync(docs('projects', 'My_Projects.pdf'), 'utf8')).toBe('%PDF-1 a');
-    expect((await upload('My Projects.pdf', Buffer.from('%PDF-1 a'))).json().path).toBe('projects/My_Projects.pdf');
-    expect((await upload('My Projects.pdf', Buffer.from('%PDF-1 b'))).json().path).toBe('projects/My_Projects-1.pdf');
-    expect(fs.readFileSync(docs('projects', 'My_Projects.pdf'), 'utf8')).toBe('%PDF-1 a');
+    expect(res.json()).toEqual({ path: 'projects/My_Projects.pdf', file: 'documents/projects/My_Projects.pdf', bytes: a.length, chars: expect.any(Number) });
+    expect(fs.readFileSync(docs('projects', 'My_Projects.pdf')).equals(a)).toBe(true);
+    expect((await upload('My Projects.pdf', a)).json().path).toBe('projects/My_Projects.pdf');
+    expect((await upload('My Projects.pdf', b)).json().path).toBe('projects/My_Projects-1.pdf');
+    expect(fs.readFileSync(docs('projects', 'My_Projects.pdf')).equals(a)).toBe(true);
     expect(fs.existsSync(path.join(t.cfg.dataRoot, 'data', 'control-center', 'uploads'))).toBe(false);
+  });
+
+  it('refuses a PDF with no text layer the way intake does, and does not keep it', async () => {
+    const res = await upload('scan.pdf', makePdf([]));
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatch(/no text extracted.*scanned or image-only PDF/i);
+    expect(fs.existsSync(docs('projects', 'scan.pdf'))).toBe(false);
   });
 
   it('refuses DOCX with the reason intake gives, writing nothing', async () => {

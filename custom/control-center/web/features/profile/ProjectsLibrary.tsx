@@ -371,7 +371,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   return (
     <div className="card projects-card">
       <h2>Import projects</h2>
-      <p className="muted small">Paste a projects JSON (AutoJobApply or JSON Resume) or library markdown, or pick a file. A PDF is kept in documents/projects/ and read by a read-only parser session through intake (uses tokens). Nothing is written to the library until you append.</p>
+      <p className="muted small">Paste a projects JSON (AutoJobApply or JSON Resume) or library markdown, or pick a file. A PDF is kept in documents/projects/; the app extracts its text as intake does and a read-only parser session proposes blocks from it (uses tokens). Nothing is written to the library until you append.</p>
       <div className="row gap projects-import__controls">
         <label className="project-field project-field--inline">
           <span className="project-field__label">Format</span>
@@ -388,7 +388,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           mode="projects-ingest"
           title="Parse the uploaded document"
           target={{ type: 'text', value: uploadPath }}
-          initialPrompt={`Extract the projects from documents/${uploadPath}: read it with node intake.mjs --text ${uploadPath}, then emit them in the projects envelope.`}
+          initialPrompt={`Extract the projects from documents/${uploadPath} (the app attaches its text) and emit them in the projects envelope.`}
           autoStart
           onEnvelope={onUploadEnvelope}
           startLabel="Parse"

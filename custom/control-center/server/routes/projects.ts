@@ -11,7 +11,7 @@ import { execNoShell, type Exec } from './system.js';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
 import { readUserFile, writeUserFile } from './files.js';
-import { projectsLib, type ProjectsLib, type ProjectsRead } from '../domains/projects.js';
+import { documentsPath, extractSourceText, projectsLib, type ProjectsLib, type ProjectsRead } from '../domains/projects.js';
 
 const LINE = z.string().max(2000).regex(/^[^\r\n]*$/, 'one line');
 const entrySchema = z.object({
@@ -34,19 +34,19 @@ const PDF = 'application/pdf';
 const UNSUPPORTED_UPLOADS = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'];
 
 /** Copy `bytes` into `dir` as `name`, reusing an identical file of that name family and never overwriting a different one. */
-function storeUnique(dir: string, name: string, bytes: Buffer): string {
+function storeUnique(dir: string, name: string, bytes: Buffer): { name: string; created: boolean } {
   fs.mkdirSync(dir, { recursive: true });
   const ext = path.extname(name);
   const stem = name.slice(0, name.length - ext.length);
   const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const family = new RegExp(`^${escape(stem)}(-\\d+)?${escape(ext)}$`);
   const twin = fs.readdirSync(dir).filter((n) => family.test(n)).find((n) => fs.readFileSync(path.join(dir, n)).equals(bytes));
-  if (twin) return twin;
+  if (twin) return { name: twin, created: false };
   for (let n = 0; ; n++) {
     const candidate = n === 0 ? name : `${stem}-${n}${ext}`;
     try {
       fs.writeFileSync(path.join(dir, candidate), bytes, { flag: 'wx' });
-      return candidate;
+      return { name: candidate, created: true };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
@@ -66,18 +66,7 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   const exec = opts.exec ?? execNoShell;
   const docsDir = path.join(cfg.dataRoot, 'documents');
 
-  /** The documents/-relative path of an existing file under documents/, or null. */
-  function sourceFile(rel: string): string | null {
-    if (path.isAbsolute(rel)) return null;
-    const abs = path.resolve(docsDir, rel);
-    if (!abs.startsWith(path.resolve(docsDir) + path.sep)) return null;
-    try {
-      if (!fs.statSync(abs).isFile()) return null;
-    } catch {
-      return null;
-    }
-    return path.relative(docsDir, abs).split(path.sep).join('/');
-  }
+  const sourceFile = (rel: string) => documentsPath(cfg.dataRoot, rel);
 
   /** intake.mjs --commit for one confirmed source, the way the intake mode records a merge. */
   async function recordSource(rel: string): Promise<{ recorded: boolean; warning?: string }> {
@@ -170,8 +159,15 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       return reply.code(415).send({ error: 'intake reads PDF, Markdown and text: export to PDF or .md/.txt first (pick a .md file to import Markdown directly)' });
     }
     const stem = (req.query.name ?? 'projects').replace(/[^\w.-]+/g, '_').replace(/\.[^.]*$/, '').slice(0, 60) || 'projects';
-    const name = storeUnique(path.join(docsDir, 'projects'), `${stem}.pdf`, req.body);
-    return { path: `projects/${name}`, file: `documents/projects/${name}`, bytes: req.body.length };
+    const stored = storeUnique(path.join(docsDir, 'projects'), `${stem}.pdf`, req.body);
+    const rel = `projects/${stored.name}`;
+    // Read it now, as the parser will, so a PDF intake cannot read is refused up front and not left behind.
+    const extracted = await extractSourceText(cfg.codeRoot, cfg.dataRoot, rel);
+    if (!extracted.ok) {
+      if (stored.created) fs.rmSync(path.join(docsDir, rel));
+      return reply.code(422).send({ error: extracted.error });
+    }
+    return { path: rel, file: `documents/${rel}`, bytes: req.body.length, chars: extracted.text.length };
   });
 
   app.post<{ Body: unknown }>('/api/projects/validate', async (req, reply) => {

@@ -55,11 +55,11 @@ describe('invocation builder', () => {
     expect(buildArgv({ ...base, policy: getModePolicy('oferta')! }).join(' ')).not.toContain('tok-secret');
     expect(redact('stderr says tok-secret twice tok-secret', 'tok-secret')).toBe('stderr says [redacted] twice [redacted]');
   });
-  it('tells projects-ingest to read the document only through intake.mjs --text and to emit library blocks', () => {
+  it('tells projects-ingest that the document text is in the request and that it runs nothing', () => {
     const text = buildPreamble({ policy: getModePolicy('projects-ingest')!, outputLanguage: 'en' });
-    expect(text).toMatch(/node intake\.mjs --text <path>/);
+    expect(text).toMatch(/<document source="documents\/\.\.\."> tags/);
     expect(text).toMatch(/<<cc:projects \{"markdown":"\.\.\."\}>>/);
-    expect(text).toMatch(/Do not run --commit/);
+    expect(text).not.toMatch(/intake\.mjs --text/);
   });
 
   it('writes a preamble that names the scope, the router context and the envelope contract, with no em dash', () => {
@@ -513,10 +513,9 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(oferta, 'node custom/projects/rank.mjs /etc/passwd --json');
   });
 
-  it('projects-ingest: intake.mjs may only extract text (--text <path>); recording sources is the app\'s job after the user confirms', () => {
+  it('projects-ingest: no command is allowed, not even intake.mjs --text (it creates the documents/ scaffold)', () => {
     const ingest = policyFor('projects-ingest', [...ALWAYS_DENIED_WRITES]);
-    ok(ingest, 'node intake.mjs --text projects/kites.pdf');
-    for (const cmd of ['node intake.mjs --commit projects/kites.pdf', 'node intake.mjs --commit --all', 'node intake.mjs --text', 'node intake.mjs --text projects/kites.pdf --commit', 'node intake.mjs --self-test', 'node rank-pipeline.mjs']) no(ingest, cmd);
+    for (const cmd of ['node intake.mjs --text projects/kites.pdf', 'node intake.mjs', 'node intake.mjs --commit --all']) no(ingest, cmd);
   });
 
   it('refuses Bash when the session is not running from the repo root', () => {

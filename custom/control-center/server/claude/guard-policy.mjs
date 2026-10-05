@@ -129,8 +129,6 @@ const WRITER_SCRIPTS = {
   'hired-share.mjs': { switches: ['--open', '--dry-run', '--status', '--help', '-h'], next: HIRED_FLAGS, eq: HIRED_FLAGS, positionals: [] },
   'weekly-digest.mjs': { switches: ['--summary', '--self-test', '--help', '-h'], next: DIGEST_FLAGS, eq: DIGEST_FLAGS, positionals: [] },
   'custom/cv/build-html.mjs': { switches: ['--help', '-h'], positionals: ['input', 'output'] },
-  // Not a writer: listed for its exact grammar. Text extraction only; --commit records sources, which the app does after the user confirms.
-  'intake.mjs': { switches: [], next: { '--text': 'value' }, positionals: [] },
   // Rewrites its input HTML with the fitted density, so both paths are outputs.
   'custom/cv/render-pdf.mjs': {
     switches: ['--strict-pages', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check', '--help', '-h'],

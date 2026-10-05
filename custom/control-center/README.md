@@ -52,7 +52,7 @@ Sidebar groups: Work (Today, Pipeline, Tracker, Apply, Follow-ups, Interviews), 
 Projects library writes go through `/api/projects` (GET; POST to add, PUT and DELETE `/api/projects/:id`). Each is ETag-gated like the other editors and edits one entry byte for byte. A result that would not validate is a 422 with the errors, and nothing is written. Import works the same way:
 - **Preview** (`/api/projects/convert`) turns a projects JSON (AutoJobApply or JSON Resume) or library markdown into blocks. It lists titles already in the library, and reports the errors the library would have after the append.
 - **Append** (`/api/projects/append`) writes the previewed blocks.
-- **A PDF is a source document, as in the `intake` mode.** `/api/projects/upload` keeps it under `documents/projects/` (an identical copy is reused, a different one never overwritten; DOCX is refused with intake's reason). A read-only `projects-ingest` session reads it only through `node intake.mjs --text <path>` and proposes library blocks. The preview stamps each block with `Source: documents/projects/<file>`. Append is your confirmation: only after the write does the server run `node intake.mjs --commit <path>` for that document.
+- **A PDF is a source document, as in the `intake` mode.** `/api/projects/upload` keeps it under `documents/projects/` (an identical copy is reused, a different one never overwritten; DOCX is refused with intake's reason). The server extracts its text with intake's own helpers (`classifySource`, `detectPdfExtractor`, the extractor `intake.mjs --commit` fingerprints; in process, so not even the documents/ scaffold is created) and puts it in the first message of a read-only `projects-ingest` session, which runs no command and proposes library blocks. A PDF with no text layer is refused at upload and not kept. The preview stamps each block with `Source: documents/projects/<file>`. Append is your confirmation: only after the write does the server run `node intake.mjs --commit <path>` for that document.
 
 The CV tab's PDF/DOCX import does not go through `documents/` or intake yet (see section 12).
 
@@ -64,7 +64,7 @@ Sessions run `claude -p` headless with `--permission-mode dontAsk`, path-scoped 
 
 | Policy class | Writes allowed | Examples |
 |---|---|---|
-| read-only | none | advisor (Ask drawer), tracker, discover AI search, cv-ingest, projects-ingest (`node intake.mjs --text` only) |
+| read-only | none | advisor (Ask drawer), tracker, discover AI search, cv-ingest, projects-ingest (no command; the app hands it the text) |
 | evaluate | `reports/`, tracker via core CLIs; may run `custom/projects/rank.mjs` and the fork CV build and render | oferta, auto-pipeline, ofertas, pipeline, batch |
 | documents | `output/`, `jds/`; may run `custom/projects/rank.mjs` and the fork CV build and render | pdf, text, latex, cover |
 | outreach and interview | `interview-prep/`, follow-up drafts | followup, interview-prep, interview/plan, interview/practice |

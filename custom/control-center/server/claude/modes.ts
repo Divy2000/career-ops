@@ -218,13 +218,13 @@ export const DEVCHAT_DENIED_WRITES = [
 ];
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
-export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[]; scripts?: string[] }> = {
+export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
   advisor: { title: 'Ask (advisor)', policyClass: 'read-only' },
   'ai-search': { title: 'AI search', policyClass: 'read-only', network: ['WebSearch'] },
   research: { title: 'Portfolio research', policyClass: 'read-only', network: ['WebFetch'] },
   'cv-ingest': { title: 'CV import (PDF/DOCX parse)', policyClass: 'read-only' },
-  // Reads its source from documents/ through intake.mjs --text, as the intake mode does (the guard allows nothing else).
-  'projects-ingest': { title: 'Projects import (PDF parse)', policyClass: 'read-only', scripts: ['intake.mjs'] },
+  // Runs no command: the app extracts the documents/ source with intake's helpers and puts the text in the first message.
+  'projects-ingest': { title: 'Projects import (PDF parse)', policyClass: 'read-only' },
   'fix-portal': { title: 'Fix portal slug', policyClass: 'fix-portal' },
   'immigration-policy': { title: 'Immigration policy pass', policyClass: 'immigration-policy' },
   'sponsorship-check': { title: 'Company sponsorship check', policyClass: 'sponsorship-check' },
@@ -315,7 +315,7 @@ export function getModePolicy(id: string): ModePolicy | null {
   if (!derived && !virtual) return null;
   const policyClass = classForMode(id);
   const def = POLICY_CLASSES[policyClass];
-  const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? []), ...(virtual?.scripts ?? [])])].sort();
+  const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].sort();
   const bashPrefixes = def.bashPrefixes ?? scripts.map(bashPrefixFor);
   return {
     id,
