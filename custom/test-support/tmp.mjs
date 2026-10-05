@@ -19,14 +19,22 @@ export function tempDir(prefix) {
   return d;
 }
 
-/** Runs every *.spec.mjs in `testsDir` except `exclude` with TMPDIR pointing at a fresh dir; returns the run and what it left behind. */
+/**
+ * The environment for a guard child: `tmp` as TMPDIR, TEMP and TMP (os.tmpdir() reads TEMP or TMP before
+ * TMPDIR on Windows), and no NODE_TEST_CONTEXT, which, inherited from this test process, makes the child
+ * skip every file.
+ */
+export function suiteEnv(base, tmp) {
+  const { NODE_TEST_CONTEXT: _ctx, ...env } = base;
+  return { ...env, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
+}
+
+/** Runs every *.spec.mjs in `testsDir` except `exclude` with the temp dir pointing at a fresh one; returns the run and what it left behind. */
 export function runSuiteInFreshTmp(testsDir, exclude) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tmp-guard-'));
   try {
     const files = fs.readdirSync(testsDir).filter((f) => f.endsWith('.spec.mjs') && f !== exclude).map((f) => path.join(testsDir, f));
-    // Without NODE_TEST_CONTEXT: inherited from this test process, it makes the child skip every file.
-    const { NODE_TEST_CONTEXT: _ctx, ...env } = process.env;
-    const r = spawnSync(process.execPath, ['--test', ...files], { env: { ...env, TMPDIR: tmp }, encoding: 'utf8', timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
+    const r = spawnSync(process.execPath, ['--test', ...files], { env: suiteEnv(process.env, tmp), encoding: 'utf8', timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
     if (files.length && !/ℹ tests [1-9]/.test(`${r.stdout}`)) throw new Error(`the suite did not run in the child:\n${r.stdout}\n${r.stderr}`.slice(-4000));
     return { status: r.status, output: `${r.stdout}\n${r.stderr}`, leftovers: fs.readdirSync(tmp).sort() };
   } finally {
