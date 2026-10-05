@@ -57,6 +57,34 @@ describe('Keyword match', () => {
   });
 });
 
+describe('Reply watch digest (SW-server-02)', () => {
+  const candidates = () => path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json');
+
+  it('with no pasted replies yet, refuses before running, so reply-watch.mjs never seeds its mock emails into the data root', async () => {
+    fs.rmSync(candidates(), { force: true });
+    const res = await post('followups.replyWatch', {});
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/No replies to review yet.*Paste a reply/);
+    expect(fs.existsSync(candidates())).toBe(false);
+  });
+
+  it('with a pasted reply, digests only that reply and leaves the candidates file as it was', async () => {
+    const pasted = [{ message_id: 'paste-1', from: 'talent@acme.example', subject: 'Next steps', body_snippet: 'Thanks for applying, we will be in touch.', signal: null }];
+    fs.writeFileSync(candidates(), JSON.stringify(pasted, null, 2));
+    try {
+      const res = await post('followups.replyWatch', {});
+      expect(res.statusCode, res.body).toBe(202);
+      const { meta, text } = await finished(res.json().runId);
+      expect(meta.status, text).toBe('done');
+      expect(text).toMatch(/Today: 1 application updates need review/);
+      expect(text).not.toMatch(/wingyun|zhaopin|mock candidates/i);
+      expect(JSON.parse(fs.readFileSync(candidates(), 'utf8'))).toEqual(pasted);
+    } finally {
+      fs.rmSync(candidates(), { force: true });
+    }
+  });
+});
+
 describe('Seed follow-up cadence', () => {
   it('seeds one application by number, or backfills every one, and refuses neither or both', async () => {
     const one = await post('followups.seed', { appNum: 1, dryRun: true });
