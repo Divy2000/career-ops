@@ -117,7 +117,6 @@ export function buildArgv(input: InvocationInput): string[] {
   const disallowed = buildDisallowedTools(input.policy);
   return [
     '-p',
-    neutralizeFileMentions(input.userMessage),
     '--output-format',
     'stream-json',
     '--verbose',
@@ -138,6 +137,10 @@ export function buildArgv(input: InvocationInput): string[] {
     ...(input.policy.mcp === 'playwright' ? ['--mcp-config', input.mcpConfig ?? PLAYWRIGHT_MCP_PATH] : []),
     ...(input.model ? ['--model', input.model] : []),
     ...(input.maxTurns ? ['--max-turns', String(input.maxTurns)] : []),
+    // Last, after --: the CLI's option parser (and its early flag scan) stop there, so a prompt that starts with a
+    // dash ("- rename X", "-h") is the prompt and never an option or an error (probed on 2.1.289).
+    '--',
+    neutralizeFileMentions(input.userMessage),
   ];
 }
 

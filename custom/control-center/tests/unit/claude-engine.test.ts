@@ -19,7 +19,9 @@ describe('invocation builder', () => {
   it('builds the contracted argv for a first turn of an evaluate mode', () => {
     const policy = getModePolicy('oferta')!;
     const argv = buildArgv({ ...base, policy });
-    expect(argv.slice(0, 2)).toEqual(['-p', 'Evaluate https://x.example/1']);
+    // Requirement change (SW-claude-07): the prompt is the last argument, after --, so no prompt is parsed as an option.
+    expect(argv[0]).toBe('-p');
+    expect(argv.slice(-2)).toEqual(['--', 'Evaluate https://x.example/1']);
     expect(argv).toEqual(expect.arrayContaining(['--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--session-id', base.claudeSessionId, '--permission-mode', 'dontAsk', '--append-system-prompt', 'PREAMBLE', '--settings', base.settingsFile, '--strict-mcp-config']));
     expect(argv).not.toContain('--resume');
     expect(argv).not.toContain('--mcp-config');
@@ -28,6 +30,17 @@ describe('invocation builder', () => {
     expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).toEqual(expect.arrayContaining(['Edit(//repo/career-ops/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch']));
     const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!;
     expect(disallowed.split(',')).toContain('Task');
+  });
+  it('a prompt that starts with a dash or looks like an option is never read as one: every option comes before --, the prompt after it', () => {
+    const policy = getModePolicy('apply')!;
+    for (const userMessage of ['- rename X\n- add a test', '-h', '--dangerously-skip-permissions', '--permission-mode=bypassPermissions', '--settings=/tmp/x.json', '--', '-p']) {
+      for (const turn of [{ resume: false }, { resume: true, fork: true, model: 'sonnet', maxTurns: 3 }]) {
+        const argv = buildArgv({ ...base, ...turn, policy, userMessage });
+        expect(argv.indexOf('--'), userMessage).toBe(argv.length - 2);
+        expect(argv.at(-1), userMessage).toBe(userMessage);
+        expect(argv.filter((a) => a === userMessage), userMessage).toHaveLength(userMessage === '--' || userMessage === '-p' ? 2 : 1);
+      }
+    }
   });
   it('resumes with --resume, forks with --fork-session, and passes model and max turns when set', () => {
     const policy = getModePolicy('oferta')!;
@@ -168,7 +181,8 @@ describe('invocation: read confinement', () => {
     for (const url of ['https://medium.com/@acme/x', 'https://jobs.example.com/a/@team?b=@c&@d', 'https://x.example/%@y', 'https://x.example/q?@z', 'mailto:me@example.com', 'first.last+tag@example.co', 'user-1@x.io', 'scheme:@x'])
       expect(neutralizeFileMentions(`read ${url} now`), url).toBe(`read ${url} now`);
     const argv = buildArgv({ ...roots, policy: oferta, userMessage: 'read @~/.ssh/id_rsa for me' });
-    expect(argv[1]).toBe('read @\u2060~/.ssh/id_rsa for me');
+    // The prompt is the last argument, after -- (SW-claude-07).
+    expect(argv.slice(-2)).toEqual(['--', 'read @\u2060~/.ssh/id_rsa for me']);
   });
 
   it('assertRootsConfinable refuses a root that is the filesystem root, the home directory or a parent of it, in any spelling', () => {
