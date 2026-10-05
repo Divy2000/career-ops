@@ -33,13 +33,45 @@ ENV_ROOT=0
 if [ -n "$(trim "${CAREER_OPS_ROOT:-}")" ] || [ -n "$(trim "${CAREER_OPS_DATA_DIR:-}")" ]; then ENV_ROOT=1; fi
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+# The claude the daily job runs, pinned as CC_CLAUDE_BIN: launchd's own PATH could reach another install first (an old
+# one in /usr/local/bin, say), and the job would then skip its Claude steps every day. CC_CLAUDE_BIN (absolute) wins,
+# else the first claude on this shell's PATH, else ~/.local/bin/claude (the native installer). It is checked against
+# the approved versions now, so a mismatch is reported here and not only in tomorrow's log.
+CLAUDE_BIN=""
+if [ -n "${CC_CLAUDE_BIN:-}" ]; then
+  case "$CC_CLAUDE_BIN" in /*) CLAUDE_BIN="$CC_CLAUDE_BIN" ;; *) echo "error: CC_CLAUDE_BIN must be an absolute path (got $CC_CLAUDE_BIN)" >&2; exit 2 ;; esac
+else
+  CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+  case "$CLAUDE_BIN" in /*) ;; *) CLAUDE_BIN="" ;; esac
+  if [ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE_BIN="$HOME/.local/bin/claude"; fi
+fi
+if [ -n "$CLAUDE_BIN" ]; then
+  if CLAUDE_CHECK="$(cd "$ROOT" && CLAUDE_BIN="$CLAUDE_BIN" node --input-type=module -e '
+import path from "node:path";
+const { claudeVersionGate } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
+try {
+  const gate = claudeVersionGate(process.env.CLAUDE_BIN);
+  process.stdout.write(gate.problem ? `warning: ${gate.problem}; the daily job skips its policy pass and rank until it is` : `Claude Code ${gate.version}`);
+} catch (err) {
+  process.stdout.write(`warning: ${err.message}; the daily job fails its policy pass and rank until it can be read`);
+}
+' 2>&1)"; then :; else CLAUDE_CHECK="warning: could not check the Claude Code version of $CLAUDE_BIN"; fi
+  case "$CLAUDE_CHECK" in
+    warning:*) echo "$CLAUDE_CHECK" >&2 ;;
+    *) echo "daily job uses claude $CLAUDE_BIN ($CLAUDE_CHECK)" ;;
+  esac
+else
+  echo "warning: no claude found on PATH or in ~/.local/bin; the daily job looks it up on launchd's PATH at run time. To pin one: CC_CLAUDE_BIN=/path/to/claude $(shell_quote "$0")" >&2
+fi
 
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd="" envxml="" xdata xroot
+  local wd="" envxml="" vars="" xdata xroot
   xdata="$(xml_escape "$DATA")"
   xroot="$(xml_escape "$ROOT")"
-  if [ "$ENV_ROOT" = 1 ]; then envxml="<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>$xdata</string></dict>"; fi
+  if [ "$ENV_ROOT" = 1 ]; then vars="<key>CAREER_OPS_ROOT</key><string>$xdata</string>"; fi
+  if [ "$label" = com.career-ops.immigration-watch ] && [ -n "$CLAUDE_BIN" ]; then vars="$vars<key>CC_CLAUDE_BIN</key><string>$(xml_escape "$CLAUDE_BIN")</string>"; fi
+  if [ -n "$vars" ]; then envxml="<key>EnvironmentVariables</key><dict>$vars</dict>"; fi
   [ -n "$weekday" ] && wd="<key>Weekday</key><integer>$weekday</integer>"
   cat > "$AGENTS/$label.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

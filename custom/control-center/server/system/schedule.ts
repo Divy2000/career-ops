@@ -59,12 +59,18 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  * The script runs from the code root with CAREER_OPS_ROOT set to the data root
  * (path-resolver.mjs gives it precedence over the .career-ops-data marker), so
  * the job reads and writes the same data the app shows; its launchd logs go to
- * the data root too, where the log browser reads them.
+ * the data root too, where the log browser reads them. The daily job also gets
+ * CC_CLAUDE_BIN, the absolute claude the app runs: launchd's own PATH could
+ * otherwise reach another install (an old one in /usr/local/bin, say) first.
  */
-export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string, opts: { pinDataRoot?: boolean } = {}): string {
+export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string, opts: { pinDataRoot?: boolean; claudeBin?: string } = {}): string {
   const root = esc(codeRoot);
   const logs = esc(path.join(dataRoot, job.logDir));
   const wd = t.weekday === null ? '' : `<key>Weekday</key><integer>${t.weekday}</integer>`;
+  const vars = [
+    ...(opts.pinDataRoot === false ? [] : [`<key>CAREER_OPS_ROOT</key><string>${esc(dataRoot)}</string>`]),
+    ...(job.kind === 'daily' && opts.claudeBin && path.isAbsolute(opts.claudeBin) ? [`<key>CC_CLAUDE_BIN</key><string>${esc(opts.claudeBin)}</string>`] : []),
+  ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -73,7 +79,7 @@ export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: numbe
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>${root}/${job.script}</string></array>
   <key>WorkingDirectory</key><string>${root}</string>
-  ${opts.pinDataRoot === false ? '' : `<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${esc(dataRoot)}</string></dict>`}
+  ${vars.length ? `<key>EnvironmentVariables</key><dict>${vars.join('')}</dict>` : ''}
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>${t.hour}</integer><key>Minute</key><integer>${t.minute}</integer>${wd}</dict>
   <key>StandardOutPath</key><string>${logs}/launchd.out.log</string>
@@ -119,7 +125,7 @@ interface PlistJson {
 
 export class ScheduleService {
   constructor(
-    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; dataRootFromEnv?: boolean; now?: () => Date },
+    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; dataRootFromEnv?: boolean; claudeBin?: string; now?: () => Date },
   ) {}
 
   job(label: string): ScheduleJob | undefined {
@@ -186,7 +192,7 @@ export class ScheduleService {
     const plistPath = this.plistPath(job);
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv }));
+    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv, claudeBin: this.deps.claudeBin }));
     // launchd does not create the log directory; without it the job's output is lost.
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);

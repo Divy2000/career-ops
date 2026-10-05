@@ -88,7 +88,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
     return { status: r.status, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
-  return { T, root, data, home, run };
+  return { T, root, data, home, fakeClaude, run };
 }
 
 const flagValue = (argv, flag) => argv[argv.indexOf(flag) + 1];
@@ -255,4 +255,11 @@ test('the Claude Code checked at the start is checked again right before each sp
   assert.match(r.log, /Claude Code changed since the job checked it .*the rank is not run/);
   assert.notEqual(r.status, 0);
   assert.deepEqual(r.leftovers, []);
+});
+
+test('the log says which claude the job resolved, where from, and its real path and version', () => {
+  const w = dailyWorld();
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.ok(r.log.includes(`claude: ${w.fakeClaude} (from CC_CLAUDE_BIN), ${fs.realpathSync(w.fakeClaude)}@${APPROVED[0]}`), r.log);
 });

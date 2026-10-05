@@ -77,6 +77,10 @@ process.stdout.write(gate.identity);
 }
 CLAUDE_GATE_RC=0
 CLAUDE_GATE="$(claude_check)" || CLAUDE_GATE_RC=$?
+# Which binary, from where: launchd's PATH is not the shell's, so the plist pins CC_CLAUDE_BIN.
+CLAUDE_FROM=PATH
+if [ -n "${CC_CLAUDE_BIN:-}" ]; then CLAUDE_FROM=CC_CLAUDE_BIN; fi
+echo "claude: ${CLAUDE_REAL:-none found} (from $CLAUDE_FROM), $CLAUDE_GATE"
 
 policy_watch() {
   local watch_json prompt batch settings_dir policy_sha rc now

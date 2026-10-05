@@ -19,7 +19,7 @@ const mkTmp = (prefix) => {
   return d;
 };
 
-function run(args, { env = {}, marker = null, existing = [], homeName = 'home' } = {}) {
+function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null } = {}) {
   const T = mkTmp('ci-launchd-');
   const bin = path.join(T, 'bin');
   fs.mkdirSync(bin);
@@ -27,11 +27,22 @@ function run(args, { env = {}, marker = null, existing = [], homeName = 'home' }
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   const home = path.join(T, homeName);
   fs.mkdirSync(home);
+  if (localClaude !== null) {
+    fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'claude'), `#!/bin/sh\necho '${localClaude} (Claude Code)'\n`, { mode: 0o755 });
+  }
   // The script derives ROOT from its own location, so run a copy inside a scratch "checkout".
   const root = path.join(T, 'root');
   fs.mkdirSync(path.join(root, 'custom', 'launchd'), { recursive: true });
   fs.copyFileSync(SCRIPT, path.join(root, 'custom', 'launchd', 'install.sh'));
   fs.copyFileSync(path.join(HERE, '..', '..', '..', 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
+  // The version check reads the approved list next to the confinement module, as in a real checkout.
+  fs.mkdirSync(path.join(root, 'custom', 'control-center', 'server', 'claude'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'custom', 'control-center', 'server', 'core'), { recursive: true });
+  fs.copyFileSync(path.join(HERE, '..', '..', 'control-center', 'server', 'claude', 'confinement.mjs'), path.join(root, 'custom', 'control-center', 'server', 'claude', 'confinement.mjs'));
+  fs.writeFileSync(path.join(root, 'custom', 'control-center', 'server', 'core', 'contract.json'), JSON.stringify({ claude: { approvedVersions: ['2.1.289'] } }));
+  // A claude on the test PATH answering `--version` with `claude` (never the real one: /opt/homebrew/bin is not on it).
+  if (claude !== null) fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\necho '${claude} (Claude Code)'\n`, { mode: 0o755 });
   if (marker !== null) fs.writeFileSync(path.join(root, '.career-ops-data'), `${marker.replace('$T', T)}\n`);
   const agentsDir = path.join(home, 'Library', 'LaunchAgents');
   fs.mkdirSync(agentsDir, { recursive: true });
@@ -168,4 +179,51 @@ test('a job the Control Center disabled is enabled again before it is bootstrapp
     const bootstrap = calls.findIndex((c) => c.startsWith('launchctl bootstrap ') && c.endsWith(`/${label}.plist`));
     assert.ok(enable > -1 && bootstrap > enable, `${label}: enable at ${enable}, bootstrap at ${bootstrap}\n${r.log}`);
   }
+});
+
+const CLAUDE_KEY = (bin) => `<key>CC_CLAUDE_BIN</key><string>${bin}</string>`;
+
+test('the daily plist pins the approved claude found on PATH (CC_CLAUDE_BIN), and the weekly plist does not', () => {
+  const r = run(['--jobs', 'all'], { claude: '2.1.289' });
+  assert.equal(r.status, 0, r.stderr);
+  const bin = path.join(r.T, 'bin', 'claude');
+  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict>${CLAUDE_KEY(bin)}</dict>`), plistText(r, DAILY));
+  assert.doesNotMatch(plistText(r, SYNC), /CC_CLAUDE_BIN/);
+  assert.match(r.stdout, new RegExp(`daily job uses claude ${bin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(Claude Code 2\\.1\\.289\\)`));
+});
+
+test('CC_CLAUDE_BIN from the environment wins and is written next to CAREER_OPS_ROOT', () => {
+  const data = mkTmp('ci-launchd-data-');
+  const other = path.join(mkTmp('ci-launchd-claude-'), 'claude');
+  fs.writeFileSync(other, "#!/bin/sh\necho '2.1.289 (Claude Code)'\n", { mode: 0o755 });
+  const r = run(['--jobs', 'daily'], { claude: '2.1.289', env: { CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: other } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${data}</string>${CLAUDE_KEY(other)}</dict>`), plistText(r, DAILY));
+});
+
+test('a relative CC_CLAUDE_BIN is a usage error that installs nothing', () => {
+  const r = run(['--jobs', 'daily'], { env: { CC_CLAUDE_BIN: 'claude' } });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /CC_CLAUDE_BIN must be an absolute path/);
+  assert.deepEqual(r.plists, []);
+});
+
+test('an unapproved claude is still pinned, with a warning that the Claude steps will be skipped until it is approved', () => {
+  const r = run(['--jobs', 'daily'], { claude: '2.1.290' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes(CLAUDE_KEY(path.join(r.T, 'bin', 'claude'))));
+  assert.match(r.stderr, /warning: Claude Code 2\.1\.290 is not approved .*the daily job skips its policy pass and rank/);
+});
+
+test('no claude anywhere: no CC_CLAUDE_BIN, and a warning that says how to pin one', () => {
+  const r = run(['--jobs', 'daily']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(plistText(r, DAILY), /CC_CLAUDE_BIN/);
+  assert.match(r.stderr, /warning: no claude found .*CC_CLAUDE_BIN=/);
+});
+
+test('with no claude on PATH, the native installer location ~/.local/bin/claude is pinned', () => {
+  const r = run(['--jobs', 'daily'], { localClaude: '2.1.289' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes(CLAUDE_KEY(path.join(r.home, '.local', 'bin', 'claude'))), plistText(r, DAILY));
 });
