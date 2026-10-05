@@ -157,12 +157,12 @@ test('unexpected_upstream lists the upstream files that differ but did not confl
   assert.equal(run('scan.mjs', 'scan.mjs.bak'), 'scan.mjs\n', 'whole names, not prefixes');
 });
 
-test('sync.sh blocks on upstream edits outside the conflicts it handed Claude', () => {
+test('sync.sh blocks on upstream edits this run made after the merge, outside the conflicts it handed Claude', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  const changed = sync.indexOf('CHANGED_UPSTREAM="$(git diff');
-  const unexpected = sync.indexOf('UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_UPSTREAM" "$CONFLICTS")"');
+  const claude = sync.indexOf('claude -p');
+  const unexpected = sync.indexOf('UNEXPECTED_UPSTREAM="$(unexpected_upstream "$(changed_since_snapshot "$STATE_DIR/$TODAY.merge-snapshot.txt")" "$CONFLICTS")"');
   const decide = sync.indexOf('BLOCKERS="$(merge_blockers)"');
-  assert.ok(changed > -1 && unexpected > changed && decide > unexpected, `order was changed=${changed} unexpected=${unexpected} decide=${decide}`);
+  assert.ok(claude > -1 && unexpected > claude && decide > unexpected, `order was claude=${claude} unexpected=${unexpected} decide=${decide}`);
 });
 
 // node stub for `node test-all.mjs --quick`: prints the given output and exits with the given code.

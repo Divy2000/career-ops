@@ -378,3 +378,95 @@ test('sync.sh stops the run through verify_merge before it pushes', () => {
   const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")" || fail "$GATE"');
   assert.ok(gate > sync.indexOf('echo "--- verifying"') && gate < sync.indexOf('git push'), `verify_merge at ${gate}`);
 });
+
+// ---- which upstream edits hold the PR: only this run's, outside the conflicts ----
+
+/**
+ * A fork whose main already carries an edit to the upstream file scan.mjs, kept by an earlier sync, and an upstream
+ * one commit ahead. `conflict` makes upstream edit scan.mjs too. The sync branch merges upstream; `claude(repo)` then
+ * stands in for the headless pass. Returns what sync.sh's own lines decide is an unexpected upstream edit.
+ */
+function heldUpstream({ conflict = false, claude = () => {} } = {}) {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-held-'));
+  const repo = path.join(base, 'repo');
+  const state = path.join(base, 'state');
+  mkdirSync(repo);
+  mkdirSync(state);
+  try {
+    git(repo, 'init', '-q', '-b', 'main');
+    commitFile(repo, 'scan.mjs', 'upstream scan\n', 'upstream base');
+    commitFile(repo, 'other.mjs', 'upstream other\n', 'upstream other');
+    git(repo, 'checkout', '-q', '-b', 'up');
+    if (conflict) commitFile(repo, 'scan.mjs', 'upstream scan v2\n', 'upstream edits scan');
+    else commitFile(repo, 'new.mjs', 'upstream new\n', 'upstream adds a file');
+    git(repo, 'update-ref', 'refs/remotes/upstream/main', 'up');
+    git(repo, 'checkout', '-q', 'main');
+    commitFile(repo, 'scan.mjs', 'fork scan\n', 'an earlier sync kept a fork edit');
+    git(repo, 'checkout', '-q', '-b', 'sync/x');
+    const merged = spawnSync('git', ['merge', '-q', '--no-ff', '--no-edit', 'upstream/main'], { cwd: repo, env: GIT_ENV, encoding: 'utf8' });
+    assert.equal(merged.status === 0, !conflict, merged.stderr);
+    const lines = readFileSync(SYNC, 'utf8').split('\n');
+    const snapshot = lines.find((l) => l.startsWith('merge_snapshot ')) ?? '';
+    const from = lines.findIndex((l) => l.startsWith('CHANGED_UPSTREAM="$(git diff'));
+    const to = lines.findIndex((l) => l.startsWith('UNEXPECTED_UPSTREAM='));
+    assert.ok(from > -1 && to > from, 'the CHANGED_UPSTREAM .. UNEXPECTED_UPSTREAM block was not found');
+    const vars = `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="$(git diff --name-only --diff-filter=U)"\nfail() { echo "!!! $1"; exit 1; }\n`;
+    const before = bashLib(repo, `${vars}${snapshot}\nprintf '%s' "$CONFLICTS"`);
+    assert.equal(before.status, 0, before.stdout + before.stderr);
+    const conflicts = before.stdout;
+    claude(repo);
+    const after = bashLib(repo, `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="${conflicts}"\n{\n${lines.slice(from, to + 1).join('\n')}\n} >/dev/null\nprintf '%s' "$UNEXPECTED_UPSTREAM"`);
+    assert.equal(after.status, 0, after.stderr);
+    return { conflicts, unexpected: after.stdout, differs: git(repo, 'diff', '--name-only', 'upstream/main', 'HEAD').trim() };
+  } finally { rmSync(base, { recursive: true, force: true }); }
+}
+
+test('a fork edit to an upstream file kept by an earlier sync does not hold a clean merge', () => {
+  const r = heldUpstream();
+  assert.equal(r.differs, 'scan.mjs', 'the earlier fork edit still differs from upstream');
+  assert.equal(r.unexpected, '');
+});
+
+test('an edit after the merge to an upstream file that did not conflict holds the PR', () => {
+  const r = heldUpstream({ claude: (repo) => commitFile(repo, 'other.mjs', 'patched by the pass\n', 'fix(custom): sneaky') });
+  assert.equal(r.unexpected, 'other.mjs');
+});
+
+test('an upstream file the pass adds or deletes after the merge holds the PR too', () => {
+  const r = heldUpstream({
+    claude: (repo) => {
+      git(repo, 'rm', '-q', 'new.mjs');
+      commitFile(repo, 'added.mjs', 'x\n', 'add and delete');
+    },
+  });
+  assert.equal(r.unexpected, 'added.mjs\nnew.mjs');
+});
+
+test('edits under custom/ and to the fork README never hold the PR', () => {
+  const r = heldUpstream({
+    claude: (repo) => {
+      commitFile(repo, 'custom/a.mjs', 'fix\n', 'fix(custom): follow upstream');
+      commitFile(repo, '.github/README.md', 'fork\n', 'docs');
+    },
+  });
+  assert.equal(r.unexpected, '');
+});
+
+test('resolving a conflict is allowed, but an upstream file slipped into the merge commit beside it holds the PR', () => {
+  const resolve = (extra) => (repo) => {
+    writeFileSync(path.join(repo, 'scan.mjs'), 'resolved\n');
+    if (extra) writeFileSync(path.join(repo, 'other.mjs'), 'slipped in\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '--no-edit');
+  };
+  const clean = heldUpstream({ conflict: true, claude: resolve(false) });
+  assert.equal(clean.conflicts, 'scan.mjs');
+  assert.equal(clean.unexpected, '');
+  assert.equal(heldUpstream({ conflict: true, claude: resolve(true) }).unexpected, 'other.mjs');
+});
+
+test('sync.sh records the merge result after the README step and before Claude runs', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const snap = sync.indexOf('merge_snapshot > "$STATE_DIR/$TODAY.merge-snapshot.txt" || fail ');
+  assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('claude -p'), `merge_snapshot at ${snap}`);
+});

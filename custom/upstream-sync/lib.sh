@@ -82,6 +82,24 @@ verify_merge() {
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "uncommitted changes left in the sync worktree"; return 1; fi
 }
 
+# merge_snapshot: every path the merge left resolved (index stage 0), one
+# "path<TAB>mode blob" line each, sorted. Taken right after the merge attempt
+# and before Claude runs: auto-merged content as the merge staged it, and no
+# entry for a path that still conflicts.
+merge_snapshot() {
+  git ls-files -s | awk -F'\t' '{ split($1, m, " "); if (m[3] == 0) print $2 "\t" m[1] " " m[2] }' | LC_ALL=C sort
+}
+
+# changed_since_snapshot <snapshot>: the paths outside custom/ and
+# .github/README.md whose content, mode or presence at HEAD differs from the
+# merge_snapshot in <snapshot>: what this run changed after the merge. A fork
+# difference from upstream kept by an earlier sync is in both, so it is not here.
+changed_since_snapshot() {
+  git ls-tree -r HEAD | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] " " m[3] }' | LC_ALL=C sort |
+    LC_ALL=C comm -3 "$1" - | sed -e 's/^\t//' | cut -f1 |
+    awk '!/^custom\// && $0 != ".github/README.md"' | LC_ALL=C sort -u
+}
+
 # unexpected_upstream <changed> <conflicts>: the files (one per line) in
 # <changed> that are not in <conflicts>. Upstream files may only be edited to
 # resolve a merge conflict, so any of these holds the PR for a human.

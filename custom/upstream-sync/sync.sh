@@ -97,6 +97,8 @@ if ! git merge --no-ff --no-edit -m "chore(sync): merge upstream main $TODAY" up
     *) fail "keep-fork-readme.sh failed" ;;
   esac
 fi
+# What the merge itself produced: only what Claude changes after this, outside the conflicts, can hold the PR.
+merge_snapshot > "$STATE_DIR/$TODAY.merge-snapshot.txt" || fail "cannot record the merge result before Claude runs"
 
 echo "--- headless Claude ($MODEL)"
 PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
@@ -126,7 +128,7 @@ if [ -n "$CHANGED_UPSTREAM" ]; then
   echo "NOTE: files outside custom/ differ from upstream/main (expected only for conflict resolutions):"
   echo "$CHANGED_UPSTREAM"
 fi
-UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_UPSTREAM" "$CONFLICTS")"
+UNEXPECTED_UPSTREAM="$(unexpected_upstream "$(changed_since_snapshot "$STATE_DIR/$TODAY.merge-snapshot.txt")" "$CONFLICTS")"
 
 CUSTOM_OK=1
 custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0
@@ -150,7 +152,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo "- control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
-  echo "- Of those, edited outside conflict resolution (blocks auto-merge): ${UNEXPECTED_UPSTREAM:-none}"
+  echo "- Upstream files this run edited after the merge outside conflict resolution (blocks auto-merge): ${UNEXPECTED_UPSTREAM:-none}"
   if [ $KEPT_README = 1 ]; then
     echo "- .github/README.md conflicted with upstream: the fork's version was kept. Upstream's copy: data/upstream-sync/$TODAY.upstream-github-readme.md (not auto-merged; compare, then merge by hand)."
   fi
