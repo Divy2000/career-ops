@@ -80,7 +80,7 @@ export function parsePipeline(md: string): PipelineRow[] {
     const h = line.match(/^##\s+(.+?)\s*$/);
     if (h) {
       const t = h[1]!.toLowerCase();
-      section = /^(pending|pendientes)/.test(t) ? 'pending' : /^(done|hecho|processed)/.test(t) ? 'done' : 'other';
+      section = /^(pending|pendientes)/.test(t) ? 'pending' : /^(done|hecho|processed|procesadas)/.test(t) ? 'done' : 'other';
       return;
     }
     const m = line.match(CHECKBOX_RE);

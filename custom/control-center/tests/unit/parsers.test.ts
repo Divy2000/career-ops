@@ -171,6 +171,14 @@ describe('tracker', () => {
 });
 
 describe('pipeline', () => {
+  it('reads scan.mjs\'s Spanish section headings, Pendientes and Procesadas (SW-tests-19)', () => {
+    const rows = parsePipeline('# Pipeline\n\n## Pendientes\n\n- [ ] https://jobs.example.com/a | A Co | Role\n\n## Procesadas\n\n- [x] https://jobs.example.com/b | B Co | Role\n');
+    expect(rows.map((r) => [r.url, r.section])).toEqual([
+      ['https://jobs.example.com/a', 'pending'],
+      ['https://jobs.example.com/b', 'done'],
+    ]);
+  });
+
   it('parses checkbox rows with labels, sections and rank reasons containing the em dash', () => {
     const rows = parsePipeline(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'));
     expect(rows).toHaveLength(6);
