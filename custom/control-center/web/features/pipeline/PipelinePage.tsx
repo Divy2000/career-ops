@@ -269,8 +269,8 @@ function Shortlist() {
             ) : (
               <ul className="bullets">
                 {q.data.excluded.map((e) => (
-                  <li key={e.company}>
-                    <strong>{e.company}</strong> <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
+                  <li key={`${e.company} ${e.url ?? e.role}`}>
+                    <strong>{e.company}</strong> {e.url ? <a href={e.url} target="_blank" rel="noreferrer noopener">{e.role}</a> : e.role} <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
                   </li>
                 ))}
               </ul>

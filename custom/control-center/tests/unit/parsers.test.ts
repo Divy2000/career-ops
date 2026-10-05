@@ -198,7 +198,7 @@ describe('pipeline', () => {
 });
 
 describe('shortlist', () => {
-  it('parses the date, ranked rows with links and the excluded table', () => {
+  it('parses the date, ranked rows with links and the excluded bullets shortlist.mjs writes', () => {
     const s = readShortlist(root);
     expect(s.kind).toBe('ok');
     if (s.kind !== 'ok') return;
@@ -206,7 +206,16 @@ describe('shortlist', () => {
     expect(s.rows).toHaveLength(3);
     expect(s.rows[0]).toMatchObject({ rank: 1, score: 5.3, relevance: 4.8, sponsor: 'strong', company: 'Globex Payments', role: 'Staff Software Engineer', url: 'https://careers.example.com/globex/777', posted: '2026-09-24' });
     expect(s.rows[2]).toMatchObject({ posted: null, sponsor: 'unknown' });
-    expect(s.excluded).toEqual([{ company: 'Initech Cloud', alert: 'paused', headline: 'Initech pauses visa sponsorship for new hires' }]);
+    expect(s.excluded).toEqual([
+      { company: 'Initech Cloud', role: 'Backend Engineer II', url: 'https://jobs.example.com/initech/9', alert: 'paused', date: '2026-09-29', headline: 'Initech pauses visa sponsorship for new hires' },
+    ]);
+  });
+  it('reads the "- none" line of an empty excluded section as no rows', () => {
+    expect(parseShortlist('# Shortlist - 2026-10-03\n\n## Excluded by sponsorship alerts (0)\n\n- none\n').excluded).toEqual([]);
+  });
+  it('keeps a company whose name has a dash and a headline with a colon', () => {
+    const md = '## Excluded by sponsorship alerts (1)\n\n- Hewlett - Packard - [SRE](https://x.example/1) - stopped (2026-09-01): Update: H-1B paused\n';
+    expect(parseShortlist(md).excluded).toEqual([{ company: 'Hewlett - Packard', role: 'SRE', url: 'https://x.example/1', alert: 'stopped', date: '2026-09-01', headline: 'Update: H-1B paused' }]);
   });
   it('handles an empty document', () => {
     expect(parseShortlist('')).toEqual({ date: null, summary: null, rows: [], excluded: [] });

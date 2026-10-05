@@ -1,6 +1,6 @@
 # Shortlist - 2026-10-03
 
-Ranked rows with rank >= 3: 3. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5). Sponsorship tier is DOL filing history and lags policy changes.
+Ranked rows with rank >= 3: 3. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5). Sponsorship tier is DOL filing history and lags policy; full evaluation re-checks current news.
 
 | # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |
 |---|---|---|---|---|---|---|---|---|
@@ -8,8 +8,6 @@ Ranked rows with rank >= 3: 3. Score = rank + sponsorship adjustment (strong +0.
 | 2 | 4.9 | 4.4 | strong | Acme Robotics | [Senior Backend Engineer](https://jobs.example.com/acme/123) | Austin, TX | 2026-09-15 | strong backend match, sponsors visas |
 | 3 | 3.2 | 3.5 | unknown | Northwind Analytics | [ML Platform Engineer](https://boards.example.com/northwind/88) | Remote, US | - | ML infra, partial match |
 
-## Excluded by company alerts
+## Excluded by sponsorship alerts (1)
 
-| Company | Alert | Headline |
-|---|---|---|
-| Initech Cloud | paused | Initech pauses visa sponsorship for new hires |
+- Initech Cloud - [Backend Engineer II](https://jobs.example.com/initech/9) - paused (2026-09-29): Initech pauses visa sponsorship for new hires
