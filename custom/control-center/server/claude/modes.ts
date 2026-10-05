@@ -179,6 +179,59 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
   },
 };
 
+/**
+ * Secret files no session may read, relative to each root and matched case-insensitively (an over-deny on
+ * case-sensitive volumes, by design). Enforced as Read deny rules in the per-turn settings file (under each
+ * root's given and real path) and by the guard hook. File-name based: a secret under another name is readable.
+ */
+export const READ_DENY = [
+  '**/.env',
+  '**/.env.*',
+  '**/*.pem',
+  '**/*.key',
+  '**/*.p12',
+  '**/*.pfx',
+  '**/*.jks',
+  '**/*.keystore',
+  '**/*.ppk',
+  '**/id_rsa*',
+  '**/id_dsa*',
+  '**/id_ecdsa*',
+  '**/id_ed25519*',
+  '**/.npmrc',
+  '**/.pypirc',
+  '**/.netrc',
+  '**/.git-credentials',
+  '**/.git/config',
+  '**/credentials*.json',
+  '**/client_secret*.json',
+  '**/service-account*.json',
+  '**/*.token',
+];
+
+/** Credential stores in the home directory, denied as Read rules (they are outside every root anyway). */
+export const HOME_READ_DENY = [
+  '~/.ssh/**',
+  '~/.aws/**',
+  '~/.gnupg/**',
+  '~/.azure/**',
+  '~/.kube/**',
+  '~/.config/gh/**',
+  '~/.config/gcloud/**',
+  '~/.docker/config.json',
+  '~/.netrc',
+  '~/.npmrc',
+  '~/.pypirc',
+  '~/.git-credentials',
+  '~/.claude.json',
+  '~/.claude/.credentials.json',
+  '~/Library/Keychains/**',
+  '~/Library/Cookies/**',
+  '~/Library/Safari/**',
+  '~/Library/Application Support/Google/Chrome/**',
+  '~/Library/Application Support/Firefox/**',
+];
+
 /** Denied for every non Dev Chat session, regardless of class (enforced by the hook). */
 export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
 /**

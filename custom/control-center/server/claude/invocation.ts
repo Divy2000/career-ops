@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { ALWAYS_DENIED_WRITES, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, READ_DENY, type ModePolicy } from './modes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const GUARD_HOOK_PATH = path.join(here, 'guard-hook.mjs');
@@ -145,6 +145,14 @@ export interface PolicyFile {
   deny: string[];
   bash: string[][];
   playwright: boolean;
+  /** Secret-file globs no read may reach, relative to each root. */
+  readDeny: string[];
+  /** Readable and never writable: the session's own oversized tool results. */
+  readOnlyRoots: string[];
+  /** Agent and Task (subagents) may run. */
+  allowsAgent: boolean;
+  /** Glob and Grep are granted (with the hook's path and pattern checks). */
+  search: boolean;
 }
 
 /**
@@ -153,7 +161,7 @@ export interface PolicyFile {
  * per-turn unlocks (Dev Chat blacklist checkbox). The sha256 of the exact bytes
  * goes to the hook through CC_POLICY_SHA256.
  */
-export function writePolicyFile(dir: string, opts: { codeRoot: string; dataRoot?: string; sessionDir?: string; policy: ModePolicy; extraAllow?: string[]; deny?: string[] }): { file: string; sha256: string } {
+export function writePolicyFile(dir: string, opts: { codeRoot: string; dataRoot?: string; sessionDir?: string; policy: ModePolicy; extraAllow?: string[]; deny?: string[]; readOnlyRoots?: string[] }): { file: string; sha256: string } {
   const policy: PolicyFile = {
     codeRoot: opts.codeRoot,
     dataRoot: opts.dataRoot ?? opts.codeRoot,
@@ -162,6 +170,10 @@ export function writePolicyFile(dir: string, opts: { codeRoot: string; dataRoot?
     deny: opts.deny ?? [...ALWAYS_DENIED_WRITES],
     bash: opts.policy.bashPrefixes,
     playwright: opts.policy.mcp === 'playwright',
+    readDeny: [...READ_DENY],
+    readOnlyRoots: opts.readOnlyRoots ?? [],
+    allowsAgent: opts.policy.allowsTask,
+    search: true,
   };
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'policy.json');

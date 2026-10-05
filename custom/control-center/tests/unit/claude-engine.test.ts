@@ -4,9 +4,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPreamble, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, getModePolicy } from '../../server/claude/modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { checkBash, snapshotKey } from '../../server/claude/guard-policy.mjs';
+import { checkBash, checkRead, checkSearch, locateRead, snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
@@ -529,6 +529,137 @@ describe('checkBash: exact per-command argument grammars', () => {
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
+  });
+});
+
+describe('read confinement: guard policy', () => {
+  const base = fs.realpathSync(tempDir('cc-read-'));
+  const code = path.join(base, 'code');
+  const data = path.join(base, 'data root');
+  const outside = path.join(base, 'outside');
+  const results = path.join(base, 'claude', 'tool-results');
+  for (const d of [code, data, outside, results, path.join(data, 'Data')]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(code, 'cv.md'), 'code cv\n');
+  fs.writeFileSync(path.join(data, 'cv.md'), 'data cv\n');
+  fs.writeFileSync(path.join(code, '.env'), 'SECRET=1\n');
+  fs.writeFileSync(path.join(data, 'Data', '.ENV'), 'SECRET=1\n');
+  fs.writeFileSync(path.join(outside, 's.txt'), 'outside\n');
+  fs.writeFileSync(path.join(results, 'big.txt'), 'oversized output\n');
+  fs.symlinkSync(outside, path.join(code, 'link-out'));
+  fs.symlinkSync(path.join(outside, 's.txt'), path.join(data, 'file-link'));
+  const policy = { codeRoot: code, dataRoot: data, allow: getModePolicy('oferta')!.writeGlobs, deny: [...ALWAYS_DENIED_WRITES], readDeny: [...READ_DENY], readOnlyRoots: [results], search: true };
+  const read = (file_path: string, cwd: string | undefined = code) => checkRead(policy, { file_path }, cwd);
+
+  it('given an evaluate policy, a read outside both roots is denied', () => {
+    expect(read(path.join(outside, 's.txt'))).toMatch(/outside the repo and data roots/);
+    expect(read('/etc/hosts')).toMatch(/outside the repo and data roots/);
+    expect(read(path.join(code, '..', 'outside', 's.txt'))).toMatch(/outside/);
+  });
+
+  it('a symlink inside a root that points outside is denied, by its real path', () => {
+    expect(read(path.join(code, 'link-out', 's.txt'))).toMatch(/outside the repo and data roots/);
+    expect(read(path.join(data, 'file-link'))).toMatch(/outside the repo and data roots/);
+  });
+
+  it('~ paths, .env and Data/.ENV are denied', () => {
+    expect(read('~/x')).toMatch(/use the absolute path/);
+    expect(read('~')).toMatch(/use the absolute path/);
+    expect(read(path.join(code, '.env'))).toMatch(/protected secret file/);
+    expect(read('.env')).toMatch(/protected secret file/);
+    // Deny globs compare case-insensitively: an over-deny on a case-sensitive volume, by design.
+    expect(read(path.join(data, 'Data', '.ENV'))).toMatch(/protected secret file/);
+  });
+
+  it('cv.md relative to the code root is allowed from the code root and denied from any other cwd', () => {
+    expect(read('cv.md')).toBeNull();
+    expect(locateRead(policy, 'cv.md')).toMatchObject({ abs: path.join(code, 'cv.md'), root: 'code', rel: 'cv.md' });
+    expect(read('cv.md', data)).toMatch(/relative path/);
+    expect(read('cv.md', outside)).toMatch(/relative path/);
+  });
+
+  it('the data root cv.md by absolute path is allowed and located in the data root', () => {
+    expect(read(path.join(data, 'cv.md'))).toBeNull();
+    expect(read(path.join(data, 'cv.md'), outside)).toBeNull();
+    expect(locateRead(policy, path.join(data, 'cv.md'))).toMatchObject({ abs: path.join(data, 'cv.md'), root: 'data', rel: 'cv.md' });
+  });
+
+  it('the root itself is allowed', () => {
+    expect(locateRead(policy, code)).toMatchObject({ rel: '', root: 'code' });
+    expect(locateRead(policy, data)).toMatchObject({ rel: '', root: 'data' });
+    expect(read(code)).toBeNull();
+  });
+
+  it('a read in a read-only root is allowed while a write there is denied', () => {
+    expect(read(path.join(results, 'big.txt'))).toBeNull();
+    expect(locateRead(policy, path.join(results, 'big.txt'))).toMatchObject({ root: 'readonly' });
+    const dir = tempDir('cc-read-guard-');
+    const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy('oferta')!, readOnlyRoots: [results] });
+    const write = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(results, 'big.txt'), content: 'x' }, cwd: code });
+    expect(write.status).toBe(2);
+    expect(write.stderr).toMatch(/outside the repo and data roots/);
+  });
+
+  it('a policy without a read-deny list refuses every read', () => {
+    const { readDeny: _readDeny, ...old } = policy;
+    expect(checkRead(old, { file_path: path.join(code, 'cv.md') }, code)).toMatch(/policy/);
+  });
+
+  it('Glob and Grep: the path passes the read checks, and patterns cannot climb out, start at ~ or brace in an absolute path', () => {
+    const search = (tool: string, input: Record<string, unknown>, cwd: string = code) => checkSearch(policy, tool, input, cwd);
+    expect(search('Glob', { pattern: '**/*.md' })).toBeNull();
+    expect(search('Glob', { pattern: '**/*.md', path: data })).toBeNull();
+    expect(search('Glob', { pattern: `${data}/reports/*.md` })).toBeNull();
+    expect(search('Grep', { pattern: 'Score', path: code, glob: '*.md' })).toBeNull();
+    expect(search('Grep', { pattern: 'Score' })).toBeNull();
+    expect(search('Glob', { pattern: '*', path: outside })).toMatch(/outside/);
+    expect(search('Grep', { pattern: 'x', path: path.join(code, 'link-out') })).toMatch(/outside/);
+    expect(search('Grep', { pattern: 'x', path: path.join(code, '.env') })).toMatch(/protected secret file/);
+    expect(search('Glob', { pattern: '*', path: '~/.ssh' })).toMatch(/absolute path/);
+    expect(search('Glob', { pattern: '*' }, outside)).toMatch(/repo root/);
+    for (const pattern of ['../outside/*', '**/../../x', 'a\\..\\b', '~/.ssh/*', '{/etc,src}/*', 'src/{a,/etc}/*', '{~,x}/*', 'a,~/x', `${outside}/*`, '/etc/*', '/*'])
+      expect(search('Glob', { pattern }), pattern).toEqual(expect.any(String));
+    for (const glob of ['../outside/*', '~/x', '{/etc,a}', `${outside}/*`]) expect(search('Grep', { pattern: 'x', glob }), glob).toEqual(expect.any(String));
+  });
+
+  it('Glob and Grep are refused when the policy does not grant search', () => {
+    expect(checkSearch({ ...policy, search: false }, 'Glob', { pattern: '*' }, code)).toMatch(/not granted/);
+    const { search: _search, ...old } = policy;
+    expect(checkSearch(old, 'Grep', { pattern: 'x' }, code)).toMatch(/not granted/);
+  });
+});
+
+describe('checkBash: URL arguments and protected inputs', () => {
+  const root = fs.realpathSync(tempDir('cc-bash-url-'));
+  fs.writeFileSync(path.join(root, '.env'), 'SECRET=1\n');
+  const p = getModePolicy('oferta')!;
+  const oferta = { codeRoot: root, dataRoot: root, allow: p.writeGlobs, deny: [...ALWAYS_DENIED_WRITES], readDeny: [...READ_DENY], bash: p.bashPrefixes };
+
+  it('file:, view-source:, data: and the other local or non-http schemes are refused as script arguments', () => {
+    for (const cmd of [
+      'node archive-posting.mjs file:///etc/passwd',
+      'node archive-posting.mjs file:/x',
+      'node archive-posting.mjs FILE:///etc/passwd',
+      'node check-liveness.mjs view-source:file:///etc/passwd',
+      'node check-liveness.mjs --url=file:///etc/passwd',
+      'node archive-posting.mjs data:text/html,x',
+      'node archive-posting.mjs javascript:alert',
+      'node archive-posting.mjs chrome://settings',
+      'node archive-posting.mjs ftp://x.example/y',
+      'node archive-posting.mjs ws://x.example/y',
+      'node generate-pdf.mjs file:///etc/passwd output/x.pdf',
+    ])
+      expect(checkBash(cmd, oferta, root), cmd).toEqual(expect.any(String));
+  });
+
+  it('http and https arguments must name a public host', () => {
+    for (const cmd of ['node check-liveness.mjs http://127.0.0.1/', 'node check-liveness.mjs http://localhost:8080/x', 'node check-liveness.mjs https://[::1]/', 'node archive-posting.mjs http://169.254.169.254/latest/meta-data', 'node check-liveness.mjs http://intranet/x', 'node check-liveness.mjs http://0x7f.1/'])
+      expect(checkBash(cmd, oferta, root), cmd).toEqual(expect.any(String));
+    expect(checkBash('node check-liveness.mjs https://jobs.example.com/x/1', oferta, root)).toBeNull();
+  });
+
+  it('a protected secret file is refused as a script input', () => {
+    expect(checkBash('node jd-skill-gap.mjs .env', oferta, root)).toMatch(/protected/);
+    expect(checkBash('node jd-skill-gap.mjs jds/acme.md --summary', oferta, root)).toBeNull();
   });
 });
 

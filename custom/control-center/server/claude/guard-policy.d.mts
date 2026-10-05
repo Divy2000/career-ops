@@ -4,17 +4,36 @@ export interface PathPolicy {
   dataRoot?: string;
 }
 
+export interface ReadPolicy extends PathPolicy {
+  /** Secret-file globs no read may reach; a policy without the list refuses every read. */
+  readDeny?: string[];
+  /** Roots readable but never writable (the session's own oversized tool results). */
+  readOnlyRoots?: string[];
+  /** Glob and Grep are granted. */
+  search?: boolean;
+}
+
 export interface BashPolicy extends PathPolicy {
   allow: string[];
   deny: string[];
+  readDeny?: string[];
   bash?: string[][];
 }
+
+export type DnsLookup = (host: string) => Promise<Array<{ address: string; family: number }>>;
 
 export function globToRegExp(glob: string): RegExp;
 export function matches(rel: string, globs: string[]): boolean;
 export function resolveReal(p: string): string;
 export function relativeToRoot(codeRoot: string, target: string): string | null;
 export function locate(policy: PathPolicy, target: string): { rel: string; abs: string; root: 'code' | 'data' } | null;
+export function locateRead(policy: ReadPolicy, target: string): { rel: string; abs: string; root: 'code' | 'data' | 'readonly' } | null;
+export function checkRead(policy: ReadPolicy, input: { file_path?: unknown }, cwd?: string, label?: string): string | null;
+export function checkSearch(policy: ReadPolicy, tool: string, input: Record<string, unknown>, cwd?: string): string | null;
+export function isPublicAddress(ip: string): boolean;
+export function checkUrlLiteral(raw: string, label?: string): string | null;
+export function checkFetchUrl(raw: string, lookup?: DnsLookup, opts?: { label?: string; timeoutMs?: number }): Promise<string | null>;
+export function httpUrlsIn(command: string): string[];
 export function tokenize(command: string): string[] | null;
 export function checkBash(command: string, policy: BashPolicy, cwd?: string): string | null;
 export function snapshotKey(sessionDir: string, abs: string): string;
