@@ -57,7 +57,7 @@ Projects library writes go through `/api/projects` (GET; POST to add, PUT and DE
 
 The CV tab's PDF import (DOCX and DOC are refused: the read-only `cv-ingest` session cannot read Word files) does not go through `documents/` or intake yet (see section 12).
 
-Structured editors send `{ops}` (set, delete, insert) that the server applies with the `yaml` Document API, so comments, key order and unknown keys survive. Saves are ETag-gated: a 409 keeps your pending edits on top of the current file so "save again" is the merge. Portals go through `validate-portals.mjs`, the profile through `validate-profile.mjs`; a failing validator returns 422 and nothing is written.
+Structured editors send `{ops}` (set, delete, insert) that the server applies with the `yaml` Document API, so comments, key order and unknown keys survive. Saves are ETag-gated: a 409 keeps your pending edits on top of the current file so "save again" is the merge. Every editor (cv.md and the other user files, raw and structured YAML, the projects form, the blacklist) sends the ETag of the version its draft started from, not the newest one: when the file changes on disk while you edit, the page refreshes it live and the editor says it "changed on disk since you started editing", keeps your edits on the version you loaded, and the save gets the 409 instead of overwriting the other change. Portals go through `validate-portals.mjs`, the profile through `validate-profile.mjs`; a failing validator returns 422 and nothing is written.
 
 ## 4. AI sessions and permissions
 

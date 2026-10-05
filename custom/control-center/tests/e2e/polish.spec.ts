@@ -38,8 +38,8 @@ test.describe('P3 editors and P6 polish', () => {
     await days.fill('21');
     await days.press('Enter');
     await expect(page.getByText('1 pending change')).toBeVisible();
-    // The live watcher refetches on any real disk change, so the stale-ETag answer is simulated once:
-    // the first PUT gets the server's 409 shape with a "changed outside" version of the file.
+    // The stale-ETag answer is simulated once, so this checks the merge UI on its own (writes.spec.ts covers a
+    // real change on disk): the first PUT gets the server's 409 shape with a "changed outside" version of the file.
     const current = await (await page.request.get('/api/config/portals')).json();
     let intercepted = false;
     await page.route('**/api/config/portals', async (route) => {

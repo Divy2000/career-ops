@@ -4,6 +4,7 @@ import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { DataState, FilePicker, Pill, Tabs } from '../../components/ui';
+import { useEditBase } from '../../lib/editBase';
 import { ProjectsLibrary } from './ProjectsLibrary';
 
 interface UserFile {
@@ -38,32 +39,50 @@ function useUserFile(key: string) {
   return useQuery({ queryKey: ['config', 'user-file', key], queryFn: () => apiGet<UserFile>(`/api/files/user/${key}`) });
 }
 
-/** Plain textarea editor with ETag save; a 409 shows the current server text for a manual merge. */
+/**
+ * Plain textarea editor with ETag save. It saves against the version the draft was made on, so a change on disk
+ * mid-edit (the watcher refetches the file) is announced and refused with 409, never overwritten; the 409 shows the
+ * current server text for a manual merge, and saving again after it overwrites deliberately.
+ */
 export function UserFileEditor({ fileKey, label }: { fileKey: string; label: string }) {
   const q = useUserFile(fileKey);
   const qc = useQueryClient();
+  const edit = useEditBase(q.data);
   // Edits live in local state; until the first keystroke the server text is shown as is.
   const [draft, setDraft] = useState<string | null>(null);
-  const [savedEtag, setSavedEtag] = useState<string | null>(null);
+  // The draft as last typed, read after a save's refetch (refs are only touched in handlers).
+  const latestDraft = useRef<string | null>(null);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const [conflict, setConflict] = useState<UserFile | null>(null);
   const text = draft ?? q.data?.text ?? '';
-  const etag = savedEtag ?? q.data?.etag ?? null;
-  const setText = setDraft;
-  const setEtag = setSavedEtag;
+  const onEdit = (value: string) => {
+    edit.pin();
+    latestDraft.current = value;
+    setDraft(value);
+  };
   const save = async () => {
     setNote(null);
+    const from = edit.base ?? q.data;
+    const etag = from?.etag ?? null;
     try {
       const r = await apiSend<{ etag: string }>('PUT', `/api/files/user/${fileKey}`, { text }, etag ? { 'If-Match': etag } : {});
-      setEtag(r.etag);
+      // The saved text is the new base, so the refetch of this very write is not a change on disk.
+      if (from) edit.rebase({ ...from, kind: 'ok', text, etag: r.etag });
       setConflict(null);
       setNote({ tone: 'ok', text: `Saved ${label}` });
       await qc.invalidateQueries({ queryKey: ['config'] });
+      // Nothing typed since: show the file as the server has it again, so later changes on disk appear here.
+      if (latestDraft.current === text) {
+        latestDraft.current = null;
+        setDraft(null);
+        edit.rebase(null);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setConflict((err.body as { current: UserFile }).current);
+        const current = (err.body as { current: UserFile }).current;
+        setConflict(current);
+        edit.rebase(current);
         setNote({ tone: 'danger', text: 'The file changed on disk since you loaded it. Review the current version below, then save again to overwrite it.' });
-        setEtag((err.body as { current: UserFile }).current.etag);
       } else setNote({ tone: 'danger', text: `Could not save: ${(err as Error).message}` });
     }
   };
@@ -78,8 +97,13 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
         </button>
       </div>
       <DataState query={q}>
-        <textarea aria-label={`${label} contents`} className="mono editor" rows={14} value={text} onChange={(e) => setText(e.target.value)} />
+        <textarea aria-label={`${label} contents`} className="mono editor" rows={14} value={text} onChange={(e) => onEdit(e.target.value)} />
       </DataState>
+      {edit.drifted && (
+        <p role="alert" className="danger-text">
+          {label} changed on disk since you started editing. Your edits are kept here; Save shows the current version so you can merge them.
+        </p>
+      )}
       {note && (
         <p role={note.tone === 'danger' ? 'alert' : 'status'} className={note.tone === 'danger' ? 'danger-text' : 'muted'}>
           {note.text}

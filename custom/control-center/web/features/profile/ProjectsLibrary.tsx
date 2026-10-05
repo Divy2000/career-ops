@@ -23,6 +23,8 @@ interface Editing {
   draft: ProjectDraft;
   tagline: string | null;
   source: string | null;
+  /** The library version the form opened on: the save sends it, so a change on disk meanwhile gets the 409, not an overwrite. */
+  baseEtag: string | null;
 }
 
 export function ProjectsLibrary() {
@@ -59,7 +61,7 @@ export function ProjectsLibrary() {
               <span className="mono">article-digest.md</span>: every project with copy-paste bullets. Tailored CVs pick 2 to 4 from here.
             </p>
           </div>
-          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null, source: null })}>
+          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null, source: null, baseEtag: data?.etag ?? null })}>
             <Plus size={16} aria-hidden="true" /> Add project
           </button>
         </div>
@@ -72,7 +74,7 @@ export function ProjectsLibrary() {
         )}
         <DataState query={q}>
           {data && <ValidationPanel validation={data.validation} />}
-          {editing?.id === null && <ProjectForm editing={editing} etag={data?.etag ?? null} onChange={setEditing} onDone={() => setEditing(null)} />}
+          {editing?.id === null && <ProjectForm editing={editing} liveEtag={data?.etag ?? null} onChange={setEditing} onDone={() => setEditing(null)} />}
           {data && data.entries.length === 0 && editing === null && (
             <Empty>{data.kind === 'missing' ? 'No article-digest.md yet. Add a project or import a list below; the file is created on the first save.' : 'The library has no entries yet.'}</Empty>
           )}
@@ -81,10 +83,10 @@ export function ProjectsLibrary() {
               {data.entries.map((entry) =>
                 editing?.id === entry.id ? (
                   <li key={entry.id} className="project-row project-row--editing">
-                    <ProjectForm editing={editing} etag={data.etag} onChange={setEditing} onDone={() => setEditing(null)} />
+                    <ProjectForm editing={editing} liveEtag={data.etag} onChange={setEditing} onDone={() => setEditing(null)} />
                   </li>
                 ) : (
-                  <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline, source: entry.source })} onDelete={() => void remove(entry)} />
+                  <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline, source: entry.source, baseEtag: data.etag })} onDelete={() => void remove(entry)} />
                 ),
               )}
             </ul>
@@ -162,7 +164,7 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
   );
 }
 
-function ProjectForm({ editing, etag, onChange, onDone }: { editing: Editing; etag: string | null; onChange: (e: Editing) => void; onDone: () => void }) {
+function ProjectForm({ editing, liveEtag, onChange, onDone }: { editing: Editing; liveEtag: string | null; onChange: (e: Editing) => void; onDone: () => void }) {
   const qc = useQueryClient();
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -179,8 +181,8 @@ function ProjectForm({ editing, etag, onChange, onDone }: { editing: Editing; et
     setSaving(true);
     try {
       const body = entryFromDraft(draft, { tagline: editing.tagline, source: editing.source });
-      if (editing.id === null) await apiSend('POST', '/api/projects', body, ifMatch(etag));
-      else await apiSend('PUT', `/api/projects/${editing.id}`, body, ifMatch(etag));
+      if (editing.id === null) await apiSend('POST', '/api/projects', body, ifMatch(editing.baseEtag));
+      else await apiSend('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
       toast.success(`Saved ${body.title}`);
       await qc.invalidateQueries({ queryKey: QUERY_KEY });
       onDone();
@@ -188,6 +190,8 @@ function ProjectForm({ editing, etag, onChange, onDone }: { editing: Editing; et
       if (err instanceof ApiError && err.status === 422) setErrors((err.body as { errors?: string[] }).errors ?? [describeError(err)]);
       else if (err instanceof ApiError && err.status === 409) {
         setErrors(['article-digest.md changed on disk since it was loaded. The list is refreshed; your draft is kept, so save again to apply it.']);
+        // Told and shown the refreshed list, the user may now save the draft over the version the server has.
+        onChange({ ...editing, baseEtag: (err.body as { current?: { etag: string | null } }).current?.etag ?? null });
         await qc.invalidateQueries({ queryKey: QUERY_KEY });
       } else setErrors([`Could not save: ${describeError(err)}`]);
     } finally {
@@ -253,6 +257,11 @@ function ProjectForm({ editing, etag, onChange, onDone }: { editing: Editing; et
           <Plus size={16} aria-hidden="true" /> Add bullet
         </button>
       </fieldset>
+      {liveEtag !== editing.baseEtag && errors.length === 0 && (
+        <ul className="form-errors" role="alert">
+          <li>article-digest.md changed on disk since you opened this form. Your draft is kept; Save project shows the conflict before anything is written.</li>
+        </ul>
+      )}
       {errors.length > 0 && (
         <ul className="form-errors" role="alert">
           {errors.map((m) => (

@@ -5,6 +5,7 @@ import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
+import { useEditBase } from '../../lib/editBase';
 import type { BlacklistRead, BlacklistRow } from '@shared/api';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -12,13 +13,20 @@ const today = () => new Date().toISOString().slice(0, 10);
 /**
  * The only place that writes data/blacklist.md. Saving opens an explicit confirm
  * dialog; the PUT carries {confirm:true} and X-CC-Explicit: blacklist, which the
- * server requires (403 otherwise). Sessions can never write this file.
+ * server requires (403 otherwise). Sessions can never write this file. The save carries the ETag of the version the
+ * draft rows were made on, so a change on disk meanwhile is announced and refused with 409, never overwritten.
  */
 export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const q = useQuery({ queryKey: ['config', 'blacklist'], queryFn: () => apiGet<BlacklistRead>('/api/blacklist') });
-  const [rows, setRows] = useState<BlacklistRow[] | null>(null);
+  const edit = useEditBase(q.data);
+  const [rows, setRowsState] = useState<BlacklistRow[] | null>(null);
+  const setRows = (next: BlacklistRow[] | null) => {
+    if (next === null) edit.rebase(null);
+    else edit.pin();
+    setRowsState(next);
+  };
   const [draft, setDraft] = useState<BlacklistRow>({ company: prefillCompany ?? '', since: today(), scope: 'company', reason: '' });
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const current = rows ?? q.data?.rows ?? [];
@@ -34,7 +42,8 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     setDraft({ company: '', since: today(), scope: 'company', reason: '' });
   };
   const save = async () => {
-    const added = current.length - (q.data?.rows.length ?? 0);
+    const from = edit.base ?? q.data;
+    const added = current.length - (from?.rows.length ?? 0);
     const ok = await confirm({
       title: 'Write data/blacklist.md?',
       body: (
@@ -50,7 +59,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     });
     if (!ok) return;
     try {
-      await apiSend('PUT', '/api/blacklist', { confirm: true, rows: current }, { 'X-CC-Explicit': 'blacklist', ...(q.data?.etag ? { 'If-Match': q.data.etag } : {}) });
+      await apiSend('PUT', '/api/blacklist', { confirm: true, rows: current }, { 'X-CC-Explicit': 'blacklist', ...(from?.etag ? { 'If-Match': from.etag } : {}) });
       setRows(null);
       setNote({ tone: 'ok', text: 'Blacklist written.' });
       toast.success('Blacklist written');
@@ -129,6 +138,11 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
             Add row
           </button>
         </div>
+        {edit.drifted && dirty && (
+          <p role="alert" className="danger-text">
+            data/blacklist.md changed on disk since you started editing. Saving is refused until you discard your draft and add your rows to the current list.
+          </p>
+        )}
         {note && (
           <p role={note.tone === 'danger' ? 'alert' : 'status'} className={note.tone === 'danger' ? 'danger-text' : 'muted'}>
             {note.text}

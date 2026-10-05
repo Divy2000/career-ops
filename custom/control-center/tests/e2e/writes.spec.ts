@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
@@ -9,6 +11,28 @@ async function login(page: Page) {
 
 test.describe('deterministic writes from the pages', () => {
   test.beforeEach(async ({ page }) => login(page));
+
+  test('cv.md changed on disk while its editor holds unsaved edits: the editor says so and Save gets the conflict, never overwriting it', async ({ page }) => {
+    // The e2e roots sit under CC_E2E_TMP (playwright.config.ts): root/ is the main app's data root.
+    const cv = path.join(process.env.CC_E2E_TMP!, 'root', 'cv.md');
+    const original = fs.readFileSync(cv, 'utf8');
+    try {
+      await page.goto('/profile');
+      const editor = page.getByLabel('cv.md contents');
+      await expect(editor).toHaveValue(original);
+      await editor.fill(`${original}\n- typed in the editor\n`);
+      // Another writer (an "Add an entry" session, or a shell) changes the file; the watcher refreshes the page's data.
+      fs.appendFileSync(cv, '\n- added elsewhere\n');
+      await expect(page.getByRole('alert')).toContainText('cv.md changed on disk since you started editing', { timeout: 15_000 });
+      await expect(editor).toHaveValue(`${original}\n- typed in the editor\n`);
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(page.getByText('Current version on disk')).toBeVisible();
+      await expect(page.locator('pre', { hasText: '- added elsewhere' })).toBeVisible();
+      expect(fs.readFileSync(cv, 'utf8')).toBe(`${original}\n- added elsewhere\n`);
+    } finally {
+      fs.writeFileSync(cv, original);
+    }
+  });
 
   test('inbox Skip flips the pipeline checkbox, Undo restores it, and Add URLs appends a row', async ({ page }) => {
     await page.goto('/pipeline');
