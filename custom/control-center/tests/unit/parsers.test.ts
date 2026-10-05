@@ -58,6 +58,11 @@ describe('reports', () => {
     expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: 'full remote', comp: '$150k', tldr: 'Good fit.' });
   });
 
+  it('an empty Block A bullet stays empty instead of taking the next line (R8-07)', () => {
+    const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## A) Role Summary\n- Remote:\n- Comp: $150k\n';
+    expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: null, comp: '$150k' });
+  });
+
   it('reads discard reasons and the cover letter PDF path', () => {
     const skip = readReport(root, 4);
     expect(skip.kind === 'ok' && skip.report.discardReasons).toEqual(['comp below floor', 'staffing agency']);

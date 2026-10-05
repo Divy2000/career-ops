@@ -90,9 +90,9 @@ const DATE_KEY = 'Date|Datum|Data|Dato|Tanggal|Tarih|Дата';
 const ARCHETYPE_KEY = 'Archetype|Archetyp|Arketype|Archetipo|Arquétipo|Arketipe|Arketip|Архетип';
 const LEGITIMACY_KEY = 'Legitimacy|Легітимність|Meşruiyet';
 
-/** A `**Key:**` header line; French and Korean reports write `**Key :**`. */
+/** A `**Key:**` header line; French and Korean reports write `**Key :**`. Blanks never cross a line: an empty `**URL:**` is empty. */
 function headerField(md: string, key: string): string | null {
-  const re = new RegExp(`^\\*\\*(?:${key})\\s*:\\*\\*\\s*(.*)$`, 'mi');
+  const re = new RegExp(`^\\*\\*(?:${key})[ \\t]*:\\*\\*[ \\t]*(.*)$`, 'mi');
   const m = md.match(re);
   if (!m) return null;
   const v = m[1]!.trim();
@@ -140,9 +140,9 @@ function machineSummary(md: string, file: string): Record<string, unknown> | nul
 
 /** A Block A field: a `| **Label** | value |` table row (what oferta writes) or a legacy `- Label: value` bullet. */
 function blockField(sectionContent: string, label: string): string | null {
-  const row = sectionContent.match(new RegExp(`^\\|\\s*\\**${label}\\**\\s*\\|\\s*(.*?)\\s*\\|\\s*$`, 'mi'));
+  const row = sectionContent.match(new RegExp(`^\\|[ \\t]*\\**${label}\\**[ \\t]*\\|[ \\t]*(.*?)[ \\t]*\\|[ \\t]*$`, 'mi'));
   if (row && row[1]) return row[1];
-  const re = new RegExp(`^\\s*[-*]?\\s*\\**${label}\\**\\s*(?:\\([^)]*\\))?\\s*:\\s*(.+)$`, 'mi');
+  const re = new RegExp(`^[ \\t]*[-*]?[ \\t]*\\**${label}\\**[ \\t]*(?:\\([^)]*\\))?[ \\t]*:[ \\t]*(.+)$`, 'mi');
   const m = sectionContent.match(re);
   return m ? m[1]!.trim() : null;
 }
