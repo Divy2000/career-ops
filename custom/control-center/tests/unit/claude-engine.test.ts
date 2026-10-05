@@ -88,6 +88,19 @@ describe('invocation builder', () => {
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'es' })).toContain('Playwright is unavailable');
   });
+  it('rule 6 names only the web tools the session has: never WebFetch to a session without it', () => {
+    const rule6 = (policy: ReturnType<typeof getModePolicy>) => buildPreamble({ policy: policy!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('6. '))!;
+    const { mcp: _mcp, ...applyWithoutPlaywright } = getModePolicy('apply')!;
+    for (const policy of [applyWithoutPlaywright, getModePolicy('offer-prep'), getModePolicy('update'), getModePolicy('advisor'), getModePolicy('ai-search')]) {
+      const line = rule6(policy);
+      expect(line, policy!.id).not.toContain('WebFetch when');
+      expect(line, policy!.id).toMatch(/ask the user to paste/);
+    }
+    expect(rule6(getModePolicy('ai-search'))).toMatch(/WebSearch/);
+    expect(rule6(applyWithoutPlaywright)).toMatch(/no web access/);
+    for (const id of ['oferta', 'research', 'master-profile']) expect(rule6(getModePolicy(id)), id).toMatch(/Use WebFetch when you need a page/);
+    expect(rule6(getModePolicy('apply'))).toMatch(/Playwright MCP is available/);
+  });
 });
 
 describe('invocation: read confinement', () => {

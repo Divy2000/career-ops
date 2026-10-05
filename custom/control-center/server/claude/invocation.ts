@@ -183,6 +183,15 @@ export interface PreambleInput {
   dataRoot?: string;
 }
 
+/** Rule 6: the web tools this session really has; a session without WebFetch is never told to use it. */
+function webRule(p: ModePolicy): string {
+  if (p.mcp === 'playwright') return '6. Playwright MCP is available in this apply session. The browser is headed so the user sees it; you stop before any submit.';
+  if (p.network.includes('WebFetch')) return '6. Playwright is unavailable. Use WebFetch when you need a page and mark the result "Verification: unconfirmed (batch mode)".';
+  const paste = 'When you need the content of a page or a form, ask the user to paste its text (or a screenshot) and end the turn.';
+  if (p.network.includes('WebSearch')) return `6. Playwright and WebFetch are unavailable; WebSearch finds pages but does not open them. ${paste}`;
+  return `6. This session has no web access (no Playwright, WebFetch or WebSearch). ${paste}`;
+}
+
 /** Spec 4.1 preamble, nine numbered rules, no em dash anywhere. */
 export function buildPreamble(input: PreambleInput): string {
   const p = input.policy;
@@ -194,7 +203,7 @@ export function buildPreamble(input: PreambleInput): string {
     '3. The app already ran the update check and doctor. Skip both.',
     `4. Router context: read modes/_shared.md when the mode file references it, then modes/_profile.md and modes/_custom.md, then the mode file for ${p.id} (${p.title}). The house rules in _custom.md apply to every evaluation.`,
     `5. Write user-facing content in the language code "${input.outputLanguage}" (profile.yml language.output).`,
-    p.mcp === 'playwright' ? '6. Playwright MCP is available in this apply session. The browser is headed so the user sees it; you stop before any submit.' : '6. Playwright is unavailable. Use WebFetch when you need a page and mark the result "Verification: unconfirmed (batch mode)".',
+    webRule(p),
     '7. When the mode needs the user to confirm or choose, ask exactly one question and end the turn. The app shows it and resumes you with the answer.',
     `8. Allowed write scope (paths relative to the repo root): ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
     `9. Envelope contract: ${ENVELOPE_CONTRACT[p.id] ?? 'none for this mode; report results as markdown.'}`,
