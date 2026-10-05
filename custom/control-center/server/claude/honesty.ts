@@ -52,8 +52,12 @@ export function isReportGated(modeId: string): boolean {
   return id === 'oferta' || id === 'auto-pipeline' || id.startsWith('regional/') || id.endsWith('/oferta');
 }
 
-/** Modes whose terminal output is an envelope rather than prose. */
-export const ENVELOPE_MODES = new Set(['apply', 'ai-search', 'cv-ingest', 'projects-ingest', 'advisor']);
+/**
+ * Modes whose contract demands a terminal envelope (invocation.ts ENVELOPE_CONTRACT). Advisor proposes an action
+ * only when one fits and ai-search emits one line per posting it found, so both may end in prose and follow the
+ * question rule like any other mode.
+ */
+export const ENVELOPE_MODES = new Set(['apply', 'cv-ingest', 'projects-ingest']);
 
 export function endsWithQuestion(text: string): boolean {
   const lines = text

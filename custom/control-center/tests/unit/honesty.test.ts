@@ -52,6 +52,18 @@ describe('evaluation honesty gate', () => {
     for (const modeId of ['de/pipeline', 'de/bewerben']) expect(decideTurnOutcome({ ...base, modeId }).status, modeId).toBe('done');
   });
 
+  it('advisor and ai-search may end in prose: an answer is done, a question waits, and no envelope is required', () => {
+    const ask = { ...base, modeId: 'advisor', policyClass: 'read-only' as const };
+    expect(decideTurnOutcome({ ...ask, finalText: 'Your strongest match this week is Acme Robotics (4.4/5).' })).toMatchObject({ status: 'done', reason: 'clean exit with output' });
+    expect(decideTurnOutcome({ ...ask, finalText: 'Two rows match. Which one do you mean?' }).status).toBe('awaiting_user');
+    expect(decideTurnOutcome({ ...ask, envelopeCount: 1 }).status).toBe('done');
+    const search = { ...base, modeId: 'ai-search', policyClass: 'read-only' as const };
+    expect(decideTurnOutcome({ ...search, finalText: 'No postings matched these filters.' }).status).toBe('done');
+    expect(decideTurnOutcome({ ...search, envelopeCount: 3 }).status).toBe('done');
+    // The modes whose contract demands an envelope still wait without one.
+    for (const modeId of ['apply', 'cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only' }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+  });
+
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply', envelopeCount: 1 }).status).toBe('done');
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply' }).status).toBe('awaiting_user');
