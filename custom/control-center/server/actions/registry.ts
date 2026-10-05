@@ -94,6 +94,7 @@ const tmpFile = (ctx: ActionContext, ext: string, content: string): string => {
 };
 
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
+const CONTACTS_VCF = 'custom/control-center/server/actions/contacts-vcf.mjs';
 
 export const ACTIONS: ActionDef[] = [
   // ---- tracker ----
@@ -379,7 +380,21 @@ export const ACTIONS: ActionDef[] = [
   }),
   define({ id: 'followups.replyWatch', label: 'Reply watch digest', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'replyWatch', []) }),
   define({ id: 'followups.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),
-  define({ id: 'followups.contactsVcf', label: 'Export contacts (vCard)', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ callerId: safeToken }), build: (p, ctx) => node(ctx, 'contacts', ['--vcf', '--caller-id', p.callerId]) }),
+  define({
+    id: 'followups.contactsVcf',
+    label: 'Export contacts (vCard)',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: true,
+    // --caller-id is a switch (FN becomes "Jane Doe (Acme recruiter)"). The cards come back as the result, never a file.
+    params: z.object({ callerId: z.boolean().default(false) }),
+    build: (p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, CONTACTS_VCF), ...flag(p.callerId, '--caller-id')], cwd: ctx.codeRoot }),
+    explainFailure: ({ code, stderr }) => {
+      const last = stderr.trim().split('\n').at(-1) ?? '';
+      return code === 3 ? { status: 404, error: last } : { status: 500, error: `The vCard export failed (exit ${code}): ${last || 'no output'}` };
+    },
+  }),
   define({ id: 'followups.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
   // ---- plugins ----
   define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),

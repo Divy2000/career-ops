@@ -703,6 +703,13 @@
       ]
     },
     {
+      "module": "contacts.mjs",
+      "names": [
+        "parseContacts",
+        "buildVcf"
+      ]
+    },
+    {
       "module": "intake.mjs",
       "names": [
         "classifySource",

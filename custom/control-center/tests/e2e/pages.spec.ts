@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
@@ -114,6 +115,23 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Follow-ups' })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'overdue' }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: 'Globex Payments' })).toBeVisible();
+    await axeClean(page);
+  });
+
+  test('Follow-ups > Contacts: Export vCard downloads the cards, named for caller id when that box is ticked (R8-03)', async ({ page }) => {
+    await page.goto('/followups?tab=contacts');
+    await expect(page.getByRole('cell', { name: 'Pat Example' })).toBeVisible();
+    const save = async () => {
+      const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Export vCard/ }).click()]);
+      expect(download.suggestedFilename()).toBe('career-ops-contacts.vcf');
+      return fs.readFileSync((await download.path())!, 'utf8');
+    };
+    const plain = await save();
+    expect(plain.startsWith('BEGIN:VCARD\r\n')).toBe(true);
+    expect(plain.match(/BEGIN:VCARD/g)).toHaveLength(2);
+    expect(plain).toContain('FN:Pat Example\r\n');
+    await page.getByRole('checkbox', { name: /caller ID/i }).check();
+    expect(await save()).toContain('FN:Pat Example (Acme Robotics recruiter)\r\n');
     await axeClean(page);
   });
 });

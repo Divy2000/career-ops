@@ -222,7 +222,7 @@ function sampleParams(id: string): Record<string, unknown> {
     'insights.inviteMatch': { text: 'hello' },
     'insights.jdSkillGap': { text: '- Experience with Python' },
     'projects.rank': { text: 'We need Python.' },
-    'followups.contactsVcf': { callerId: 'me' },
+    'followups.contactsVcf': { callerId: true },
     'plugins.run': { id: 'h1b-sponsor', hook: 'check', args: [] },
     'system.updateDismiss': { version: '1.2.3' },
   };

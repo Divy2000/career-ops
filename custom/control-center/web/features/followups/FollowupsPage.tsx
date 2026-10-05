@@ -199,7 +199,7 @@ function ContactsTab() {
   const q = useQuery({ queryKey: ['followups', 'contacts'], queryFn: () => apiGet<ContactsRead>('/api/contacts') });
   const actions = useActions();
   const { run, message, busy } = useRunAction();
-  const [callerId, setCallerId] = useState('career-ops');
+  const [callerId, setCallerId] = useState(false);
   const exportVcf = async () => {
     const out = await run('followups.contactsVcf', { callerId }, 'vCard export ready');
     if (out && 'result' in out) {
@@ -219,7 +219,9 @@ function ContactsTab() {
           Contacts (data/contacts.tsv)
         </h2>
         <div className="row gap">
-          <input aria-label="vCard caller id" value={callerId} onChange={(e) => setCallerId(e.target.value)} style={{ width: 140 }} />
+          <label className="row gap" title='Each card is named "Jane Doe (Acme recruiter)", so a call shows who it is'>
+            <input type="checkbox" checked={callerId} onChange={(e) => setCallerId(e.target.checked)} /> Caller ID names
+          </label>
           <ActionButton meta={actions.data?.find((a) => a.id === 'followups.contactsVcf')} disabled={busy !== null} onRun={() => void exportVcf()}>
             Export vCard
           </ActionButton>
