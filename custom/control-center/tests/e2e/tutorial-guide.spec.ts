@@ -111,13 +111,78 @@ test.describe('Tutorials guide, documentation style', () => {
     await openDocs(page);
     await expect(toc(page).getByRole('link', { name: /^(Getting started|Tracking|Automation)/ })).toHaveCount(3);
     await expect(toc(page).getByRole('link', { name: /^Getting started/ })).toHaveAttribute('aria-current', 'true');
-    await expect(toc(page).getByRole('list', { name: 'Getting started subsections' }).getByRole('link')).toHaveText(['Launch and sign in', 'Safety model', 'Find your way around', 'Appearance']);
+    await expect(toc(page).getByRole('list', { name: 'Getting started subsections' }).getByRole('link')).toHaveText(['Launch and sign in', 'Safety model', 'Layout', 'Appearance']);
     await expect(toc(page).getByRole('list', { name: 'Tracking subsections' })).toHaveCount(0);
     await toc(page).getByRole('link', { name: /^Tracking/ }).click();
     await expect(page).toHaveURL(/section=tracking/);
     await expect(h2(page, 'Tracking')).toBeVisible();
     await expect(toc(page).getByRole('list', { name: 'Tracking subsections' }).getByRole('link')).toHaveText(['Change a status', 'Follow-ups and replies', 'Safety of the data']);
     await expect(toc(page).getByRole('list', { name: 'Getting started subsections' })).toHaveCount(0);
+  });
+
+  test.describe('collapsible contents', () => {
+    const toggle = (page: Page, name: string) => toc(page).getByRole('button', { name: `${name} subsections` });
+    /** Height of every visible contents row, as [kind, px] pairs. */
+    const rowHeights = (page: Page) =>
+      page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>('.guide-toc__section, .guide-toc__sub')]
+          .filter((el) => el.offsetParent !== null)
+          .map((el) => [el.classList.contains('guide-toc__sub') ? 'sub' : 'section', Math.round(el.getBoundingClientRect().height)] as const),
+      );
+
+    test('shows the short label with the full title as a tooltip, while the heading keeps the full title', async ({ page }) => {
+      await openDocs(page, '&section=getting-started&sub=navigate');
+      await expect(toc(page).getByRole('link', { name: 'Layout', exact: true })).toHaveAttribute('title', 'Find your way around');
+      await expect(h3(page, 'Find your way around')).toBeVisible();
+    });
+
+    test('a chevron opens another section without navigating', async ({ page }) => {
+      await openDocs(page, '&section=getting-started&sub=launch');
+      await expect(toggle(page, 'Tracking')).toHaveAttribute('aria-expanded', 'false');
+      const before = page.url();
+      await toggle(page, 'Tracking').click();
+      await expect(toggle(page, 'Tracking')).toHaveAttribute('aria-expanded', 'true');
+      await expect(toc(page).getByRole('list', { name: 'Tracking subsections' }).getByRole('link')).toHaveText(['Change a status', 'Follow-ups and replies', 'Safety of the data']);
+      await expect(toc(page).getByRole('list', { name: 'Getting started subsections' })).toBeVisible();
+      expect(page.url()).toBe(before);
+      await expect(h2(page, 'Getting started')).toBeVisible();
+    });
+
+    test('j from the last subsection of a section opens the next section and closes the first', async ({ page }) => {
+      await openDocs(page, '&section=getting-started&sub=appearance');
+      await expect(toc(page).getByRole('link', { name: 'Appearance' })).toHaveAttribute('aria-current', 'true');
+      await page.keyboard.press('j');
+      await expect(page).toHaveURL(/section=tracking/);
+      await expect(toc(page).getByRole('list', { name: 'Tracking subsections' })).toBeVisible();
+      await expect(toc(page).getByRole('list', { name: 'Getting started subsections' })).toHaveCount(0);
+      await expect(toggle(page, 'Getting started')).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    test('the single-subsection sections of a version 1 guide have no chevron', async ({ page }) => {
+      await page.goto(`${LEGACY}&section=today`);
+      await expect(h2(page, 'Today')).toBeVisible();
+      await expect(toc(page).getByRole('button')).toHaveCount(0);
+    });
+
+    for (const colorScheme of ['dark', 'light'] as const) {
+      test(`at 1440x900 in ${colorScheme}: one-line rows, no sideways overflow, no serious axe issue, and a deep link opens and marks its row`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.emulateMedia({ colorScheme });
+        await openDocs(page, '&section=tracking&sub=follow-ups');
+        const row = toc(page).getByRole('link', { name: 'Follow-ups and replies' });
+        await expect(row).toHaveAttribute('aria-current', 'true');
+        await expect(row).toHaveAttribute('data-toc-active', 'true');
+        await expect(toggle(page, 'Tracking')).toHaveAttribute('aria-expanded', 'true');
+        await toggle(page, 'Getting started').click();
+        await waitForAnimations(page);
+        const heights = await rowHeights(page);
+        expect(heights.filter(([kind]) => kind === 'sub')).toHaveLength(7);
+        for (const [kind, px] of heights) expect(px, kind).toBe(kind === 'sub' ? 32 : 38);
+        const overflow = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.guide__side, .guide-toc')].map((el) => el.scrollWidth - el.clientWidth));
+        expect(overflow).toEqual([0, 0]);
+        await axeClean(page);
+      });
+    }
   });
 
   test.describe('deep links', () => {

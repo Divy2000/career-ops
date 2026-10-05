@@ -154,7 +154,14 @@ button.guide-progress__reset:hover:not(:disabled) {
   font-weight: 500;
   text-decoration: none;
 }
-.guide-toc__section:hover,
+/* The chevron sits on top of the right end of the row, so hovering it still lights the whole row. */
+.guide-toc__row {
+  position: relative;
+}
+.guide-toc__section--expandable {
+  padding-right: 40px;
+}
+.guide-toc__row:hover > .guide-toc__section,
 .guide-toc__sub:hover {
   background: var(--surface-3);
   color: var(--text);
@@ -169,15 +176,47 @@ button.guide-progress__reset:hover:not(:disabled) {
   color: var(--nav-active-fg);
 }
 .guide-toc__title {
+  flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.guide-toc__subs {
+button.guide-toc__toggle {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  justify-content: center;
+  width: 28px;
+  min-width: 0;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+}
+button.guide-toc__toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.guide-toc__toggle svg {
+  transition: transform var(--dur-2) var(--ease-out);
+}
+.guide-toc__toggle[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+/* Under .guide-toc ol, which resets list margins; the rail lines up with the centre of the section's ring (8px padding + 11px). */
+.guide-toc .guide-toc__subs {
   position: relative;
   margin: 2px 0 var(--space-2) 19px;
   padding-left: var(--space-3);
   border-left: 1px solid var(--border);
   animation: guide-fade var(--dur-3) var(--ease-out);
+}
+.guide-toc__subs[hidden] {
+  display: none;
 }
 /* Rows are one fixed height, so the marker can slide to a row with a transform alone. */
 .guide-toc__marker {
@@ -199,7 +238,7 @@ button.guide-progress__reset:hover:not(:disabled) {
 .guide-toc__sub {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   height: 32px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
@@ -218,8 +257,13 @@ button.guide-progress__reset:hover:not(:disabled) {
   color: var(--nav-active-fg);
   font-weight: 500;
 }
-.guide-toc__sub-check {
+.guide-toc__tick {
   flex: none;
+  display: inline-flex;
+  color: var(--text-faint);
+  transition: color var(--dur-2) var(--ease-out);
+}
+.guide-toc__tick[data-reviewed='true'] {
   color: var(--success);
 }
 

@@ -1,5 +1,5 @@
-import { Check } from 'lucide-react';
-import { useEffect, useRef, type CSSProperties, type MouseEvent } from 'react';
+import { Check, ChevronRight, Circle, CircleCheck } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { sectionProgress, subKey, type GuideLocation } from '../../../lib/guide';
 import type { GuideDocs } from '@shared/api';
 
@@ -30,9 +30,30 @@ interface Props {
   onGo: (loc: GuideLocation) => void;
 }
 
-/** The sticky two-level contents: every section with its progress ring, and the subsections of the section being read under it. */
+/**
+ * Which sections show their subsections. Whenever the section being read changes, only that one is open; the chevrons open or close any
+ * section in between without navigating.
+ */
+function useOpenSections(active: string) {
+  const [state, setState] = useState(() => ({ active, open: new Set([active]) as ReadonlySet<string> }));
+  let open = state.open;
+  if (state.active !== active) {
+    open = new Set([active]);
+    setState({ active, open });
+  }
+  const toggle = (id: string) =>
+    setState((prev) => {
+      const next = new Set(prev.open);
+      if (!next.delete(id)) next.add(id);
+      return { ...prev, open: next };
+    });
+  return { open, toggle };
+}
+
+/** The sticky two-level contents: every section with its progress ring and short label, and a collapsible list of its subsections. */
 export function GuideToc({ docs, loc, reviewed, hrefFor, onGo }: Props) {
   const nav = useRef<HTMLElement>(null);
+  const { open, toggle } = useOpenSections(loc.sectionId);
   const go = (target: GuideLocation) => (e: MouseEvent) => {
     if (!isPlainClick(e)) return;
     e.preventDefault();
@@ -61,32 +82,46 @@ export function GuideToc({ docs, loc, reviewed, hrefFor, onGo }: Props) {
           const top = { sectionId: s.id, subId: null };
           // A section whose one subsection repeats its title (every version 1 section) is just the section: a second row would say the same thing.
           const single = s.subsections.length === 1 && s.subsections[0]!.title === s.title;
+          const expanded = !single && open.has(s.id);
+          const listId = `guide-toc-subs-${s.id}`;
           return (
             <li key={s.id} className={`guide-toc__item ${active ? 'guide-toc__item--active' : ''}`}>
-              <a href={hrefFor(top)} className="guide-toc__section" aria-current={active ? 'true' : undefined} data-toc-active={active && loc.subId === null ? 'true' : undefined} onClick={go(top)}>
-                <ProgressRing done={progress.done} total={progress.total} />
-                <span className="guide-toc__title">{s.title}</span>
-                <span className="sr-only">
-                  , {progress.done} of {progress.total} reviewed
-                </span>
-              </a>
-              {active && !single && (
-                <ol className="guide-toc__subs" aria-label={`${s.title} subsections`} style={{ '--at': Math.max(at, 0) } as CSSProperties}>
+              <div className="guide-toc__row">
+                <a
+                  href={hrefFor(top)}
+                  className={`guide-toc__section ${single ? '' : 'guide-toc__section--expandable'}`}
+                  title={s.title}
+                  aria-current={active ? 'true' : undefined}
+                  data-toc-active={active && loc.subId === null ? 'true' : undefined}
+                  onClick={go(top)}
+                >
+                  <ProgressRing done={progress.done} total={progress.total} />
+                  <span className="guide-toc__title">{s.short}</span>
+                  <span className="sr-only">
+                    , {progress.done} of {progress.total} reviewed
+                  </span>
+                </a>
+                {!single && (
+                  <button type="button" className="guide-toc__toggle" aria-expanded={expanded} aria-controls={listId} aria-label={`${s.short} subsections`} onClick={() => toggle(s.id)}>
+                    <ChevronRight size={16} strokeWidth={2.25} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              {!single && (
+                <ol id={listId} className="guide-toc__subs" hidden={!expanded} aria-label={`${s.title} subsections`} style={{ '--at': Math.max(at, 0) } as CSSProperties}>
                   <li className="guide-toc__marker" aria-hidden="true" data-visible={at >= 0 ? 'true' : 'false'} />
                   {s.subsections.map((u) => {
-                    const here = u.id === loc.subId;
+                    const here = active && u.id === loc.subId;
                     const marked = reviewed.has(subKey(s.id, u.id));
                     const target = { sectionId: s.id, subId: u.id };
                     return (
                       <li key={u.id}>
                         <a href={hrefFor(target)} className="guide-toc__sub" aria-current={here ? 'true' : undefined} data-toc-active={here ? 'true' : undefined} title={u.title} onClick={go(target)}>
-                          <span className="guide-toc__sub-title">{u.title}</span>
-                          {marked && (
-                            <>
-                              <Check size={14} strokeWidth={2.5} className="guide-toc__sub-check" aria-hidden="true" />
-                              <span className="sr-only">, reviewed</span>
-                            </>
-                          )}
+                          <span className="guide-toc__tick" data-reviewed={marked ? 'true' : 'false'} aria-hidden="true">
+                            {marked ? <CircleCheck size={14} strokeWidth={2.25} /> : <Circle size={14} strokeWidth={2} />}
+                          </span>
+                          <span className="guide-toc__sub-title">{u.short}</span>
+                          {marked && <span className="sr-only">, reviewed</span>}
                         </a>
                       </li>
                     );
@@ -118,11 +153,11 @@ export function GuideContentsSelect({ docs, loc, reviewed, onGo }: Omit<Props, '
         }}
       >
         {docs.sections.map((s) => (
-          <optgroup key={s.id} label={s.title}>
+          <optgroup key={s.id} label={s.short}>
             <option value={`${s.id}/`}>Overview</option>
             {s.subsections.map((u) => (
               <option key={u.id} value={`${s.id}/${u.id}`}>
-                {reviewed.has(subKey(s.id, u.id)) ? `${u.title} (reviewed)` : u.title}
+                {reviewed.has(subKey(s.id, u.id)) ? `${u.short} (reviewed)` : u.short}
               </option>
             ))}
           </optgroup>

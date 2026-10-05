@@ -198,6 +198,7 @@ export const DOCS_GUIDE = {
         {
           id: 'navigate',
           title: 'Find your way around',
+          short: 'Layout',
           summary: 'The sidebar groups every page.',
           blocks: [...filler('sidebar', 4), { type: 'media', kind: 'image', file: 'navigate.dark.png', fileLight: 'navigate.light.png', alt: 'The sidebar with its groups.', caption: 'The sidebar.', width: 320, height: 180 }],
         },
