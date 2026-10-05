@@ -388,6 +388,26 @@ describe('a viewer seek during a swap', () => {
     expect(media.seeks).toEqual([3]);
   });
 
+  it('given a seek after the new file is parsed but before the swap ends, when the new file then fails, then the fallback restores the seek', () => {
+    const { media, swap } = swapping();
+    media.loaded(60);
+    swap.seekTo(2.5);
+    expect(media.currentTime).toBe(2.5);
+    media.failed();
+    expect(media.src).toBe('dark.mp4');
+    media.loaded(60);
+    expect(media.seeks).toEqual([12.5, 2.5, 2.5]);
+  });
+
+  it('given a seek after the new file is parsed but before the swap ends, when the theme flips back, then the swap back restores the seek', () => {
+    const { media, swap } = swapping();
+    media.loaded(60);
+    swap.seekTo(2.5);
+    swap.swapTo('dark.mp4', null);
+    media.loaded(60);
+    expect(media.seeks).toEqual([12.5, 2.5, 2.5]);
+  });
+
   it('moves the element itself when no swap is waiting for its file: none under way, or the restore already made', () => {
     const { media, swap } = setup();
     media.src = 'dark.mp4';

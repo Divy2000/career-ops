@@ -61,7 +61,7 @@ export interface MediaSwap {
   swapTo(src: string, fallback: string | null): void;
   /** While the new file loads (the element reads 0 then), the place the swap will restore; otherwise null. */
   position(): number | null;
-  /** The viewer moved the playhead to `time`: while the new file loads the swap restores there instead, otherwise the element moves now. */
+  /** The viewer moved the playhead to `time`: a swap under way restores there from now on, and the element moves now unless its new file is still loading. */
   seekTo(time: number): void;
   dispose(): void;
 }
@@ -174,8 +174,10 @@ export function createMediaSwap(media: SwapMedia, hooks: SwapHooks): MediaSwap {
       return awaitingFile && snapshot ? snapshot.time : null;
     },
     seekTo(time) {
-      if (awaitingFile && snapshot) snapshot.time = time;
-      else media.currentTime = time;
+      // A swap under way keeps the new place, so a revert to the fallback or a swap back restores it, not the old one.
+      if (snapshot) snapshot.time = time;
+      // While the new file loads the element has no position to move; the restore applies the place once it is parsed.
+      if (!awaitingFile) media.currentTime = time;
     },
     dispose() {
       if (!stop) return;
