@@ -98,6 +98,26 @@ describe('claude shim: running the real binary', () => {
     expect(real.calls()).toHaveLength(1);
   });
 
+  it('with CC_SHIM_REFUSALS, every refusal appends its reason there (a caller that swallows the exit still sees it), and a call that ran appends nothing', () => {
+    const real = realClaude(APPROVED);
+    const refusals = path.join(tempDir('cc-shim-refusals-'), 'refusals');
+    const identity = `${fs.realpathSync(real.bin)}@${APPROVED}`;
+    expect(shim(['-p', 'x'], { CC_CLAUDE_BIN: real.bin, CC_CLAUDE_EXPECT: identity, CC_SHIM_REFUSALS: refusals }).status).toBe(0);
+    expect(shim(['-p', 'x'], { CC_CLAUDE_BIN: realClaude(APPROVED, { exit: 7 }).bin, CC_SHIM_REFUSALS: refusals }).status).toBe(7);
+    expect(fs.existsSync(refusals)).toBe(false);
+    const refused = [
+      shim(['-p', 'x', '--allowedTools', 'Bash'], { CC_CLAUDE_BIN: real.bin, CC_SHIM_REFUSALS: refusals }),
+      shim(['-p', 'x'], { CC_CLAUDE_BIN: realClaude('2.1.290').bin, CC_SHIM_REFUSALS: refusals }),
+      shim(['-p', 'x'], { CC_CLAUDE_BIN: real.bin, CC_CLAUDE_EXPECT: `${fs.realpathSync(real.bin)}@2.1.288`, CC_SHIM_REFUSALS: refusals }),
+      shim(['-p', 'x'], { CC_CLAUDE_BIN: 'claude', CC_SHIM_REFUSALS: refusals }),
+    ];
+    expect(refused.map((r) => r.status)).toEqual([2, 3, 4, 1]);
+    const lines = fs.readFileSync(refusals, 'utf8').trim().split('\n');
+    expect(lines).toEqual(refused.map((r) => r.stderr.trim()));
+    expect(lines[0]).toMatch(/^claude-shim: --allowedTools is not allowed/);
+    expect(real.calls()).toHaveLength(1);
+  });
+
   it('--version answers with the real version, autoupdater off', () => {
     const r = shim(['--version'], { CC_CLAUDE_BIN: realClaude(APPROVED).bin });
     expect(r.status).toBe(0);

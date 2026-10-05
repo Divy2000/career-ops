@@ -3,6 +3,8 @@
 // prompt and model and runs with no tools, no MCP servers and dontAsk, on an approved Claude Code with the autoupdater
 // off; a flag that could widen it refuses the call. The real binary is CC_CLAUDE_BIN (absolute, never this file);
 // with CC_CLAUDE_EXPECT (real path @ version, as the job's own check saw it) a binary changed since never runs.
+// With CC_SHIM_REFUSALS, every refusal also appends its reason to that file: rank-pipeline.mjs catches a failed call
+// and still exits 0, so the job reads the file to fail the step.
 // Dev Chat cannot edit it (server/claude/** is protected).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,6 +50,7 @@ export function confinedArgv(argv) {
 
 function refuse(message, code = 1) {
   process.stderr.write(`${message}\n`);
+  if (process.env.CC_SHIM_REFUSALS) fs.appendFileSync(process.env.CC_SHIM_REFUSALS, `${message}\n`);
   process.exit(code);
 }
 
