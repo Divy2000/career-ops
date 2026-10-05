@@ -154,5 +154,31 @@ describe('a source must really live under documents/', () => {
     expect(dirSwap.ok).toBe(false);
     expect(JSON.stringify(dirSwap)).not.toContain('SECRET');
   });
+
+  it('refuses a source when documents/ itself is swapped for a symlink after the containment check', async () => {
+    const outsideRoot = tempDir('cc-outside-root-');
+    fs.mkdirSync(path.join(outsideRoot, 'swap'));
+    fs.writeFileSync(path.join(outsideRoot, 'swap', 'root.md'), 'SECRET outside documents\n');
+    const docs = path.join(t.cfg.dataRoot, 'documents');
+    fs.mkdirSync(path.join(docs, 'swap'), { recursive: true });
+    fs.writeFileSync(path.join(docs, 'swap', 'root.md'), '## Fine\n- Inside.\n');
+    let swapped = false;
+    const moved = `${docs}.orig`;
+    try {
+      const rootSwap = await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'swap/root.md', {
+        beforeOpen: () => {
+          fs.renameSync(docs, moved);
+          fs.symlinkSync(outsideRoot, docs);
+          swapped = true;
+        },
+      });
+      expect(swapped, 'the swap ran between the check and the open').toBe(true);
+      expect(rootSwap.ok).toBe(false);
+      expect(JSON.stringify(rootSwap)).not.toContain('SECRET');
+    } finally {
+      if (fs.lstatSync(docs, { throwIfNoEntry: false })?.isSymbolicLink()) fs.rmSync(docs);
+      if (fs.existsSync(moved)) fs.renameSync(moved, docs);
+    }
+  });
 });
 
