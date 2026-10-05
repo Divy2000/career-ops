@@ -78,7 +78,7 @@ echo "jobs use node $NODE_BIN ($("$NODE_BIN" --version))"
 
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd="" envxml vars="" xdata xroot
+  local wd="" envxml vars="" xdata xroot tmp
   xdata="$(xml_escape "$DATA")"
   xroot="$(xml_escape "$ROOT")"
   if [ "$ENV_ROOT" = 1 ]; then vars="<key>CAREER_OPS_ROOT</key><string>$xdata</string>"; fi
@@ -86,7 +86,10 @@ write_plist() { # label script hour minute weekday(or empty) logdir
   vars="$vars<key>CC_NODE_BIN</key><string>$(xml_escape "$NODE_BIN")</string>"
   envxml="<key>EnvironmentVariables</key><dict>$vars</dict>"
   [ -n "$weekday" ] && wd="<key>Weekday</key><integer>$weekday</integer>"
-  cat > "$AGENTS/$label.plist" <<PLIST
+  # Written and linted beside the installed plist, then moved over it: a plist that fails the lint never replaces a
+  # working one. The temp name does not end in .plist, so launchd never loads it at login.
+  tmp="$(mktemp "$AGENTS/.$label.XXXXXX")"
+  cat > "$tmp" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -103,7 +106,13 @@ write_plist() { # label script hour minute weekday(or empty) logdir
 </dict>
 </plist>
 PLIST
-  plutil -lint "$AGENTS/$label.plist" >/dev/null
+  if ! plutil -lint "$tmp" >/dev/null; then
+    rm -f "$tmp"
+    echo "error: the plist for $label failed plutil -lint; the installed job was left as it was" >&2
+    exit 1
+  fi
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$AGENTS/$label.plist"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   # Disabling the job in the Control Center is persistent and bootstrap refuses a disabled label: reinstalling re-enables it.
   launchctl enable "gui/$(id -u)/$label"

@@ -19,11 +19,13 @@ const mkTmp = (prefix) => {
   return d;
 };
 
-function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null, relativeClaude = false } = {}) {
+function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null, relativeClaude = false, realPlutil = false } = {}) {
   const T = mkTmp('ci-launchd-');
   const bin = path.join(T, 'bin');
   fs.mkdirSync(bin);
-  for (const t of ['launchctl', 'plutil']) fs.symlinkSync(path.join(STUBS, t), path.join(bin, t));
+  fs.symlinkSync(path.join(STUBS, 'launchctl'), path.join(bin, 'launchctl'));
+  // The real plutil only lints (read-only); the stub records the call and passes, or fails with STUB_PLUTIL_FAIL.
+  fs.symlinkSync(realPlutil ? '/usr/bin/plutil' : path.join(STUBS, 'plutil'), path.join(bin, 'plutil'));
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   const home = path.join(T, homeName);
   fs.mkdirSync(home);
@@ -301,4 +303,39 @@ test('a pinned node that is gone (its version was uninstalled) leaves PATH alone
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.path, '/usr/bin:/bin');
   assert.match(r.stderr, /warning: CC_NODE_BIN .*node is not an executable.*custom\/launchd\/install\.sh/);
+});
+
+// ---- the plist on disk ----
+
+const HAS_PLUTIL = fs.existsSync('/usr/bin/plutil');
+
+test('&, < and > in a path are escaped: the plist passes the real plutil -lint and reads back the exact path', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const data = path.join(mkTmp('ci-launchd-data-'), 'R&D <jobs> data');
+  fs.mkdirSync(data);
+  const r = run(['--jobs', 'all'], { env: { CAREER_OPS_ROOT: data }, realPlutil: true });
+  assert.equal(r.status, 0, r.stderr);
+  for (const label of [DAILY, SYNC]) {
+    const file = path.join(r.home, 'Library', 'LaunchAgents', `${label}.plist`);
+    assert.ok(plistText(r, label).includes('R&amp;D &lt;jobs&gt; data'), plistText(r, label));
+    const read = (key) => spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', file], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(read('EnvironmentVariables.CAREER_OPS_ROOT'), data);
+    assert.equal(read('StandardOutPath'), `${data}/${label === DAILY ? 'data/immigration/logs' : 'data/upstream-sync'}/launchd.out.log`);
+  }
+});
+
+test('a plist that fails plutil -lint never replaces the installed one or reaches launchctl, and leaves no file behind', () => {
+  const r = run(['--jobs', 'daily'], { existing: [DAILY], env: { STUB_PLUTIL_FAIL: '1' } });
+  assert.notEqual(r.status, 0);
+  assert.equal(plistText(r, DAILY), 'PRE-EXISTING');
+  assert.deepEqual(r.plists, [`${DAILY}.plist`]);
+  assert.match(r.stderr, /plist for com\.career-ops\.immigration-watch failed plutil -lint/);
+  assert.doesNotMatch(r.log, /^launchctl /m);
+});
+
+test('a plist that passes lint replaces the installed one', () => {
+  const r = run(['--jobs', 'daily'], { existing: [DAILY] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(plistText(r, DAILY), /^<\?xml /);
+  assert.deepEqual(r.plists, [`${DAILY}.plist`]);
+  assert.equal(fs.statSync(path.join(r.home, 'Library', 'LaunchAgents', `${DAILY}.plist`)).mode & 0o777, 0o644, 'readable like any LaunchAgents plist, not mktemp\'s 0600');
 });

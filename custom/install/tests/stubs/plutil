@@ -1,3 +1,4 @@
 #!/bin/bash
 echo "plutil $*" >> "$STUB_LOG"
+if [ -n "${STUB_PLUTIL_FAIL:-}" ]; then echo "${*: -1}: Encountered unknown tag" >&2; exit 1; fi
 exit 0
