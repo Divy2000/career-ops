@@ -265,7 +265,10 @@ test('sync.sh runs keep-fork-readme.sh right after the merge and before headless
 test('sync.sh blocks auto-merge when the fork README had to be kept', () => {
   const sync = readFileSync(SYNC, 'utf8');
   assert.match(sync, /KEPT_README=1/);
-  assert.match(sync, /\$KEPT_README = 0 \]/, 'auto-merge condition must require KEPT_README = 0');
+  const lib = path.resolve(HERE, '../lib.sh');
+  const kept = spawnSync('bash', ['-c', `source "${lib}"\nmerge_blockers`], { env: { PATH: '/usr/bin:/bin', CUSTOM_OK: '1', CC_OK: '1', AUTO_MERGE: '1', KEPT_README: '1' }, encoding: 'utf8' });
+  assert.match(kept.stdout, /fork README kept/, 'the auto-merge gate must hold the PR when KEPT_README = 1');
+  assert.match(sync, /^BLOCKERS="\$\(merge_blockers\)"$/m);
   assert.match(sync, /\.github\/README\.md/);
 });
 

@@ -314,3 +314,67 @@ test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root 
     assert.match(existsSync(calls) ? readFileSync(calls, 'utf8') : '', /path-resolver\.mjs/);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
+
+// ---- the gates that stop the sync before anything is pushed ----
+
+/** A sync worktree on `sync/x` from main, with upstream/main one commit ahead; `merged` merges it in. */
+function verifyWorld({ merged = true, conflict = false } = {}) {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-verify-'));
+  const repo = path.join(base, 'repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q', '-b', 'main');
+  commitFile(repo, 'shared.txt', 'base\n', 'base');
+  git(repo, 'checkout', '-q', '-b', 'up');
+  commitFile(repo, 'shared.txt', 'upstream\n', 'upstream');
+  git(repo, 'update-ref', 'refs/remotes/upstream/main', 'up');
+  git(repo, 'checkout', '-q', '-b', 'sync/x', 'main');
+  if (conflict) {
+    commitFile(repo, 'shared.txt', 'fork\n', 'fork');
+    spawnSync('git', ['merge', '-q', 'upstream/main'], { cwd: repo, env: GIT_ENV });
+  } else if (merged) git(repo, 'merge', '-q', '--no-ff', '--no-edit', 'upstream/main');
+  return { base, repo, verify: () => bashLib(repo, 'verify_merge sync/x') };
+}
+
+test('verify_merge passes a finished merge of upstream/main, untracked files and all', () => {
+  const w = verifyWorld();
+  try {
+    writeFileSync(path.join(w.repo, 'untracked.log'), 'x\n');
+    const res = w.verify();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(res.stdout, '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('verify_merge stops on unmerged paths', () => {
+  const w = verifyWorld({ conflict: true });
+  try {
+    const res = w.verify();
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), 'unmerged paths remain after Claude');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('verify_merge stops when upstream/main is not merged into the branch', () => {
+  const w = verifyWorld({ merged: false });
+  try {
+    const res = w.verify();
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), 'upstream/main is not merged into sync/x');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('verify_merge stops on uncommitted changes to tracked files', () => {
+  const w = verifyWorld();
+  try {
+    writeFileSync(path.join(w.repo, 'shared.txt'), 'edited after the merge\n');
+    const res = w.verify();
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), 'uncommitted changes left in the sync worktree');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('sync.sh stops the run through verify_merge before it pushes', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")" || fail "$GATE"');
+  assert.ok(gate > sync.indexOf('echo "--- verifying"') && gate < sync.indexOf('git push'), `verify_merge at ${gate}`);
+});
