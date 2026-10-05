@@ -19,7 +19,7 @@ const mkTmp = (prefix) => {
   return d;
 };
 
-function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null } = {}) {
+function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null, relativeClaude = false } = {}) {
   const T = mkTmp('ci-launchd-');
   const bin = path.join(T, 'bin');
   fs.mkdirSync(bin);
@@ -43,6 +43,12 @@ function run(args, { env = {}, marker = null, existing = [], homeName = 'home', 
   fs.writeFileSync(path.join(root, 'custom', 'control-center', 'server', 'core', 'contract.json'), JSON.stringify({ claude: { approvedVersions: ['2.1.289'] } }));
   // A claude on the test PATH answering `--version` with `claude` (never the real one: /opt/homebrew/bin is not on it).
   if (claude !== null) fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\necho '${claude} (Claude Code)'\n`, { mode: 0o755 });
+  // A claude reached only through relative PATH entries (node_modules/.bin, and an empty entry, which is the current
+  // folder), both first on PATH: the script runs from T, where both exist.
+  if (relativeClaude) {
+    fs.mkdirSync(path.join(T, 'node_modules', '.bin'), { recursive: true });
+    for (const f of [path.join(T, 'node_modules', '.bin', 'claude'), path.join(T, 'claude')]) fs.writeFileSync(f, "#!/bin/sh\necho '2.1.289 (Claude Code)'\n", { mode: 0o755 });
+  }
   if (marker !== null) fs.writeFileSync(path.join(root, '.career-ops-data'), `${marker.replace('$T', T)}\n`);
   const agentsDir = path.join(home, 'Library', 'LaunchAgents');
   fs.mkdirSync(agentsDir, { recursive: true });
@@ -50,7 +56,8 @@ function run(args, { env = {}, marker = null, existing = [], homeName = 'home', 
   const stubLog = path.join(T, 'stub.log');
   fs.writeFileSync(stubLog, '');
   const r = spawnSync('bash', [path.join(root, 'custom', 'launchd', 'install.sh'), ...args], {
-    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home, STUB_LOG: stubLog, ...env },
+    cwd: T,
+    env: { PATH: `${relativeClaude ? 'node_modules/.bin::' : ''}${bin}:/usr/bin:/bin`, HOME: home, STUB_LOG: stubLog, ...env },
     encoding: 'utf8',
     timeout: 30000,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -226,4 +233,21 @@ test('with no claude on PATH, the native installer location ~/.local/bin/claude 
   const r = run(['--jobs', 'daily'], { localClaude: '2.1.289' });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(plistText(r, DAILY).includes(CLAUDE_KEY(path.join(r.home, '.local', 'bin', 'claude'))), plistText(r, DAILY));
+});
+
+test('relative PATH entries are skipped, not the end of the search: the first claude on PATH by absolute path is pinned', () => {
+  const r = run(['--jobs', 'daily'], { relativeClaude: true, claude: '2.1.289', localClaude: '2.1.289' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes(CLAUDE_KEY(path.join(r.T, 'bin', 'claude'))), plistText(r, DAILY));
+  assert.doesNotMatch(r.stderr, /no claude found/);
+});
+
+test('a claude only behind relative PATH entries falls back to ~/.local/bin/claude, else to no pin with the warning', () => {
+  const local = run(['--jobs', 'daily'], { relativeClaude: true, localClaude: '2.1.289' });
+  assert.equal(local.status, 0, local.stderr);
+  assert.ok(plistText(local, DAILY).includes(CLAUDE_KEY(path.join(local.home, '.local', 'bin', 'claude'))), plistText(local, DAILY));
+  const none = run(['--jobs', 'daily'], { relativeClaude: true });
+  assert.equal(none.status, 0, none.stderr);
+  assert.doesNotMatch(plistText(none, DAILY), /CC_CLAUDE_BIN/);
+  assert.match(none.stderr, /warning: no claude found .*CC_CLAUDE_BIN=/);
 });

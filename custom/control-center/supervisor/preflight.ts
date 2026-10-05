@@ -97,11 +97,15 @@ export function claudeCandidates(bin: string, opts: { env?: NodeJS.ProcessEnv; h
 }
 
 /**
- * Absolute path of the claude binary: a name with a slash is taken as given, a bare name is looked up in claudeCandidates order.
- * A bare name that is found nowhere is returned unchanged so the probe reports ENOENT.
+ * Absolute path of the claude binary: a name with a slash is made absolute against the folder the user started from
+ * (INIT_CWD, which npm sets, else the cwd), a bare name is looked up in claudeCandidates order. A bare name that is
+ * found nowhere is returned unchanged so the probe reports ENOENT.
  */
 export function resolveClaudeBin(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string {
-  if (bin.includes('/')) return bin;
+  if (bin.includes('/')) {
+    const from = (opts.env ?? process.env).INIT_CWD;
+    return path.resolve(from && path.isAbsolute(from) ? from : process.cwd(), bin);
+  }
   return claudeCandidates(bin, opts)[0] ?? bin;
 }
 

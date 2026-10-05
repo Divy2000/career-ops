@@ -35,15 +35,22 @@ shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 # The claude the daily job runs, pinned as CC_CLAUDE_BIN: launchd's own PATH could reach another install first (an old
 # one in /usr/local/bin, say), and the job would then skip its Claude steps every day. CC_CLAUDE_BIN (absolute) wins,
-# else the first claude on this shell's PATH, else ~/.local/bin/claude (the native installer). It is checked against
-# the approved versions now, so a mismatch is reported here and not only in tomorrow's log.
+# else the first claude on this shell's PATH, else ~/.local/bin/claude (the native installer). PATH is walked in order
+# and relative entries (an empty one included) are skipped, not taken as the end of the search, the way the app's
+# claudeCandidates picks. It is checked against the approved versions now, so a mismatch is reported here and not only
+# in tomorrow's log.
 CLAUDE_BIN=""
 if [ -n "${CC_CLAUDE_BIN:-}" ]; then
   case "$CC_CLAUDE_BIN" in /*) CLAUDE_BIN="$CC_CLAUDE_BIN" ;; *) echo "error: CC_CLAUDE_BIN must be an absolute path (got $CC_CLAUDE_BIN)" >&2; exit 2 ;; esac
 else
-  CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
-  case "$CLAUDE_BIN" in /*) ;; *) CLAUDE_BIN="" ;; esac
-  if [ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE_BIN="$HOME/.local/bin/claude"; fi
+  rest="$PATH:"
+  while [ -n "$rest" ]; do
+    dir="${rest%%:*}"
+    rest="${rest#*:}"
+    case "$dir" in /*) ;; *) continue ;; esac
+    if [ -f "${dir%/}/claude" ] && [ -x "${dir%/}/claude" ]; then CLAUDE_BIN="${dir%/}/claude"; break; fi
+  done
+  if [ -z "$CLAUDE_BIN" ] && [ -f "$HOME/.local/bin/claude" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE_BIN="$HOME/.local/bin/claude"; fi
 fi
 if [ -n "$CLAUDE_BIN" ]; then
   if CLAUDE_CHECK="$(cd "$ROOT" && CLAUDE_BIN="$CLAUDE_BIN" node --input-type=module -e '

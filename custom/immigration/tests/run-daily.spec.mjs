@@ -61,10 +61,11 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
-  // claude (the first one on PATH must be the shim's wrapper, or it records that and stops).
+  // claude (the first one on PATH must be the shim's wrapper, or it records that and stops). Like the real script, it
+  // catches a failed call, logs it, leaves the batch un-annotated and still exits 0.
   put(
     'rank-pipeline.mjs',
-    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { execFileSync } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nconst out = execFileSync('claude', ['-p', 'RANK PROMPT', '--model', 'sonnet'], { encoding: 'utf8' });\nfs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n`,
+    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { execFileSync } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nlet out;\ntry {\n  out = execFileSync('claude', ['-p', 'RANK PROMPT', '--model', 'sonnet'], { encoding: 'utf8' });\n} catch (err) {\n  console.error('  batch 1: CLI call failed (' + (err.code ?? err.message) + ') - entries left un-annotated');\n  fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank batch failed\\n');\n  process.exit(0);\n}\nfs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n`,
   );
   fs.writeFileSync(path.join(data, 'config/profile.yml'), 'location:\n  needs_sponsorship: true\n');
   fs.writeFileSync(path.join(bin, 'security'), '#!/bin/bash\necho fake-keychain-token\n', { mode: 0o755 });
@@ -262,4 +263,35 @@ test('the log says which claude the job resolved, where from, and its real path 
   const r = w.run();
   assert.equal(r.status, 0, r.log);
   assert.ok(r.log.includes(`claude: ${w.fakeClaude} (from CC_CLAUDE_BIN), ${fs.realpathSync(w.fakeClaude)}@${APPROVED[0]}`), r.log);
+});
+
+test('a rank call the shim refuses fails the rank step, though rank-pipeline.mjs catches the failed call and exits 0', () => {
+  // Both versions are approved and the job's own checks all see 2.1.289; only the shim, right before the call, sees 2.1.300.
+  const w = dailyWorld({ approved: ['2.1.289', '2.1.300'] });
+  const r = w.run({ FAKE_CLAUDE_VERSIONS: JSON.stringify(['2.1.289 (Claude Code)', '2.1.289 (Claude Code)', '2.1.289 (Claude Code)', '2.1.300 (Claude Code)']) });
+  assert.equal(r.calls.length, 1, 'the policy pass still ran on the binary it checked');
+  assert.equal(r.rankCalls.length, 0, r.steps);
+  assert.match(r.steps, /^rank batch failed$/m, 'the stand-in caught the refused call, as the real script does');
+  assert.match(r.log, /claude-shim: Claude Code changed since the job checked it .*2\.1\.289.*2\.1\.300.*the call is not run/);
+  assert.match(r.log, /claude-shim refused 1 rank call\(s\); the rank step fails/);
+  assert.match(r.log, /!!! step failed: rank top 100/);
+  assert.doesNotMatch(r.log, /!!! step failed: policy watch/);
+  assert.match(r.log, /done \(failed=1\)/);
+  assert.notEqual(r.status, 0);
+  assert.match(r.steps, /^custom\/pipeline\/shortlist\.mjs/m, 'the steps after the rank still run');
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('a rank call the shim refuses for a flag it does not allow fails the rank step too', () => {
+  const w = dailyWorld();
+  // The stand-in's argv, as an upstream change to rank-pipeline.mjs could make it.
+  const stand = path.join(w.root, 'rank-pipeline.mjs');
+  fs.writeFileSync(stand, readFileSync(stand, 'utf8').replace("'--model', 'sonnet']", "'--model', 'sonnet', '--allowedTools', 'Bash']"));
+  const r = w.run();
+  assert.equal(r.rankCalls.length, 0, r.steps);
+  assert.match(r.steps, /^rank batch failed$/m);
+  assert.match(r.log, /claude-shim: --allowedTools is not allowed in a confined call/);
+  assert.match(r.log, /!!! step failed: rank top 100/);
+  assert.notEqual(r.status, 0);
+  assert.deepEqual(r.leftovers, []);
 });

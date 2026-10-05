@@ -122,9 +122,14 @@ describe('resolveClaudeBin', () => {
     return bin;
   };
 
-  it('keeps an explicit path or a name with a slash as given', () => {
+  it('keeps an absolute path as given', () => {
     expect(resolveClaudeBin('/opt/custom/claude', { env: { PATH: '' }, home: '/h' })).toBe('/opt/custom/claude');
-    expect(resolveClaudeBin('./bin/claude', { env: { PATH: '' }, home: '/h' })).toBe('./bin/claude');
+  });
+
+  it('makes a relative path with a slash absolute, against the folder bin/cc was started from (npm sets INIT_CWD), else the cwd', () => {
+    expect(resolveClaudeBin('./bin/claude', { env: { PATH: '', INIT_CWD: '/work/here' }, home: '/h' })).toBe('/work/here/bin/claude');
+    expect(resolveClaudeBin('tools/claude', { env: { PATH: '', INIT_CWD: '/work/here' }, home: '/h' })).toBe('/work/here/tools/claude');
+    expect(resolveClaudeBin('./bin/claude', { env: { PATH: '' }, home: '/h' })).toBe(path.resolve('bin/claude'));
   });
 
   it('finds claude on PATH and returns an absolute path', () => {

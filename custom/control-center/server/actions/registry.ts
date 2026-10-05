@@ -15,6 +15,8 @@ export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followu
 export interface ActionContext {
   codeRoot: string;
   dataRoot: string;
+  /** The claude the app runs (CC_CLAUDE_BIN or the resolved one); the daily job gets it when it is absolute, as the plist does. */
+  claudeBin?: string;
   /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
   tmpInputs: string[];
 }
@@ -393,7 +395,7 @@ export const ACTIONS: ActionDef[] = [
     claude: true,
     sync: false,
     params: none,
-    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot }),
+    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { env: { CC_CLAUDE_BIN: ctx.claudeBin } } : {}) }),
   }),
   define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
 ];

@@ -180,8 +180,10 @@ step "prioritize pipeline" node custom/pipeline/prioritize.mjs
 # (whatever CAREER_OPS_RANK_CLI says) and a wrapper for claude-shim.mjs first on PATH, so that call
 # gets no tools, no MCP servers and dontAsk on the approved binary; the folder is removed after.
 # The shim checks again before every call that the binary is still CLAUDE_GATE (CC_CLAUDE_EXPECT).
+# rank-pipeline.mjs catches a failed call and exits 0, so the shim also writes each refusal to a file
+# (CC_SHIM_REFUSALS) and any refusal fails the step.
 rank_top() {
-  local shim_dir rc now
+  local shim_dir rc now refused
   if [ "$CLAUDE_GATE_RC" -eq 3 ]; then
     echo "rank skipped: $CLAUDE_GATE"
     return 0
@@ -206,7 +208,12 @@ fs.writeFileSync(path.join(process.env.DIR, "claude"), `#!/bin/sh\nexec ${shellQ
     return 1
   fi
   rc=0
-  PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" CC_CLAUDE_EXPECT="$CLAUDE_GATE" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
+  PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" CC_CLAUDE_EXPECT="$CLAUDE_GATE" CC_SHIM_REFUSALS="$shim_dir/refusals" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
+  if [ -s "$shim_dir/refusals" ]; then
+    refused="$(grep -c '' "$shim_dir/refusals")"
+    echo "claude-shim refused $refused rank call(s); the rank step fails"
+    rc=1
+  fi
   rm -rf "$shim_dir"
   return "$rc"
 }

@@ -4,9 +4,7 @@ import { Message } from '../../components/ActionBar';
 import { Pill } from '../../components/ui';
 import { fanOut } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
-
-/** The most URLs one POST /api/sessions/fanout takes. */
-export const BATCH_MAX_URLS = 50;
+import { BATCH_MAX_URLS } from '@shared/fanout';
 
 /**
  * Pipeline > Batch: each URL becomes one oferta evaluation in its own confined session (the fan-out reserves the

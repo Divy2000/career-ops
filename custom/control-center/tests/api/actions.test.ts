@@ -123,6 +123,41 @@ describe('action registry', () => {
     }
   });
 
+  it('Run the daily job now runs the claude the app runs: its absolute path reaches run-daily.sh as CC_CLAUDE_BIN', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    // Captured, not run: the daily job would scan portals and call Claude.
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      const res = await post('/api/actions/daily.runNow', { params: {} });
+      expect(res.statusCode, res.body).toBe(202);
+      expect(path.isAbsolute(t.cfg.claudeBin)).toBe(true);
+      expect(started[0]!.cmd.args).toEqual([path.join(t.cfg.codeRoot, 'custom/immigration/run-daily.sh')]);
+      expect(started[0]!.env).toMatchObject({ CC_CLAUDE_BIN: t.cfg.claudeBin, CAREER_OPS_ROOT: t.cfg.dataRoot });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('Run the daily job now passes no CC_CLAUDE_BIN when the app has no absolute claude, so the job looks it up itself', async () => {
+    const bare = await makeTestApp({ claudeBin: 'claude' });
+    const started: Array<Parameters<typeof bare.runner.start>[0]> = [];
+    const spy = vi.spyOn(bare.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      const res = await bare.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: bare.authedWrite, payload: { params: {} } });
+      expect(res.statusCode, res.body).toBe(202);
+      expect(started[0]!.env).not.toHaveProperty('CC_CLAUDE_BIN');
+    } finally {
+      spy.mockRestore();
+      await bare.close();
+    }
+  });
+
   it('actions need the write headers like every other mutation', async () => {
     const res = await t.app.inject({ method: 'POST', url: '/api/actions/system.doctor', headers: t.authed, payload: { params: {} } });
     expect(res.statusCode).toBe(403);

@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveClaudeBin } from '../supervisor/preflight.js';
 
 export type ClientMode = 'vite' | 'dist' | 'none';
 
@@ -63,7 +64,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     token: requireEnv('CC_TOKEN'),
     sessionSecret: requireEnv('CC_SESSION_SECRET'),
     client,
-    claudeBin: env.CC_CLAUDE_BIN ?? 'claude',
+    // Absolute once, here: sessions, the daily plist and Run the daily job now all run this path.
+    claudeBin: resolveClaudeBin(env.CC_CLAUDE_BIN ?? 'claude', { env }),
     nodeEnv: env.NODE_ENV ?? 'development',
     watch: env.CC_WATCH !== '0',
     launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
