@@ -4,6 +4,7 @@ import type { ServerConfig } from '../config.js';
 import { BusyError, NotFoundError, type SessionManager } from '../claude/manager.js';
 import { listModeIds } from '../claude/modes.js';
 import { EXPLICIT_HEADER } from './settings.js';
+import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { readSettings } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
@@ -12,7 +13,7 @@ const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
-export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager }): Promise<void> {
+export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; bus: EventBus }): Promise<void> {
   const { manager } = opts;
   // Unlocking data/blacklist.md for a turn is the same explicit gate as PUT /api/blacklist: Dev Chat only, and the header on that request.
   const unlockRefused = (mode: string, headers: Record<string, unknown>) =>
@@ -116,7 +117,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     for (const ev of manager.store.readEvents(meta.id, after)) send(ev);
     const off = manager.onEvent((sid, ev) => sid === meta.id && send(ev));
     const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 10_000);
-    await new Promise<void>((resolve) => req.raw.on('close', resolve));
+    await opts.bus.stream(reply);
     clearInterval(heartbeat);
     off();
     return reply;

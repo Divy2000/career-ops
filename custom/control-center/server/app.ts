@@ -78,7 +78,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   closers.push(async () => daily.stop());
   await app.register(systemRoutes, { cfg, exec });
   await app.register(readRoutes, { cfg, bus, exec });
-  await app.register(actionRoutes, { cfg, runner, exec });
+  await app.register(actionRoutes, { cfg, runner, bus, exec });
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });
@@ -93,7 +93,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
     sessions.reconcile();
   };
   if (!deps.deferReconcile) activate();
-  await app.register(sessionRoutes, { cfg, manager: sessions });
+  await app.register(sessionRoutes, { cfg, manager: sessions, bus });
   await app.register(fileRoutes, { cfg, bus });
   await app.register(projectRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });

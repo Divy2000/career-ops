@@ -2,12 +2,13 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerConfig } from '../config.js';
 import { actionMetadata, findAction } from '../actions/registry.js';
 import type { Runner } from '../runner/runner.js';
+import type { EventBus } from '../watch/bus.js';
 import { execNoShell, type Exec } from './system.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
 
 const SYNC_TIMEOUT_MS = 30_000;
 
-export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; runner: Runner; exec?: Exec }): Promise<void> {
+export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; runner: Runner; bus: EventBus; exec?: Exec }): Promise<void> {
   const { cfg, runner } = opts;
   const exec = opts.exec ?? execNoShell;
   const coreEnv = { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1' };
@@ -76,7 +77,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     const meta = safeRead(runner, req.params.id);
     if (!meta) return reply.code(404).send({ error: 'no such run' });
     streamRun(runner, meta.id, Number(req.headers['last-event-id'] ?? 0) || 0, reply);
-    await new Promise<void>((resolve) => req.raw.on('close', resolve));
+    await opts.bus.stream(reply);
     return reply;
   });
 }
