@@ -70,7 +70,17 @@ function newId(): string {
   return `s${ts}-${crypto.randomBytes(3).toString('hex')}`;
 }
 
+/** What a store knows about the end of an events file: its size, the highest seq in it, and whether its last line is torn. */
+interface EventsTail {
+  size: number;
+  seq: number;
+  torn: boolean;
+}
+
 export class SessionStore {
+  /** Per events file, as this store last saw it; an append that finds the size unchanged reads nothing back. */
+  private tails = new Map<string, EventsTail>();
+
   constructor(
     private dataRoot: string,
     private guardRoot: string,
@@ -210,6 +220,7 @@ export class SessionStore {
     if (!fs.existsSync(dir)) return false;
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(this.guardDirOf(id), { recursive: true, force: true });
+    this.tails.delete(path.join(dir, 'events.ndjson'));
     return true;
   }
 
@@ -231,8 +242,13 @@ export class SessionStore {
   /** Appends one normalized event; the returned seq is the SSE event id. */
   appendEvent(id: string, event: SessionEvent): number {
     const file = path.join(this.dirOf(id), 'events.ndjson');
-    const seq = this.lastSeq(file) + 1;
-    fs.appendFileSync(file, JSON.stringify({ seq, ts: new Date().toISOString(), event } satisfies StoredEvent) + '\n');
+    const tail = this.tailOf(file);
+    const seq = tail.seq + 1;
+    const line = JSON.stringify({ seq, ts: new Date().toISOString(), event } satisfies StoredEvent) + '\n';
+    // A line a crash tore has no newline: the event starts a line of its own instead of joining it.
+    const text = tail.torn ? `\n${line}` : line;
+    fs.appendFileSync(file, text);
+    this.tails.set(file, { size: tail.size + Buffer.byteLength(text), seq, torn: false });
     return seq;
   }
 
@@ -256,14 +272,33 @@ export class SessionStore {
     return out;
   }
 
-  private lastSeq(file: string): number {
+  /**
+   * The cached tail while the file still has the size this store left it at; otherwise (the first append in this
+   * process, or another server appended since) one scan for the highest seq, skipping torn lines.
+   */
+  private tailOf(file: string): EventsTail {
+    let size: number;
     try {
-      const text = fs.readFileSync(file, 'utf8').trimEnd();
-      const last = text.slice(text.lastIndexOf('\n') + 1);
-      return last ? (JSON.parse(last) as StoredEvent).seq : 0;
-    } catch {
-      return 0;
+      size = fs.statSync(file).size;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      size = 0;
     }
+    const known = this.tails.get(file);
+    if (known && known.size === size) return known;
+    if (size === 0) return { size: 0, seq: 0, torn: false };
+    const bytes = fs.readFileSync(file);
+    let seq = 0;
+    for (const line of bytes.toString('utf8').split('\n')) {
+      if (!line) continue;
+      try {
+        const n = (JSON.parse(line) as Partial<StoredEvent>).seq;
+        if (typeof n === 'number' && Number.isFinite(n) && n > seq) seq = n;
+      } catch {
+        /* torn line */
+      }
+    }
+    return { size: bytes.length, seq, torn: bytes[bytes.length - 1] !== 0x0a };
   }
 }
 
