@@ -27,7 +27,11 @@ export function useLiveInvalidation(): void {
       }
     };
     es.addEventListener('data.changed', onChanged);
-    es.addEventListener('daily.status', () => void qc.invalidateQueries({ queryKey: ['system', 'daily'] }));
+    // A job log's status is decided when it is read (a run killed before its done line turns interrupted), so the logs refetch too.
+    es.addEventListener('daily.status', () => {
+      void qc.invalidateQueries({ queryKey: ['system', 'daily'] });
+      void qc.invalidateQueries({ queryKey: ['immigration', 'logs'] });
+    });
     es.addEventListener('run.status', () => void qc.invalidateQueries({ queryKey: ['runs'] }));
     return () => es.close();
   }, [qc]);
