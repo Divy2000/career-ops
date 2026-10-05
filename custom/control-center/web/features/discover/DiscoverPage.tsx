@@ -7,6 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
+import { addNote } from './addNote';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
@@ -186,7 +187,7 @@ function NetworkScan() {
         added += r.added;
         skipped += r.skipped;
       }
-      setMessage({ tone: 'ok', text: `Added ${added} to the pipeline${skipped ? `; ${skipped} ${skipped === 1 ? 'was' : 'were'} already there` : ''}` });
+      setMessage({ tone: 'ok', text: addNote(added, skipped) });
     } catch (err) {
       setMessage({ tone: 'danger', text: `${added ? `Added ${added}, then could not add the rest` : 'Could not add'}: ${describeError(err)}` });
     }
