@@ -80,3 +80,14 @@ test.describe('Apply: draft session prompt', () => {
     await expect(prompt).toHaveValue('Only read the form, my own words.');
   });
 });
+
+test.describe('Apply: a row that is not there (R8-20)', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('/apply/<n> for a missing row says it could not load the row instead of loading forever', async ({ page }) => {
+    await page.goto('/apply/9999');
+    await expect(page.getByRole('alert')).toContainText('Could not load.');
+    await expect(page.getByText('Loading the tracker row.')).toHaveCount(0);
+    await axeClean(page);
+  });
+});
