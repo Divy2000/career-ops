@@ -89,6 +89,8 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
     CAREER_OPS_INSTALL_TTY: path.join(T, 'no-such-tty'),
     CAREER_OPS_CLAUDE_FALLBACK_DIRS: path.join(home, '.local', 'bin'),
     LANG: 'en_US.UTF-8',
+    // The test run's TMPDIR, so whatever the installer or a nested tool makes goes where the caller chose.
+    ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
   };
 
   const world = {

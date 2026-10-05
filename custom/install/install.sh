@@ -813,8 +813,11 @@ else
     pending "node doctor.mjs reported problems; run it in $QDIR and read the output."
   fi
   specs=("$DIR"/custom/*/tests/*.spec.mjs)
-  if [ -e "${specs[0]}" ]; then
-    if ! (cd "$DIR" && run_logged node --test custom/*/tests/*.spec.mjs); then
+  if [ -n "${CAREER_OPS_IN_SELFTEST:-}" ]; then
+    # A spec that runs this installer must not start the specs again (each level would run the next).
+    say "  already inside a self-test run; skipping the self-tests"
+  elif [ -e "${specs[0]}" ]; then
+    if ! (cd "$DIR" && export CAREER_OPS_IN_SELFTEST=1 && run_logged node --test custom/*/tests/*.spec.mjs); then
       pending "The fork self-tests failed (node --test custom/*/tests/*.spec.mjs in $QDIR); see $LOG_FILE."
     fi
   else

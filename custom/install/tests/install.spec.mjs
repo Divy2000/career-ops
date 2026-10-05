@@ -548,6 +548,33 @@ test('standalone: when the validator cannot be fetched, the install stops before
   assert.equal(exists(D), false);
 });
 
+// ---------------------------------------------------------------- self-tests
+
+const SELFTEST_SPEC = `import { test } from 'node:test';
+import fs from 'node:fs';
+test('records the self-test marker', () => fs.appendFileSync(process.env.STUB_LOG, 'selftest CAREER_OPS_IN_SELFTEST=' + (process.env.CAREER_OPS_IN_SELFTEST ?? '') + '\\n'));
+`;
+
+test('the health check runs the checkout\'s custom specs with CAREER_OPS_IN_SELFTEST=1', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'custom/demo/tests/a.spec.mjs': SELFTEST_SPEC } });
+  w.run(args());
+  assert.deepEqual(w.calls('selftest'), ['selftest CAREER_OPS_IN_SELFTEST=1']);
+});
+
+test('inside a self-test run the installer does not start the custom specs again', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'custom/demo/tests/a.spec.mjs': SELFTEST_SPEC } });
+  const r = w.run(args(), { env: { CAREER_OPS_IN_SELFTEST: '1' } });
+  assert.deepEqual(w.calls('selftest'), []);
+  assert.match(r.out, /already inside a self-test run; skipping the self-tests/);
+});
+
+test('worlds keep the caller\'s TMPDIR, so nested temp files land where the test run put them', () => {
+  const { w } = fresh();
+  assert.equal(w.env().TMPDIR, process.env.TMPDIR);
+});
+
 // ---------------------------------------------------------------- Keychain
 
 test('without a TTY a missing Keychain item is a pending action (exit 3) and the token flow never starts', () => {
@@ -808,8 +835,10 @@ test('a script that lives inside a checkout uses that checkout: no clone, and th
   const w = makeWorld({ keychain: true });
   const inside = path.join(w.T, 'inside');
   w.makeCheckout(inside);
-  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true });
+  // Without tests/: the installer runs a checkout's custom specs, and these would run this test again.
+  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
   const r = w.run(['--non-interactive', ...QUIET], { script: path.join(inside, 'custom', 'install', 'install.sh') });
+  assert.match(r.out, /no custom\/\*\/tests specs in this checkout; skipping the self-tests/);
   assert.notEqual(r.status, 1, r.out);
   assert.equal(w.log().filter((l) => l.startsWith('git clone')).length, 0);
   assert.ok(r.out.includes(`checkout:  ${inside}`), r.out);
