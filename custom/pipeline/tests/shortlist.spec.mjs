@@ -76,3 +76,19 @@ test('a paused sponsor is excluded whatever slug the alert row carries, keyed by
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /shortlist: 0 kept, 5 excluded/);
 });
+
+for (const [what, write] of [
+  ['no portals.yml (the pasted-URL workflow)', () => {}],
+  ['an empty portals.yml', (root) => fs.writeFileSync(path.join(root, 'portals.yml'), '')],
+  ['a portals.yml with no title_filter', (root) => fs.writeFileSync(path.join(root, 'portals.yml'), 'tracked_companies: []\n')],
+]) {
+  test(`the shortlist is written with no title negatives on a root with ${what} (R8-13)`, () => {
+    const root = tempDir('shortlist-');
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Low Co | Data Analyst | Remote | rank: 1.0/5 - weak fit\n');
+    write(root);
+    const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
+  });
+}
