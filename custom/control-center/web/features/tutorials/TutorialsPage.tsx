@@ -360,7 +360,7 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
                 // Any seek dismisses Up next (the native controls too) and becomes the place a theme swap under way restores,
                 // except the one the swap makes itself to restore the place.
                 const v = video.current;
-                if (!v || isRestoreSeek(v.currentTime)) return;
+                if (!v || isRestoreSeek()) return;
                 noteSeek(v.currentTime);
                 setEnded(false);
               }}
