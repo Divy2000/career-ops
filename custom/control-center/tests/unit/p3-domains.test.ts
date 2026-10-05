@@ -10,9 +10,9 @@ import { tempDir } from '../helpers/tmp.js';
 
 const PORTALS = `# Synthetic portals config for tests
 title_filter:
-  include:
+  positive:
     - backend # keep this comment
-  exclude:
+  negative:
     - intern
 
 location_filter:
@@ -22,8 +22,8 @@ location_filter:
 
 tracked_companies:
   - name: Acme Robotics
-    ats: greenhouse
-    slug: acme-robotics
+    careers_url: https://jobs.example.com/acme
+    provider: greenhouse
     enabled: true
 
 custom_unknown_key: # a key the editor does not know about
@@ -36,11 +36,11 @@ describe('applyYamlOps (yaml Document API)', () => {
   it('set, insert and delete keep comments and unknown keys intact', () => {
     const out = applyYamlOps(PORTALS, [
       { op: 'set', path: ['tracked_companies', 0, 'enabled'], value: false },
-      { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', ats: 'lever', slug: 'umbrella', enabled: true } },
+      { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', careers_url: 'https://jobs.lever.co/umbrella', provider: 'lever', enabled: true } },
       { op: 'set', path: ['location_filter', 'strict'], value: true },
-      { op: 'insert', path: ['title_filter', 'include'], index: 0, value: 'platform' },
+      { op: 'insert', path: ['title_filter', 'positive'], index: 0, value: 'platform' },
       { op: 'set', path: ['max_posting_age_days'], value: 14 },
-      { op: 'delete', path: ['title_filter', 'exclude'] },
+      { op: 'delete', path: ['title_filter', 'negative'] },
     ]);
     expect(out.startsWith('# Synthetic portals config for tests')).toBe(true);
     expect(out).toContain('- backend # keep this comment');
@@ -51,7 +51,7 @@ describe('applyYamlOps (yaml Document API)', () => {
     expect(out).toContain('name: Umbrella Corp');
     expect(out).toContain('strict: true');
     expect(out).toContain('max_posting_age_days: 14');
-    expect(out).not.toContain('exclude');
+    expect(out).not.toContain('negative');
     expect(out.indexOf('- platform')).toBeLessThan(out.indexOf('- backend'));
   });
 

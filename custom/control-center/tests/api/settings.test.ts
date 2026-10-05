@@ -31,7 +31,7 @@ describe('structured portals editor (ops through the yaml Document API)', () => 
       {
         ops: [
           { op: 'set', path: ['tracked_companies', 1, 'enabled'], value: false },
-          { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', ats: 'greenhouse', slug: 'umbrella', enabled: true } },
+          { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', careers_url: 'https://job-boards.greenhouse.io/umbrella', provider: 'greenhouse', enabled: true } },
           { op: 'set', path: ['max_posting_age_days'], value: 14 },
           { op: 'set', path: ['location_filter', 'strict'], value: true },
         ],
@@ -44,7 +44,8 @@ describe('structured portals editor (ops through the yaml Document API)', () => 
     expect(raw).toContain('name: Umbrella Corp');
     expect(raw).toContain('max_posting_age_days: 14');
     expect(raw).toContain('strict: true');
-    expect(raw).toMatch(/slug: northwind\n\s+enabled: false/);
+    // Northwind has no enabled key (upstream defaults it on): the op adds it.
+    expect(raw).toMatch(/provider: lever\n\s+enabled: false/);
     expect(res.json().etag).not.toBe(before.etag);
     const after = (await get('/api/config/portals')).json();
     expect(after.etag).toBe(res.json().etag);

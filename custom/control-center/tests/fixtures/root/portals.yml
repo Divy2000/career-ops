@@ -14,14 +14,11 @@ location_filter:
 
 tracked_companies:
   - name: Acme Robotics
-    ats: greenhouse
     careers_url: https://jobs.example.com/acme
-    slug: acme-robotics
+    provider: greenhouse
     enabled: true
   - name: Northwind Analytics
-    ats: lever
     careers_url: https://boards.example.com/northwind
-    slug: northwind
-    enabled: true
+    provider: lever
 
 max_posting_age_days: 30
