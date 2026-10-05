@@ -6,6 +6,12 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 const argv = process.argv.slice(2);
+if (argv[0] === '--version') {
+  fs.appendFileSync(process.env.FAKE_CLAUDE_RECORD, `${JSON.stringify({ versionCall: true, disableAutoupdater: process.env.DISABLE_AUTOUPDATER ?? null })}\n`);
+  if (!process.env.FAKE_CLAUDE_VERSION) process.exit(1);
+  console.log(process.env.FAKE_CLAUDE_VERSION);
+  process.exit(0);
+}
 const at = argv.indexOf('--settings');
 const settings = at === -1 ? null : JSON.parse(fs.readFileSync(argv[at + 1], 'utf8'));
 const policyFile = process.env.CC_POLICY_FILE;
@@ -26,6 +32,7 @@ fs.appendFileSync(
     policy: policyBytes ? JSON.parse(policyBytes.toString('utf8')) : null,
     policyShaMatches: policyBytes ? crypto.createHash('sha256').update(policyBytes).digest('hex') === process.env.CC_POLICY_SHA256 : false,
     sessionDir: process.env.CC_SESSION_DIR ?? null,
+    disableAutoupdater: process.env.DISABLE_AUTOUPDATER ?? null,
     hookRuns,
   })}\n`,
 );

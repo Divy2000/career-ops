@@ -6,6 +6,10 @@
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { CONTRACT } from '../core/adapter.js';
+import { parseClaudeVersion } from './confinement.mjs';
+
+// Shared with the daily job, which gates its own Claude calls the same way.
+export { parseClaudeVersion };
 
 /** What tests/fakes/claude.mjs reports; accepted only under NODE_ENV=test. */
 export const FAKE_CLAUDE_VERSION = '0.0.0-fake';
@@ -14,12 +18,6 @@ const VERSION_TIMEOUT_MS = 30_000;
 export function approvedClaudeVersions(nodeEnv: string): string[] {
   const listed: string[] = [...CONTRACT.claude.approvedVersions];
   return nodeEnv === 'test' ? [...listed, FAKE_CLAUDE_VERSION] : listed;
-}
-
-/** The leading x.y.z (with an optional -tag) of `claude --version` output. */
-export function parseClaudeVersion(out: string): string | null {
-  const m = out.trim().match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)(?:\s|$)/);
-  return m ? m[1]! : null;
 }
 
 export function unapprovedMessage(found: string, approved: string[]): string {

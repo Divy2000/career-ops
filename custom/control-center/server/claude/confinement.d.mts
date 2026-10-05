@@ -18,3 +18,6 @@ export interface GuardHook {
 }
 export function guardHooks(command?: string): { PreToolUse: Array<{ matcher: string; hooks: GuardHook[] }>; PostToolUse: Array<{ matcher: string; hooks: GuardHook[] }> };
 export function writeGuardPolicy(dir: string, policy: object): { file: string; sha256: string };
+export function parseClaudeVersion(out: string): string | null;
+export function contractApprovedVersions(contractFile?: string): string[];
+export function claudeVersionGate(bin: string, approved?: string[]): { version: string; problem: string | null };

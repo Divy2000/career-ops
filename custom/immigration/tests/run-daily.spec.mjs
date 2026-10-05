@@ -33,6 +33,7 @@ test('the policy prompt carries the watch JSON, the date and the data dir verbat
 // ---- the policy pass runs confined, like a Control Center session ----
 
 const CONFINEMENT = path.join(ROOT, 'custom/control-center/server/claude/confinement.mjs');
+const APPROVED = JSON.parse(readFileSync(path.join(ROOT, 'custom/control-center/server/core/contract.json'), 'utf8')).claude.approvedVersions;
 
 /**
  * A checkout with the real run-daily.sh, daily-prompt.md, path-resolver.mjs and confinement module and stubs for every
@@ -53,6 +54,8 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
   };
   for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'path-resolver.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
   for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
+  put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: APPROVED } }));
+  put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
   const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
@@ -65,14 +68,18 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
   const run = (extraEnv = {}) => {
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
     assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-claude\}/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
-    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, ...extraEnv };
+    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
     const log = logs.map((f) => readFileSync(path.join(imm, 'logs', f), 'utf8')).join('\n');
-    const calls = fs.existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+    const records = fs.existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+    const calls = records.filter((c) => !c.versionCall);
+    const versionCalls = records.filter((c) => c.versionCall);
     const steps = fs.existsSync(stepLog) ? readFileSync(stepLog, 'utf8') : '';
-    return { status: r.status, log, calls, steps, imm, leftovers: fs.readdirSync(tmp) };
+    const digestFile = path.join(imm, 'policy-digest.md');
+    const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
+    return { status: r.status, log, calls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, run };
 }
@@ -174,4 +181,38 @@ test('the policy pass runs under the guard hook: loopback and metadata fetches, 
   assert.equal(pre.hooks[0].timeout, 30);
   assert.ok(call.settings.hooks.PostToolUse[0].matcher.split('|').includes('Write'));
   assert.deepEqual(r.leftovers, []);
+});
+
+test('the pass runs only on an approved Claude Code, asked with the autoupdater off, and runs with the autoupdater off', () => {
+  const w = dailyWorld();
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.calls.length, 1, r.log);
+  assert.ok(r.versionCalls.length >= 1, 'the version is checked before the pass');
+  for (const v of r.versionCalls) assert.equal(v.disableAutoupdater, '1');
+  assert.equal(r.calls[0].disableAutoupdater, '1');
+});
+
+test('an unapproved Claude Code skips the pass, not the job: a clear log line, a dated digest note, nothing acknowledged, the other steps run', () => {
+  const w = dailyWorld();
+  const today = new Date().toLocaleDateString('en-CA');
+  const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)' });
+  assert.equal(r.calls.length, 0, 'an unprobed CLI never runs the pass');
+  assert.equal(r.status, 0, r.log);
+  assert.match(r.log, /policy pass skipped: Claude Code 2\.1\.290 is not approved for the confined pass \(approved: /);
+  assert.doesNotMatch(r.log, /!!! step failed: policy watch/);
+  assert.match(r.digest, new RegExp(`^# Immigration policy digest\\n\\n## ${today}\\n- AI policy pass skipped: Claude Code 2\\.1\\.290 is not approved`));
+  assert.doesNotMatch(r.steps, /^watch --ack/m, 'the official items stay pending for the next run');
+  assert.match(r.steps, /^scan\.mjs/m);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('a Claude Code whose version cannot be read fails the step and never runs the pass', () => {
+  const w = dailyWorld();
+  const r = w.run({ FAKE_CLAUDE_VERSION: 'Claude Code is updating...' });
+  assert.equal(r.calls.length, 0, r.log);
+  assert.match(r.log, /could not read the Claude Code version/);
+  assert.match(r.log, /!!! step failed: policy watch/);
+  assert.equal(r.digest, null);
+  assert.notEqual(r.status, 0);
 });

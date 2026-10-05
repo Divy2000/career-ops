@@ -5,9 +5,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const GUARD_HOOK_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'guard-hook.mjs');
+const here = path.dirname(fileURLToPath(import.meta.url));
+export const GUARD_HOOK_PATH = path.join(here, 'guard-hook.mjs');
+const CONTRACT_FILE = path.join(here, '..', 'core', 'contract.json');
+
+/** The leading x.y.z (with an optional -tag) of `claude --version` output. */
+export function parseClaudeVersion(out) {
+  const m = String(out).trim().match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)(?:\s|$)/);
+  return m ? m[1] : null;
+}
+
+/** The Claude Code versions whose confinement was probed (contract.json claude.approvedVersions). */
+export function contractApprovedVersions(contractFile = CONTRACT_FILE) {
+  const listed = JSON.parse(fs.readFileSync(contractFile, 'utf8'))?.claude?.approvedVersions;
+  if (!Array.isArray(listed)) throw new Error(`${contractFile} lists no claude.approvedVersions`);
+  return listed;
+}
+
+/**
+ * Asks `bin --version` (autoupdater off, so asking cannot update it) and says whether that version may run outside
+ * the app: `problem` is null for an approved version, else why not. Throws when the version cannot be read.
+ */
+export function claudeVersionGate(bin, approved = contractApprovedVersions()) {
+  const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, DISABLE_AUTOUPDATER: '1' } });
+  const version = r.status === 0 ? parseClaudeVersion(r.stdout) : null;
+  if (!version) throw new Error(`could not read the Claude Code version from ${bin} (exit ${r.status ?? r.error?.code}${r.stdout?.trim() ? `: ${JSON.stringify(r.stdout.trim().slice(0, 80))}` : ''})`);
+  const list = approved.length ? approved.join(', ') : 'none yet';
+  return { version, problem: approved.includes(version) ? null : `Claude Code ${version} is not approved for the confined pass (approved: ${list}); install an approved one (claude install ${approved[0] ?? '<version>'}) or approve it with npm --prefix custom/control-center run probe:reads -- --record` };
+}
 
 /** Denied for every non Dev Chat session and for the daily policy pass, regardless of class (enforced by the hook). */
 export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
