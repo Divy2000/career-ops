@@ -1,3 +1,16 @@
 #!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
+# With STUB_LAUNCHD_DISABLED set, model launchd's persistent disabled list in that file: disable and enable
+# edit it, and bootstrap refuses a disabled label the way macOS does (error 5).
+if [ -n "${STUB_LAUNCHD_DISABLED:-}" ]; then
+  touch "$STUB_LAUNCHD_DISABLED"
+  case "$1" in
+    disable) echo "${2##*/}" >> "$STUB_LAUNCHD_DISABLED" ;;
+    enable) grep -vxF "${2##*/}" "$STUB_LAUNCHD_DISABLED" > "$STUB_LAUNCHD_DISABLED.new" || true; mv "$STUB_LAUNCHD_DISABLED.new" "$STUB_LAUNCHD_DISABLED" ;;
+    bootstrap)
+      label="$(basename "$3" .plist)"
+      if grep -qxF "$label" "$STUB_LAUNCHD_DISABLED"; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
+      ;;
+  esac
+fi
 exit 0

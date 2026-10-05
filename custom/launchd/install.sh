@@ -60,6 +60,8 @@ write_plist() { # label script hour minute weekday(or empty) logdir
 PLIST
   plutil -lint "$AGENTS/$label.plist" >/dev/null
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  # Disabling the job in the Control Center is persistent and bootstrap refuses a disabled label: reinstalling re-enables it.
+  launchctl enable "gui/$(id -u)/$label"
   launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"
   echo "installed $label"
 }
