@@ -9,6 +9,7 @@ import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { makePdf } from '../helpers/pdf.js';
 import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
 import { tempDir } from '../helpers/tmp.js';
+import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -179,6 +180,16 @@ describe('Claude sessions', () => {
     expect(names.filter((n) => /^(009|010)-RESERVED/.test(n))).toEqual([]);
     const run = (await get(`/api/runs/${done[0]!.meta.turns[0]!.runId}`)).json();
     expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 9 is reserved/);
+  });
+
+  it('one fan-out takes at most BATCH_MAX_URLS (the limit the Batch tab and Evaluate visible enforce): one more is refused before any number is reserved', async () => {
+    expect(BATCH_MAX_URLS).toBe(50);
+    const urls = Array.from({ length: BATCH_MAX_URLS + 1 }, (_, i) => `https://jobs.example.com/over/${i}`);
+    const before = fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'));
+    const res = await post('/api/sessions/fanout', { mode: 'oferta', urls });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid body');
+    expect(fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'))).toEqual(before);
   });
 
   it('a missing Keychain token fails the session loudly without spawning', async () => {

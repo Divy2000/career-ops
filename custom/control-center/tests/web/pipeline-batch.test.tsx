@@ -16,9 +16,13 @@ function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-async function mount() {
+const navigated: unknown[] = [];
+vi.mock('@tanstack/react-router', async (importOriginal) => ({ ...(await importOriginal<object>()), useNavigate: () => async (to: unknown) => void navigated.push(to) }));
+
+async function mount(component: 'BatchTab' | { inboxUrls: string[] } = 'BatchTab') {
   sent = [];
   started = 0;
+  navigated.length = 0;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -31,12 +35,14 @@ async function mount() {
     }),
   );
   const { BatchTab } = await import('@web/features/pipeline/BatchTab');
+  const { InboxAi } = await import('@web/features/pipeline/InboxAi');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(BatchTab, { onStarted: () => void (started += 1) })))));
+  const inner = component === 'BatchTab' ? createElement(BatchTab, { onStarted: () => void (started += 1) }) : createElement(InboxAi, { urls: component.inboxUrls });
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, inner))));
 }
 
 async function until<T>(fn: () => T | null | undefined, what: string): Promise<T> {
@@ -108,5 +114,30 @@ describe('Pipeline > Batch', () => {
     await type(textarea(), Array.from({ length: 51 }, (_, i) => `https://jobs.example.com/${i}`).join('\n'));
     expect(button('Batch evaluate')!.disabled).toBe(true);
     expect(host.textContent).toMatch(/at most 50 URLs/);
+  });
+});
+
+describe('Pipeline > Inbox > Evaluate visible', () => {
+  const urls = (n: number) => Array.from({ length: n }, (_, i) => `https://jobs.example.com/${i}`);
+
+  it('up to one fan-out of visible pending rows: confirmed with the count, then sent as one request', async () => {
+    await mount({ inboxUrls: urls(50) });
+    await click(button('Evaluate visible (50)')!);
+    expect(document.body.textContent).toMatch(/Start 50 evaluation sessions\?/);
+    await click(button('Start them')!);
+    await until(() => sent.find((s) => s.url === '/api/sessions/fanout'), 'the fan-out request');
+    expect(sent.filter((s) => s.method === 'POST')).toEqual([{ method: 'POST', url: '/api/sessions/fanout', body: { mode: 'oferta', urls: urls(50) } }]);
+    await until(() => (navigated.length === 1 ? true : null), 'the move to Sessions');
+  });
+
+  it('more visible pending rows than one fan-out takes: the button is disabled and says the limit and how to get under it', async () => {
+    await mount({ inboxUrls: urls(60) });
+    const evaluate = button('Evaluate visible (60)')!;
+    expect(evaluate.disabled).toBe(true);
+    expect(host.textContent).toMatch(/At most 50 evaluations at a time/);
+    expect(host.textContent).toMatch(/filter/i);
+    await click(evaluate);
+    expect(sent.filter((s) => s.method === 'POST')).toEqual([]);
+    expect(document.body.textContent).not.toMatch(/Start 60 evaluation sessions/);
   });
 });

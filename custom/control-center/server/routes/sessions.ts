@@ -8,6 +8,7 @@ import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { readSettings } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
+import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 
 const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
 const prompt = z.string().min(1).max(20_000);
@@ -52,7 +53,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   });
 
   app.post<{ Body: unknown }>('/api/sessions/fanout', async (req, reply) => {
-    const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(z.string().url().max(2048)).min(1).max(50), model }).safeParse(req.body ?? {});
+    const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(z.string().url().max(2048)).min(1).max(BATCH_MAX_URLS), model }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     try {
