@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cancelSession, sendTurn, startSession } from '@web/lib/sessions';
+import { cancelSession, forkSession, sendTurn, startSession } from '@web/lib/sessions';
 
 function captureFetch() {
   const calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
@@ -21,10 +21,14 @@ describe('session client: the blacklist unlock is an explicit, per-request gate'
     await sendTurn('s1', 'and Globex', true);
     await startSession({ mode: 'devchat', prompt: 'No unlock', blacklistAllowed: false });
     await sendTurn('s1', 'plain turn');
+    await forkSession('s1', 'fork with the unlock', true);
+    await forkSession('s1', 'plain fork');
     expect(calls.map((c) => [c.headers['X-CC-Explicit'] ?? null, c.body.blacklistAllowed ?? null])).toEqual([
       ['blacklist', true],
       ['blacklist', true],
       [null, null],
+      [null, null],
+      ['blacklist', true],
       [null, null],
     ]);
   });

@@ -98,6 +98,24 @@ describe('Dev Chat', () => {
     expect(turnPolicy(1).allow).toContain('data/blacklist.md');
   });
 
+  it('a fork sent with the checkbox ticked unlocks data/blacklist.md for its first turn, and only with the header (SW-web-b-12)', async () => {
+    const explicit = { ...t.authedWrite, 'x-cc-explicit': 'blacklist' };
+    const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'A plain turn' })).json();
+    await settle(id);
+    const bare = await post(`/api/sessions/${id}/fork`, { prompt: 'now the blacklist', blacklistAllowed: true });
+    expect(bare.statusCode).toBe(403);
+    expect(bare.json().error).toMatch(/X-CC-Explicit: blacklist/);
+    const fork = await t.app.inject({ method: 'POST', url: `/api/sessions/${id}/fork`, headers: explicit, payload: { prompt: 'now the blacklist', blacklistAllowed: true } });
+    expect(fork.statusCode, fork.body).toBe(202);
+    await settle(fork.json().id);
+    const policy = JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', fork.json().id, 'turns', '1', 'policy.json'), 'utf8'));
+    expect(policy.allow).toContain('data/blacklist.md');
+    expect(policy.deny).not.toContain('data/blacklist.md');
+    const plain = (await post(`/api/sessions/${id}/fork`, { prompt: 'no unlock' })).json();
+    await settle(plain.id);
+    expect(JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', plain.id, 'turns', '1', 'policy.json'), 'utf8')).deny).toContain('data/blacklist.md');
+  });
+
   it('keeps each turn policy, the settings and the revert bookkeeping outside both roots', async () => {
     const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'Add a rule to the house rules' })).json();
     const { meta } = await settle(id);

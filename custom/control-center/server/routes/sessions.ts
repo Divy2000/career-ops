@@ -120,9 +120,16 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/fork', async (req, reply) => {
-    const parsed = z.object({ prompt }).safeParse(req.body ?? {});
+    const parsed = z.object({ prompt, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return mutate(reply, async () => reply.code(202).send(await manager.fork(req.params.id, parsed.data.prompt)));
+    // A fork's first turn is a turn like any other: the same explicit unlock gate as POST /turns.
+    if (parsed.data.blacklistAllowed) {
+      const meta = manager.read(req.params.id);
+      if (!meta) return reply.code(404).send({ error: 'no such session' });
+      const refused = unlockRefused(meta.mode, req.headers);
+      if (refused) return reply.code(403).send({ error: refused });
+    }
+    return mutate(reply, async () => reply.code(202).send(await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
   });
 
   await withEmptyJsonBody(app, (scope) => {

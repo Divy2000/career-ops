@@ -181,8 +181,9 @@ export function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean)
   const unlock = blacklistUnlock(blacklistAllowed);
   return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
 }
-export function forkSession(id: string, prompt: string): Promise<SessionMeta> {
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/fork`, { prompt });
+export function forkSession(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
+  const unlock = blacklistUnlock(blacklistAllowed);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/fork`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function cancelSession(id: string): Promise<SessionMeta> {
   return apiSend<SessionMeta>('POST', `/api/sessions/${id}/cancel`);

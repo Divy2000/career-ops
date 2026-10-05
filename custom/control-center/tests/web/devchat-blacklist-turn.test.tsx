@@ -66,7 +66,7 @@ beforeEach(async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
-      if (init?.method === 'POST' && (url === '/api/sessions' || url.endsWith('/turns'))) {
+      if (init?.method === 'POST' && (url === '/api/sessions' || url.endsWith('/turns') || url.endsWith('/fork'))) {
         sent.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown>, headers: init.headers as Record<string, string> });
         return json(meta, 202);
       }
@@ -118,6 +118,20 @@ describe('Dev Chat blacklist unlock', () => {
     expect(sent[1]!.url).toBe('/api/sessions/s-1/turns');
     expect(sent[1]!.body.blacklistAllowed).toBeUndefined();
     expect(sent[1]!.headers['X-CC-Explicit']).toBeUndefined();
+  });
+
+  it('given the box is ticked after a turn, when the reply is forked, then the fork carries the unlock and the box clears (SW-web-b-12)', async () => {
+    await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'A plain turn');
+    await click(button('Send'));
+    await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
+    await flush();
+    await click(checkbox());
+    await type(host.querySelector('input[aria-label="Reply to the session"]')!, 'Block Initech in a fork');
+    await click(button('Fork'));
+    expect(sent.at(-1)!.url).toBe('/api/sessions/s-1/fork');
+    expect(sent.at(-1)!.body.blacklistAllowed).toBe(true);
+    expect(sent.at(-1)!.headers['X-CC-Explicit']).toBe('blacklist');
+    expect(checkbox().checked).toBe(false);
   });
 
   it('given the server refuses the turn, when it fails, then the box stays ticked for the retry', async () => {
