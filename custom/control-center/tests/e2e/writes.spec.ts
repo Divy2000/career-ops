@@ -74,16 +74,18 @@ test.describe('deterministic writes from the pages', () => {
 
   test('Follow-ups page logs a follow-up and pins a date', async ({ page }) => {
     await page.goto('/followups');
-    // Acme (#1) stays Applied across the suite; Vandelay is discarded by actions.spec and leaves the cadence.
+    // Acme (#1) stays in the cadence across the suite (Applied, or Responded once sessions.spec has run); Vandelay is
+    // discarded by actions.spec and leaves it. The new entry's number depends on what earlier runs logged, so it is read back.
     await page.getByRole('button', { name: 'Log follow-up for Acme Robotics' }).click();
     await page.getByLabel('Notes').fill('e2e note');
     await page.getByRole('button', { name: 'Save follow-up' }).click();
-    await expect(page.getByRole('status')).toHaveText(/Logged follow-up #3/);
+    await expect(page.getByRole('status')).toHaveText(/^Logged follow-up #\d+ for Acme Robotics$/);
+    const logged = Number((await page.getByRole('status').textContent())!.match(/#(\d+)/)![1]);
     await page.getByRole('button', { name: 'Pin next follow-up for Acme Robotics in 7 days' }).click();
     await expect(page.getByRole('status')).toHaveText(/pinned to/);
     const detail = await (await page.request.get('/api/tracker/1')).json();
     expect(detail.timeline.pin).not.toBeNull();
-    expect(detail.timeline.followups.some((f: { notes: string }) => f.notes === 'e2e note')).toBe(true);
+    expect(detail.timeline.followups.find((f: { num: number | null }) => f.num === logged)).toMatchObject({ appNum: 1, notes: 'e2e note' });
   });
 
   test('Application Documents tab lists PDFs with Re-render and the danger zone previews a delete', async ({ page }) => {

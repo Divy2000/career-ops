@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TrackerRow } from '@shared/api';
 import { StatusControl } from '@web/features/tracker/StatusControl';
+import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,7 +49,7 @@ beforeEach(async () => {
     select.value = 'Hired';
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  await act(async () => new Promise((r) => setTimeout(r, 10)));
+  await until(() => dialog(), 'the Hired Wall dialog');
 });
 
 afterEach(async () => {
@@ -85,7 +86,7 @@ describe('Hired Wall dialog', () => {
       select.value = 'Hired';
       select.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    await until(() => host.querySelector('[role="status"]'), 'the status message');
     expect(host.querySelector('[role="status"]')?.textContent).toBe('Could not set status: tracker is locked by another writer');
     expect(dialog()).toBeNull();
     expect(posts.some((p) => p.url === '/api/actions/tracker.hiredMark')).toBe(false);
