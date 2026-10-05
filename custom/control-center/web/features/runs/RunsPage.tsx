@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { apiGet, apiSend } from '../../lib/api';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { ActionMeta, RawLine, RunMeta, RunStatus } from '@shared/api';
@@ -82,7 +83,10 @@ export function RunsPage() {
       await apiSend('POST', `/api/runs/${id}/cancel`);
       setMessage(null);
     } catch (err) {
-      setMessage(`Could not cancel ${id}: ${describeError(err)}`);
+      // Also a toast: the page message sits above a run table the Cancel button may be scrolled far down.
+      const text = `Could not cancel ${id}: ${describeError(err)}`;
+      setMessage(text);
+      toast.error(text);
     }
     await qc.invalidateQueries({ queryKey: ['runs'] });
   };

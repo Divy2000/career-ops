@@ -228,7 +228,9 @@ test.describe('Cancel stops a running session or run from the page', () => {
       await expect(panel.getByRole('alert')).toContainText('Could not cancel: cancel refused for the test');
       await page.goto('/runs');
       await runningRow(page).getByRole('button', { name: 'Cancel', exact: true }).click();
-      await expect(page.getByRole('alert').filter({ hasText: 'Could not cancel' })).toContainText(`Could not cancel ${runId}: cancel refused for the test`);
+      await expect(page.locator('p[role="alert"]')).toHaveText(`Could not cancel ${runId}: cancel refused for the test`);
+      // The page message sits above the table, so a toast says it where the user is looking too.
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: `Could not cancel ${runId}: cancel refused for the test` })).toBeVisible();
     } finally {
       await page.unrouteAll();
       await page.request.post(`/api/sessions/${id}/cancel`, { headers: { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}` } });
