@@ -92,8 +92,10 @@ describe('core contract', () => {
     for (const flag of CONTRACT.batchRunner.flags) expect(text).toContain(flag);
   });
 
-  it('the installed Claude CLI advertises every flag the invocation builder uses', () => {
-    const bin = process.env.CC_REAL_CLAUDE_BIN ?? 'claude';
+  // A host with no Claude Code installed (CI) has nothing to check; where it is installed, the check always runs.
+  const realClaude = process.env.CC_REAL_CLAUDE_BIN ?? 'claude';
+  it.skipIf((spawnSync(realClaude, ['--version'], { timeout: 30_000 }).error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT')('the installed Claude CLI advertises every flag the invocation builder uses (skipped where no claude is installed)', () => {
+    const bin = realClaude;
     const r = spawnSync(bin, ['--help'], { encoding: 'utf8', timeout: 30_000 });
     expect(r.status, `${bin} --help failed: ${r.stderr}`).toBe(0);
     for (const flag of CONTRACT.claude.flags) expect(r.stdout, `claude --help mentions ${flag}`).toContain(flag);

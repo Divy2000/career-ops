@@ -107,7 +107,8 @@ describe('the daily job probe on real processes', () => {
     expect(await probeOf(data).runningNow()).toBe(false);
   });
 
-  describe('the real run-daily.sh, typed with a relative path', () => {
+  // run-daily.sh re-execs itself under macOS's /usr/bin/lockf; on a host without it the script cannot hold its lock.
+  describe.skipIf(!fs.existsSync('/usr/bin/lockf'))('the real run-daily.sh, typed with a relative path (macOS: needs /usr/bin/lockf)', () => {
     // A checkout holding the real script and its data-root resolver, with a Keychain lookup that hangs: the job holds its
     // lock and has written its pidfile, and never gets to a step.
     function world() {
