@@ -203,15 +203,9 @@ export function validateMarkdownInput(file, { kind, targetCv } = {}) {
     }
     if (targetReal && targetReal === real) return { ok: false, error: `${label}: this is the target cv.md itself; pass a copy of your resume` };
   }
-  const buf = fs.readFileSync(real);
-  let text;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-  } catch {
-    return { ok: false, error: `${label}: not valid UTF-8` };
-  }
-  if (text.includes('\0')) return { ok: false, error: `${label}: contains NUL bytes (binary file?)` };
-  if (text.replace(/^﻿/, '').trim() === '') return { ok: false, error: `${label}: file is empty` };
+  const decoded = decodeText(fs.readFileSync(real), label);
+  if (!decoded.ok) return decoded;
+  const { text } = decoded;
   const warnings = [];
   if (!/^#{1,6}\s/m.test(text)) warnings.push(`${label}: no '#' heading found`);
   if (kind === 'resume' && !/^#{1,6}\s.*\b(experience|education|skills)\b/im.test(text)) {
@@ -220,8 +214,41 @@ export function validateMarkdownInput(file, { kind, targetCv } = {}) {
   return { ok: true, path: file, realpath: real, bytes: st.size, warnings };
 }
 
+// The byte-level checks every text input gets: strict UTF-8 (no silent replacement), no NUL, not empty.
+function decodeText(buf, label) {
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return { ok: false, error: `${label}: not valid UTF-8` };
+  }
+  if (text.includes('\0')) return { ok: false, error: `${label}: contains NUL bytes (binary file?)` };
+  if (text.replace(/^\ufeff/, '').trim() === '') return { ok: false, error: `${label}: file is empty` };
+  return { ok: true, text };
+}
+
+const PROJECTS_EXT = new Set(['.md', '.markdown', '.json']);
+
+/** --projects: a library .md or a projects .json, with the same byte checks and size cap as a --docs file. Returns the decoded text. */
+export function validateProjectsInput(file) {
+  const label = file;
+  let real;
+  try {
+    real = fs.realpathSync(file);
+  } catch {
+    return { ok: false, error: `${label}: file does not exist` };
+  }
+  const st = fs.statSync(real);
+  if (!st.isFile()) return { ok: false, error: `${label}: not a regular file` };
+  if (!PROJECTS_EXT.has(path.extname(file).toLowerCase())) return { ok: false, error: `${label}: --projects takes a .md, .markdown or .json file` };
+  if (st.size > LIMITS.docBytes) return { ok: false, error: `${label}: ${st.size} bytes is over the ${LIMITS.docBytes / MiB} MiB limit for the projects file` };
+  const decoded = decodeText(fs.readFileSync(real), label);
+  if (!decoded.ok) return decoded;
+  return { ok: true, path: file, realpath: real, bytes: st.size, text: decoded.text };
+}
+
 /** Validates the resume and every doc up front; nothing is written whether or not this passes. */
-export function validateInputs({ resume, docs = [], targetCv } = {}) {
+export function validateInputs({ resume, docs = [], projects, targetCv } = {}) {
   const errors = [];
   const warnings = [];
   let total = 0;
@@ -235,6 +262,10 @@ export function validateInputs({ resume, docs = [], targetCv } = {}) {
   if (docs.length > LIMITS.maxDocs) errors.push(`--docs: ${docs.length} files given, at most ${LIMITS.maxDocs} are accepted`);
   for (const d of docs) take(validateMarkdownInput(d, { kind: 'doc', targetCv }));
   if (total > LIMITS.totalBytes) errors.push(`inputs total ${total} bytes, over the ${LIMITS.totalBytes / MiB} MiB limit`);
+  if (projects) {
+    const r = validateProjectsInput(projects);
+    if (!r.ok) errors.push(r.error);
+  }
   return { ok: errors.length === 0, errors, warnings };
 }
 

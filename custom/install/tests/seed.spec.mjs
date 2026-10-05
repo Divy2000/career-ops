@@ -277,3 +277,15 @@ test('projects-seed writes a markdown library byte for byte', () => {
   assert.equal(seed(['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', lib]).status, 0);
   assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), text);
 });
+
+test('projects-check and projects-seed refuse bytes that are not UTF-8 instead of decoding them leniently', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const bad = put(path.join(d, 'bad.md'), Buffer.from('## A\n- \xff\n', 'latin1'));
+  for (const args of [['projects-check', '--lib', PROJECTS_LIB, '--file', bad], ['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', bad]]) {
+    const r = seed(args);
+    assert.equal(r.status, 2, args[0]);
+    assert.match(r.stderr, /not valid UTF-8/, args[0]);
+  }
+  assert.equal(fs.existsSync(path.join(data, 'article-digest.md')), false);
+});

@@ -494,6 +494,21 @@ function standalone(w, { parser = true } = {}) {
 }
 const cloneTargets = (w) => w.calls('git').filter((l) => l.startsWith('git clone')).map((l) => l.split(' ').at(-1));
 
+test('--projects gets the same byte checks as --docs before anything changes, also in standalone mode', () => {
+  for (const mode of ['checkout', 'standalone']) {
+    const { w, D, args } = fresh();
+    const script = mode === 'standalone' ? standalone(w) : INSTALL_SH;
+    const bad = w.write('src/bad.md', Buffer.from('## A\n- \xff\n', 'latin1'));
+    const before = w.snapshot();
+    const r = w.run(args('--projects', bad), { script });
+    assert.equal(r.status, 2, `${mode}: ${r.out}`);
+    assert.match(r.out, /bad\.md: not valid UTF-8/, mode);
+    assert.deepEqual(w.snapshot(), before, mode);
+    assert.equal(exists(D), false, mode);
+    assert.equal(w.calls('git').length, 0, mode);
+  }
+});
+
 test('standalone: an invalid --projects file is refused before the checkout or the user layer exists', () => {
   const { w, D, args } = fresh();
   const script = standalone(w);

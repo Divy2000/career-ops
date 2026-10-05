@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { insertHouseRule, mergeLocalPaths, normalizeMarkdown, parseFlags, summarizeUnifiedDiff, uniqueDestName } from './lib.mjs';
+import { insertHouseRule, mergeLocalPaths, normalizeMarkdown, parseFlags, summarizeUnifiedDiff, uniqueDestName, validateProjectsInput } from './lib.mjs';
 
 const out = (...cols) => process.stdout.write(`${cols.join('\t')}\n`);
 const exists = (f) => fs.existsSync(f);
@@ -146,8 +146,10 @@ function projectsRule(data, template) {
 // The projects parser lives in the checkout (custom/projects/lib.mjs); install.sh passes its path,
 // because this script may run from a standalone copy of custom/install.
 async function libraryFrom(lib, file) {
+  const input = validateProjectsInput(file);
+  if (!input.ok) return { errors: [input.error] };
   const projects = await import(pathToFileURL(path.resolve(lib)).href);
-  const raw = fs.readFileSync(file, 'utf8');
+  const raw = input.text;
   if (/\.(md|markdown)$/i.test(file)) {
     const check = projects.validateLibrary(raw);
     return { text: raw, errors: check.errors, count: projects.parseLibrary(raw).entries.length };

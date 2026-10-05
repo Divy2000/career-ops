@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
-  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule,
+  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput,
 } from '../lib.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ci-lib-'));
@@ -208,4 +208,17 @@ test('insertHouseRule is idempotent: a file that already has the heading is left
 
 test('insertHouseRule adds a House Rules section at the end when the file has none', () => {
   assert.equal(insertHouseRule('# Custom\n\nnotes\n', RULE), '# Custom\n\nnotes\n\n## House Rules\n\n### Projects library (every item)\n\n- Pick from article-digest.md.\n');
+});
+
+test('validateProjectsInput applies the --docs byte checks to a projects .md or .json: UTF-8, no NUL, not empty, at most 2 MiB', () => {
+  const d = tmp();
+  const ok = (name, data) => validateProjectsInput(write(d, name, data));
+  assert.equal(ok('lib.md', '## A\n- One.\n').ok, true);
+  assert.equal(ok('projects.json', '[{"name":"A"}]').ok, true);
+  assert.match(ok('bad.md', Buffer.from([0x23, 0x23, 0x20, 0x41, 0x0a, 0x2d, 0x20, 0xff, 0x0a])).error, /not valid UTF-8/);
+  assert.match(ok('nul.json', '[{"name":"A\u0000"}]').error, /NUL/);
+  assert.match(ok('empty.md', '\n  \n').error, /empty/);
+  assert.match(ok('notes.txt', '## A\n- One.\n').error, /\.md, \.markdown or \.json/);
+  assert.match(ok('big.md', `## A\n- ${'x'.repeat(LIMITS.docBytes)}\n`).error, /over the 2 MiB limit/);
+  assert.match(validateProjectsInput(path.join(d, 'missing.md')).error, /does not exist/);
 });

@@ -272,12 +272,13 @@ check_data_root_conflict() {
 
 validate_inputs() {
   [ "$VALIDATED" = 1 ] && return 0
-  if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ]; then VALIDATED=1; return 0; fi
+  if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ] && [ -z "$PROJECTS" ]; then VALIDATED=1; return 0; fi
   have node || return 0 # checked again once the prerequisites are in place
   DATA="$(effective_data_root)"
   local vargs=() rc=0
   if [ -n "$RESUME" ]; then vargs+=(--resume "$RESUME"); fi
   if [ "${#DOCS[@]}" -gt 0 ]; then vargs+=(--docs "${DOCS[@]}"); fi
+  if [ -n "$PROJECTS" ]; then vargs+=(--projects "$PROJECTS"); fi
   vargs+=(--cv "$DATA/cv.md")
   node "$SCRIPT_DIR/validate-md.mjs" "${vargs[@]}" >/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then

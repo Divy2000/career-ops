@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Validates the Markdown inputs of install.sh before anything is written.
-// Usage: node validate-md.mjs [--resume f.md] [--docs a.md b.md ...] [--cv <target cv.md>]
+// Usage: node validate-md.mjs [--resume f.md] [--docs a.md b.md ...] [--projects f.md|f.json] [--cv <target cv.md>]
 // Prints JSON { ok, errors, warnings } on stdout, human messages on stderr; exit 0 ok, 2 rejected.
 import { parseFlags, validateInputs } from './lib.mjs';
 
@@ -14,6 +14,7 @@ try {
 const result = validateInputs({
   resume: typeof flags.get('--resume') === 'string' ? flags.get('--resume') : undefined,
   docs: flags.get('--docs') ?? [],
+  projects: typeof flags.get('--projects') === 'string' ? flags.get('--projects') : undefined,
   targetCv: typeof flags.get('--cv') === 'string' ? flags.get('--cv') : undefined,
 });
 process.stdout.write(`${JSON.stringify(result)}\n`);
