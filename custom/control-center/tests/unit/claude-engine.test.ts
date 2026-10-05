@@ -850,6 +850,15 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(oferta, 'node plugins/h1b-sponsor/check.mjs --cache-dir reports Acme');
   });
 
+  it('reply-watch: the candidates file it creates when missing must be inside the write scope', () => {
+    const outreach = { ...policyFor('reply-watch', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    ok(outreach, 'node reply-watch.mjs');
+    ok(outreach, 'node reply-watch.mjs data/reply-candidates.json');
+    // The audit trigger: a missing path is created (with its folders) and filled with mock candidates.
+    for (const cmd of ['node reply-watch.mjs modes/new-mode.md', 'node reply-watch.mjs .claude/commands/x.md', 'node reply-watch.mjs output/candidates.json', 'node reply-watch.mjs -x/../modes/y.md', 'node reply-watch.mjs data/reply-candidates.json modes/z.md', 'node reply-watch.mjs --file modes/a.md'])
+      no(outreach, cmd);
+  });
+
   it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
     ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
     no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');

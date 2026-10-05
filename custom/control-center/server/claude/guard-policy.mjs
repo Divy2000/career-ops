@@ -378,6 +378,8 @@ const WRITER_SCRIPTS = {
   'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
   // Rewrites --pipeline (by default data/pipeline.md, its own file) after copying it to <file>.pre-reconcile.bak.
   'reconcile-pipeline.mjs': { switches: ['--dry-run', '--help', '-h'], next: RECONCILE_FLAGS, eq: RECONCILE_FLAGS, positionals: [], readOnlyWith: ['--dry-run'], outputSuffixes: ['.pre-reconcile.bak'] },
+  // Its first positional is the candidates file, created with mock candidates when it does not exist.
+  'reply-watch.mjs': { switches: ['--help', '-h'], positionals: ['output'] },
   'application-artifacts.mjs': { switches: ['--init', '--help', '-h'], next: ARTIFACT_FLAGS, eq: ARTIFACT_FLAGS, positionals: [] },
   'contacts.mjs': { switches: ['--summary', '--self-test', '--caller-id', '--vcf', '--help', '-h'], optionalNext: { '--vcf': 'output' }, eq: { '--vcf': 'output' }, positionals: [] },
   'discover-new-companies.mjs': { switches: ['--added-only', '--summary', '--json', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
