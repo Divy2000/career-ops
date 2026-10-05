@@ -6,6 +6,9 @@ import { CONTRACT, cliScriptPath, importCore, type CliContract } from '../../ser
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { NODE_FLOOR } from '../../supervisor/preflight.js';
 import { copyFixtureRoot } from '../helpers/app.js';
+import { buildArgv, buildPermissions, writeSettingsFile } from '../../server/claude/invocation.js';
+import { getModePolicy } from '../../server/claude/modes.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const fixtureRoot = copyFixtureRoot();
 
@@ -77,3 +80,53 @@ describe('core contract', () => {
     expect(p.streamJson.result.keys).toEqual(expect.arrayContaining(['total_cost_usd', 'usage', 'num_turns', 'permission_denials', 'is_error']));
   });
 });
+
+/**
+ * Release gate for read confinement (BUG-06): sessions are confined by the CLI layer, which only the real CLI
+ * can prove, so the probe's recorded result must cover the approved version, every gate case must have passed,
+ * and the invocation the app builds must still have the shape the probe ran.
+ */
+describe('read-confinement probe release gate', () => {
+  const probe = CONTRACT.claude.readProbe;
+  const GATE = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'C17', 'C18', 'C20'];
+  const INFO = ['C14', 'C15', 'C16', 'C19'];
+
+  it('the probe that approves a version is wired as npm run probe:reads (the refusal message names it)', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'control-center', 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['probe:reads']).toBe('node scripts/claude-probe-reads.mjs');
+    expect(fs.existsSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'control-center', 'scripts', 'claude-probe-reads.mjs'))).toBe(true);
+  });
+
+  it('the recorded probe ran on an approved Claude Code version', () => {
+    expect(CONTRACT.claude.approvedVersions.length).toBeGreaterThan(0);
+    expect(CONTRACT.claude.approvedVersions).toContain(probe.version);
+  });
+
+  it('every gate case passed and every informational case was recorded', () => {
+    const cases = probe.cases as Record<string, string>;
+    for (const id of GATE) expect(cases[id], id).toBe('pass');
+    for (const id of INFO) expect(['pass', 'info'], id).toContain(cases[id]);
+    for (const [id, r] of Object.entries(cases)) expect(['pass', 'info'], `${id}: ${r}`).toContain(r);
+  });
+
+  it('buildArgv has the shape the probe recorded', () => {
+    const argv = buildArgv({ claudeBin: 'claude', codeRoot: '/code', dataRoot: '/data', sessionDir: '/g/s', policyFile: '/g/s/p.json', settingsFile: '/g/s/settings.json', policy: getModePolicy('oferta')!, userMessage: 'x', claudeSessionId: '11111111-1111-4111-8111-111111111111', resume: false, preamble: 'P' });
+    for (const flag of probe.shape.flags) expect(argv, flag).toContain(flag);
+    const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!.split(',');
+    for (const t of probe.shape.alwaysDisallowed) expect(disallowed).toContain(t);
+    for (const flag of ['--restricted', '--tools']) expect(CONTRACT.claude.flags).toContain(flag);
+  });
+
+  it('the settings file has the shape the probe recorded', () => {
+    const file = writeSettingsFile(tempDir('cc-contract-settings-'), { permissions: buildPermissions({ policy: getModePolicy('oferta')!, codeRoot: '/code', dataRoot: '/data', guardRoot: '/guard' }) });
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, Record<string, unknown>>;
+    for (const key of probe.shape.settingsKeys) {
+      const [top, sub] = key.split('.') as [string, string];
+      expect(settings[top]?.[sub], key).toBeDefined();
+    }
+    const pre = settings.hooks!.PreToolUse as Array<{ matcher: string; hooks: Array<{ timeout: number }> }>;
+    expect(pre[0]!.matcher).toBe(probe.shape.preToolUseMatcher);
+    for (const h of pre[0]!.hooks) expect(h.timeout).toBe(probe.shape.hookTimeout);
+  });
+});
+
