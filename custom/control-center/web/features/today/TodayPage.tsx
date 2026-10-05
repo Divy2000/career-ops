@@ -1,9 +1,14 @@
-import { Link } from '@tanstack/react-router';
+import { useState } from 'react';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
 import { localDate } from '@shared/local-date';
+import type { ShortlistRow, TrackerRow } from '@shared/api';
+import { startEvaluateSession } from '../../lib/sessions';
+import { describeError } from '../../lib/actions';
+import { DiscardReasonPicker, StatusMessage, useSetStatus } from '../tracker/StatusControl';
 
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
 
@@ -50,6 +55,79 @@ function DigestChip() {
   const stale = q.data.digest.staleDays;
   if (stale === null) return null;
   return <Pill tone={stale > 2 ? 'warn' : 'neutral'}>Digest {stale > 2 ? `${stale} days old` : 'fresh'}</Pill>;
+}
+
+/** Starts the oferta session for a shortlist row's posting and opens it, like Quick evaluate. */
+function EvaluateButton({ row }: { row: ShortlistRow }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const url = row.url;
+  const go = async () => {
+    if (!url) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const m = await startEvaluateSession(url);
+      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="stack-tight">
+      <button type="button" disabled={busy || !url} title={url ? 'Starts an evaluation session for this posting (uses tokens)' : 'This row has no posting link to evaluate'} onClick={() => void go()}>
+        Evaluate
+      </button>
+      {error && (
+        <span role="alert" className="danger-text small">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Evaluated offers waiting for a decision: Applied commits at once, Skip asks for a reason first (as on the Tracker). */
+function Decisions({ rows }: { rows: TrackerRow[] }) {
+  const { setStatus, busy, message } = useSetStatus();
+  const [skipping, setSkipping] = useState<number | null>(null);
+  const decide = async (row: TrackerRow, state: 'Applied' | 'SKIP', note?: string) => {
+    if (await setStatus(row, state, { note, okText: `${row.company}: status set to ${state}` })) setSkipping(null);
+  };
+  return (
+    <>
+      {rows.length === 0 ? (
+        <Empty>No evaluated offers waiting for a decision.</Empty>
+      ) : (
+        <ul className="bullets" aria-label="Decisions">
+          {rows.map((r) => (
+            <li key={r.num} className="row gap">
+              <ScorePill score={r.score} />
+              <Link to="/tracker/$n" params={{ n: String(r.num) }}>
+                {r.company}
+              </Link>
+              <span className="muted">{r.role}</span>
+              <button type="button" disabled={busy} onClick={() => void decide(r, 'Applied')}>
+                Applied
+              </button>
+              <button type="button" disabled={busy} aria-expanded={skipping === r.num} onClick={() => setSkipping(skipping === r.num ? null : r.num)}>
+                Skip
+              </button>
+              {skipping === r.num && (
+                <div style={{ flexBasis: '100%' }}>
+                  <DiscardReasonPicker state="SKIP" row={r} busy={busy} onConfirm={(note) => void decide(r, 'SKIP', note)} onCancel={() => setSkipping(null)} />
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <StatusMessage message={message} />
+    </>
+  );
 }
 
 export function TodayPage() {
@@ -137,9 +215,7 @@ export function TodayPage() {
                               </td>
                               <td className="mono muted">{r.posted ?? ''}</td>
                               <td>
-                                <button type="button" disabled title="Evaluate sessions arrive with the Claude engine phase">
-                                  Evaluate
-                                </button>
+                                <EvaluateButton row={r} />
                               </td>
                             </tr>
                           ))}
@@ -227,35 +303,7 @@ export function TodayPage() {
 
           <div className="card">
             <h2>Decisions</h2>
-            <DataState query={tracker}>
-              {tracker.data?.kind === 'ok' && (
-                <>
-                  {tracker.data.rows.filter((r) => r.status === 'Evaluated').length === 0 ? (
-                    <Empty>No evaluated offers waiting for a decision.</Empty>
-                  ) : (
-                    <ul className="bullets">
-                      {tracker.data.rows
-                        .filter((r) => r.status === 'Evaluated')
-                        .map((r) => (
-                          <li key={r.num} className="row gap">
-                            <ScorePill score={r.score} />
-                            <Link to="/tracker/$n" params={{ n: String(r.num) }}>
-                              {r.company}
-                            </Link>
-                            <span className="muted">{r.role}</span>
-                            <button type="button" disabled title="Status changes arrive with the runner phase">
-                              Applied
-                            </button>
-                            <button type="button" disabled title="Status changes arrive with the runner phase">
-                              Skip
-                            </button>
-                          </li>
-                        ))}
-                    </ul>
-                  )}
-                </>
-              )}
-            </DataState>
+            <DataState query={tracker}>{tracker.data?.kind === 'ok' && <Decisions rows={tracker.data.rows.filter((r) => r.status === 'Evaluated')} />}</DataState>
           </div>
 
           <div className="card">

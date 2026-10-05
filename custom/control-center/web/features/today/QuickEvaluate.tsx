@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { startSession } from '../../lib/sessions';
+import { startEvaluateSession } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
 import { Pill } from '../../components/ui';
 
@@ -19,7 +19,7 @@ export function QuickEvaluate() {
     setBusy(true);
     setError(null);
     try {
-      const m = await startSession({ mode: 'oferta', target: { type: 'url', value: u }, prompt: `Evaluate this job posting following the mode file: ${u}` });
+      const m = await startEvaluateSession(u);
       await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(describeError(err));
