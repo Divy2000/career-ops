@@ -347,3 +347,77 @@ test('given converted entries, when serialized as a library, then blocks are sep
   assert.equal(out, '# Projects library\n\n## A\n- a.\n\n---\n\n## B\n- b.\n');
   assert.equal(validateLibrary(out).ok, true);
 });
+
+const DIGEST = fs.readFileSync(path.join(FIX, 'digest.md'), 'utf8');
+const entryInput = (e) => ({ title: e.title, url: e.url, tagline: e.tagline, tags: e.tags, kind: e.kind, dates: e.dates, source: e.source, bullets: [...e.bullets] });
+
+test('given an upstream digest block, when one proof point is edited, then only that bullet line changes and every other byte stays', () => {
+  const e = byId(DIGEST, 'fraudshield');
+  const edit = { ...entryInput(e), bullets: e.bullets.map((b, i) => (i === 1 ? b.replace('10K', '12K') : b)) };
+  const out = replaceEntry(DIGEST, 'fraudshield', edit);
+  assert.equal(out, DIGEST.replace('- Handles 10K transactions/second', '- Handles 12K transactions/second'));
+});
+
+test('given an upstream digest block, when tags are added and a proof point removed, then the meta goes under the heading and the other sections stay', () => {
+  const e = byId(DIGEST, 'fraudshield');
+  const out = replaceEntry(DIGEST, 'fraudshield', { ...entryInput(e), tags: ['kafka', 'xgboost'], bullets: e.bullets.slice(0, 2) });
+  const expected = DIGEST
+    .replace('## FraudShield -- Real-Time Fraud Detection\n', '## FraudShield -- Real-Time Fraud Detection\nTags: kafka, xgboost\n')
+    .replace('\n- Conference talk: "Real-Time ML at Scale"', '');
+  assert.equal(out, expected);
+  assert.deepEqual(byId(out, 'fraudshield').bullets, e.bullets.slice(0, 2));
+});
+
+test('given a "# Section" heading after an entry, when that entry is edited or removed, then the section heading stays', () => {
+  const e = byId(DIGEST, 'fraudshield');
+  const edited = replaceEntry(DIGEST, 'fraudshield', { ...entryInput(e), title: 'FraudShield Pro' });
+  assert.ok(edited.includes('\n# Publications\n'));
+  const removed = removeEntry(DIGEST, 'fraudshield');
+  assert.ok(removed.includes('\n# Publications\n\n## Retrieval Benchmark Study'));
+  assert.ok(!removed.includes('Hero metrics'));
+  assert.equal(parseLibrary(removed).entries.length, 1);
+});
+
+test('given the last entry follows a "# Section" heading, when removed, then the section heading stays', () => {
+  const out = removeEntry(DIGEST, 'retrieval-benchmark-study');
+  assert.ok(out.endsWith('\n---\n\n# Publications\n'));
+  assert.ok(out.includes('**Hero metrics:**'));
+});
+
+test('given a paragraph after the bullets, when the entry is edited, then the paragraph stays', () => {
+  const e = byId(DIGEST, 'retrieval-benchmark-study');
+  const out = replaceEntry(DIGEST, 'retrieval-benchmark-study', { ...entryInput(e), bullets: ['Compared five retrievers.'] });
+  assert.ok(out.endsWith('- Compared five retrievers.\n\nReviewer notes kept by hand, not part of the copy-paste points.\n'));
+});
+
+test('given nested items or text between the copy-paste bullets, when parsed, then the entry says why it cannot be edited and replacing it throws', () => {
+  const md = '## Alpha\n- One.\n  - nested detail\n- Two.\n\n## Beta\n**Highlights:**\n- One.\n\n**Other:**\n- Two.\n\n## Gamma\n- One.\n- Two.\n';
+  const [alpha, beta, gamma] = parseLibrary(md).entries;
+  assert.match(alpha.editProblem, /edit article-digest\.md directly/);
+  assert.match(beta.editProblem, /edit article-digest\.md directly/);
+  assert.equal(gamma.editProblem, null);
+  assert.throws(() => replaceEntry(md, 'alpha', { ...entryInput(alpha), bullets: ['Only.'] }), /cannot be edited here/);
+  assert.throws(() => replaceEntry(md, 'beta', { ...entryInput(beta), bullets: ['Only.'] }), /cannot be edited here/);
+  assert.equal(byId(DIGEST, 'fraudshield').editProblem, null);
+});
+
+test('given a CRLF digest, when one proof point is edited, then every other byte stays, line endings included', () => {
+  const crlf = DIGEST.replace(/\n/g, '\r\n');
+  const e = byId(crlf, 'fraudshield');
+  const out = replaceEntry(crlf, 'fraudshield', { ...entryInput(e), tags: ['kafka'], bullets: e.bullets.map((b, i) => (i === 0 ? 'Cut false positives 60%' : b)) });
+  const expected = crlf
+    .replace('Real-Time Fraud Detection\r\n', 'Real-Time Fraud Detection\r\nTags: kafka\r\n')
+    .replace('- Reduced false positives 60% vs the rule-based system', '- Cut false positives 60%');
+  assert.equal(out, expected);
+});
+
+test('given a Proof points label with no bullets under it, when bullets are added, then they go right under the label', () => {
+  const md = '## Alpha\nKind: article\n\n**Hero metrics:** fast\n\n**Proof points:**\n\n**Notes:** kept\n';
+  const out = replaceEntry(md, 'alpha', { title: 'Alpha', kind: 'project', bullets: ['One.'] });
+  assert.equal(out, '## Alpha\n\n**Hero metrics:** fast\n\n**Proof points:**\n- One.\n\n**Notes:** kept\n');
+});
+
+test('given an edit whose bullets would land where they do not parse, when replaced, then it throws instead of writing a different entry', () => {
+  const md = '## Alpha\nKind: article\n```\nunclosed fence\n';
+  assert.throws(() => replaceEntry(md, 'alpha', { title: 'Alpha', kind: 'article', bullets: ['One.'] }), /would not read back as entered/);
+});

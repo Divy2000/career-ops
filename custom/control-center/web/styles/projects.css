@@ -99,6 +99,10 @@
 .project-row__bullets li + li {
   margin-top: 2px;
 }
+.project-row__locked {
+  margin: 0;
+  color: var(--text-muted);
+}
 .project-row__actions {
   display: flex;
   gap: var(--space-2);

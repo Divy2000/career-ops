@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Rank the projects library (article-digest.md) against a job description.
 // Deterministic, zero LLM tokens: skill overlap via upstream skill-extract.mjs
-// plus tag keywords. Entries whose kind is not `project` are listed as
+// over the whole entry block, tag keywords, and the JD's other words. Entries whose kind is not `project` are listed as
 // excluded. The agent makes the final pick from `candidates`.
 //
 //   node custom/projects/rank.mjs <jd.md> [--json | --summary]

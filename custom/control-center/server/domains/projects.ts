@@ -32,6 +32,8 @@ export interface LibraryEntry {
   source: string | null;
   bullets: string[];
   line: number;
+  /** Why the form cannot rewrite this block in place (edit the file directly), or null. */
+  editProblem: string | null;
   /** Character offsets of the entry block in the file (heading through last content line). */
   start: number;
   end: number;
@@ -73,6 +75,7 @@ export interface ProjectView {
   source: string | null;
   bullets: string[];
   line: number;
+  editProblem: string | null;
   inCv: boolean;
 }
 
@@ -156,38 +159,46 @@ function extractPdf(codeRoot: string, abs: string): Promise<PdfResult> {
 /** The prompt carries the text in argv (macOS ARG_MAX is 1 MiB), so a document's text is capped well below it. */
 export const MAX_DOCUMENT_BYTES = 300_000;
 
-/**
- * The documents/-relative path of an existing file under <dataRoot>/documents, or null. Compared by real
- * path, so a symlink that leads outside documents/ is refused; the path returned is the real file's.
- */
-export function documentsPath(dataRoot: string, rel: string): string | null {
+/** A checked documents/ source: its path relative to documents/, and the documents/ folder it was checked against (real path, dev, ino). */
+interface CheckedSource {
+  rel: string;
+  root: { real: string; dev: number; ino: number };
+}
+
+function checkSource(dataRoot: string, rel: string): CheckedSource | null {
   if (path.isAbsolute(rel)) return null;
   let docsReal: string;
   let fileReal: string;
+  let rootStat: fs.Stats;
   try {
     docsReal = fs.realpathSync(path.resolve(dataRoot, 'documents'));
+    rootStat = fs.statSync(docsReal);
     fileReal = fs.realpathSync(path.resolve(dataRoot, 'documents', rel));
     if (!fs.statSync(fileReal).isFile()) return null;
   } catch {
     return null;
   }
   if (!fileReal.startsWith(docsReal + path.sep)) return null;
-  return path.relative(docsReal, fileReal).split(path.sep).join('/');
+  return { rel: path.relative(docsReal, fileReal).split(path.sep).join('/'), root: { real: docsReal, dev: rootStat.dev, ino: rootStat.ino } };
+}
+
+/**
+ * The documents/-relative path of an existing file under <dataRoot>/documents, or null. Compared by real
+ * path, so a symlink that leads outside documents/ is refused; the path returned is the real file's.
+ */
+export function documentsPath(dataRoot: string, rel: string): string | null {
+  return checkSource(dataRoot, rel)?.rel ?? null;
 }
 
 /**
  * The bytes of a checked documents/ source, read through one descriptor: the real path is opened without
  * following a final symlink, the descriptor must be a regular file, and after the open the path must still
- * resolve inside documents/ to that same file (dev and inode), so a swap after the check is refused.
+ * resolve inside the documents/ folder the check saw (same real path, dev and inode, never recomputed, so
+ * swapping documents/ itself is caught) to that same file (dev and inode), so a swap after the check is refused.
  */
-function readSourceOnce(dataRoot: string, found: string): Buffer | null {
-  let docsReal: string;
-  try {
-    docsReal = fs.realpathSync(path.resolve(dataRoot, 'documents'));
-  } catch {
-    return null;
-  }
-  const realAbs = path.join(docsReal, found);
+function readSourceOnce(source: CheckedSource): Buffer | null {
+  const { real: docsReal, dev, ino } = source.root;
+  const realAbs = path.join(docsReal, source.rel);
   let fd: number;
   try {
     fd = fs.openSync(realAbs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
@@ -199,6 +210,8 @@ function readSourceOnce(dataRoot: string, found: string): Buffer | null {
     if (!st.isFile()) return null;
     const now = fs.realpathSync(realAbs);
     const onDisk = fs.lstatSync(now);
+    const root = fs.lstatSync(docsReal);
+    if (!root.isDirectory() || root.dev !== dev || root.ino !== ino) return null;
     if (!now.startsWith(docsReal + path.sep) || onDisk.dev !== st.dev || onDisk.ino !== st.ino) return null;
     return fs.readFileSync(fd);
   } catch {
@@ -232,10 +245,11 @@ export async function extractSourceText(
   /** Test seam: runs between the containment check and the open, where a swap would have to happen. */
   hooks: { beforeOpen?: () => void } = {},
 ): Promise<{ ok: true; rel: string; text: string } | { ok: false; error: string }> {
-  const found = documentsPath(dataRoot, rel);
-  if (!found) return { ok: false, error: `not a file under documents/: ${rel}` };
+  const source = checkSource(dataRoot, rel);
+  if (!source) return { ok: false, error: `not a file under documents/: ${rel}` };
+  const found = source.rel;
   hooks.beforeOpen?.();
-  const raw = readSourceOnce(dataRoot, found);
+  const raw = readSourceOnce(source);
   if (!raw) return { ok: false, error: `not a file under documents/: ${rel}` };
   const intake = await importCore<IntakeExtraction>(codeRoot, 'intake.mjs');
   const cls = intake.classifySource(found);

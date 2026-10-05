@@ -6,8 +6,9 @@
 #   3. headless Claude (Opus 5.5, 1M context) resolves conflicts, checks that
 #      custom/ still works with the new upstream code, and writes a report
 #   4. this script verifies independently: no unmerged paths, upstream/main is
-#      an ancestor, custom tests pass, and the upstream suite has no NEW failures
-#      compared with origin/main before the merge
+#      an ancestor, custom tests pass, the control center's tests and typecheck
+#      pass, and the upstream suite has no NEW failures compared with origin/main
+#      before the merge
 #   5. push the branch, open a PR against the fork's main, merge it when green,
 #      then fast-forward the live checkout
 # Upstream files are never edited except to resolve merge conflicts.
@@ -113,10 +114,12 @@ echo "--- headless Claude ($MODEL)"
 PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
 const fs = require("fs");
 let t = fs.readFileSync(process.argv[1], "utf8");
-for (const k of ["CONFLICTS", "BASELINE", "TODAY", "BEHIND", "REPORT"]) t = t.replaceAll(`{{${k}}}`, process.env[k] || "(none)");
+// A replacer function: a string replacement would expand $& and the like inside test output.
+for (const k of ["CONFLICTS", "BASELINE", "TODAY", "BEHIND", "REPORT"]) t = t.replaceAll(`{{${k}}}`, () => process.env[k] || "(none)");
 process.stdout.write(t);
 ' "$LIVE/custom/upstream-sync/sync-prompt.md")"
-CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
+# Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
+CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
   --model "$MODEL" \
   --permission-mode dontAsk \
   --add-dir "$STATE_DIR" \
@@ -143,6 +146,10 @@ node --test custom/*/tests/*.spec.mjs > "$STATE_DIR/$TODAY.custom-tests.txt" 2>&
 grep -qE "^ℹ pass [1-9]" "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0   # zero tests ran is not a pass
 echo "custom tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
 
+CC_OK=1
+control_center_checks "$STATE_DIR/$TODAY.control-center-tests.txt" || CC_OK=0
+echo "control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
+
 suite_failures "$STATE_DIR/$TODAY.after-failures.txt"
 NEW_FAILURES="$(comm -13 "$STATE_DIR/$TODAY.baseline-failures.txt" "$STATE_DIR/$TODAY.after-failures.txt")"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
@@ -154,6 +161,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo
   echo "- Conflicts: ${CONFLICTS:-none}"
   echo "- custom/ tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
+  echo "- control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
   if [ $KEPT_README = 1 ]; then
@@ -172,7 +180,7 @@ else
 fi
 echo "PR: $PR_URL"
 
-if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEPT_README = 0 ]; then
+if [ $CUSTOM_OK = 1 ] && [ $CC_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEPT_README = 0 ]; then
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
@@ -190,7 +198,7 @@ if [ $CUSTOM_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEP
   fi
   git worktree remove --force "$WT" >/dev/null 2>&1
 else
-  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}; fork README kept over an upstream .github/README.md: $([ $KEPT_README = 1 ] && echo yes || echo no)." >/dev/null || true
+  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); control-center tests and typecheck $([ $CC_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}; fork README kept over an upstream .github/README.md: $([ $KEPT_README = 1 ] && echo yes || echo no)." >/dev/null || true
   notify "Upstream sync PR needs review: $PR_URL"
 fi
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') done"

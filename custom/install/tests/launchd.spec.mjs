@@ -152,3 +152,20 @@ test('--jobs daily prints nothing about the weekly sync when it was never instal
   const r = run(['--jobs', 'daily']);
   assert.doesNotMatch(r.stdout + r.stderr, /upstream-sync|weekly sync/i);
 });
+
+test('a job the Control Center disabled is enabled again before it is bootstrapped, so a reinstall succeeds', () => {
+  const T = mkTmp('ci-launchd-disabled-');
+  const disabled = path.join(T, 'disabled');
+  fs.writeFileSync(disabled, 'com.career-ops.immigration-watch\ncom.career-ops.upstream-sync\n');
+  const r = run(['--jobs', 'all'], { env: { STUB_LAUNCHD_DISABLED: disabled } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /installed com\.career-ops\.immigration-watch/);
+  assert.match(r.stdout, /installed com\.career-ops\.upstream-sync/);
+  assert.equal(fs.readFileSync(disabled, 'utf8').trim(), '');
+  const calls = r.log.trim().split('\n');
+  for (const label of ['com.career-ops.immigration-watch', 'com.career-ops.upstream-sync']) {
+    const enable = calls.findIndex((c) => /^launchctl enable gui\/\d+\//.test(c) && c.endsWith(`/${label}`));
+    const bootstrap = calls.findIndex((c) => c.startsWith('launchctl bootstrap ') && c.endsWith(`/${label}.plist`));
+    assert.ok(enable > -1 && bootstrap > enable, `${label}: enable at ${enable}, bootstrap at ${bootstrap}\n${r.log}`);
+  }
+});

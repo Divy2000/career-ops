@@ -100,8 +100,12 @@ function parseHeading(raw) {
   return { title, url, tagline, invalidUrl: link !== null && url === null ? link : null, headingProblem: problem };
 }
 
+// Besides the fields, returns where they sit (body line indices): the meta
+// lines, each collected bullet's [from, to] span (with its continuation
+// lines) and the Proof points label, so an edit can rewrite just those lines.
 function parseBody(lines) {
   const meta = { tags: [], kind: 'project', dates: null, source: null };
+  const metaLines = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -113,62 +117,105 @@ function parseBody(lines) {
     else if (key === 'kind') meta.kind = m[2].toLowerCase();
     else if (key === 'source') meta.source = m[2] || null;
     else meta.dates = m[2] || null;
+    metaLines.push(i);
     i++;
   }
-  const rest = lines.slice(i);
   const isProofLabel = (l) => /^proof points$/i.test(l.match(LABEL)?.[1]?.trim() ?? '');
-  const hasProof = rest.some(isProofLabel);
+  const hasProof = lines.slice(i).some(isProofLabel);
   const bullets = [];
+  const spans = [];
+  let proofLabel = null;
   let collecting = !hasProof;
   let inFence = false;
   let open = false;
-  for (const line of rest) {
+  for (let k = i; k < lines.length; k++) {
+    const line = lines[k];
     if (FENCE.test(line)) { inFence = !inFence; open = false; continue; }
     if (inFence) continue;
-    if (LABEL.test(line)) { collecting = hasProof ? isProofLabel(line) : true; open = false; continue; }
+    if (LABEL.test(line)) {
+      collecting = hasProof ? isProofLabel(line) : true;
+      if (hasProof && collecting && proofLabel === null) proofLabel = k;
+      open = false;
+      continue;
+    }
     const b = line.match(BULLET);
     if (b && !RULE.test(line)) {
-      if (collecting) bullets.push(b[1]);
+      if (collecting) { bullets.push(b[1]); spans.push([k, k]); }
       open = collecting;
       continue;
     }
     if (open && /^\s+\S/.test(line) && !/^\s+(?:[-*+]|\d+[.)])\s/.test(line)) {
       bullets[bullets.length - 1] += ` ${line.trim()}`;
+      spans[spans.length - 1][1] = k;
       continue;
     }
     open = false;
   }
-  return { ...meta, bullets };
+  return { fields: { ...meta, bullets }, layout: { metaLines, spans, proofLabel } };
+}
+
+// The form owns the heading, the meta lines and the copy-paste bullets. It can
+// rewrite the bullets in place only when they form one run with nothing but
+// blank lines between them; anything else there would lose its position.
+function layoutProblem(lines, { spans }) {
+  if (!spans.length) return null;
+  const owned = new Set(spans.flatMap(([a, b]) => Array.from({ length: b - a + 1 }, (_, k) => a + k)));
+  for (let k = spans[0][0]; k <= spans[spans.length - 1][1]; k++) {
+    if (!owned.has(k) && lines[k].trim()) {
+      return 'it has text or nested items between its copy-paste bullets, which the form cannot keep in place; edit article-digest.md directly';
+    }
+  }
+  return null;
 }
 
 // Each entry carries character offsets: [start, end) is the heading through
 // its last content line, so separators and blank lines stay outside it.
-export function parseLibrary(text) {
-  const src = String(text ?? '');
+function lineTable(src) {
   const lines = src.split('\n');
   const starts = [];
   let pos = 0;
   for (const l of lines) { starts.push(pos); pos += l.length + 1; }
-  const clean = lines.map((l) => l.replace(/\r$/, ''));
+  return { starts, clean: lines.map((l) => l.replace(/\r$/, '')) };
+}
+
+const isBlankOrRule = (l) => !l.trim() || RULE.test(l);
+
+// A `# Section` heading is never part of an entry: it ends the one above it.
+export function parseLibrary(text) {
+  const { preamble, entries } = parseWithLayout(text);
+  return { preamble, entries: entries.map(({ layout: _layout, ...e }) => e) };
+}
+
+function parseWithLayout(text) {
+  const src = String(text ?? '');
+  const { starts, clean } = lineTable(src);
   const headings = [];
+  const breaks = [];
   let inFence = false;
   clean.forEach((l, i) => {
     if (FENCE.test(l)) inFence = !inFence;
-    else if (!inFence && /^##(?!#)\s+\S/.test(l)) headings.push(i);
+    else if (!inFence && /^##(?!#)\s+\S/.test(l)) { headings.push(i); breaks.push(i); }
+    else if (!inFence && /^#(?!#)\s+\S/.test(l)) breaks.push(i);
   });
-  const entries = headings.map((h, k) => {
-    const next = k + 1 < headings.length ? headings[k + 1] : clean.length;
+  const entries = headings.map((h) => {
+    const next = breaks.find((b) => b > h) ?? clean.length;
     let last = next - 1;
-    while (last > h && (!clean[last].trim() || RULE.test(clean[last]))) last--;
+    while (last > h && isBlankOrRule(clean[last])) last--;
     const head = parseHeading(clean[h].replace(/^##\s+/, ''));
-    const body = parseBody(clean.slice(h + 1, last + 1));
+    const bodyLines = clean.slice(h + 1, last + 1);
+    const { fields, layout } = parseBody(bodyLines);
+    const metaSet = new Set(layout.metaLines);
     return {
       id: projectId(head.title),
       ...head,
-      ...body,
+      ...fields,
+      // Every line under the heading but the meta lines: all labeled sections, paragraphs and bullets.
+      body: bodyLines.filter((_, k) => !metaSet.has(k)).join('\n'),
+      editProblem: layoutProblem(bodyLines, layout),
       line: h + 1,
       start: starts[h],
       end: starts[last] + clean[last].length,
+      layout,
     };
   });
   return { preamble: src.slice(0, headings.length ? starts[headings[0]] : src.length), entries };
@@ -203,7 +250,7 @@ export function validateLibrary(text) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-export function serializeEntry(entry) {
+function entryLines(entry) {
   const title = oneLine(entry?.title);
   if (!title) throw new Error('entry needs a non-empty title');
   if (!projectId(title)) throw new Error(`title "${title}" needs a letter or digit; it would get no id`);
@@ -216,20 +263,22 @@ export function serializeEntry(entry) {
   else if (url) heading = `## ${title} -- ${url}`;
   else if (tagline) heading = `## ${title} -- ${tagline}`;
   else heading = `## ${title}`;
-  const out = [heading];
+  const meta = [];
   const tags = (entry.tags ?? []).map(oneLine).filter(Boolean);
-  if (tags.length) out.push(`Tags: ${tags.join(', ')}`);
+  if (tags.length) meta.push(`Tags: ${tags.join(', ')}`);
   const kind = oneLine(entry.kind).toLowerCase();
-  if (kind && kind !== 'project') out.push(`Kind: ${kind}`);
+  if (kind && kind !== 'project') meta.push(`Kind: ${kind}`);
   const dates = oneLine(entry.dates);
-  if (dates) out.push(`Dates: ${dates}`);
+  if (dates) meta.push(`Dates: ${dates}`);
   const source = oneLine(entry.source);
-  if (source) out.push(`Source: ${source}`);
-  for (const b of entry.bullets ?? []) {
-    const line = oneLine(b);
-    if (line) out.push(`- ${line}`);
-  }
-  return out.join('\n');
+  if (source) meta.push(`Source: ${source}`);
+  const bullets = (entry.bullets ?? []).map(oneLine).filter(Boolean).map((b) => `- ${b}`);
+  return { heading, meta, bullets };
+}
+
+export function serializeEntry(entry) {
+  const { heading, meta, bullets } = entryLines(entry);
+  return [heading, ...meta, ...bullets].join('\n');
 }
 
 export function serializeLibrary(entries) {
@@ -246,25 +295,59 @@ function assertNewTitle(entries, title, exceptId) {
 const newlineOf = (text) => (String(text ?? '').includes('\r\n') ? '\r\n' : '\n');
 const withNewline = (s, nl) => s.replace(/\r?\n/g, nl);
 
+const EDITED_FIELDS = ['title', 'url', 'tagline', 'tags', 'kind', 'dates', 'source', 'bullets'];
+
+// Rewrites only the lines the form owns (heading, meta lines, copy-paste
+// bullets) in place; every other line of the block stays byte for byte. A
+// block whose bullets cannot be rewritten in place, or whose result would not
+// read back as entered, is refused.
 export function replaceEntry(text, id, entry) {
-  const { entries } = parseLibrary(text);
-  const target = entries.find((e) => e.id === id);
-  if (!target) throw new Error(`no entry with id "${id}"`);
-  const block = serializeEntry(entry);
+  const { entries } = parseWithLayout(text);
+  const index = entries.findIndex((e) => e.id === id);
+  if (index === -1) throw new Error(`no entry with id "${id}"`);
+  const target = entries[index];
+  const refuse = (why) => new Error(`"${target.title}" cannot be edited here: ${why}`);
+  if (target.editProblem) throw refuse(target.editProblem);
+  const fresh = entryLines(entry);
   assertNewTitle(entries, entry.title, id);
-  return text.slice(0, target.start) + withNewline(block, newlineOf(text)) + text.slice(target.end);
+  const nl = newlineOf(text);
+  const lines = text.slice(target.start, target.end).split('\n').map((l) => ({ text: l.replace(/\r$/, ''), cr: l.endsWith('\r') }));
+  lines[lines.length - 1].cr = text[target.end] === '\r';
+  const made = (l) => ({ text: l, cr: nl === '\r\n' });
+  // Body indices are block indices minus the heading; splice from the bottom up so earlier indices hold.
+  const { metaLines, spans, proofLabel } = target.layout;
+  const at = (k) => k + 1;
+  if (spans.length) lines.splice(at(spans[0][0]), spans[spans.length - 1][1] - spans[0][0] + 1, ...fresh.bullets.map(made));
+  else if (fresh.bullets.length) lines.splice(proofLabel !== null ? at(proofLabel) + 1 : lines.length, 0, ...fresh.bullets.map(made));
+  if (metaLines.length) lines.splice(at(metaLines[0]), metaLines[metaLines.length - 1] - metaLines[0] + 1, ...fresh.meta.map(made));
+  else lines.splice(1, 0, ...fresh.meta.map(made));
+  lines[0] = { ...lines[0], text: fresh.heading };
+  const block = lines.map((l, k) => l.text + (k < lines.length - 1 && l.cr ? '\r' : '')).join('\n');
+  const out = text.slice(0, target.start) + block + text.slice(target.end);
+  const want = parseLibrary(serializeEntry(entry)).entries[0];
+  const got = parseLibrary(out).entries;
+  if (got.length !== entries.length || EDITED_FIELDS.some((f) => JSON.stringify(got[index][f]) !== JSON.stringify(want[f]))) {
+    throw refuse('the edited block would not read back as entered; edit article-digest.md directly');
+  }
+  return out;
 }
 
-// Removes one entry with its separator; every other byte stays. A middle
-// entry takes the separator after it, the last one the separator before it.
+// Removes one entry with its separator; every other byte stays, including a
+// `# Section` heading next to it. An entry with content after it takes the
+// separator after it; the last one takes the separator before it.
 export function removeEntry(text, id) {
   const { entries } = parseLibrary(text);
   const i = entries.findIndex((e) => e.id === id);
   if (i === -1) throw new Error(`no entry with id "${id}"`);
   const target = entries[i];
-  if (i + 1 < entries.length) return text.slice(0, target.start) + text.slice(entries[i + 1].start);
-  const keep = i > 0 ? text.slice(0, entries[i - 1].end) : text.slice(0, target.start).replace(/\s+$/, '');
-  return `${keep}${newlineOf(text)}`;
+  const { starts, clean } = lineTable(text);
+  let next = starts.findIndex((s) => s > target.end);
+  if (next !== -1) while (next < clean.length && isBlankOrRule(clean[next])) next++;
+  if (next !== -1 && next < clean.length) return text.slice(0, target.start) + text.slice(starts[next]);
+  if (i === 0) return `${text.slice(0, target.start).replace(/\s+$/, '')}${newlineOf(text)}`;
+  let prev = target.line - 2;
+  while (prev >= 0 && isBlankOrRule(clean[prev])) prev--;
+  return `${text.slice(0, starts[prev] + clean[prev].length)}${newlineOf(text)}`;
 }
 
 // Appends a ready-made markdown block (already validated by the caller).
@@ -379,44 +462,101 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const mentions = (text, term) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(term)}(?![\\p{L}\\p{N}])`, 'iu').test(text);
 const byCodepoint = (a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0);
 
-const WEIGHT = { title: 3, tags: 2, bullets: 1 };
+const WEIGHT = { title: 3, tags: 2, body: 1 };
 const RECOMMEND_MIN = 2;
 const RECOMMEND_MAX = 4;
 const RECOMMEND_RATIO = 0.6;
+// A JD word outside the skill vocabulary is noisier than a named skill: it scores half a skill match at the
+// same place, scaled by how rare it is across the library's projects.
+const KEYWORD_WEIGHT = 0.5;
+// Function words and the boilerplate every job description carries; they say nothing about fit.
+const STOPWORDS = new Set(`
+a about above across after again all also an and any are around as at be because been before being below between both but by
+can could did do does doing down during each either etc few for from further had has have having here how if in into is it its
+just least less like made more most much must no nor not now of off on once only or other our ours out over own per plus same should
+so some such than that the their theirs them then there these they this those through to too under until up upon us use used uses
+using very via was we were what when where which while who whom why will with within without would you your yours
+ability able applicant applicants apply benefits best bonus build building candidate candidates collaborate collaboration
+communication company day days degree environment equal every excellent experience experienced familiar familiarity field get good
+great have help ideal ideally include includes including job join knowledge level looking love make makes minimum need needs new
+nice one opportunity paced passion passionate plus preferred proficiency proficient related relevant required requirement
+requirements responsibilities responsibility role roles salary senior junior skill skills strong team teams three time two
+understanding want well work working year years engineer engineers engineering developer developers what you will`.split(/\s+/).filter(Boolean));
+
+// Lowercase words, a trailing plural `s` folded the same way on both sides (apis/api, services/service).
+const fold = (w) => (w.length >= 4 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w);
+const wordsOf = (text) => (String(text ?? '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).map(fold);
+
+/** JD keywords: folded word -> the JD's own spelling (first seen), minus stopwords, numbers and words of `exclude`. */
+function jdKeywords(jdText, exclude) {
+  const out = new Map();
+  for (const raw of String(jdText ?? '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []) {
+    const w = fold(raw);
+    if (raw.length < 3 || /^\d+$/.test(raw) || STOPWORDS.has(raw) || STOPWORDS.has(w) || exclude.has(w) || out.has(w)) continue;
+    out.set(w, raw);
+  }
+  return out;
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
 
 // Deterministic, no AI. Each JD skill (upstream skill vocabulary) a project
-// shows scores by where it appears: title 3, tags 2, bullets 1. A tag outside
-// the vocabulary that the JD names literally scores the same way (title 3 when
-// the title also names it, else 2). Ties keep library order.
+// shows scores by where it appears: title 3, tags 2, anywhere else in the
+// block (labeled sections, paragraphs, bullets) 1. A tag outside the
+// vocabulary that the JD names literally scores the same way (title 3 when
+// the title also names it, else 2). Every other JD word the project uses adds
+// KEYWORD_WEIGHT at the same place weights, scaled by its rarity across the
+// projects. Ties go to the project matching more distinct terms, then to
+// library order.
 export function rankProjects(entries, { jdText, cvText = '' }) {
   const jdSkills = extractSkills(jdText);
   const cvSkills = extractSkills(cvText);
   const candidates = [];
   const excluded = [];
   const skillsOf = new Map();
-  for (const e of entries) {
-    if (e.kind !== 'project') {
-      excluded.push({ id: e.id, title: e.title, kind: e.kind });
-      continue;
-    }
+  const projects = entries.filter((e) => {
+    if (e.kind === 'project') return true;
+    excluded.push({ id: e.id, title: e.title, kind: e.kind });
+    return false;
+  });
+  const bodyOf = (e) => [e.tagline ?? '', e.body ?? e.bullets.join('\n')].join('\n');
+  const vocabWords = new Set([...jdSkills].flatMap(wordsOf));
+  const words = new Map(projects.map((e) => [e.id, { title: new Set(wordsOf(e.title)), tags: new Set(wordsOf(e.tags.join(' '))), body: new Set(wordsOf(bodyOf(e))) }]));
+  const scored = projects.map((e) => {
     const where = {
       title: extractSkills(e.title),
       tags: extractSkills(e.tags.join(', ')),
-      bullets: extractSkills([e.tagline ?? '', ...e.bullets].join('\n')),
+      body: extractSkills(bodyOf(e)),
     };
-    skillsOf.set(e.id, new Set([...where.title, ...where.tags, ...where.bullets]));
+    skillsOf.set(e.id, new Set([...where.title, ...where.tags, ...where.body]));
     const matched = new Map();
     for (const skill of jdSkills) {
-      const field = ['title', 'tags', 'bullets'].find((f) => where[f].has(skill));
+      const field = ['title', 'tags', 'body'].find((f) => where[f].has(skill));
       if (field) matched.set(skill, WEIGHT[field]);
     }
     const seenTags = new Set();
+    const tagWords = new Set();
     for (const tag of e.tags) {
       const key = titleKey(tag);
       if (!key || seenTags.has(key)) continue;
       seenTags.add(key);
       if (extractSkills(tag).size || !mentions(jdText, tag)) continue;
       matched.set(tag, mentions(e.title, tag) ? WEIGHT.title : WEIGHT.tags);
+      for (const w of wordsOf(tag)) tagWords.add(w);
+    }
+    return { e, matched, tagWords };
+  });
+  const df = new Map();
+  for (const { e } of scored) {
+    const w = words.get(e.id);
+    for (const word of new Set([...w.title, ...w.tags, ...w.body])) df.set(word, (df.get(word) ?? 0) + 1);
+  }
+  for (const { e, matched, tagWords } of scored) {
+    const w = words.get(e.id);
+    for (const [word, spelling] of jdKeywords(jdText, new Set([...vocabWords, ...tagWords]))) {
+      const field = ['title', 'tags', 'body'].find((f) => w[f].has(word));
+      if (!field || matched.has(spelling)) continue;
+      matched.set(spelling, KEYWORD_WEIGHT * WEIGHT[field] * Math.log(1 + projects.length / df.get(word)));
     }
     candidates.push({
       id: e.id,
@@ -424,16 +564,16 @@ export function rankProjects(entries, { jdText, cvText = '' }) {
       url: e.url ?? null,
       kind: e.kind,
       inCv: findCvEntry(cvText, e.title) !== null,
-      score: [...matched.values()].reduce((a, b) => a + b, 0),
+      score: round2([...matched.values()].reduce((a, b) => a + b, 0)),
       matchedSkills: [...matched.keys()].sort(byCodepoint),
       bullets: [...e.bullets],
     });
   }
   const libraryOrder = candidates.map((c) => c.id);
-  candidates.sort((a, b) => b.score - a.score);
-  const scored = candidates.filter((c) => c.score > 0);
-  const top = scored[0]?.score ?? 0;
-  const recommended = scored
+  candidates.sort((a, b) => b.score - a.score || b.matchedSkills.length - a.matchedSkills.length);
+  const ranked = candidates.filter((c) => c.score > 0);
+  const top = ranked[0]?.score ?? 0;
+  const recommended = ranked
     .slice(0, RECOMMEND_MAX)
     .filter((c, i) => i < RECOMMEND_MIN || c.score >= RECOMMEND_RATIO * top)
     .map((c) => c.id);

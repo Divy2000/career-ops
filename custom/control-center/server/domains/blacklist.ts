@@ -5,6 +5,7 @@
 // columns the editor does not manage are carried through per row, in order.
 import fs from 'node:fs';
 import path from 'node:path';
+import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { z } from 'zod';
 import { etagOf } from './files.js';
 
@@ -56,7 +57,8 @@ export function parseBlacklist(md: string): BlacklistParsed {
   const headerCells = splitCells(lines[headerIdx]!);
   const header = headerCells.map((h) => h.toLowerCase());
   const col = (names: string[]) => header.findIndex((h) => names.includes(h));
-  const iCompany = col(['company']);
+  // Found the way the header line is ("Company", "Company name"): an exact-only match would read no rows, and the next save would drop them all.
+  const iCompany = col(['company']) >= 0 ? col(['company']) : header.findIndex((h) => h.includes('company'));
   const iSince = col(['since', 'added', 'date']);
   const iScope = col(['scope']);
   const iReason = col(['reason', 'notes', 'why']);
@@ -104,11 +106,6 @@ export function readBlacklist(dataRoot: string): BlacklistRead {
 
 /** Atomic write of the rendered table; the caller has already checked the ETag and the explicit gate. */
 export function writeBlacklist(dataRoot: string, rows: BlacklistRow[], preamble: string | null, postamble = '', extraColumns: string[] = []): BlacklistRead {
-  const abs = path.join(dataRoot, BLACKLIST_REL);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  const text = renderBlacklist(rows, preamble, postamble, extraColumns);
-  const tmp = `${abs}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, abs);
+  writeFileAtomic(path.join(dataRoot, BLACKLIST_REL), renderBlacklist(rows, preamble, postamble, extraColumns), dataRootOnly(dataRoot));
   return readBlacklist(dataRoot);
 }

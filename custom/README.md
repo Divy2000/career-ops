@@ -9,7 +9,7 @@ Everything this fork adds lives under `custom/`, plus one file outside it: [`.gi
 | `immigration/run-daily.sh` | The 8am job: policy watch, scan, prioritize, rank (top 100), shortlist. Log: `data/immigration/logs/<date>.log`. |
 | `projects/` | The projects library, `article-digest.md`: every project with copy-paste bullets, so a tailored CV can pick the 2 to 4 that fit a job while `cv.md` keeps only the default 2 or 3. `lib.mjs` parses, validates and edits it byte for byte, `rank.mjs` ranks it against a job description, `import.mjs` converts a projects JSON or another library into it. See [Projects library and CV build](#projects-library-and-cv-build). |
 | `cv/` | The fork CV build: `build-html.mjs` checks a CV payload against `cv.md` and the library, then builds the HTML with the template pack in `cv/pack/`; `render-pdf.mjs` renders it and tightens the layout until it fits the page budget. Both hand off to the upstream scripts, whose checks still run. |
-| `upstream-sync/` | Weekly job: merges career-ops-hq/career-ops `main` into this fork on a branch, lets headless Claude (Opus 5.5, 1M context) resolve conflicts and adapt `custom/`, verifies tests, opens a PR, merges it when green, and fast-forwards the local checkout. Log and report: `data/upstream-sync/<date>.*`. |
+| `upstream-sync/` | Weekly job: merges career-ops-hq/career-ops `main` into this fork on a branch, lets headless Claude (Opus 5.5, 1M context) resolve conflicts and adapt `custom/`, verifies the custom tests, the Control Center's vitest suite and typecheck and the upstream suite, opens a PR, merges it when green, and fast-forwards the local checkout. Log and report: `data/upstream-sync/<date>.*`. |
 | `launchd/install.sh` | Installs the macOS launchd jobs for the current checkout (`--jobs daily` for the 8am job only, `--jobs all`, the default, for both). |
 | `install/` | The installer for other users: `install.sh` (script install, Markdown resume), `ONBOARDING.md` (the procedure Claude Code follows to build a profile from documents in any format), `bootstrap.sh` and the shipped house-rule templates (`templates/_custom.md`, plus `_custom-projects.md` and `_custom-sponsorship.md`, which it adds under House Rules). Start from the landing README, [`.github/README.md`](../.github/README.md). |
 
@@ -24,7 +24,7 @@ Tags: python, fastapi
 - Cut first-response time from 9 to 2 hours.
 ```
 
-The ` -- link` part, `Tags:` and `Dates:` are optional. A project needs 1 to 6 bullets (more than 6 is a warning, more than 8 an error). `Kind: publication` or `Kind: article` marks an entry that is not a project, so it is never offered as one. `Source: documents/projects/<file>` records the document an imported entry came from. Upstream digest blocks (`**Hero metrics:**`, `**Proof points:**`) are read too.
+The ` -- link` part, `Tags:` and `Dates:` are optional. A project needs 1 to 6 bullets (more than 6 is a warning, more than 8 an error). `Kind: publication` or `Kind: article` marks an entry that is not a project, so it is never offered as one. `Source: documents/projects/<file>` records the document an imported entry came from. Upstream digest blocks (`**Hero metrics:**`, `**Proof points:**`) are read too, and an edit keeps their other sections.
 
 ```bash
 node custom/projects/rank.mjs jds/acme.md --json   # recommended 2-4, candidates, excluded, libraryCoverage
@@ -32,7 +32,7 @@ node custom/projects/rank.mjs --check              # validate article-digest.md
 node custom/projects/import.mjs projects.json      # dry run; --write creates the file, --merge adds only new titles
 ```
 
-`rank.mjs` is deterministic and spends no tokens: skill overlap with the job description plus tag keywords. Its `libraryCoverage` lists job skills that `cv.md` lacks but a library project shows, so they are not reported as gaps.
+`rank.mjs` is deterministic and spends no tokens. It scores every skill from the upstream vocabulary that the job description names and a project shows anywhere in its block (title 3, tags 2, any section or bullet 1), tags the job names literally, and the job's other words a project uses (half weight, scaled by how rare the word is across the library). Ties go to the project matching more distinct terms. Its `libraryCoverage` lists job skills that `cv.md` lacks but a library project shows, so they are not reported as gaps.
 
 The always-on house rule (`install/templates/_custom-projects.md`, added to `modes/_custom.md` by the installer and onboarding) makes every `pdf`, `text`, `latex`, `cover`, `apply`, `oferta`, `auto-pipeline` and batch item pick projects from `rank.mjs` output, and build with the fork pipeline:
 

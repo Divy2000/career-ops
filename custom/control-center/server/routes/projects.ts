@@ -86,8 +86,8 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const l = await lib();
     const file = readUserFile(cfg.dataRoot, 'articleDigest');
     const cv = readUserFile(cfg.dataRoot, 'cv').text;
-    const entries = l.parseLibrary(file.text).entries.map(({ id, title, url, tagline, tags, kind, dates, source, bullets, line }) => ({
-      id, title, url, tagline, tags, kind, dates, source, bullets, line, inCv: l.findCvEntry(cv, title) !== null,
+    const entries = l.parseLibrary(file.text).entries.map(({ id, title, url, tagline, tags, kind, dates, source, bullets, line, editProblem }) => ({
+      id, title, url, tagline, tags, kind, dates, source, bullets, line, editProblem, inCv: l.findCvEntry(cv, title) !== null,
     }));
     return { path: file.path, kind: file.kind, etag: file.etag, entries, validation: l.validateLibrary(file.text) };
   }

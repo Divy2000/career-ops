@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
 import { RunStore, type RunMeta } from './store.js';
 import { childEnv } from '../system/child-env.js';
+import { removeTmpInputs } from '../actions/tmp-inputs.js';
 
 export const WRAPPER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'wrapper.mjs');
 
@@ -86,6 +87,11 @@ export class Runner {
     }
   }
 
+  /** A run that ended (any way) no longer needs the input files the app wrote for it. */
+  private dropInputs(meta: RunMeta): void {
+    removeTmpInputs(this.dataRoot, meta.cmd.args);
+  }
+
   get claudeSlots(): number {
     return this.opts.claudeSlots ?? 2;
   }
@@ -101,6 +107,7 @@ export class Runner {
       if (meta.status === 'queued') {
         if (this.queue.some((q) => q.meta.id === meta.id) || !this.claim(meta.id)) continue;
         this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'queued when the server restarted; it never started, so start it again' });
+        this.dropInputs(meta);
         this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
         continue;
       }
@@ -114,6 +121,7 @@ export class Runner {
       } else {
         const reused = Boolean(meta.wrapperPid && pidAlive(meta.wrapperPid));
         this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error: reused ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone' : 'wrapper process disappeared without an exit record' });
+        this.dropInputs(meta);
         this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
       }
     }
@@ -207,6 +215,7 @@ export class Runner {
         clearInterval(timer);
         this.active.delete(meta.id);
         this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
+        this.dropInputs(meta);
         this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
         this.pump();
       }
@@ -219,6 +228,7 @@ export class Runner {
     const status: RunMeta['status'] = meta.status === 'cancelled' || exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL' ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
     this.store.write({ ...meta, status, endedAt: exit.endedAt, exitCode: exit.code, signal: exit.signal });
     this.envById.delete(meta.id);
+    this.dropInputs(meta);
     this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId, exitCode: exit.code });
   }
 
@@ -238,6 +248,7 @@ export class Runner {
         this.envById.delete(id);
         const cancelled: RunMeta = { ...meta, status: 'cancelled', endedAt: new Date().toISOString() };
         this.store.write(cancelled);
+        this.dropInputs(cancelled);
         this.bus.publish('run.status', { runId: id, status: 'cancelled', actionId: cancelled.actionId });
         return cancelled;
       }
@@ -253,6 +264,7 @@ export class Runner {
       if (this.store.readExit(id)) return meta;
       const lost: RunMeta = { ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'its processes are gone (the PIDs are free or now belong to other processes); nothing was signalled' };
       this.store.write(lost);
+      this.dropInputs(lost);
       this.bus.publish('run.status', { runId: id, status: 'lost', actionId: meta.actionId });
       return lost;
     }

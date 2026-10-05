@@ -16,6 +16,7 @@ export function formatSse(ev: BusEvent): string {
 export class EventBus {
   private seq = 0;
   private clients = new Set<FastifyReply>();
+  private streams = new Set<FastifyReply>();
   private listeners = new Set<(ev: BusEvent) => void>();
   private heartbeat: NodeJS.Timeout | null = null;
 
@@ -51,6 +52,20 @@ export class EventBus {
     });
   }
 
+  /**
+   * A per-resource SSE stream (one session's or one run's events) that drain ends along with the bus's
+   * own clients, so closing the server never waits for a browser to leave. Settles when the stream closes.
+   */
+  stream(reply: FastifyReply): Promise<void> {
+    this.streams.add(reply);
+    return new Promise((resolve) =>
+      reply.raw.on('close', () => {
+        this.streams.delete(reply);
+        resolve();
+      }),
+    );
+  }
+
   private ping(): void {
     for (const reply of this.clients) reply.raw.write(': ping\n\n');
   }
@@ -64,6 +79,8 @@ export class EventBus {
     this.publish('server.reloading', { reason });
     for (const reply of this.clients) reply.raw.end();
     this.clients.clear();
+    for (const reply of this.streams) reply.raw.end();
+    this.streams.clear();
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
   }

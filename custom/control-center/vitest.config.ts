@@ -15,6 +15,8 @@ export default defineConfig({
   },
   test: {
     env: { NODE_ENV: 'test', TZ: 'America/Los_Angeles' },
+    globalSetup: ['tests/global-setup.ts'],
+    setupFiles: ['tests/setup-tmp.ts'],
     projects: [
       {
         extends: true,

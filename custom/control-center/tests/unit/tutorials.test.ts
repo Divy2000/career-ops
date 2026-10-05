@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { MEDIA_TYPES, listTutorials, parseManifest, parseRange, srtToVtt } from '../../server/domains/tutorials.js';
 import { guideFileNames, parseGuide } from '../../server/domains/tutorial-manifest.mjs';
+import { tempDir } from '../helpers/tmp.js';
 
 describe('srtToVtt', () => {
   it('prefixes the WEBVTT header, drops cue numbers and turns timing commas into dots', () => {
@@ -451,7 +451,7 @@ describe('listTutorials with parts', () => {
   const url = (name: string) => `/api/tutorials/tour/media/${name}`;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-parts-'));
+    root = tempDir('cc-tut-parts-');
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 

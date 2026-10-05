@@ -15,6 +15,8 @@ import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates } from '
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
 import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
+import { watchCoreGraph } from './core-graph.js';
+import { CONTRACT } from '../server/core/adapter.js';
 import { PAGE_THEME_CSS } from '../shared/page-theme.js';
 import { dataRootFromEnv } from '../shared/data-root.js';
 
@@ -166,7 +168,7 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: u
         const files = t.files
           .map(
             (f) =>
-              `<li><code>${escapeHtml(f.path)}</code> <span class="s">${f.status} +${f.additions} -${f.deletions}</span>` +
+              `<li><code>${escapeHtml(f.path)}</code> <span class="s">${f.status} +${f.additions} -${f.deletions}${f.error ? ` (${escapeHtml(f.error)})` : ''}</span>` +
               (f.canRevert ? `<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><input type="hidden" name="abs" value="${escapeHtml(f.abs)}"><button>Revert file</button></form>` : '') +
               (f.patch ? `<details><summary>diff</summary><pre>${escapeHtml(f.patch)}</pre></details>` : '') +
               `</li>`,
@@ -280,7 +282,8 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`, location: '/__recovery' }).end();
         return true;
       }
-      res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(renderRecovery(sessionsDir, guardRoot, bg.status));
+      const html = renderRecovery(sessionsDir, guardRoot, bg.status);
+      res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(html);
       return true;
     }
     if (url.pathname === '/__recovery/revert' && req.method === 'POST') {
@@ -299,7 +302,13 @@ async function main(): Promise<void> {
   };
 
   const proxy = http.createServer((req, res) => {
-    void handleLocal(req, res).then((handled) => {
+    // A request that throws (a disk error on /__recovery) answers 500; an unhandled rejection would exit the supervisor and the app.
+    const failed = (err: unknown) => {
+      console.error(`[supervisor] ${req.method} ${req.url} failed: ${(err as Error).stack ?? String(err)}`);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' });
+      res.end(`supervisor error: ${(err as Error).message}`);
+    };
+    handleLocal(req, res).then((handled) => {
       if (handled) return;
       const upstream = http.request({ host: '127.0.0.1', port: bg.active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
         res.writeHead(ures.statusCode ?? 502, ures.headers);
@@ -314,7 +323,7 @@ async function main(): Promise<void> {
         if (!res.writableFinished) upstream.destroy();
       });
       req.pipe(upstream);
-    });
+    }).catch(failed);
   });
   proxy.on('upgrade', (req, socket, head) => {
     const target = net.connect(bg.active.port, '127.0.0.1', () => {
@@ -347,16 +356,24 @@ async function main(): Promise<void> {
     }
   });
 
-  // Blue/green restart on server or shared changes, debounced 500 ms (spec 3.1).
+  // Blue/green restart on server or shared changes, debounced 500 ms (spec 3.1). Also on a change anywhere in the import
+  // graph of the core modules the server loads (custom/projects/lib.mjs and what it imports from the upstream root, edited
+  // by Dev Chat or fast-forwarded by the weekly sync): only a new process loads that whole graph anew (core-graph.ts).
   if (!process.env.CC_NO_RELOAD) {
     const watcher = chokidar.watch([path.join(PACKAGE_ROOT, 'server'), path.join(PACKAGE_ROOT, 'shared')], { ignoreInitial: true });
     let debounce: NodeJS.Timeout | null = null;
-    watcher.on('all', (_event, file) => {
+    const changed = (file: string) => {
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => {
-        console.error(`[supervisor] ${path.relative(PACKAGE_ROOT, file)} changed; blue/green reload`);
+        console.error(`[supervisor] ${path.relative(CODE_ROOT, file)} changed; blue/green reload`);
         void bg.reload();
       }, 500);
+    };
+    watcher.on('all', (_event, file) => changed(file));
+    const core = await watchCoreGraph(CODE_ROOT, CONTRACT.exports.map((e) => e.module), changed);
+    // The new code may import files the old one did not.
+    bg.onStatus((st) => {
+      if (st.state === 'ok') void core.refresh();
     });
   }
 

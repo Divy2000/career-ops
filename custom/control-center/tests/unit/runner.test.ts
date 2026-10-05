@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { RunStore, runsDir } from '../../server/runner/store.js';
@@ -9,10 +8,12 @@ import { childEnv } from '../../server/system/child-env.js';
 import { execNoShell } from '../../server/routes/system.js';
 import { runModule } from '../../server/core/child.js';
 import { EventBus } from '../../server/watch/bus.js';
+import { writeTmpInput } from '../../server/actions/tmp-inputs.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const NOISY = path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs');
-const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cc-runner-'));
+const tmpRoot = () => tempDir('cc-runner-');
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(pred: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -121,6 +122,19 @@ describe('Runner', () => {
     expect(final.wrapperPid).toBeGreaterThan(0);
     expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('line three');
     expect(events).toEqual(['run.status:queued', 'run.status:running', 'run.status:done']);
+  });
+
+  it('removes the input file the app wrote for a run once the run finalizes, and nothing else', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const input = writeTmpInput(root, 'txt', 'pasted recruiter email');
+    const keep = path.join(root, 'keep.txt');
+    fs.writeFileSync(keep, 'x');
+    const meta = runner.start(req(['0', '0', input, keep]));
+    await until(() => runner.store.read(meta.id)?.status === 'done');
+    expect(fs.existsSync(input)).toBe(false);
+    expect(fs.existsSync(keep)).toBe(true);
   });
 
   it('marks a non-zero exit as failed', async () => {

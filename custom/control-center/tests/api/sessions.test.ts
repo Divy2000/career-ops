@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { makePdf } from '../helpers/pdf.js';
 import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -53,7 +53,7 @@ const delta = (text: string) => ({ type: 'stream_event', event: { type: 'content
 const result = (text: string, cost: number) => ({ type: 'result', subtype: 'success', result: text, total_cost_usd: cost, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false });
 const SLOW = { events: [INIT, delta('before '), { __sleep: 1500 }, delta('after'), result('before after', 0.07)] };
 function scenarioFile(scenario: unknown): string {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-scenario-')), 'scenario.json');
+  const file = path.join(tempDir('cc-scenario-'), 'scenario.json');
   fs.writeFileSync(file, JSON.stringify(scenario));
   return file;
 }
@@ -208,7 +208,7 @@ describe('Claude sessions', () => {
 
   it('a turn still queued when the server restarts ends with a clear error instead of hanging', async () => {
     const dataRoot = copyFixtureRoot();
-    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const guardRoot = tempDir('cc-test-guard-');
     const a = await makeTestApp({ dataRoot, guardRoot });
     const req = (app: TestApp, method: 'GET' | 'POST' | 'PUT', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload });
     try {
@@ -344,7 +344,7 @@ describe('Claude sessions', () => {
 
   it('a server handover resumes the transcript where the old process stopped: no duplicate events, cost counted once', async () => {
     const dataRoot = copyFixtureRoot();
-    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const guardRoot = tempDir('cc-test-guard-');
     const a = await makeTestApp({ dataRoot, guardRoot });
     let b: TestApp | null = null;
     try {
@@ -371,7 +371,7 @@ describe('Claude sessions', () => {
 
   it('two servers finishing the same turn count its cost and release its report number once', async () => {
     const dataRoot = copyFixtureRoot();
-    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
+    const guardRoot = tempDir('cc-test-guard-');
     const releases: string[] = [];
     const counting: Exec = async (cmd, args, opts) => {
       if (args.includes('--release')) releases.push(args[args.indexOf('--release') + 1]!);
@@ -408,6 +408,15 @@ describe('Claude sessions', () => {
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'ok' });
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'deduped' });
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_profile.md'), 'utf8')).toContain('- Prefers remote roles');
+  });
+
+  it('refuses to remember a fact before onboarding created modes/_profile.md, and creates nothing that would hide the missing profile', async () => {
+    const profile = path.join(t.cfg.dataRoot, 'modes', '_profile.md');
+    fs.rmSync(profile, { force: true });
+    const res = await post('/api/memory', { fact: 'Prefers remote roles' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/onboarding/);
+    expect(fs.existsSync(profile)).toBe(false);
   });
 });
 

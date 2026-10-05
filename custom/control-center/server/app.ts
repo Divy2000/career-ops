@@ -9,6 +9,8 @@ import { actionRoutes } from './routes/actions.js';
 import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
+import { sweepStaleInputs } from './actions/tmp-inputs.js';
+import { OutsideRootsError, unresolvablePath } from './lib/atomic-write.js';
 import { writeRoutes } from './routes/writes.js';
 import { DailyJobWatch, maybeFakeDailyProbe } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
@@ -24,6 +26,9 @@ import { settingsRoutes } from './routes/settings.js';
 import { ScheduleService } from './system/schedule.js';
 import { maybeFakeLaunchd } from './system/fake-launchd.js';
 import { readSettings, type AppSettings } from './domains/settings.js';
+
+/** Action input files and CV uploads a crash or restart left behind are removed after a day. */
+const STALE_INPUT_MS = 24 * 3_600_000;
 
 export interface AppDeps {
   /** Injectable process runner (tests fake pgrep, launchctl and plutil). */
@@ -53,6 +58,14 @@ export interface BuiltApp {
 export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<BuiltApp> {
   const exec = deps.exec ?? execNoShell;
   const app = Fastify({ logger: cfg.nodeEnv === 'test' ? false : { level: 'info' }, trustProxy: false });
+  // A write refused for leaving the data root carries its reason in `error`, where the client looks for it.
+  // So does a read or write of a user file whose path cannot be resolved (a symlink loop): never a 500.
+  app.setErrorHandler((err, _req, reply) => {
+    const errPath = (err as NodeJS.ErrnoException).path;
+    const refused = err instanceof OutsideRootsError ? err : unresolvablePath(errPath ? path.relative(cfg.dataRoot, errPath) : 'the file', err);
+    if (refused) return reply.code(refused.statusCode).send({ error: refused.message });
+    return reply.send(err);
+  });
   const closers: Array<() => Promise<void>> = [];
   const bus = new EventBus();
   // The runner reads this object live, so a settings save changes the slot cap without a restart.
@@ -74,7 +87,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   closers.push(async () => daily.stop());
   await app.register(systemRoutes, { cfg, exec });
   await app.register(readRoutes, { cfg, bus, exec });
-  await app.register(actionRoutes, { cfg, runner, exec });
+  await app.register(actionRoutes, { cfg, runner, bus, exec });
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });
@@ -84,11 +97,12 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const activate = () => {
     if (activated) return;
     activated = true;
+    sweepStaleInputs(cfg.dataRoot, STALE_INPUT_MS);
     runner.reconcile();
     sessions.reconcile();
   };
   if (!deps.deferReconcile) activate();
-  await app.register(sessionRoutes, { cfg, manager: sessions });
+  await app.register(sessionRoutes, { cfg, manager: sessions, bus });
   await app.register(fileRoutes, { cfg, bus });
   await app.register(projectRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });

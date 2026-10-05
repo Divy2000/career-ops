@@ -15,8 +15,12 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
   const shown = useRef(initialSrc);
   const swap = useRef<MediaSwap | null>(null);
   const pending = useRef(pendingSeek);
-  /** The time of the swap's own restoring seek until its `seeking` event is seen: that one seek is not the viewer's. */
-  const restoreAt = useRef<number | null>(null);
+  /**
+   * Set when the swap seeks to restore the place, until the next `seeking` event: that one is the swap's own. The swap sets currentTime
+   * right after telling us, with no await between, so no other seek can be queued in between; the time it reads is not compared, since
+   * a viewer seek made meanwhile already shows there, and a near-equal later viewer seek must not pass for the restore.
+   */
+  const restoreUnseen = useRef(false);
   const [warning, setWarning] = useState<string | null>(null);
 
   useEffect(() => {
@@ -33,7 +37,7 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
         if (canvas && drawFreezeFrame(el, canvas)) canvas.dataset.state = 'on';
       },
       release: () => {
-        restoreAt.current = null;
+        restoreUnseen.current = false;
         if (cover.current) cover.current.dataset.state = 'off';
       },
       warn: setWarning,
@@ -41,8 +45,8 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
         shown.current = src;
       },
       pendingSeek: () => pending.current,
-      onRestore: (time) => {
-        restoreAt.current = time;
+      onRestore: () => {
+        restoreUnseen.current = true;
       },
     });
     swap.current = controller;
@@ -65,9 +69,9 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
   /** A seek the element made that is not the swap's restore (the native scrubber included): a swap under way keeps it as the place. */
   const noteSeek = useCallback((time: number) => swap.current?.noteSeek(time), []);
   /** True once, for the `seeking` event of the swap's own restoring seek; any other seek is the viewer's. */
-  const isRestoreSeek = useCallback((time: number) => {
-    if (restoreAt.current === null || Math.abs(time - restoreAt.current) > 0.05) return false;
-    restoreAt.current = null;
+  const isRestoreSeek = useCallback(() => {
+    if (!restoreUnseen.current) return false;
+    restoreUnseen.current = false;
     return true;
   }, []);
 

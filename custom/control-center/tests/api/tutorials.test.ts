@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 let outside: string;
@@ -22,7 +23,7 @@ function writeTutorial(folder: string, manifest: unknown, files: Record<string, 
 
 beforeAll(async () => {
   t = await makeTestApp();
-  outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-outside-'));
+  outside = tempDir('cc-tut-outside-');
   fs.writeFileSync(path.join(outside, 'secret.mp4'), SECRET);
   fs.mkdirSync(path.join(outside, 'linked-tutorial'));
   fs.writeFileSync(path.join(outside, 'linked-tutorial', 'a.mp4'), SECRET);
@@ -174,7 +175,7 @@ describe('GET /api/tutorials', () => {
 
   it('lists nothing when the tutorials folder is a symlink out of the data root', async () => {
     const t3 = await makeTestApp();
-    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-linked-root-'));
+    const target = tempDir('cc-tut-linked-root-');
     try {
       fs.mkdirSync(path.join(target, 'demo'));
       fs.writeFileSync(path.join(target, 'demo', 'demo.mp4'), SECRET);
@@ -194,7 +195,7 @@ describe('GET /api/tutorials', () => {
   });
 
   it('still serves when the data root itself is reached through a symlink', async () => {
-    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tut-real-root-'));
+    const real = tempDir('cc-tut-real-root-');
     const link = path.join(os.tmpdir(), `cc-tut-link-root-${path.basename(real)}`);
     fs.symlinkSync(real, link);
     const t4 = await makeTestApp({ dataRoot: link });

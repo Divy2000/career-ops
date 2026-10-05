@@ -1,6 +1,6 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
-// parser session for PDF/DOCX) and a rank preview against a pasted JD.
+// parser session for PDF) and a rank preview against a pasted JD.
 import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
@@ -144,9 +144,14 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
             ))}
           </div>
         )}
+        {entry.editProblem && (
+          <p className="project-row__locked small" role="note">
+            Read-only here: {entry.editProblem}.
+          </p>
+        )}
       </div>
       <div className="project-row__actions">
-        <button type="button" aria-label={`Edit ${entry.title}`} disabled={disabled} onClick={onEdit}>
+        <button type="button" aria-label={`Edit ${entry.title}`} disabled={disabled || entry.editProblem !== null} title={entry.editProblem ? 'This entry has content the form cannot keep; edit article-digest.md directly' : undefined} onClick={onEdit}>
           Edit
         </button>
         <button type="button" className="button--ghost" aria-label={`Delete ${entry.title}`} disabled={disabled} onClick={onDelete}>

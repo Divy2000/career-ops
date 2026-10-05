@@ -42,6 +42,8 @@ export function cliExitCodes(id: CliId): Record<string, number> {
 }
 
 const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
+const attempted = new Set<string>();
+let reloads = 0;
 
 /** Dynamic import of a pure core module listed in the contract (no writers). */
 /** Absolute path of a contracted core module, for code that must load it outside this process (a worker thread). */
@@ -55,10 +57,19 @@ export function importCore<T extends object>(codeRoot: string, module: CoreModul
     return Promise.reject(new Error(`${module} is not a contracted core module`));
   }
   const key = `${codeRoot}::${module}`;
-  let p = moduleCache.get(key);
-  if (!p) {
-    p = import(pathToFileURL(path.join(codeRoot, module)).href) as Promise<Record<string, unknown>>;
-    moduleCache.set(key, p);
-  }
-  return p as Promise<T>;
+  // One copy per process: a module loaded again under a new URL would still get its old dependencies, so a changed
+  // file anywhere in a core module's import graph restarts the server child instead (supervisor/core-graph.ts).
+  const cached = moduleCache.get(key);
+  if (cached) return cached as Promise<T>;
+  const url = pathToFileURL(path.join(codeRoot, module));
+  // Node keeps a URL's first result, a failure included, so a load after a failed one gets a fresh URL.
+  if (attempted.has(key)) url.search = `v=${++reloads}`;
+  attempted.add(key);
+  const promise = import(url.href) as Promise<Record<string, unknown>>;
+  moduleCache.set(key, promise);
+  // A failed import (a file mid-write during a sync) is not remembered, so the next call tries again.
+  promise.catch(() => {
+    if (moduleCache.get(key) === promise) moduleCache.delete(key);
+  });
+  return promise as Promise<T>;
 }

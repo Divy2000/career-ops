@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { SessionStore, sessionsDir } from '../../server/claude/sessions.js';
+import { tempDir } from '../helpers/tmp.js';
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sessions-'));
-const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sessions-guard-'));
+const root = tempDir('cc-sessions-');
+const guardRoot = tempDir('cc-sessions-guard-');
 
 describe('session store', () => {
   const store = new SessionStore(root, guardRoot);

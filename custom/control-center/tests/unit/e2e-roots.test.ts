@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { installTutorial } from '../../scripts/install-tutorial.mjs';
 import { listTutorials } from '../../server/domains/tutorials.js';
-import { tinyPng, writeDemoTutorials } from '../e2e/roots.js';
+import { e2eTempParent, tinyPng, writeDemoTutorials } from '../e2e/roots.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let dir: string;
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-roots-'));
+  dir = tempDir('cc-e2e-roots-');
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -81,7 +81,7 @@ describe('writeDemoTutorials, the documentation guide fixture', () => {
 
   it('declares sizes that match the files, so install-tutorial --strict-dims accepts the folder', () => {
     writeDemoTutorials(dir);
-    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-e2e-roots-target-'));
+    const target = tempDir('cc-e2e-roots-target-');
     try {
       expect(installTutorial({ source: folder(), dataRoot: target, strictDims: true }).id).toBe('docs-tour');
     } finally {
@@ -95,5 +95,25 @@ describe('writeDemoTutorials, the documentation guide fixture', () => {
     const subs = docs.guideDocs!.sections.flatMap((s) => s.subsections);
     expect(subs.some((u) => u.route !== null && u.chapter !== null)).toBe(true);
     expect(docs.guideDocs!.sections.length).toBeGreaterThan(1);
+  });
+});
+
+describe('e2eTempParent', () => {
+  it('makes one parent for every e2e root where it runs first, and removes it with everything under it on cleanup', () => {
+    const env: NodeJS.ProcessEnv = {};
+    const first = e2eTempParent(env, dir);
+    expect(path.dirname(first.dir)).toBe(dir);
+    expect(env.CC_E2E_TMP).toBe(first.dir);
+    fs.mkdirSync(path.join(first.dir, 'root', 'data'), { recursive: true });
+    expect(first.cleanup).not.toBeNull();
+    first.cleanup!();
+    expect(fs.existsSync(first.dir)).toBe(false);
+  });
+
+  it('reuses the parent named in the environment (a worker re-importing the config) and leaves its removal to the process that made it', () => {
+    const env: NodeJS.ProcessEnv = { CC_E2E_TMP: path.join(dir, 'made-elsewhere') };
+    const again = e2eTempParent(env, dir);
+    expect(again).toEqual({ dir: path.join(dir, 'made-elsewhere'), cleanup: null });
+    expect(fs.readdirSync(dir)).toEqual([]);
   });
 });

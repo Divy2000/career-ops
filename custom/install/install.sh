@@ -612,7 +612,7 @@ fi
 
 if [ -n "$PROJECTS" ]; then
   if [ "$DRY_RUN" = 1 ]; then
-    dry "copy $PROJECTS to documents/projects/ and create article-digest.md from it when absent"
+    dry "copy $PROJECTS to documents/projects/ (a projects JSON as its Markdown conversion, which intake reads) and create article-digest.md from it when absent"
   else
     # Already validated in step 2; projects-seed checks again with this checkout's parser.
     lib_path="$(projects_lib)"

@@ -41,30 +41,35 @@ function customTemplate(data, template) {
   out('created');
 }
 
-function sameBytes(a, b) {
-  return fs.readFileSync(a).equals(fs.readFileSync(b));
-}
-
-function copyOne(kind, src, destDir) {
+// Puts `bytes` into destDir as `base`: an identical file of that name family is reused, a different one
+// is never overwritten (the copy gets a -1, -2 ... suffix). Prints the outcome and returns the path.
+function placeOne(kind, base, bytes, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
-  const base = path.basename(src);
   const ext = path.extname(base);
   const stem = base.slice(0, base.length - ext.length);
   const family = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(-\\d+)?${ext.replace('.', '\\.')}$`);
   const names = fs.readdirSync(destDir);
-  const twin = names.filter((n) => family.test(n)).find((n) => sameBytes(path.join(destDir, n), src));
-  if (twin) return out('present', kind, path.join(destDir, twin));
+  const twin = names.filter((n) => family.test(n)).find((n) => fs.readFileSync(path.join(destDir, n)).equals(bytes));
+  if (twin) {
+    out('present', kind, path.join(destDir, twin));
+    return path.join(destDir, twin);
+  }
   const taken = new Set(names);
   for (;;) {
     const name = uniqueDestName(base, taken);
     try {
-      fs.copyFileSync(src, path.join(destDir, name), fs.constants.COPYFILE_EXCL);
-      return out('copied', kind, path.join(destDir, name));
+      fs.writeFileSync(path.join(destDir, name), bytes, { flag: 'wx' });
+      out('copied', kind, path.join(destDir, name));
+      return path.join(destDir, name);
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
       taken.add(name);
     }
   }
+}
+
+function copyOne(kind, src, destDir) {
+  return placeOne(kind, path.basename(src), fs.readFileSync(src), destDir);
 }
 
 function copyDocuments(data, resume, docs) {
@@ -185,10 +190,19 @@ async function projectsSeed(lib, data, file) {
     for (const e of r.errors.length ? r.errors : [`${file} has no projects`]) process.stderr.write(`error: ${e}\n`);
     process.exit(2);
   }
-  copyOne('projects', file, path.join(data, 'documents', 'projects'));
+  const docs = path.join(data, 'documents', 'projects');
+  let text = r.text;
+  if (/\.(md|markdown)$/i.test(file)) copyOne('projects', file, docs);
+  else {
+    // intake reads Markdown, not JSON: the conversion is the source document kept in documents/, and each entry names it.
+    const kept = placeOne('projects', `${path.basename(file).replace(/\.[^.]*$/, '')}.md`, Buffer.from(r.text), docs);
+    const source = path.relative(data, kept).split(path.sep).join('/');
+    const projects = await import(pathToFileURL(path.resolve(lib)).href);
+    text = projects.serializeLibrary(projects.parseLibrary(r.text).entries.map((e) => ({ ...e, source })));
+  }
   const target = path.join(data, 'article-digest.md');
   try {
-    fs.writeFileSync(target, r.text, { flag: 'wx' });
+    fs.writeFileSync(target, text, { flag: 'wx' });
   } catch (err) {
     if (err.code === 'EEXIST') return out('exists');
     throw err;

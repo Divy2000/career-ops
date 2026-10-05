@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
 import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
 import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings } from '../../server/domains/settings.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const PORTALS = `# Synthetic portals config for tests
 title_filter:
@@ -92,6 +92,15 @@ Some intro text about the file.
     ]);
     expect(parsed.preamble).toContain('Some intro text about the file.');
   });
+  it('reads a table whose company column is headed "Company name", so a save keeps its rows', () => {
+    const md = '# Blacklist\n\n| Company name | Reason |\n|---|---|\n| Spam Staffing Ltd | body-shop |\n| Acme Recruiting | spam |\n';
+    const parsed = parseBlacklist(md);
+    expect(parsed.rows.map((r) => r.company)).toEqual(['Spam Staffing Ltd', 'Acme Recruiting']);
+    expect(parsed.extraColumns).toEqual([]);
+    const saved = renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, parsed.extraColumns);
+    expect(parseBlacklist(saved).rows).toEqual(parsed.rows);
+  });
+
   it('maps the legacy three-column table (Company, Reason, Added) to company scope', () => {
     const parsed = parseBlacklist('# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Spam Staffing Ltd | body-shop | 2026-09-01 |\n');
     expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop' }]);
@@ -192,7 +201,7 @@ describe('launchd schedule helpers', () => {
 
 describe('usage meter from ~/.claude/projects jsonl', () => {
   it('sums input, output and cache-creation tokens over 5h and 7d, dedups by requestId and ignores older lines', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-usage-unit-'));
+    const dir = tempDir('cc-usage-unit-');
     fs.mkdirSync(path.join(dir, 'proj-a'));
     const now = Date.parse('2026-10-03T12:00:00Z');
     const line = (ts: number, input: number, output: number, cache: number, requestId: string) =>

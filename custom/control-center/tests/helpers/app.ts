@@ -1,10 +1,10 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp, type AppDeps, type BuiltApp } from '../../server/app.js';
 import { SESSION_COOKIE } from '../../server/auth/plugin.js';
 import { DEFAULT_CODE_ROOT, type ServerConfig } from '../../server/config.js';
+import { tempDir } from './tmp.js';
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const FIXTURE_ROOT = path.join(PACKAGE_ROOT, 'tests', 'fixtures', 'root');
@@ -12,7 +12,7 @@ export const FAKE_CLAUDE = path.join(PACKAGE_ROOT, 'tests', 'fakes', 'claude.mjs
 
 /** Fresh copy of the synthetic data root; never the user's real one. */
 export function copyFixtureRoot(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-root-'));
+  const dir = tempDir('cc-test-root-');
   fs.cpSync(FIXTURE_ROOT, dir, { recursive: true });
   return dir;
 }
@@ -29,7 +29,7 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     dataRoot,
     dataRootFromEnv: true,
     // Outside both roots, like the supervisor's default; never the real ~/Library.
-    guardRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-')),
+    guardRoot: tempDir('cc-test-guard-'),
     publicPort: TEST_PORT,
     token: TEST_TOKEN,
     sessionSecret: TEST_SECRET,

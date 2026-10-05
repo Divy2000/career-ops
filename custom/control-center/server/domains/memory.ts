@@ -3,6 +3,7 @@
 // TUI see them too.
 import fs from 'node:fs';
 import path from 'node:path';
+import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 
 export const NOTES_START = '<!-- co-web-notes:start -->';
 export const NOTES_END = '<!-- co-web-notes:end -->';
@@ -22,20 +23,25 @@ export function applyRememberedFact(md: string, fact: string): { text: string; r
   return { text: base + section, result: 'ok' };
 }
 
+/** Remember before onboarding: a bare modes/_profile.md would pass doctor's checks and stop --init-templates from copying the template. */
+export class ProfileMissingError extends Error {
+  constructor() {
+    super('modes/_profile.md does not exist yet: run the onboarding interview (Profile & CV > AI flows) first, then remember facts; nothing was written');
+  }
+}
+
 export function rememberFact(dataRoot: string, fact: string): 'ok' | 'deduped' {
   const p = path.join(dataRoot, 'modes', '_profile.md');
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  let md = '';
+  let md: string;
   try {
     md = fs.readFileSync(p, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new ProfileMissingError();
+    throw err;
   }
   const { text, result } = applyRememberedFact(md, fact);
   if (result === 'ok') {
-    const tmp = `${p}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, p);
+    writeFileAtomic(p, text, dataRootOnly(dataRoot));
   }
   return result;
 }

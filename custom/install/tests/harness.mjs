@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { isNestedCheckout } from '../../../lib/mjs-files.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const INSTALL_DIR = path.join(HERE, '..');
@@ -113,17 +114,24 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
     snapshot() {
       const out = {};
       const skip = new Set([stubLog, ttyFile, fakeSrc]);
+      // The walk never crosses into a checkout on its own (the shared isNestedCheckout rule); the fake
+      // checkouts this world makes are part of what a test compares, so each is then walked as a root of its own.
+      const roots = [T];
       const walk = (d) => {
         for (const e of fs.readdirSync(d, { withFileTypes: true })) {
           const f = path.join(d, e.name);
           if (skip.has(f)) continue;
           if (e.isDirectory()) {
             out[`${path.relative(T, f)}/`] = '';
+            if (isNestedCheckout(f)) {
+              roots.push(f);
+              continue;
+            }
             walk(f);
           } else out[path.relative(T, f)] = fs.readFileSync(f).toString('base64');
         }
       };
-      walk(T);
+      while (roots.length) walk(roots.shift());
       return out;
     },
     /** Runs the script under a real pseudo-terminal, sending each answer once its prompt has appeared. */

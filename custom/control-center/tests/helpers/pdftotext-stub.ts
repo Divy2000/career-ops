@@ -2,11 +2,15 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { INTAKE_PROBE_TIMEOUT_MS } from '../../server/domains/projects.js';
 
-/** Whether Poppler's pdftotext is installed (it is optional; CI may not have it). */
-export function hasRealPdftotext(): boolean {
-  const r = spawnSync('pdftotext', ['-v'], { stdio: 'ignore' });
-  return !r.error && r.status === 0;
+/**
+ * Whether pdftotext is installed (it is optional; CI may not have it), decided as intake.mjs's probeRan decides it: the binary ran,
+ * whatever its exit code (Xpdf exits 99 for -v), within intake's own probe timeout.
+ */
+export function hasRealPdftotext(timeoutMs = INTAKE_PROBE_TIMEOUT_MS): boolean {
+  const r = spawnSync('pdftotext', ['-v'], { stdio: 'ignore', timeout: timeoutMs });
+  return typeof r.status === 'number';
 }
 
 /**

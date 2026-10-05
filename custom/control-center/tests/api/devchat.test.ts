@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { getModePolicy } from '../../server/claude/modes.js';
 import { buildArgv } from '../../server/claude/invocation.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -144,8 +144,8 @@ describe('Dev Chat', () => {
 
   it('a turn that ends while no server runs keeps its own post-turn hashes: a later hand edit blocks the revert', async () => {
     const dataRoot = copyFixtureRoot();
-    const guardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-guard-'));
-    const scenario = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-scenario-')), 'offline.json');
+    const guardRoot = tempDir('cc-test-guard-');
+    const scenario = path.join(tempDir('cc-scenario-'), 'offline.json');
     fs.writeFileSync(scenario, JSON.stringify({ events: [{ type: 'system', subtype: 'init', model: 'fake-model', tools: ['Write'] }, { __sleep: 400 }, { __write: { path: '{{DATA_ROOT}}/data/notes/offline.md', content: 'written by the turn\n' } }, { type: 'result', subtype: 'success', result: 'Wrote the note.', total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, num_turns: 1, is_error: false }] }));
     const a = await makeTestApp({ dataRoot, guardRoot });
     process.env.FAKE_CLAUDE_SCENARIO = scenario;

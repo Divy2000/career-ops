@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { imageSize, installTutorial } from '../../scripts/install-tutorial.mjs';
 import { listTutorials, parseManifest } from '../../server/domains/tutorials.js';
 import { MAX_GUIDE_BYTES } from '../../server/domains/tutorial-manifest.mjs';
 import { PACKAGE_ROOT } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const GUIDE = {
   sections: [
@@ -40,7 +40,7 @@ function recordingFolder() {
 }
 
 beforeEach(() => {
-  work = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-install-tut-'));
+  work = tempDir('cc-install-tut-');
   dataRoot = path.join(work, 'data-root');
   fs.mkdirSync(dataRoot, { recursive: true });
 });

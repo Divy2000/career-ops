@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 let fake: ReturnType<typeof fakeLaunchdExec>;
 let usageDir: string;
 beforeAll(async () => {
-  usageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-usage-api-'));
+  usageDir = tempDir('cc-usage-api-');
   fake = fakeLaunchdExec();
   t = await makeTestApp({ claudeProjectsDir: usageDir }, { exec: fake.exec });
 });
@@ -345,6 +345,13 @@ describe('cached insights scripts', () => {
     expect((await get('/api/insights/notAScript')).statusCode).toBe(404);
     const reposts = await get('/api/insights/detectReposts');
     expect(reposts.statusCode, reposts.body).toBe(200);
+  });
+
+  it('answers 404 for names inherited from Object, which are not scripts', async () => {
+    for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      const res = await get(`/api/insights/${name}`);
+      expect(res.statusCode, `${name}: ${res.body}`).toBe(404);
+    }
   });
 });
 

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseLaunchctlPrint, parsePrintDisabled, ScheduleService, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { formatLocalMinute, describeLastExit } from '../../web/lib/time.js';
 import type { Exec } from '../../server/routes/system.js';
+import { tempDir } from '../helpers/tmp.js';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'launchctl');
 const read = (name: string) => fs.readFileSync(path.join(fixtures, name), 'utf8');
@@ -36,7 +36,7 @@ describe('launchctl print, parsed from captured real output', () => {
 });
 
 describe('ScheduleService.readOne against launchctl output', () => {
-  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-agents-'));
+  const agentsDir = tempDir('cc-agents-');
   const job = SCHEDULE_JOBS[0]!;
   fs.writeFileSync(path.join(agentsDir, `${job.label}.plist`), '<plist/>');
   const exec: Exec = async (cmd, args) => {

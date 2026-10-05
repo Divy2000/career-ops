@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -100,22 +100,40 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const [draft, setDraft] = useState('');
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const onEnvelope = useCallback((kind: string, payload: unknown) => {
-    if (kind === 'cv') setDraft((payload as { markdown: string }).markdown);
-  }, []);
+  // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
+  const currentUpload = useRef<string | null>(null);
+  const showUpload = (p: string | null) => {
+    currentUpload.current = p;
+    setUploadPath(p);
+  };
+  const envelopeFor = useCallback(
+    (forPath: string) => (kind: string, payload: unknown) => {
+      if (kind === 'cv' && currentUpload.current === forPath) setDraft((payload as { markdown: string }).markdown);
+    },
+    [],
+  );
+  const onEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
+  // Bumped by every file pick; an upload or read that finishes under an older pick is dropped (as the projects import does).
+  const generation = useRef(0);
   const onFile = async (file: File) => {
+    const mine = ++generation.current;
+    const current = () => generation.current === mine;
     setNote(null);
+    showUpload(null);
     if (/\.(md|txt|markdown)$/i.test(file.name)) {
-      setDraft(await file.text());
+      const text = await file.text();
+      if (current()) setDraft(text);
       return;
     }
-    const type = file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
     const res = await fetch(`/api/cv/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
-    if (!res.ok) {
-      setNote(`Upload failed (${res.status}). PDF and DOCX only.`);
+    const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
+    if (!current()) return;
+    if (!res.ok || !body?.path) {
+      setNote(`Upload failed (${res.status}): ${body?.error ?? 'PDF only'}.`);
       return;
     }
-    setUploadPath(((await res.json()) as { path: string }).path);
+    showUpload(body.path);
   };
   const save = async () => {
     const current = await apiGet<UserFile>('/api/files/user/cv');
@@ -127,11 +145,11 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   return (
     <div className="card import-card">
       <h2>Import CV</h2>
-      <p className="muted">Paste the text, drop a .md or .txt file, or upload a PDF or DOCX for the parser session (uses tokens, read-only scope).</p>
+      <p className="muted">Paste the text, drop a .md or .txt file, or upload a PDF for the parser session (uses tokens, read-only scope).</p>
       <div className="row gap import-card__controls">
-        <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf,.docx" onFile={(f) => void onFile(f)} />
+        <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf" onFile={(f) => void onFile(f)} />
       </div>
-      {uploadPath && <SessionPanel mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
+      {uploadPath && <SessionPanel key={uploadPath} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
       <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="# Your name ..." />
       <div className="row gap">
         <button type="button" disabled={!draft.trim()} onClick={() => void save()}>

@@ -24,7 +24,7 @@ fetch_main() {
 # install_root_deps <ignore-scripts|run-scripts>: install the checkout's root
 # dependencies (run from the repo root). Upstream ships no root package-lock.json,
 # so "npm ci" only works when one is tracked; otherwise install without writing a
-# lockfile. control-center has its own tracked lockfile and is not installed here.
+# lockfile. control-center has its own tracked lockfile; control_center_checks installs it.
 install_root_deps() {
   local mode="$1" flags=()
   case "$mode" in
@@ -47,4 +47,18 @@ install_root_deps() {
 # between two revisions: the tracked lockfile's blob, else package.json's.
 deps_fingerprint() {
   git rev-parse --verify --quiet "$1:package-lock.json" 2>/dev/null || git rev-parse --verify "$1:package.json"
+}
+
+# control_center_checks <log>: install custom/control-center from its tracked
+# lockfile (no lifecycle scripts), then run its vitest suite (which holds the
+# contract test against upstream's CLIs) and its typecheck, all output to <log>.
+# Fails at the first failing step, and when no test ran at all.
+control_center_checks() {
+  local log="$1"
+  {
+    npm --prefix custom/control-center ci --ignore-scripts --no-audit --no-fund &&
+      npm --prefix custom/control-center test &&
+      npm --prefix custom/control-center run typecheck
+  } > "$log" 2>&1 || return 1
+  grep -qE 'Tests[[:space:]]+[1-9][0-9]* passed' "$log"
 }

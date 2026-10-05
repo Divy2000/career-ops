@@ -134,7 +134,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
   // ---- cached insights scripts ----
   app.get('/api/insights/scripts', async () => Object.entries(INSIGHT_SCRIPTS).map(([id, d]) => ({ id, label: d.label })));
   app.get<{ Params: { script: string }; Querystring: { recompute?: string } }>('/api/insights/:script', async (req, reply) => {
-    if (!(req.params.script in INSIGHT_SCRIPTS)) return reply.code(404).send({ error: `unknown insights script ${req.params.script}` });
+    if (!Object.hasOwn(INSIGHT_SCRIPTS, req.params.script)) return reply.code(404).send({ error: `unknown insights script ${req.params.script}` });
     return readInsight(cfg, exec, req.params.script as InsightScript, { recompute: req.query.recompute === '1' });
   });
 

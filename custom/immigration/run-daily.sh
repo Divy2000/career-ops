@@ -60,7 +60,8 @@ policy_watch() {
   prompt="$(WATCH_JSON="$watch_json" TODAY="$TODAY" IMM="$IMM" node -e '
 const fs = require("fs");
 const t = fs.readFileSync("custom/immigration/daily-prompt.md", "utf8");
-process.stdout.write(t.replaceAll("{{TODAY}}", process.env.TODAY).replaceAll("{{IMM}}", process.env.IMM).replace("{{WATCH_JSON}}", process.env.WATCH_JSON));
+// Replacer functions: a string replacement would expand $&, $` and the like inside the feed JSON or the path.
+process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceAll("{{IMM}}", () => process.env.IMM).replace("{{WATCH_JSON}}", () => process.env.WATCH_JSON));
 ')" || return 1
   # Absolute path rule (leading //) so the AI writes where watch.mjs reads,
   # even when the data root is outside the checkout.

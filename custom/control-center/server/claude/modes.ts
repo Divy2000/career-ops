@@ -222,7 +222,7 @@ export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyC
   advisor: { title: 'Ask (advisor)', policyClass: 'read-only' },
   'ai-search': { title: 'AI search', policyClass: 'read-only', network: ['WebSearch'] },
   research: { title: 'Portfolio research', policyClass: 'read-only', network: ['WebFetch'] },
-  'cv-ingest': { title: 'CV import (PDF/DOCX parse)', policyClass: 'read-only' },
+  'cv-ingest': { title: 'CV import (PDF parse)', policyClass: 'read-only' },
   // Runs no command: the app extracts the documents/ source with intake's helpers and puts the text in the first message.
   'projects-ingest': { title: 'Projects import (PDF parse)', policyClass: 'read-only' },
   'fix-portal': { title: 'Fix portal slug', policyClass: 'fix-portal' },
