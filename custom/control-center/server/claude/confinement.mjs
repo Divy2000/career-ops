@@ -27,14 +27,21 @@ export function contractApprovedVersions(contractFile = CONTRACT_FILE) {
 
 /**
  * Asks `bin --version` (autoupdater off, so asking cannot update it) and says whether that version may run outside
- * the app: `problem` is null for an approved version, else why not. Throws when the version cannot be read.
+ * the app: `problem` is null for an approved version, else why not. `identity` (real path @ version) lets a caller
+ * check right before a spawn that the binary is still the one it approved. Throws when the version cannot be read.
  */
 export function claudeVersionGate(bin, approved = contractApprovedVersions()) {
   const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, DISABLE_AUTOUPDATER: '1' } });
   const version = r.status === 0 ? parseClaudeVersion(r.stdout) : null;
   if (!version) throw new Error(`could not read the Claude Code version from ${bin} (exit ${r.status ?? r.error?.code}${r.stdout?.trim() ? `: ${JSON.stringify(r.stdout.trim().slice(0, 80))}` : ''})`);
+  let real = bin;
+  try {
+    real = fs.realpathSync(bin);
+  } catch {
+    /* a bare name that spawn found on PATH: its spelling stands for it */
+  }
   const list = approved.length ? approved.join(', ') : 'none yet';
-  return { version, problem: approved.includes(version) ? null : `Claude Code ${version} is not approved for the confined pass (approved: ${list}); install an approved one (claude install ${approved[0] ?? '<version>'}) or approve it with npm --prefix custom/control-center run probe:reads -- --record` };
+  return { version, identity: `${real}@${version}`, problem: approved.includes(version) ? null : `Claude Code ${version} is not approved for the confined pass (approved: ${list}); install an approved one (claude install ${approved[0] ?? '<version>'}) or approve it with npm --prefix custom/control-center run probe:reads -- --record` };
 }
 
 /** Denied for every non Dev Chat session and for the daily policy pass, regardless of class (enforced by the hook). */

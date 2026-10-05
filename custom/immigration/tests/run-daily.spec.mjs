@@ -40,7 +40,7 @@ const APPROVED = JSON.parse(readFileSync(path.join(ROOT, 'custom/control-center/
  * other step, a data root outside it, a fake Keychain and a fake claude that records its argv and the settings file it
  * was given. CC_CLAUDE_BIN points at the fake: the real claude on this machine is never run.
  */
-function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
+function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVED } = {}) {
   const T = fs.realpathSync(tempDir('run-daily-'));
   const root = path.join(T, 'root');
   const home = path.join(T, 'home');
@@ -54,7 +54,7 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
   };
   for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'path-resolver.mjs', 'lib/is-main-module.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
   for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs', 'claude-shim.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
-  put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: APPROVED } }));
+  put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: approved } }));
   put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
   const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`;
@@ -241,4 +241,18 @@ test('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shi
   assert.equal(r.rankCalls[0].token, true);
   assert.match(r.steps, /^rank got: SUMMARY/m);
   assert.deepEqual(r.leftovers, [], 'the shim folder lives only for the rank step');
+});
+
+test('the Claude Code checked at the start is checked again right before each spawn: a binary updated meanwhile never runs the pass or the rank', () => {
+  // Both versions are approved: what refuses the calls is the change itself, between the job's check and the spawn.
+  const w = dailyWorld({ approved: ['2.1.289', '2.1.300'] });
+  const r = w.run({ FAKE_CLAUDE_VERSIONS: JSON.stringify(['2.1.289 (Claude Code)', '2.1.300 (Claude Code)']) });
+  assert.equal(r.calls.length, 0, r.log);
+  assert.equal(r.rankCalls.length, 0, r.steps);
+  assert.match(r.log, /Claude Code changed since the job checked it .*2\.1\.289.*2\.1\.300.*the pass is not run/);
+  assert.match(r.log, /!!! step failed: policy watch/);
+  assert.match(r.log, /!!! step failed: rank top 100/);
+  assert.match(r.log, /Claude Code changed since the job checked it .*the rank is not run/);
+  assert.notEqual(r.status, 0);
+  assert.deepEqual(r.leftovers, []);
 });

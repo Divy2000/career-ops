@@ -20,4 +20,4 @@ export function guardHooks(command?: string): { PreToolUse: Array<{ matcher: str
 export function writeGuardPolicy(dir: string, policy: object): { file: string; sha256: string };
 export function parseClaudeVersion(out: string): string | null;
 export function contractApprovedVersions(contractFile?: string): string[];
-export function claudeVersionGate(bin: string, approved?: string[]): { version: string; problem: string | null };
+export function claudeVersionGate(bin: string, approved?: string[]): { version: string; identity: string; problem: string | null };

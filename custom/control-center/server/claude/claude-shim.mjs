@@ -1,7 +1,8 @@
 // `claude` for calls the daily job makes through scripts it cannot change: run-daily.sh puts a wrapper for this file
 // first on PATH for the rank step, so rank-pipeline.mjs (upstream) gets a confined claude. A wrapped call keeps its
 // prompt and model and runs with no tools, no MCP servers and dontAsk, on an approved Claude Code with the autoupdater
-// off; a flag that could widen it refuses the call. The real binary is CC_CLAUDE_BIN (absolute, never this file).
+// off; a flag that could widen it refuses the call. The real binary is CC_CLAUDE_BIN (absolute, never this file);
+// with CC_CLAUDE_EXPECT (real path @ version, as the job's own check saw it) a binary changed since never runs.
 // Dev Chat cannot edit it (server/claude/** is protected).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -74,6 +75,8 @@ function main(argv) {
     refuse(`claude-shim: ${err.message}`);
   }
   if (gate.problem) refuse(`claude-shim: ${gate.problem}`, 3);
+  const expected = process.env.CC_CLAUDE_EXPECT;
+  if (expected && gate.identity !== expected) refuse(`claude-shim: Claude Code changed since the job checked it (${expected}, now ${gate.identity}); the call is not run`, 4);
   const r = spawnSync(real, confined.argv, { stdio: 'inherit', env });
   process.exit(r.status ?? 1);
 }

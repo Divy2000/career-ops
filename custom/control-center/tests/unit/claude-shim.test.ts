@@ -86,6 +86,18 @@ describe('claude shim: running the real binary', () => {
     expect(self.stderr).toMatch(/the shim itself/);
   });
 
+  it('with CC_CLAUDE_EXPECT, runs only the binary and version the job checked: a binary changed since never runs (exit 4)', () => {
+    const real = realClaude(APPROVED);
+    const identity = `${fs.realpathSync(real.bin)}@${APPROVED}`;
+    expect(shim(['-p', 'x'], { CC_CLAUDE_BIN: real.bin, CC_CLAUDE_EXPECT: identity }).status).toBe(0);
+    for (const stale of [`${fs.realpathSync(real.bin)}@2.1.288`, `/elsewhere/claude@${APPROVED}`]) {
+      const r = shim(['-p', 'x'], { CC_CLAUDE_BIN: real.bin, CC_CLAUDE_EXPECT: stale });
+      expect(r.status, stale).toBe(4);
+      expect(r.stderr).toMatch(/changed since the job checked it/);
+    }
+    expect(real.calls()).toHaveLength(1);
+  });
+
   it('--version answers with the real version, autoupdater off', () => {
     const r = shim(['--version'], { CC_CLAUDE_BIN: realClaude(APPROVED).bin });
     expect(r.status).toBe(0);

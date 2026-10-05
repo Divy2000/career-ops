@@ -8,8 +8,17 @@ import { spawnSync } from 'node:child_process';
 const argv = process.argv.slice(2);
 if (argv[0] === '--version') {
   fs.appendFileSync(process.env.FAKE_CLAUDE_RECORD, `${JSON.stringify({ versionCall: true, disableAutoupdater: process.env.DISABLE_AUTOUPDATER ?? null })}\n`);
-  if (!process.env.FAKE_CLAUDE_VERSION) process.exit(1);
-  console.log(process.env.FAKE_CLAUDE_VERSION);
+  // FAKE_CLAUDE_VERSIONS (a JSON list) answers successive --version calls in turn, the last one from then on.
+  let version = process.env.FAKE_CLAUDE_VERSION;
+  if (process.env.FAKE_CLAUDE_VERSIONS) {
+    const list = JSON.parse(process.env.FAKE_CLAUDE_VERSIONS);
+    const counter = `${process.env.FAKE_CLAUDE_RECORD}.versions`;
+    const n = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) : 0;
+    fs.writeFileSync(counter, String(n + 1));
+    version = list[Math.min(n, list.length - 1)];
+  }
+  if (!version) process.exit(1);
+  console.log(version);
   process.exit(0);
 }
 const at = argv.indexOf('--settings');

@@ -52,28 +52,34 @@ step() {
 # Every Claude call of this job (the policy pass, and the rank through claude-shim.mjs) runs only
 # on a Claude Code whose confinement was probed (contract.json claude.approvedVersions), asked with
 # the autoupdater off: another version can change what the confinement flags and rules do.
-# CLAUDE_GATE_RC is 0 (approved), 3 (another version: those steps are skipped, not failed) or 1 (the
-# version cannot be read: those steps fail). CC_CLAUDE_BIN chooses the binary (tests use a fake).
+# claude_check prints the binary's identity (real path @ version) for an approved version (exit 0),
+# the reason for another version (exit 3) or why the version cannot be read (exit 1). CLAUDE_GATE_RC
+# is that exit for the whole job: 3 skips the Claude steps, 1 fails them. Each spawn checks again
+# that the binary is still CLAUDE_GATE. CC_CLAUDE_BIN chooses the binary (tests use a fake).
 CLAUDE_REAL="${CC_CLAUDE_BIN:-$(command -v claude || true)}"
-CLAUDE_GATE_RC=0
-CLAUDE_GATE="$(CLAUDE_BIN="$CLAUDE_REAL" node --input-type=module -e '
+claude_check() {
+  CLAUDE_BIN="$CLAUDE_REAL" node --input-type=module -e '
 import path from "node:path";
 const { claudeVersionGate } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
-let problem;
+let gate;
 try {
-  ({ problem } = claudeVersionGate(process.env.CLAUDE_BIN || "claude"));
+  gate = claudeVersionGate(process.env.CLAUDE_BIN || "claude");
 } catch (err) {
   process.stdout.write(`${err.message}; the Claude steps need an approved Claude Code`);
   process.exit(1);
 }
-if (problem) {
-  process.stdout.write(problem);
+if (gate.problem) {
+  process.stdout.write(gate.problem);
   process.exit(3);
 }
-' 2>&1)" || CLAUDE_GATE_RC=$?
+process.stdout.write(gate.identity);
+' 2>&1
+}
+CLAUDE_GATE_RC=0
+CLAUDE_GATE="$(claude_check)" || CLAUDE_GATE_RC=$?
 
 policy_watch() {
-  local watch_json prompt batch settings_dir policy_sha rc
+  local watch_json prompt batch settings_dir policy_sha rc now
   watch_json="$(node custom/immigration/watch.mjs)" || return 1
   echo "$watch_json"
   # Only an approved Claude Code runs the pass (see claude_gate). An unapproved one skips the pass
@@ -140,6 +146,12 @@ process.stdout.write(policy.sha256);
     rm -rf "$settings_dir"
     return 1
   fi
+  # The binary checked at the start must still be the one that runs: an update in between is refused.
+  if ! now="$(claude_check)" || [ "$now" != "$CLAUDE_GATE" ]; then
+    echo "Claude Code changed since the job checked it ($CLAUDE_GATE, now $now); the pass is not run"
+    rm -rf "$settings_dir"
+    return 1
+  fi
   rc=0
   DISABLE_AUTOUPDATER=1 CC_POLICY_FILE="$settings_dir/policy.json" CC_POLICY_SHA256="$policy_sha" CC_SESSION_DIR="$settings_dir" \
   "$CLAUDE_REAL" -p "$prompt" \
@@ -163,14 +175,19 @@ step "prioritize pipeline" node custom/pipeline/prioritize.mjs
 # rank-pipeline.mjs (upstream) runs `claude -p` on untrusted posting text. It runs with --cli claude
 # (whatever CAREER_OPS_RANK_CLI says) and a wrapper for claude-shim.mjs first on PATH, so that call
 # gets no tools, no MCP servers and dontAsk on the approved binary; the folder is removed after.
+# The shim checks again before every call that the binary is still CLAUDE_GATE (CC_CLAUDE_EXPECT).
 rank_top() {
-  local shim_dir rc
+  local shim_dir rc now
   if [ "$CLAUDE_GATE_RC" -eq 3 ]; then
     echo "rank skipped: $CLAUDE_GATE"
     return 0
   fi
   if [ "$CLAUDE_GATE_RC" -ne 0 ]; then
     echo "$CLAUDE_GATE"
+    return 1
+  fi
+  if ! now="$(claude_check)" || [ "$now" != "$CLAUDE_GATE" ]; then
+    echo "Claude Code changed since the job checked it ($CLAUDE_GATE, now $now); the rank is not run"
     return 1
   fi
   shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
@@ -185,7 +202,7 @@ fs.writeFileSync(path.join(process.env.DIR, "claude"), `#!/bin/sh\nexec ${shellQ
     return 1
   fi
   rc=0
-  PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
+  PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" CC_CLAUDE_EXPECT="$CLAUDE_GATE" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
   rm -rf "$shim_dir"
   return "$rc"
 }
