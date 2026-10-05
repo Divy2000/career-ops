@@ -312,6 +312,18 @@ describe('launchd schedule through the injectable executor (never the real launc
   });
 });
 
+describe('job log names inherited from Object', () => {
+  it('answers 400, not 500, for a job named after an Object property, on the list and on a dated log', async () => {
+    for (const job of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      for (const url of [`/api/schedule/logs?job=${job}`, `/api/schedule/logs/2026-10-03?job=${job}`]) {
+        const res = await get(url);
+        expect(res.statusCode, `${url}: ${res.body}`).toBe(400);
+        expect(res.json().error).toBe('job must be immigration-watch or upstream-sync');
+      }
+    }
+  });
+});
+
 describe('app settings and usage meter', () => {
   it('returns defaults, persists a partial patch, applies the Claude slot cap and validates', async () => {
     expect((await get('/api/settings/app')).json()).toMatchObject({ logos: false, retention: 500, claudeConcurrency: 2 });

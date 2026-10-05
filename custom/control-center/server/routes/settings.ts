@@ -94,7 +94,11 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     return r.state;
   });
 
-  const logJob = (q: { job?: string }) => LOG_JOBS[q.job ?? 'immigration-watch'];
+  const logJob = (q: { job?: string }) => {
+    const name = q.job ?? 'immigration-watch';
+    // Own keys only: `constructor` or `__proto__` would otherwise find Object's members.
+    return Object.hasOwn(LOG_JOBS, name) ? LOG_JOBS[name] : undefined;
+  };
   app.get<{ Querystring: { job?: string } }>('/api/schedule/logs', async (req, reply) => {
     const job = logJob(req.query);
     if (!job) return reply.code(400).send({ error: 'job must be immigration-watch or upstream-sync' });
