@@ -36,28 +36,35 @@ describe('daily job detection', () => {
 });
 
 describe('a daily run with no done line', () => {
-  const UNFINISHED = '=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n';
-  async function statuses(app: TestApp): Promise<{ today: string; latest: string; one: string; weekly: string }> {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const now = new Date();
+  // The server's local calendar date: only today's log can belong to a job that runs now.
+  const TODAY = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const OLD = '2001-01-02';
+  const unfinished = (date: string) => `=== ${date} 08:00:00 start\n--- 08:00:01 policy watch\n`;
+  async function statuses(app: TestApp) {
     const logs = path.join(app.cfg.dataRoot, 'data', 'immigration', 'logs');
-    fs.writeFileSync(path.join(logs, '2026-10-05.log'), UNFINISHED);
+    for (const date of [TODAY, OLD]) fs.writeFileSync(path.join(logs, `${date}.log`), unfinished(date));
     const weeklyDir = path.join(app.cfg.dataRoot, 'data', 'upstream-sync');
     fs.mkdirSync(weeklyDir, { recursive: true });
-    fs.writeFileSync(path.join(weeklyDir, '2026-10-04.log'), UNFINISHED);
+    for (const date of [TODAY, OLD]) fs.writeFileSync(path.join(weeklyDir, `${date}.log`), unfinished(date));
     const get = async (url: string) => (await app.app.inject({ method: 'GET', url, headers: app.authed })).json();
     return {
-      today: (await get('/api/immigration/overview')).dailyLog.status,
+      todayChip: (await get('/api/immigration/overview')).dailyLog.status,
       latest: (await get('/api/schedule/logs')).latest.status,
-      one: (await get('/api/schedule/logs/2026-10-05')).status,
-      weekly: (await get('/api/schedule/logs/2026-10-04?job=upstream-sync')).status,
+      today: (await get(`/api/schedule/logs/${TODAY}`)).status,
+      old: (await get(`/api/schedule/logs/${OLD}`)).status,
+      weeklyToday: (await get(`/api/schedule/logs/${TODAY}?job=upstream-sync`)).status,
+      weeklyOld: (await get(`/api/schedule/logs/${OLD}?job=upstream-sync`)).status,
     };
   }
   it('reads interrupted on the Today chip and in the log browser when run-daily.sh is not running', async () => {
     t = await makeTestApp({ fakeDaily: 'idle' }, { exec: hostSays(true), dailyPollMs: 60_000 });
-    expect(await statuses(t)).toEqual({ today: 'interrupted', latest: 'interrupted', one: 'interrupted', weekly: 'running' });
+    expect(await statuses(t)).toEqual({ todayChip: 'interrupted', latest: 'interrupted', today: 'interrupted', old: 'interrupted', weeklyToday: 'running', weeklyOld: 'interrupted' });
   });
-  it('reads running while run-daily.sh runs, even before the next poll', async () => {
+  it('reads running for today\'s log while run-daily.sh runs, even before the next poll, and interrupted for an older one', async () => {
     t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
-    expect(await statuses(t)).toEqual({ today: 'running', latest: 'running', one: 'running', weekly: 'running' });
+    expect(await statuses(t)).toEqual({ todayChip: 'running', latest: 'running', today: 'running', old: 'interrupted', weeklyToday: 'running', weeklyOld: 'interrupted' });
   });
 });
 

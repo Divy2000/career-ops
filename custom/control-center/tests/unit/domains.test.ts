@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, listLogDates, daysBetween, withJobState } from '../../server/domains/immigration.js';
+import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, listLogDates, daysBetween, withJobState, localDate } from '../../server/domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, evaluatedKeys, isEvaluated } from '../../server/domains/whatsNew.js';
 import { computeDashboard, parseStatusLog, readStatusLog, workModeOf } from '../../server/domains/insights.js';
 import { readTracker } from '../../server/domains/tracker.js';
@@ -59,9 +59,27 @@ describe('immigration overview', () => {
 
   it('a run with no done line reads interrupted once the job is known not to run, and stays running while it runs or nobody knows', async () => {
     const log = parseDailyLog('=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n', '2026-10-05');
-    expect((await withJobState(log, async () => false)).status).toBe('interrupted');
-    expect((await withJobState(log, async () => true)).status).toBe('running');
-    expect((await withJobState(log, async () => null)).status).toBe('running');
+    expect((await withJobState(log, '2026-10-05', async () => false)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => true)).status).toBe('running');
+    expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('running');
+  });
+
+  it('a run with no done line in a log older than today is interrupted, whatever today\'s job is doing, and the probe is not asked', async () => {
+    let asked = 0;
+    const running = async () => {
+      asked++;
+      return true;
+    };
+    const log = parseDailyLog('=== 2026-10-04 08:00:00 start\n--- 08:00:01 policy watch\n', '2026-10-04');
+    expect((await withJobState(log, '2026-10-05', running)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('interrupted');
+    expect(asked).toBe(0);
+  });
+
+  it('today is the local calendar date, not the UTC one', () => {
+    expect(localDate(new Date(2026, 9, 5, 0, 5))).toBe('2026-10-05');
+    expect(localDate(new Date(2026, 9, 5, 23, 55))).toBe('2026-10-05');
+    expect(localDate(new Date(2026, 0, 9, 12, 0))).toBe('2026-01-09');
   });
 
   it('asks whether the job runs only for a run with no done line', async () => {
@@ -71,8 +89,8 @@ describe('immigration overview', () => {
       return false;
     };
     const done = parseDailyLog('=== 2026-10-05 08:00:00 start\n=== 2026-10-05 08:09:01 done (failed=0)\n', '2026-10-05');
-    expect(await withJobState(done, probe)).toEqual(done);
-    expect(await withJobState(parseDailyLog('', '2026-10-05'), probe)).toMatchObject({ status: 'empty' });
+    expect(await withJobState(done, '2026-10-05', probe)).toEqual(done);
+    expect(await withJobState(parseDailyLog('', '2026-10-05'), '2026-10-05', probe)).toMatchObject({ status: 'empty' });
     expect(asked).toBe(0);
   });
 

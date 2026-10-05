@@ -7,7 +7,7 @@ import { readTracker } from '../domains/tracker.js';
 import { readReport } from '../domains/reports.js';
 import { readPipeline, readScanHistory } from '../domains/pipeline.js';
 import { readShortlist } from '../domains/shortlist.js';
-import { readImmigrationOverview } from '../domains/immigration.js';
+import { localDate, readImmigrationOverview } from '../domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, type NormalizeTextKey } from '../domains/whatsNew.js';
 import { computeDashboard, readStatusLog } from '../domains/insights.js';
 import { parseFollowupsTable, parseNextOverrides } from '../domains/followups.js';
@@ -109,7 +109,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     return collectWhatsNew({ history: readScanHistory(cfg.dataRoot), applications, norm: normalizeTextKey, now: now(), days, limit });
   });
 
-  app.get('/api/immigration/overview', async () => readImmigrationOverview(cfg.codeRoot, cfg.dataRoot, undefined, () => opts.daily.runningNow()));
+  app.get('/api/immigration/overview', async () => readImmigrationOverview(cfg.codeRoot, cfg.dataRoot, undefined, { localToday: localDate(new Date(now())), running: () => opts.daily.runningNow() }));
 
   app.get<{ Params: { slug: string } }>('/api/immigration/companies/:slug', async (req, reply) => {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(req.params.slug)) return reply.code(400).send({ error: 'bad slug' });

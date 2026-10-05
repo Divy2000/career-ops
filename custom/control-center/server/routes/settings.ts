@@ -12,7 +12,7 @@ import { BLACKLIST_DATE, blacklistRowSchema, readBlacklist, writeBlacklist } fro
 import { listPlugins } from '../domains/plugins.js';
 import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/schedule.js';
 import type { DailyJobWatch } from '../system/daily.js';
-import { listLogDates, parseDailyLog, withJobState } from '../domains/immigration.js';
+import { listLogDates, localDate, parseDailyLog, withJobState } from '../domains/immigration.js';
 import { readText } from '../domains/files.js';
 import { appSettingsPatchSchema, readSettings, writeSettings, type AppSettings } from '../domains/settings.js';
 import { computeUsage, type UsageRead } from '../domains/usage.js';
@@ -150,10 +150,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
   app.get('/api/interviews', async () => readInterviews(cfg.dataRoot));
 }
 
-/** Only the daily job has a process probe; a weekly log with no done line keeps reading running. */
+/** Only the daily job has a process probe; a weekly log dated today with no done line keeps reading running (older ones read interrupted). */
 async function readJobLog(dataRoot: string, job: ScheduleJob, date: string, daily: DailyJobWatch) {
   const raw = readText(path.join(dataRoot, job.logDir, `${date}.log`));
   if (raw.kind !== 'ok') return null;
   const probe = async () => (job.kind === 'daily' ? daily.runningNow() : null);
-  return { ...(await withJobState(parseDailyLog(raw.text, date), probe)), raw: raw.text };
+  return { ...(await withJobState(parseDailyLog(raw.text, date), localDate(), probe)), raw: raw.text };
 }

@@ -121,9 +121,19 @@ export function parseDailyLog(text: string, date: string): DailyLog {
   return { date, startedAt, finishedAt, status, steps, failedSteps, failedCount };
 }
 
-/** A run with no done line is running only while the job runs; the probe is asked only then, and null (unknown) keeps it running. */
-export async function withJobState<T extends DailyLog>(log: T, jobRunning: () => Promise<boolean | null>): Promise<T> {
+/** The local calendar date (YYYY-MM-DD) the job scripts name their logs by (`date +%Y-%m-%d`). */
+export function localDate(d = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * A run with no done line is running only while the job runs, and only a log dated today can belong to the run going
+ * on now: an older one is interrupted without asking. For today's log the probe is asked; null (unknown) keeps it running.
+ */
+export async function withJobState<T extends DailyLog>(log: T, today: string, jobRunning: () => Promise<boolean | null>): Promise<T> {
   if (log.status !== 'running') return log;
+  if (log.date !== today) return { ...log, status: 'interrupted' };
   return (await jobRunning()) === false ? { ...log, status: 'interrupted' } : log;
 }
 
@@ -165,8 +175,8 @@ function readJson(p: string): unknown {
   }
 }
 
-/** dailyRunning answers whether run-daily.sh runs now (null: unknown); it is asked only when the latest run has no done line. */
-export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = new Date().toISOString().slice(0, 10), dailyRunning: () => Promise<boolean | null> = async () => null): Promise<ImmigrationOverview> {
+/** job.running answers whether run-daily.sh runs now (null: unknown); it is asked only when today's latest run has no done line. */
+export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = new Date().toISOString().slice(0, 10), job: { localToday: string; running: () => Promise<boolean | null> } = { localToday: localDate(), running: async () => null }): Promise<ImmigrationOverview> {
   const lib = await importCore<ImmigrationLib>(codeRoot, 'custom/immigration/lib.mjs');
   const imm = path.join(dataRoot, 'data', 'immigration');
   const digestRead = readText(path.join(imm, 'policy-digest.md'));
@@ -206,7 +216,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,
     pendingError: pending.error,
-    dailyLog: latestLog && (await withJobState(latestLog, dailyRunning)),
+    dailyLog: latestLog && (await withJobState(latestLog, job.localToday, job.running)),
     logDates,
   };
 }
