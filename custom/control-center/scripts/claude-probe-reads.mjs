@@ -380,7 +380,7 @@ groups.push({ ids: ['C18', 'C19'], run: async () => {
 groups.push({ ids: ['C11'], run: async () => {
   const mention = () => `Summarize the two files I attached: @${path.join(OUT, 'm1.txt')} and @${HOME_TILDE}/m2.txt. Use no tools at all. If their contents are not in this conversation, reply with the single word missing.`;
   // The same rule as neutralizeFileMentions in server/claude/invocation.ts.
-  const neutral = (s) => s.replace(/(^|\s)@(?!\u2060)/g, '$1@\u2060');
+  const neutral = (s) => s.replace(/(^|[^\w.+\-/:=?&%])@(?!\u2060)/g, '$1@\u2060');
   const [a, b] = await Promise.all([
     runClaude('c11-raw', { hook: 'guard', tools: ['Read'], prompt: mention() }),
     runClaude('c11-neutral', { hook: 'guard', tools: ['Read'], prompt: neutral(mention()) }),

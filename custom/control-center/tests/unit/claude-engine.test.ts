@@ -146,14 +146,27 @@ describe('invocation: read confinement', () => {
     expect(env.DISABLE_AUTOUPDATER).toBe('1');
   });
 
-  it('neutralizeFileMentions breaks only a token-initial @, so no prompt can attach a file; e-mail addresses stay intact', () => {
+  it('neutralizeFileMentions breaks every @ that is not inside a URL or e-mail address, so no prompt can attach a file', () => {
     expect(neutralizeFileMentions('see @~/.ssh/x and a@b.com')).toBe('see @\u2060~/.ssh/x and a@b.com');
     expect(neutralizeFileMentions('@/etc/passwd')).toBe('@\u2060/etc/passwd');
-    // Requirement change (review): only an @ at the start or after whitespace is neutralized, so an @ after ( stays as written.
-    expect(neutralizeFileMentions('(@cv.md) and\n@x\t@y')).toBe('(@cv.md) and\n@\u2060x\t@\u2060y');
+    // Requirement change (second review): an @ is neutralized unless the character before it can sit inside a URL or an e-mail address.
+    expect(neutralizeFileMentions('(@cv.md) and\n@x\t@y')).toBe('(@\u2060cv.md) and\n@\u2060x\t@\u2060y');
+    for (const [text, out] of [
+      ['(@/etc/passwd)', '(@\u2060/etc/passwd)'],
+      ['"@/etc/passwd"', '"@\u2060/etc/passwd"'],
+      ["'@x'", "'@\u2060x'"],
+      ['[@x]', '[@\u2060x]'],
+      ['{@x}', '{@\u2060x}'],
+      ['<@x>', '<@\u2060x>'],
+      ['a,@x', 'a,@\u2060x'],
+      ['line one\n@x', 'line one\n@\u2060x'],
+      ['@x', '@\u2060x'],
+    ] as const)
+      expect(neutralizeFileMentions(text), text).toBe(out);
     expect(neutralizeFileMentions(neutralizeFileMentions('@x'))).toBe('@\u2060x');
     // URLs flow into reports and dedup keys: an @ inside one is never touched.
-    for (const url of ['https://medium.com/@acme/x', 'https://jobs.example.com/a/@team?b=@c', 'mailto:me@example.com']) expect(neutralizeFileMentions(`read ${url} now`)).toBe(`read ${url} now`);
+    for (const url of ['https://medium.com/@acme/x', 'https://jobs.example.com/a/@team?b=@c&@d', 'https://x.example/%@y', 'https://x.example/q?@z', 'mailto:me@example.com', 'first.last+tag@example.co', 'user-1@x.io', 'scheme:@x'])
+      expect(neutralizeFileMentions(`read ${url} now`), url).toBe(`read ${url} now`);
     const argv = buildArgv({ ...roots, policy: oferta, userMessage: 'read @~/.ssh/id_rsa for me' });
     expect(argv[1]).toBe('read @\u2060~/.ssh/id_rsa for me');
   });
