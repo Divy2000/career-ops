@@ -32,13 +32,12 @@ describe('importCore', () => {
     expect((await importCore<{ getCareerOpsRoot: () => string }>(root, 'path-resolver.mjs')).getCareerOpsRoot()).toBe('/data');
   });
 
-  it('picks up an edited module (Dev Chat or the weekly sync changed it), and reuses the loaded one while it is unchanged', async () => {
+  it('keeps one copy of a module for the life of the process, even after its file changes (the supervisor restarts the server child for that)', async () => {
     const root = codeRoot();
     put(root, 'custom/projects/lib.mjs', 'export const version = 1;\n', new Date(Date.now() - 60_000));
     const first = await importCore<{ version: number }>(root, 'custom/projects/lib.mjs');
     expect(first.version).toBe(1);
-    expect(await importCore(root, 'custom/projects/lib.mjs')).toBe(first);
     put(root, 'custom/projects/lib.mjs', 'export const version = 2;\n');
-    expect((await importCore<{ version: number }>(root, 'custom/projects/lib.mjs')).version).toBe(2);
+    expect(await importCore(root, 'custom/projects/lib.mjs')).toBe(first);
   });
 });

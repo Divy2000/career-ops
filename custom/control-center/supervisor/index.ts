@@ -15,6 +15,8 @@ import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates } from '
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
 import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
+import { watchCoreGraph } from './core-graph.js';
+import { CONTRACT } from '../server/core/adapter.js';
 import { PAGE_THEME_CSS } from '../shared/page-theme.js';
 import { dataRootFromEnv } from '../shared/data-root.js';
 
@@ -354,16 +356,24 @@ async function main(): Promise<void> {
     }
   });
 
-  // Blue/green restart on server or shared changes, debounced 500 ms (spec 3.1).
+  // Blue/green restart on server or shared changes, debounced 500 ms (spec 3.1). Also on a change anywhere in the import
+  // graph of the core modules the server loads (custom/projects/lib.mjs and what it imports from the upstream root, edited
+  // by Dev Chat or fast-forwarded by the weekly sync): only a new process loads that whole graph anew (core-graph.ts).
   if (!process.env.CC_NO_RELOAD) {
     const watcher = chokidar.watch([path.join(PACKAGE_ROOT, 'server'), path.join(PACKAGE_ROOT, 'shared')], { ignoreInitial: true });
     let debounce: NodeJS.Timeout | null = null;
-    watcher.on('all', (_event, file) => {
+    const changed = (file: string) => {
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => {
-        console.error(`[supervisor] ${path.relative(PACKAGE_ROOT, file)} changed; blue/green reload`);
+        console.error(`[supervisor] ${path.relative(CODE_ROOT, file)} changed; blue/green reload`);
         void bg.reload();
       }, 500);
+    };
+    watcher.on('all', (_event, file) => changed(file));
+    const core = await watchCoreGraph(CODE_ROOT, CONTRACT.exports.map((e) => e.module), changed);
+    // The new code may import files the old one did not.
+    bg.onStatus((st) => {
+      if (st.state === 'ok') void core.refresh();
     });
   }
 

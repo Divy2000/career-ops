@@ -1,7 +1,6 @@
 // The only module that knows core script names, paths and export names.
 // Everything is driven by contract.json, which the contract test verifies
 // against the installed checkout on every run.
-import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import contract from './contract.json' with { type: 'json' };
@@ -42,7 +41,7 @@ export function cliExitCodes(id: CliId): Record<string, number> {
   return cliContract(id).exitCodes ?? { ok: 0 };
 }
 
-const moduleCache = new Map<string, { mtime: number; promise: Promise<Record<string, unknown>> }>();
+const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
 const attempted = new Set<string>();
 let reloads = 0;
 
@@ -58,21 +57,19 @@ export function importCore<T extends object>(codeRoot: string, module: CoreModul
     return Promise.reject(new Error(`${module} is not a contracted core module`));
   }
   const key = `${codeRoot}::${module}`;
-  const file = path.join(codeRoot, module);
-  // Keyed by mtime too: Dev Chat or the weekly sync may edit a module (custom/projects/lib.mjs) while the
-  // server runs, and the API must not keep answering from the old copy. The query string makes Node load it anew.
-  const mtime = fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? -1;
+  // One copy per process: a module loaded again under a new URL would still get its old dependencies, so a changed
+  // file anywhere in a core module's import graph restarts the server child instead (supervisor/core-graph.ts).
   const cached = moduleCache.get(key);
-  if (cached && cached.mtime === mtime) return cached.promise as Promise<T>;
-  const url = pathToFileURL(file);
-  // Node keeps a URL's first result, a failure included, so every load after the first gets a fresh URL.
+  if (cached) return cached as Promise<T>;
+  const url = pathToFileURL(path.join(codeRoot, module));
+  // Node keeps a URL's first result, a failure included, so a load after a failed one gets a fresh URL.
   if (attempted.has(key)) url.search = `v=${++reloads}`;
   attempted.add(key);
   const promise = import(url.href) as Promise<Record<string, unknown>>;
-  moduleCache.set(key, { mtime, promise });
+  moduleCache.set(key, promise);
   // A failed import (a file mid-write during a sync) is not remembered, so the next call tries again.
   promise.catch(() => {
-    if (moduleCache.get(key)?.promise === promise) moduleCache.delete(key);
+    if (moduleCache.get(key) === promise) moduleCache.delete(key);
   });
   return promise as Promise<T>;
 }
