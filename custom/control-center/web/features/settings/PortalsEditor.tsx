@@ -15,9 +15,9 @@ interface SectionDef {
 }
 
 export const PORTAL_SECTIONS: SectionDef[] = [
-  { key: 'title_filter', help: 'Role title keywords: include and exclude lists.', empty: { include: [], exclude: [] } },
+  { key: 'title_filter', help: 'Role title keywords: positive (a title must match one) and negative (a match rejects the title).', empty: { positive: [], negative: [] } },
   { key: 'location_filter', help: 'Location tiers (allow, always_allow, block, block_hard) and the strict switch.', empty: { strict: false, allow: [] } },
-  { key: 'tracked_companies', help: 'Companies scanned on every run. Toggle enabled to pause one without losing it.', empty: [], columns: ['name', 'ats', 'slug', 'enabled'] },
+  { key: 'tracked_companies', help: 'Companies scanned on every run. Each needs a careers_url (or an api URL); the scanner picks the provider from it unless provider names one. Toggle enabled to pause one without losing it.', empty: [], columns: ['name', 'careers_url', 'api', 'provider', 'enabled'] },
   { key: 'job_boards', help: 'Job boards and aggregators.', empty: [] },
   { key: 'search_queries', help: 'Free-text queries for boards that support search.', empty: [] },
   { key: 'visa_filter', help: 'Sponsorship signals used to rank or drop postings.', empty: {} },
@@ -29,9 +29,7 @@ export const PORTAL_SECTIONS: SectionDef[] = [
 const LOCATION_TIERS = ['allow', 'always_allow', 'block', 'block_hard'];
 
 export const PORTAL_RULES: FieldRules = {
-  'tracked_companies.*.slug': (v) => (/^[a-z0-9][a-z0-9._-]*$/.test(v) ? null : 'slug: lowercase letters, digits, dots, underscores and dashes'),
   'tracked_companies.*.name': (v) => (v.trim() ? null : 'name is required'),
-  'tracked_companies.*.ats': (v) => (/^[a-z0-9_-]+$/i.test(v) ? null : 'ats: one word such as greenhouse or lever'),
   max_posting_age_days: (v) => (Number(v) > 0 && Number.isInteger(Number(v)) ? null : 'whole number of days'),
 };
 
