@@ -30,6 +30,21 @@ test.describe('deterministic writes through the action registry', () => {
     expect(detail.row.notes).toContain('DISCARD: level mismatch');
   });
 
+  test('an Other reason typed key by key is saved whole as the DISCARD note', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/tracker');
+    await page.getByRole('row', { name: /Umbrella Corp/ }).click();
+    await page.getByLabel('Change status').selectOption('SKIP');
+    await page.getByLabel('Discard reason', { exact: true }).selectOption('__other');
+    await page.getByLabel('Other reason').pressSequentially('too far');
+    await expect(page.getByLabel('Other reason')).toHaveValue('too far');
+    await page.getByRole('button', { name: 'Confirm SKIP' }).click();
+    await expect(page.getByRole('status')).toHaveText('Status set to SKIP');
+    const detail = await (await page.request.get('/api/tracker/5')).json();
+    expect(detail.row.status).toBe('SKIP');
+    expect(detail.row.notes).toContain('DISCARD: too far');
+  });
+
   test('Runs page starts a free script run, tails its log and shows it finished', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/runs');

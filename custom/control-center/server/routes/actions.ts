@@ -5,6 +5,7 @@ import type { Runner } from '../runner/runner.js';
 import type { EventBus } from '../watch/bus.js';
 import { execNoShell, type Exec } from './system.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
+import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 
 const SYNC_TIMEOUT_MS = 30_000;
 
@@ -68,10 +69,12 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     return { meta, lines };
   });
 
-  app.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (req, reply) => {
-    const meta = safeRead(runner, req.params.id);
-    if (!meta) return reply.code(404).send({ error: 'no such run' });
-    return runner.cancel(meta.id);
+  await withEmptyJsonBody(app, (scope) => {
+    scope.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (req, reply) => {
+      const meta = safeRead(runner, req.params.id);
+      if (!meta) return reply.code(404).send({ error: 'no such run' });
+      return runner.cancel(meta.id);
+    });
   });
 
   app.get<{ Params: { id: string } }>('/api/runs/:id/events', async (req, reply) => {

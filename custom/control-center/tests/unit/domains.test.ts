@@ -12,6 +12,8 @@ import { copyFixtureRoot } from '../helpers/app.js';
 
 const root = copyFixtureRoot();
 
+const noRunToday = () => false;
+
 describe('immigration overview', () => {
   it('splits the digest into dated sections and computes staleness', () => {
     const sections = parseDigest(fs.readFileSync(path.join(root, 'data/immigration/policy-digest.md'), 'utf8'));
@@ -59,9 +61,9 @@ describe('immigration overview', () => {
 
   it('a run with no done line reads interrupted once the job is known not to run, and stays running while it runs or nobody knows', async () => {
     const log = parseDailyLog('=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n', '2026-10-05');
-    expect((await withJobState(log, '2026-10-05', async () => false)).status).toBe('interrupted');
-    expect((await withJobState(log, '2026-10-05', async () => true)).status).toBe('running');
-    expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('running');
+    expect((await withJobState(log, '2026-10-05', async () => false, noRunToday)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => true, noRunToday)).status).toBe('running');
+    expect((await withJobState(log, '2026-10-05', async () => null, noRunToday)).status).toBe('running');
   });
 
   it('a run with no done line in a log older than yesterday is interrupted, whatever the job is doing, and the probe is not asked', async () => {
@@ -71,21 +73,30 @@ describe('immigration overview', () => {
       return true;
     };
     const log = parseDailyLog('=== 2026-10-03 08:00:00 start\n--- 08:00:01 policy watch\n', '2026-10-03');
-    expect((await withJobState(log, '2026-10-05', running)).status).toBe('interrupted');
-    expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', running, noRunToday)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => null, noRunToday)).status).toBe('interrupted');
     expect(asked).toBe(0);
   });
 
   it('yesterday\'s run with no done line (one that crossed midnight) reads running only while the job is known to run', async () => {
     const log = parseDailyLog('=== 2026-10-04 23:58:00 start\n--- 23:58:01 policy watch\n', '2026-10-04');
-    expect((await withJobState(log, '2026-10-05', async () => true)).status).toBe('running');
-    expect((await withJobState(log, '2026-10-05', async () => false)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => true, noRunToday)).status).toBe('running');
+    expect((await withJobState(log, '2026-10-05', async () => false, noRunToday)).status).toBe('interrupted');
     // No probe (the weekly sync): an unfinished run from yesterday is not assumed to run on.
-    expect((await withJobState(log, '2026-10-05', async () => null)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => null, noRunToday)).status).toBe('interrupted');
     const monthEnd = parseDailyLog('=== 2026-09-30 23:58:00 start\n', '2026-09-30');
-    expect((await withJobState(monthEnd, '2026-10-01', async () => true)).status).toBe('running');
+    expect((await withJobState(monthEnd, '2026-10-01', async () => true, noRunToday)).status).toBe('running');
     const yearEnd = parseDailyLog('=== 2025-12-31 23:58:00 start\n', '2025-12-31');
-    expect((await withJobState(yearEnd, '2026-01-01', async () => true)).status).toBe('running');
+    expect((await withJobState(yearEnd, '2026-01-01', async () => true, noRunToday)).status).toBe('running');
+  });
+
+  it('yesterday\'s run with no done line is interrupted once a run has started today, whatever the probe says: one run holds the lock and it writes today\'s log', async () => {
+    const log = parseDailyLog('=== 2026-10-04 08:00:00 start\n--- 08:00:01 policy watch\n', '2026-10-04');
+    expect((await withJobState(log, '2026-10-05', async () => true, () => true)).status).toBe('interrupted');
+    expect((await withJobState(log, '2026-10-05', async () => true, () => false)).status).toBe('running');
+    // Today's own run is never judged by whether today started.
+    const today = parseDailyLog('=== 2026-10-05 08:00:00 start\n', '2026-10-05');
+    expect((await withJobState(today, '2026-10-05', async () => true, () => true)).status).toBe('running');
   });
 
   it('today is the local calendar date, not the UTC one', () => {
@@ -101,8 +112,8 @@ describe('immigration overview', () => {
       return false;
     };
     const done = parseDailyLog('=== 2026-10-05 08:00:00 start\n=== 2026-10-05 08:09:01 done (failed=0)\n', '2026-10-05');
-    expect(await withJobState(done, '2026-10-05', probe)).toEqual(done);
-    expect(await withJobState(parseDailyLog('', '2026-10-05'), '2026-10-05', probe)).toMatchObject({ status: 'empty' });
+    expect(await withJobState(done, '2026-10-05', probe, noRunToday)).toEqual(done);
+    expect(await withJobState(parseDailyLog('', '2026-10-05'), '2026-10-05', probe, noRunToday)).toMatchObject({ status: 'empty' });
     expect(asked).toBe(0);
   });
 
@@ -114,7 +125,7 @@ describe('immigration overview', () => {
   it('any !!! line in the last run fails it with that line as the reason, even with no done line (sync.sh and run-daily.sh exit early that way)', async () => {
     const sync = parseDailyLog('=== 2026-10-04 03:00:00 start\n--- fetching\n!!! Keychain item career-ops-claude-token not found\n', '2026-10-04');
     expect(sync).toMatchObject({ status: 'failed', finishedAt: null, failedSteps: [], problems: ['Keychain item career-ops-claude-token not found'] });
-    expect((await withJobState(sync, '2026-10-04', async () => false)).status).toBe('failed');
+    expect((await withJobState(sync, '2026-10-04', async () => false, noRunToday)).status).toBe('failed');
     const daily = parseDailyLog("=== 2026-10-05 08:00:00 start\n!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token\n", '2026-10-05');
     expect(daily).toMatchObject({ status: 'failed', problems: ["Keychain item 'career-ops-claude-token' not found. Run: claude setup-token"] });
   });

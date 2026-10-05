@@ -995,4 +995,11 @@ describe('envelopes', () => {
     expect(projects.envelopes[0]).toMatchObject({ ok: true, kind: 'projects', payload: { markdown: '## Chess Engine\n- Wrote it.' } });
     expect(extractEnvelopes('<<cc:projects {"markdown":""}>>', false).envelopes[0]).toMatchObject({ ok: false });
   });
+
+  it('an envelope kind named after an Object property is an unknown kind, never a crash', () => {
+    for (const kind of ['constructor', 'tostring', 'hasownproperty', 'valueof', 'isprototypeof']) {
+      const r = extractEnvelopes(`Done.\n<<cc:${kind} {}>>`, false);
+      expect(r.envelopes, kind).toEqual([{ ok: false, kind, error: `unknown envelope kind ${kind}`, raw: `<<cc:${kind} {}>>` }]);
+    }
+  });
 });

@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, testConfig, type TestApp } from '../helpers/app.js';
-import { maybeFakeDailyProbe } from '../../server/system/daily.js';
+import { DailyJobWatch, maybeFakeDailyProbe } from '../../server/system/daily.js';
+import { EventBus } from '../../server/watch/bus.js';
+import { execNoShell } from '../../server/routes/system.js';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { tempDir } from '../helpers/tmp.js';
 import { configFromEnv } from '../../server/config.js';
 import type { Exec } from '../../server/routes/system.js';
 
@@ -35,6 +39,46 @@ describe('daily job detection', () => {
   });
 });
 
+describe('the daily job probe on real processes', () => {
+  // Real pgrep, but only the processes this test started count, so a daily job running on the host cannot change the result.
+  const ownPgrep = (pids: number[]): Exec => async (cmd, args, opts) => {
+    const r = await execNoShell(cmd, args, opts);
+    const mine = r.stdout.split('\n').filter((p) => pids.includes(Number(p)));
+    return { code: mine.length ? 0 : 1, stdout: mine.map((p) => `${p}\n`).join(''), stderr: r.stderr };
+  };
+  const children: ChildProcess[] = [];
+  afterEach(() => {
+    for (const c of children.splice(0)) c.kill('SIGKILL');
+  });
+  const started = async (bin: string, args: string[]): Promise<number> => {
+    const c = spawn(bin, args, { stdio: 'ignore' });
+    children.push(c);
+    await new Promise((r) => setTimeout(r, 200));
+    return c.pid!;
+  };
+
+  it('does not count a process that only mentions run-daily.sh in its arguments, such as a Claude prompt about it', async () => {
+    const pid = await started(process.execPath, ['-e', 'setTimeout(() => {}, 20000)', 'Why did custom/immigration/run-daily.sh skip the rank step?']);
+    const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
+    expect(await watch.runningNow()).toBe(false);
+  });
+
+  it('does not count a bash -c command line that only names run-daily.sh', async () => {
+    const pid = await started('/bin/bash', ['-c', 'sleep 20; echo custom/immigration/run-daily.sh']);
+    const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
+    expect(await watch.runningNow()).toBe(false);
+  });
+
+  it('counts bash running run-daily.sh, the way launchd and the lock re-exec start it', async () => {
+    const script = path.join(tempDir('cc-daily-probe-'), 'custom', 'immigration', 'run-daily.sh');
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, 'sleep 20\n');
+    const pid = await started('/bin/bash', [script]);
+    const watch = new DailyJobWatch(ownPgrep([pid]), new EventBus());
+    expect(await watch.runningNow()).toBe(true);
+  });
+});
+
 describe('a daily run with no done line', () => {
   const pad = (n: number) => String(n).padStart(2, '0');
   const now = new Date();
@@ -44,9 +88,9 @@ describe('a daily run with no done line', () => {
   const YESTERDAY = `${before.getFullYear()}-${pad(before.getMonth() + 1)}-${pad(before.getDate())}`;
   const OLD = '2001-01-02';
   const unfinished = (date: string) => `=== ${date} 08:00:00 start\n--- 08:00:01 policy watch\n`;
-  async function statuses(app: TestApp) {
+  async function statuses(app: TestApp, dailyDates = [TODAY, YESTERDAY, OLD]) {
     const logs = path.join(app.cfg.dataRoot, 'data', 'immigration', 'logs');
-    for (const date of [TODAY, YESTERDAY, OLD]) fs.writeFileSync(path.join(logs, `${date}.log`), unfinished(date));
+    for (const date of dailyDates) fs.writeFileSync(path.join(logs, `${date}.log`), unfinished(date));
     const weeklyDir = path.join(app.cfg.dataRoot, 'data', 'upstream-sync');
     fs.mkdirSync(weeklyDir, { recursive: true });
     for (const date of [TODAY, YESTERDAY, OLD]) fs.writeFileSync(path.join(weeklyDir, `${date}.log`), unfinished(date));
@@ -54,7 +98,7 @@ describe('a daily run with no done line', () => {
     return {
       todayChip: (await get('/api/immigration/overview')).dailyLog.status,
       latest: (await get('/api/schedule/logs')).latest.status,
-      today: (await get(`/api/schedule/logs/${TODAY}`)).status,
+      today: (await get(`/api/schedule/logs/${TODAY}`)).status ?? 'none',
       yesterday: (await get(`/api/schedule/logs/${YESTERDAY}`)).status,
       old: (await get(`/api/schedule/logs/${OLD}`)).status,
       weeklyToday: (await get(`/api/schedule/logs/${TODAY}?job=upstream-sync`)).status,
@@ -66,9 +110,20 @@ describe('a daily run with no done line', () => {
     t = await makeTestApp({ fakeDaily: 'idle' }, { exec: hostSays(true), dailyPollMs: 60_000 });
     expect(await statuses(t)).toEqual({ todayChip: 'interrupted', latest: 'interrupted', today: 'interrupted', yesterday: 'interrupted', old: 'interrupted', weeklyToday: 'running', weeklyYesterday: 'interrupted', weeklyOld: 'interrupted' });
   });
-  it('reads running for today\'s and yesterday\'s log while run-daily.sh runs (a run can cross midnight), even before the next poll, and interrupted for an older one', async () => {
+  it('reads running for today\'s log while run-daily.sh runs, even before the next poll; yesterday\'s unfinished run is interrupted once today\'s run has started (one run holds the lock), and an older one too', async () => {
     t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
-    expect(await statuses(t)).toEqual({ todayChip: 'running', latest: 'running', today: 'running', yesterday: 'running', old: 'interrupted', weeklyToday: 'running', weeklyYesterday: 'interrupted', weeklyOld: 'interrupted' });
+    expect(await statuses(t)).toEqual({ todayChip: 'running', latest: 'running', today: 'running', yesterday: 'interrupted', old: 'interrupted', weeklyToday: 'running', weeklyYesterday: 'interrupted', weeklyOld: 'interrupted' });
+  });
+  it('reads running for yesterday\'s log while run-daily.sh runs and no run has started today (a run can cross midnight)', async () => {
+    t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
+    fs.rmSync(path.join(t.cfg.dataRoot, 'data', 'immigration', 'logs', `${TODAY}.log`), { force: true });
+    expect(await statuses(t, [YESTERDAY, OLD])).toMatchObject({ todayChip: 'running', latest: 'running', today: 'none', yesterday: 'running', old: 'interrupted' });
+  });
+  it('reads running for yesterday\'s log while run-daily.sh runs when today\'s log has no start line yet', async () => {
+    t = await makeTestApp({ fakeDaily: 'running' }, { exec: hostSays(false), dailyPollMs: 60_000 });
+    const logs = path.join(t.cfg.dataRoot, 'data', 'immigration', 'logs');
+    fs.writeFileSync(path.join(logs, `${TODAY}.log`), 'note: written before the start line\n');
+    expect(await statuses(t, [YESTERDAY, OLD])).toMatchObject({ yesterday: 'running', old: 'interrupted' });
   });
 });
 

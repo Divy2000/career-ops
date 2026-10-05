@@ -8,6 +8,7 @@ import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, StatusPill, Tabs, TableScroll } from '../../components/ui';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { ContactsRead, FollowupCadenceEntry } from '@shared/api';
+import { localDate, localDatePlusDays } from '@shared/local-date';
 
 const route = getRouteApi('/followups');
 export type FollowupsTab = 'cadence' | 'replies' | 'contacts';
@@ -19,11 +20,8 @@ function urgencyTone(u: string): 'danger' | 'warn' | 'neutral' | 'info' {
   return 'neutral';
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
-const plusDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString().slice(0, 10);
-
 function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg: string) => void }) {
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(localDate());
   const [channel, setChannel] = useState('Email');
   const [contact, setContact] = useState('');
   const [notes, setNotes] = useState('');
@@ -331,7 +329,7 @@ function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete
             <button type="button" aria-label={`Log follow-up for ${e.company}`} onClick={onLog}>
               Log
             </button>
-            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, plusDays(7))}>
+            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, localDatePlusDays(7))}>
               +7d
             </button>
             <button type="button" aria-label={`Clear pinned date for ${e.company}`} onClick={() => onPin(e.num, null)} disabled={!e.nextOverride}>

@@ -9,6 +9,7 @@ import { ActionButton, Message } from '../../components/ActionBar';
 import { SessionPanel } from '../../components/SessionPanel';
 import { summarizeWatcher } from '../../lib/watcherState';
 import { LookupTab } from './LookupTab';
+import { localDate } from '@shared/local-date';
 
 const route = getRouteApi('/sponsorship');
 
@@ -89,7 +90,7 @@ export function SponsorshipPage() {
           mode="immigration-policy"
           title="AI policy pass"
           autoStart
-          initialPrompt={`Run the daily immigration policy pass for ${new Date().toISOString().slice(0, 10)}: read the pending watch items under data/immigration, update policy-digest.md and policy-changes.tsv, and append company alerts. Follow custom/immigration/daily-prompt.md.`}
+          initialPrompt={`Run the daily immigration policy pass for ${localDate()}: read the pending watch items under data/immigration, update policy-digest.md and policy-changes.tsv, and append company alerts. Follow custom/immigration/daily-prompt.md.`}
         />
       )}
       <Tabs
@@ -118,8 +119,9 @@ export function SponsorshipPage() {
                       <strong>No policy digest yet.</strong> <span className="muted">Run the AI policy pass to create data/immigration/policy-digest.md.</span>
                     </div>
                   ) : (
-                    d.digest.sections.map((s) => (
-                      <details key={s.date} className="card section" open={s.date === d.digest.kind as string || s === (d.digest.kind === 'ok' ? d.digest.sections[0] : null)}>
+                    d.digest.sections.map((s, i) => (
+                      // A manual pass and the daily run can each add a section for the same day.
+                      <details key={`${i}-${s.date}`} className="card section" open={s.date === d.digest.kind as string || s === (d.digest.kind === 'ok' ? d.digest.sections[0] : null)}>
                         <summary>
                           <h2 style={{ display: 'inline' }}>{s.date}</h2>
                         </summary>

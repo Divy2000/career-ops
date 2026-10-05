@@ -99,10 +99,61 @@ test.describe('deterministic writes from the pages', () => {
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
+  test('Network scan Add all sends every result, in bodies the pipeline route accepts, and says how many were added', async ({ page }) => {
+    // The scan run and the pipeline write are answered here: the route's own limits are covered by the writes API tests.
+    const postings = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: i === 0 ? null : i === 1 ? 'Office '.repeat(40).trim() : 'Remote', postedAt: null, source: 'greenhouse' }));
+    const summary = { line: JSON.stringify({ postings, capHit: false, stoppedEarly: false }), stream: 'stdout', seq: 1, ts: '2026-10-05T12:00:00.000Z' };
+    await page.route('**/api/actions/scan.network', (route) => route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ runId: 'e2e-network-scan' }) }));
+    await page.route('**/api/runs/e2e-network-scan/events', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: line\ndata: ${JSON.stringify(summary)}\n\nevent: run.done\ndata: {"status":"done"}\n\n` }));
+    const bodies: Array<{ offers: Array<Record<string, unknown>> }> = [];
+    await page.route('**/api/pipeline/add', async (route) => {
+      const body = route.request().postDataJSON() as { offers: Array<Record<string, unknown>> };
+      bodies.push(body);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ added: body.offers.length, skipped: 0 }) });
+    });
+    await page.goto('/discover');
+    await page.getByRole('button', { name: /Run network scan/ }).click();
+    await page.getByRole('button', { name: 'Add all (205)' }).click();
+    await expect(page.getByText('Added 205 to the pipeline')).toBeVisible();
+    expect(bodies.map((b) => b.offers.length)).toEqual([200, 5]);
+    const sent = bodies.flatMap((b) => b.offers);
+    expect(sent.map((o) => o.url)).toEqual(postings.map((p) => p.url));
+    expect(sent[0]).not.toHaveProperty('location');
+    expect(String(sent[1]!.location).length).toBeLessThanOrEqual(200);
+  });
+
+  test('Network scan Add all that fails part way says how many were added before the failure, and a retry says what was already there', async ({ page }) => {
+    const postings = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/partial/${i}`, company: `Partial ${i}`, title: 'Platform Engineer', location: 'Remote', postedAt: null, source: 'greenhouse' }));
+    const summary = { line: JSON.stringify({ postings }), stream: 'stdout', seq: 1, ts: '2026-10-05T12:00:00.000Z' };
+    await page.route('**/api/actions/scan.network', (route) => route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ runId: 'e2e-network-scan-2' }) }));
+    await page.route('**/api/runs/e2e-network-scan-2/events', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: line\ndata: ${JSON.stringify(summary)}\n\nevent: run.done\ndata: {"status":"done"}\n\n` }));
+    // The route is idempotent: on the retry the first batch is already in the pipeline and comes back skipped.
+    const answers = [
+      { status: 200, body: { added: 200, skipped: 0 } },
+      { status: 409, body: { error: 'pipeline is busy, try again in a moment' } },
+      { status: 200, body: { added: 0, skipped: 200 } },
+      { status: 200, body: { added: 5, skipped: 0 } },
+    ];
+    await page.route('**/api/pipeline/add', async (route) => {
+      const a = answers.shift()!;
+      await route.fulfill({ status: a.status, contentType: 'application/json', body: JSON.stringify(a.body) });
+    });
+    await page.goto('/discover');
+    await page.getByRole('button', { name: /Run network scan/ }).click();
+    await page.getByRole('button', { name: 'Add all (205)' }).click();
+    await expect(page.getByText('Added 200, then could not add the rest: pipeline is busy, try again in a moment')).toBeVisible();
+    await page.getByRole('button', { name: 'Add all (205)' }).click();
+    await expect(page.getByText('Added 5 to the pipeline; 200 were already there')).toBeVisible();
+    expect(answers).toEqual([]);
+  });
+
   test('Discover renders the network scan form and the Fresh tab', async ({ page }) => {
     await page.goto('/discover');
     await expect(page.getByRole('heading', { level: 1, name: 'Discover' })).toBeVisible();
     await expect(page.getByRole('form', { name: 'Network scan filters' })).toBeVisible();
+    const sources = page.getByRole('group', { name: 'ATS sources' }).getByRole('checkbox');
+    await expect(sources).toHaveCount(6);
+    expect(await sources.evaluateAll((boxes) => boxes.map((b) => b.closest('label')!.textContent!.trim()))).toEqual(['greenhouse', 'lever', 'ashby', 'workday', 'icims', 'bamboohr']);
     await page.getByRole('tab', { name: 'Fresh' }).click();
     await expect(page).toHaveURL(/tab=fresh/);
     await expect(page.getByRole('table', { name: 'Fresh matches' })).toBeVisible();

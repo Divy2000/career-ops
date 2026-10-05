@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
+import { copyFixtureRoot, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import type { RunMeta } from '../../server/runner/store.js';
 
@@ -123,6 +123,27 @@ describe('action registry', () => {
     }
   });
 
+  it('the network scan refuses an ATS source the scanner has no directory for before anything runs, and takes the ones it has', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      for (const ats of ['workable', 'smartrecruiters', 'recruitee', 'personio']) {
+        const res = await post('/api/actions/scan.network', { params: { roles: ['backend'], ats: ['greenhouse', ats] } });
+        expect(res.statusCode, `${ats}: ${res.body}`).toBe(400);
+      }
+      expect(started).toEqual([]);
+      const ok = await post('/api/actions/scan.network', { params: { roles: ['backend'], ats: ['workday', 'icims'] } });
+      expect(ok.statusCode, ok.body).toBe(202);
+      expect(started[0]!.cmd.args.join(' ')).toContain('--ats workday,icims');
+      for (const req of started) for (const f of req.tmpInputs ?? []) fs.rmSync(f, { force: true });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('Run the daily job now runs the claude the app runs: its absolute path reaches run-daily.sh as CC_CLAUDE_BIN', async () => {
     const started: Array<Parameters<typeof t.runner.start>[0]> = [];
     // Captured, not run: the daily job would scan portals and call Claude.
@@ -156,6 +177,19 @@ describe('action registry', () => {
       spy.mockRestore();
       await bare.close();
     }
+  });
+
+  it('cancel stops a running run when the request says JSON but carries no body, the way a browser button sends it', async () => {
+    const run = t.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    const res = await t.app.inject({ method: 'POST', url: `/api/runs/${run.id}/cancel`, headers: { ...t.authedWrite, 'content-type': 'application/json' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await waitForRun(run.id)).status).toBe('cancelled');
+  });
+
+  it('cancel still refuses a body that is not valid JSON', async () => {
+    const res = await t.app.inject({ method: 'POST', url: '/api/runs/does-not-exist/cancel', headers: t.authedWrite, payload: '{"half":' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('FST_ERR_CTP_INVALID_JSON_BODY');
   });
 
   it('actions need the write headers like every other mutation', async () => {

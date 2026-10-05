@@ -8,6 +8,7 @@ import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
+import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { writeTmpInput } from './tmp-inputs.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
@@ -198,7 +199,7 @@ export const ACTIONS: ActionDef[] = [
       locationAllow: z.array(z.string().max(100)).max(30).default([]),
       block: z.array(z.string().max(100)).max(30).default([]),
       sinceDays: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(14), z.literal(30)]).default(7),
-      ats: z.array(safeToken).min(1).max(10),
+      ats: z.array(z.enum(NETWORK_SCAN_SOURCES)).min(1).max(10),
       limit: positive.min(50).max(500).default(100),
       seeds: safeToken.optional(),
       includeUndated: z.boolean().default(false),

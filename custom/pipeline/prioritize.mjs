@@ -9,6 +9,7 @@
 import { readFile, writeFile, copyFile, rename } from 'node:fs/promises';
 import { orderPending } from './lib.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
+import { localToday } from '../../lib/local-today.mjs';
 // Same resolved paths (data root + CAREER_OPS_* overrides) the scanner writes to.
 import { PIPELINE_PATH as PIPELINE, SCAN_HISTORY_PATH as HISTORY } from '../../scan.mjs';
 
@@ -26,7 +27,8 @@ async function readFirstSeen() {
 
 async function main() {
   const ti = process.argv.indexOf('--today');
-  const today = ti === -1 ? new Date().toISOString().slice(0, 10) : process.argv[ti + 1];
+  // The local day, as scan.mjs stamps first-seen dates; the UTC day is already tomorrow on a US evening.
+  const today = ti === -1 ? localToday() : process.argv[ti + 1];
   if (!/^\d{4}-\d{2}-\d{2}$/.test(today ?? '')) throw new Error('--today needs a YYYY-MM-DD date');
 
   // Same lock scan.mjs and rank-pipeline.mjs hold, so a concurrent writer's

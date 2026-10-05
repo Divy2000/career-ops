@@ -3,6 +3,7 @@ import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } f
 import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
+import { localDate } from '@shared/local-date';
 
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
 
@@ -57,7 +58,7 @@ export function TodayPage() {
   const tracker = useTracker();
   const followups = useFollowups();
   const fresh = useWhatsNew(7, 6);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
   const trackerEmpty = tracker.data?.kind === 'missing' || (tracker.data?.kind === 'ok' && tracker.data.rows.length === 0);
 
   return (

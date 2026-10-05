@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CONTRACT, cliScriptPath, importCore, type CliContract } from '../../server/core/adapter.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { NODE_FLOOR } from '../../supervisor/preflight.js';
@@ -9,6 +10,7 @@ import { copyFixtureRoot } from '../helpers/app.js';
 import { buildArgv, buildPermissions, writeSettingsFile } from '../../server/claude/invocation.js';
 import { getModePolicy } from '../../server/claude/modes.js';
 import { tempDir } from '../helpers/tmp.js';
+import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 
 const fixtureRoot = copyFixtureRoot();
 
@@ -51,6 +53,14 @@ describe('core contract', () => {
       expect(fs.existsSync(path.join(DEFAULT_CODE_ROOT, w)), w).toBe(true);
       expect(CONTRACT.exports.some((e) => e.module === w), `${w} must not be importable into the server`).toBe(false);
     }
+  });
+
+  it('Discover > Network scan offers exactly the ATS sources scan-ats-full.mjs has a public directory for', () => {
+    // A child process: scan-ats-full.mjs is a writer script and never loads into this process or the server.
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'scan-ats-full.mjs')).href)}); process.stdout.write(JSON.stringify(Object.keys(m.SOURCES)));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: fixtureRoot, NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect([...NETWORK_SCAN_SOURCES]).toEqual(JSON.parse(r.stdout));
   });
 
   it('refuses to import a module outside the contract', async () => {

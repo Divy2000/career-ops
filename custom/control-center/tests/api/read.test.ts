@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
@@ -133,6 +133,21 @@ describe('GET /api/followups on an empty tracker', () => {
     expect(body.cadenceDefaults).toMatchObject({ applied_first: 7, applied_max_followups: 2 });
     expect(body.error).toBeUndefined();
     await t2.close();
+  });
+
+  it('dates an empty cadence by the local day, not the UTC one', async () => {
+    const t2 = await makeTestApp();
+    fs.rmSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // 19:00 on 2026-10-05 in Los Angeles (vitest's pinned zone) is already 2026-10-06 in UTC.
+      vi.setSystemTime(new Date(2026, 9, 5, 19, 0));
+      const body = (await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed })).json();
+      expect(body.metadata.analysisDate).toBe('2026-10-05');
+    } finally {
+      vi.useRealTimers();
+      await t2.close();
+    }
   });
 
   it('reports a header-only tracker and its dashboard as ok and empty', async () => {

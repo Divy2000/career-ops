@@ -55,7 +55,7 @@ function isNoApplications(v: unknown): v is { error: string; cadenceDefaults?: R
 
 function emptyFollowups(cadenceDefaults: Record<string, number> | undefined, nowMs: number): FollowupCadence {
   return {
-    metadata: { analysisDate: new Date(nowMs).toISOString().slice(0, 10), totalTracked: 0, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 0 },
+    metadata: { analysisDate: localDate(new Date(nowMs)), totalTracked: 0, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 0 },
     entries: [],
     ...(cadenceDefaults ? { cadenceDefaults } : {}),
   };

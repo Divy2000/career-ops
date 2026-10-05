@@ -5,6 +5,7 @@ import { isPlainObject, isScalar } from '../../lib/yamlOpsClient';
 import { DataState, Empty, Pill } from '../../components/ui';
 import { emptyReason } from '../../lib/insightEmpty';
 import type { InsightRead } from '@shared/api';
+import { formatLocalMinute } from '../../lib/time';
 
 export const useInsight = (script: string) => useQuery({ queryKey: ['insights', 'script', script], queryFn: () => apiGet<InsightRead>(`/api/insights/${script}`) });
 
@@ -92,7 +93,7 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
         <div className="row gap">
           {q.data && (
             <span className="faint small">
-              computed {q.data.computedAt.slice(0, 19).replace('T', ' ')} {q.data.fromCache && <Pill>cached</Pill>}
+              computed {formatLocalMinute(q.data.computedAt)} {q.data.fromCache && <Pill>cached</Pill>}
             </span>
           )}
           <button type="button" onClick={() => void recompute()} disabled={busy} aria-busy={busy}>

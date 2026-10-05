@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { companySlug, parsePolicyChanges, readCheckedAt, readSeenChangeCount, decideRefresh } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
+import { localToday } from '../../lib/local-today.mjs';
 
 const ROOT = getCareerOpsRoot();
 const CHANGES = path.join(ROOT, 'data/immigration/policy-changes.tsv');
@@ -17,7 +18,7 @@ const CHANGES = path.join(ROOT, 'data/immigration/policy-changes.tsv');
 async function main() {
   const args = process.argv.slice(2);
   const ti = args.indexOf('--today');
-  const today = ti === -1 ? new Date().toISOString().slice(0, 10) : args[ti + 1];
+  const today = ti === -1 ? localToday() : args[ti + 1];
   const company = args.find((_, i) => ti === -1 || (i !== ti && i !== ti + 1));
   if (!company) throw new Error('usage: freshness.mjs "<Company name>" [--today YYYY-MM-DD]');
 

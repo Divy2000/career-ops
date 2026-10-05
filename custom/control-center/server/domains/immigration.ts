@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { parseTsv, readText } from './files.js';
+import { localDate } from '../../shared/local-date.js';
 
 export interface DigestSection {
   date: string;
@@ -127,10 +128,7 @@ export function parseDailyLog(text: string, date: string): DailyLog {
 }
 
 /** The local calendar date (YYYY-MM-DD) the job scripts name their logs by (`date +%Y-%m-%d`). */
-export function localDate(d = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+export { localDate };
 
 /** The local date the day before `date` (YYYY-MM-DD). */
 function dayBefore(date: string): string {
@@ -142,14 +140,21 @@ function dayBefore(date: string): string {
  * A run with no done line is running only while the job runs, and only a log dated today or yesterday (a run that
  * crossed midnight writes to the file of the day it started) can belong to the run going on now: an older one is
  * interrupted without asking. Today's log asks the probe and null (unknown) keeps it running; yesterday's runs on only
- * when the probe says so, so a job with no probe (the weekly sync) does not keep yesterday's run alive.
+ * when the probe says so, so a job with no probe (the weekly sync) does not keep yesterday's run alive, and only while
+ * no run has started today: one run holds the job's lock, and a run started today writes today's log.
  */
-export async function withJobState<T extends DailyLog>(log: T, today: string, jobRunning: () => Promise<boolean | null>): Promise<T> {
+export async function withJobState<T extends DailyLog>(log: T, today: string, jobRunning: () => Promise<boolean | null>, startedToday: () => boolean): Promise<T> {
   if (log.status !== 'running') return log;
   const interrupted = { ...log, status: 'interrupted' as const };
   if (log.date === today) return (await jobRunning()) === false ? interrupted : log;
-  if (log.date === dayBefore(today)) return (await jobRunning()) === true ? log : interrupted;
+  if (log.date === dayBefore(today)) return !startedToday() && (await jobRunning()) === true ? log : interrupted;
   return interrupted;
+}
+
+/** Whether the job's log dated `date` has a run start line. */
+export function logHasStart(dataRoot: string, date: string, logDir = path.join('data', 'immigration', 'logs')): boolean {
+  const raw = readText(path.join(dataRoot, logDir, `${date}.log`));
+  return raw.kind === 'ok' && parseDailyLog(raw.text, date).startedAt !== null;
 }
 
 export function listLogDates(dataRoot: string, logDir = path.join('data', 'immigration', 'logs')): string[] {
@@ -234,7 +239,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,
     pendingError: pending.error,
-    dailyLog: latestLog && (await withJobState(latestLog, today, dailyRunning)),
+    dailyLog: latestLog && (await withJobState(latestLog, today, dailyRunning, () => logHasStart(dataRoot, today))),
     logDates,
   };
 }

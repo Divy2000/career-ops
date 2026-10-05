@@ -10,6 +10,8 @@ import { readApplyDocuments, readDocuments } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import type { DailyJobWatch } from '../system/daily.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
+import { PIPELINE_ADD_MAX, PIPELINE_OFFER_LIMITS } from '../../shared/pipeline-add.js';
+import { localDate } from '../../shared/local-date.js';
 
 type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>, o?: { timeoutMs?: number; retryMs?: number }) => Promise<T> };
 
@@ -59,8 +61,8 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   });
 
   app.post<{ Body: { offers?: unknown } }>('/api/pipeline/add', async (req, reply) => {
-    const offer = z.object({ url, company: z.string().max(200), title: z.string().max(300), location: z.string().max(200).optional(), portal: z.string().max(100).optional() });
-    const parsed = z.object({ offers: z.array(offer).min(1).max(200) }).safeParse(req.body ?? {});
+    const offer = z.object({ url, company: z.string().max(PIPELINE_OFFER_LIMITS.company), title: z.string().max(PIPELINE_OFFER_LIMITS.title), location: z.string().max(PIPELINE_OFFER_LIMITS.location).optional(), portal: z.string().max(PIPELINE_OFFER_LIMITS.portal).optional() });
+    const parsed = z.object({ offers: z.array(offer).min(1).max(PIPELINE_ADD_MAX) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     return appendOffers(cfg.codeRoot, cfg.dataRoot, parsed.data.offers, true);
   });
@@ -94,7 +96,7 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   app.post<{ Body: Record<string, unknown> }>('/api/followups/override', async (req, reply) => {
     const parsed = z.object({ appNum: z.number().int().positive(), date: DATE }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'pin.set', appNum: parsed.data.appNum, date: parsed.data.date, setOn: new Date().toISOString().slice(0, 10) }));
+    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'pin.set', appNum: parsed.data.appNum, date: parsed.data.date, setOn: localDate() }));
   });
 
   app.delete<{ Body: Record<string, unknown> }>('/api/followups/override', async (req, reply) => {

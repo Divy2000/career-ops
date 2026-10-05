@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import type { Exec } from '../../server/routes/system.js';
+import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
 
 let t: TestApp;
 let pgrepRunning = false;
@@ -53,6 +54,47 @@ describe('pipeline writes', () => {
     expect(readData('data/pipeline.md')).toContain('https://jobs.example.com/offerco/7');
     expect(readData('data/scan-history.tsv')).toContain('https://jobs.example.com/offerco/7');
   });
+  it('adding is idempotent: URLs already in the pipeline (pending or processed, however spelled) and repeats within the request are skipped and counted', async () => {
+    const fresh = 'https://boards.example.com/idem/1';
+    const other = 'https://boards.example.com/idem/2';
+    const offer = (url: string) => ({ url, company: 'Idem Co', title: 'Platform Engineer' });
+    const body = {
+      offers: [
+        offer(fresh),
+        // The same posting with a tracking parameter and a trailing slash.
+        offer(`${fresh}/?utm_source=x`),
+        // Already pending, and already processed, in the fixture pipeline.
+        offer('https://jobs.example.com/acme/123'),
+        offer('https://jobs.example.com/oldcorp/1'),
+        offer(other),
+      ],
+    };
+    const first = await post('/api/pipeline/add', body);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toEqual({ added: 2, skipped: 3 });
+    // A retry of the same request (an Add all that failed part way) adds nothing.
+    const again = await post('/api/pipeline/add', body);
+    expect(again.json()).toEqual({ added: 0, skipped: 5 });
+    const pipeline = readData('data/pipeline.md');
+    for (const url of [fresh, other, 'https://jobs.example.com/acme/123', 'https://jobs.example.com/oldcorp/1']) expect(pipeline.split(`${url} `).length - 1, url).toBe(1);
+    expect(pipeline).not.toContain('utm_source');
+    const history = readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${fresh}\t`) || l.startsWith(`${other}\t`));
+    expect(history).toHaveLength(2);
+  });
+  it('Network scan results with no location, a very long location and more rows than one request takes are all added', async () => {
+    const postings: ScanPostingInput[] = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: 'Remote', source: 'greenhouse' }));
+    postings[0]!.location = null;
+    postings[1]!.location = '';
+    postings[2]!.location = Array.from({ length: 40 }, (_, i) => `Office ${i}`).join('; ');
+    const batches = pipelineAddBatches(postings);
+    expect(batches.map((b) => b.offers.length)).toEqual([200, 5]);
+    for (const body of batches) {
+      const r = await post('/api/pipeline/add', body);
+      expect(r.statusCode, r.body).toBe(200);
+    }
+    const pipeline = readData('data/pipeline.md');
+    expect(postings.filter((p) => !pipeline.includes(`${p.url} `)).map((p) => p.url)).toEqual([]);
+  });
 });
 
 describe('follow-up writes', () => {
@@ -74,6 +116,32 @@ describe('follow-up writes', () => {
     expect((await del('/api/followups/override', { appNum: 6 })).statusCode).toBe(200);
     expect((await get('/api/tracker/6')).json().timeline.pin).toBeNull();
     expect((await post('/api/followups/override', { appNum: 6, date: 'soon' })).statusCode).toBe(400);
+  });
+});
+
+describe('dates the app writes are local dates (vitest runs in America/Los_Angeles)', () => {
+  // 19:00 on 2026-10-05 in Los Angeles is already 2026-10-06 in UTC.
+  const usEvening = () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 5, 19, 0));
+  };
+  afterEach(() => vi.useRealTimers());
+
+  it('a follow-up pin records the local day it was set on', async () => {
+    usEvening();
+    const r = await post('/api/followups/override', { appNum: 6, date: '2026-10-12' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await get('/api/tracker/6')).json().timeline.pin).toMatchObject({ appNum: 6, date: '2026-10-12', setOn: '2026-10-05' });
+    expect((await del('/api/followups/override', { appNum: 6 })).statusCode).toBe(200);
+  });
+
+  it('a posting added to the pipeline is first seen on the local day, as scan.mjs stamps it', async () => {
+    usEvening();
+    const url = 'https://jobs.example.com/evening/1';
+    const r = await post('/api/pipeline/add', { offers: [{ url, company: 'Evening Co', title: 'Backend Engineer' }] });
+    expect(r.statusCode, r.body).toBe(200);
+    const row = readData('data/scan-history.tsv').split('\n').find((l) => l.startsWith(`${url}\t`));
+    expect(row?.split('\t')[1]).toBe('2026-10-05');
   });
 });
 

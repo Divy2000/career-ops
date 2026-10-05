@@ -17,6 +17,7 @@ import * as yaml from 'js-yaml';
 import { buildTitleFilter, PIPELINE_PATH, PORTALS_PATH } from '../../scan.mjs';
 import { companySlug, parseCompanyAlerts } from '../immigration/lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
+import { localToday } from '../../lib/local-today.mjs';
 
 const run = promisify(execFile);
 // Code lives in the checkout; user data follows career-ops' data-root contract.
@@ -103,7 +104,7 @@ const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 async function main() {
   const minRank = arg('--min-rank', 3);
   const top = arg('--top', 40);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const rows = (await readFile(PIPELINE, 'utf8')).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];
   const { tiers, looked } = await loadTiers(companies, today);

@@ -9,6 +9,7 @@ import { ModeLauncher } from '../../components/ModeLauncher';
 import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
 import { useSessions } from '../../lib/sessions';
 import type { ReportFull } from '@shared/api';
+import { formatLocalMinute } from '../../lib/time';
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -26,7 +27,7 @@ function ApplicationSessions({ n }: { n: number }) {
               <Link to="/sessions/$id" params={{ id: s.id }}>
                 {s.mode}
               </Link>{' '}
-              <StatusLabel status={s.status} /> <span className="mono faint small">{s.updatedAt.slice(0, 16).replace('T', ' ')}</span>
+              <StatusLabel status={s.status} /> <span className="mono faint small">{formatLocalMinute(s.updatedAt)}</span>
             </li>
           ))}
         </ul>
