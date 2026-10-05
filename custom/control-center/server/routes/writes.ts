@@ -9,6 +9,7 @@ import { appendOffers, editFollowups, FollowupsBusyError } from '../domains/writ
 import { readApplyDocuments, readDocuments } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import type { DailyJobWatch } from '../system/daily.js';
+import { writeFileAtomic } from '../lib/atomic-write.js';
 
 type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>, o?: { timeoutMs?: number; retryMs?: number }) => Promise<T> };
 
@@ -36,9 +37,7 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
           }
           const r = applyInboxSkip(md, parsed.data.url, parsed.data.done);
           if (r.ok && r.changed > 0) {
-            const tmp = `${pipelinePath}.tmp-${process.pid}`;
-            fs.writeFileSync(tmp, r.text);
-            fs.renameSync(tmp, pipelinePath);
+            writeFileAtomic(pipelinePath, r.text);
           }
           return r;
         },

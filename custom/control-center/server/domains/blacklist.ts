@@ -5,6 +5,7 @@
 // columns the editor does not manage are carried through per row, in order.
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from '../lib/atomic-write.js';
 import { z } from 'zod';
 import { etagOf } from './files.js';
 
@@ -104,11 +105,6 @@ export function readBlacklist(dataRoot: string): BlacklistRead {
 
 /** Atomic write of the rendered table; the caller has already checked the ETag and the explicit gate. */
 export function writeBlacklist(dataRoot: string, rows: BlacklistRow[], preamble: string | null, postamble = '', extraColumns: string[] = []): BlacklistRead {
-  const abs = path.join(dataRoot, BLACKLIST_REL);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  const text = renderBlacklist(rows, preamble, postamble, extraColumns);
-  const tmp = `${abs}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, abs);
+  writeFileAtomic(path.join(dataRoot, BLACKLIST_REL), renderBlacklist(rows, preamble, postamble, extraColumns));
   return readBlacklist(dataRoot);
 }

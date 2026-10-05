@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
+import { writeFileAtomic } from '../lib/atomic-write.js';
 
 export const USER_FILES = {
   cv: 'cv.md',
@@ -52,11 +53,7 @@ export function writeUserFile(dataRoot: string, key: UserFileKey, text: string, 
   const expected = current.etag;
   const matches = expected === null ? ifMatch === undefined || ifMatch === '*' : ifMatch === expected || ifMatch === '*';
   if (!matches) return { ok: false, conflict: current };
-  const abs = path.join(dataRoot, USER_FILES[key]);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  const tmp = `${abs}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, abs);
+  writeFileAtomic(path.join(dataRoot, USER_FILES[key]), text);
   return { ok: true, etag: etagOf(text) };
 }
 

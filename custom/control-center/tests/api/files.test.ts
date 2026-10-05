@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { tempDir } from '../helpers/tmp.js';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 
 let t: TestApp;
@@ -35,6 +36,19 @@ describe('user files', () => {
     const created = await t.app.inject({ method: 'PUT', url: '/api/files/user/briefMd', headers: t.authedWrite, payload: { text: '# Brief\n' } });
     expect(created.statusCode).toBe(200);
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_brief.md'), 'utf8')).toBe('# Brief\n');
+  });
+
+  it('saves a symlinked cv.md through the link: the synced target is updated and the link stays', async () => {
+    const synced = tempDir('cc-synced-cv-');
+    const target = path.join(synced, 'cv.md');
+    const link = path.join(t.cfg.dataRoot, 'cv.md');
+    fs.renameSync(link, target);
+    fs.symlinkSync(target, link);
+    const before = (await t.app.inject({ method: 'GET', url: '/api/files/user/cv', headers: t.authed })).json();
+    const res = await t.app.inject({ method: 'PUT', url: '/api/files/user/cv', headers: { ...t.authedWrite, 'if-match': before.etag }, payload: { text: '# Synced CV\n' } });
+    expect(res.statusCode).toBe(200);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toBe('# Synced CV\n');
   });
 
   it('accepts a PDF upload into the data root and rejects other types', async () => {
