@@ -179,6 +179,33 @@ test.describe('Fork on a session page', () => {
   });
 });
 
+test.describe('Delete on a session page', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('the next session opened from the same page shows its transcript, not "Session deleted."', async ({ page }) => {
+    const res = await page.request.post('/api/sessions', { data: { mode: 'interview/practice', target: { type: 'app', value: '3' }, prompt: 'Practice' }, headers: { 'X-CC': '1', Origin: `http://127.0.0.1:${E2E_PORT}` } });
+    expect(res.status(), await res.text()).toBe(202);
+    const { id } = (await res.json()) as { id: string };
+    await page.goto(`/sessions/${id}`);
+    await expect(page.getByText('needs your reply', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Delete this session?' }).getByRole('button', { name: 'Delete' }).click();
+    await expect(page.getByText('Session deleted.')).toBeVisible();
+    // Cmd+K starts a mode session and opens it on the same route, so the page is not remounted.
+    await page.keyboard.press('Control+k');
+    await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('mode interview/practice');
+    await page.locator('[cmdk-item]', { hasText: /^interview\/practice\b/ }).first().click();
+    await page.getByLabel('Session prompt').fill('Practice again');
+    await page.getByRole('button', { name: 'Start (uses tokens)' }).click();
+    await expect(page).not.toHaveURL(new RegExp(`/sessions/${id}$`));
+    await expect(page).toHaveURL(/\/sessions\/s[\w-]+$/);
+    const next = new URL(page.url()).pathname.split('/').at(-1)!;
+    await expect(page.getByRole('heading', { level: 1 })).toContainText(next);
+    await expect(page.locator(`[data-session-id="${next}"]`)).toBeVisible();
+    await expect(page.getByText('Session deleted.')).toHaveCount(0);
+  });
+});
+
 test.describe('Cancel stops a running session or run from the page', () => {
   test.beforeEach(async ({ page }) => login(page));
 
