@@ -2,7 +2,8 @@
 // Fake Claude CLI for tests. Replays stream-json scenario files, honors
 // --session-id / --resume, performs scripted writes, reads, fetches and Bash steps and
 // invokes the real guard hook from --settings with the real stdin JSON so the
-// hook is exercised. Scenario selection: FAKE_CLAUDE_SCENARIO (one file) or
+// hook is exercised. A write or Bash step marked expectDenied is never performed:
+// if the hook allows it, the fake reports it and exits 3. Scenario selection: FAKE_CLAUDE_SCENARIO (one file) or
 // FAKE_CLAUDE_SCENARIO_DIR/<mode>.json (CC_MODE set by the session manager, with
 // slashes replaced by dashes), falling back to default.json.
 import fs from 'node:fs';
@@ -66,6 +67,14 @@ if (process.env.FAKE_CLAUDE_REPORT_ENV === '1') {
 }
 
 const denials = [];
+// Steps a scenario marks expectDenied (writes into the real checkout, a push) that the hook let through: never run.
+const allowedButExpectedDenied = [];
+
+/** A step the guard should have refused but did not: it is not run, and the fake exits non-zero at the end. */
+function refuseUnexpectedlyAllowed(id, tool, input) {
+  allowedButExpectedDenied.push(`${tool} ${JSON.stringify(input)}`);
+  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'fake claude: the guard allowed a step the scenario marks expectDenied; it was not run' }] } });
+}
 
 function runHook(kind, toolName, toolInput) {
   const hooks = settings?.hooks?.[kind] ?? [];
@@ -98,6 +107,10 @@ for (const ev of events) {
       emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `PreToolUse:Write hook error: ${verdict.reason}` }] } });
       continue;
     }
+    if (ev.expectDenied) {
+      refuseUnexpectedlyAllowed(id, 'Write', input);
+      continue;
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, ev.__write.content);
     runHook('PostToolUse', 'Write', input);
@@ -113,6 +126,10 @@ for (const ev of events) {
     if (verdict.blocked) {
       denials.push({ tool_name: 'Bash', tool_use_id: id, tool_input: input });
       emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `PreToolUse:Bash hook error: ${verdict.reason}` }] } });
+      continue;
+    }
+    if (ev.expectDenied) {
+      refuseUnexpectedlyAllowed(id, 'Bash', input);
       continue;
     }
     const [cmd, ...args] = ev.__bash.split(' ');
@@ -166,5 +183,9 @@ for (const ev of events) {
     continue;
   }
   emit(ev);
+}
+if (allowedButExpectedDenied.length) {
+  console.error(`fake claude: the guard allowed ${allowedButExpectedDenied.length} step(s) marked expectDenied; none was run: ${allowedButExpectedDenied.join('; ')}`);
+  process.exit(3);
 }
 process.exit(scenario.exitCode ?? 0);

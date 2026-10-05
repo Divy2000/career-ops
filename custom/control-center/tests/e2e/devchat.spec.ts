@@ -14,10 +14,13 @@ test.describe('Dev Chat', () => {
     await page.getByRole('button', { name: 'Send', exact: true }).first().click();
     // Scoped to the transcript: the git diff panel can hold the same text when custom/ has uncommitted changes.
     await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText('Permission denied', { exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Turn 1' })).toBeVisible();
-    await expect(page.getByText('modes/_custom.md').first()).toBeVisible();
-    await expect(page.getByText('data/notes/devchat.md').first()).toBeVisible();
+    // Exactly the three refusals the scenario expects: the blacklist and supervisor writes and the push.
+    await expect(page.getByRole('status').filter({ hasText: 'Permission denied' })).toHaveText('Permission denied for Write, Write, Bash: the session stayed inside its write scope.');
+    // The changed files as the Changes panel lists them, not the transcript's tool chips.
+    const changes = page.getByLabel('Changes');
+    await expect(changes.getByRole('heading', { name: 'Turn 1' })).toBeVisible();
+    await expect(changes.getByText('modes/_custom.md', { exact: true })).toBeVisible();
+    await expect(changes.getByText('data/notes/devchat.md', { exact: true })).toBeVisible();
     const custom = await (await page.request.get('/api/files/user/customMd')).json();
     expect(custom.text).toContain('Added by Dev Chat');
     const axe = await (await axeBuilder(page)).analyze();
