@@ -75,7 +75,7 @@ const positive = z.number().int().positive();
  * A tracker Report label as written ("012"); hired-share.mjs compares it as text, so "12" would miss "012".
  * A positive number is still accepted (sent as its plain digits) for callers that hold the report as a number.
  */
-const reportLabel = z.union([z.string().regex(/^\d{1,6}$/), z.number().int().positive()]);
+const reportLabel = z.union([z.string().regex(/^\d{1,6}$/), z.number().int().positive().max(999999)]);
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
 const outputPath = (ext: RegExp, what: string) =>

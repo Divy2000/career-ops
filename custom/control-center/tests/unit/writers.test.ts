@@ -145,7 +145,9 @@ describe('action registry covers section 3.3', () => {
       const extra = id === 'tracker.hiredShare' ? { anonymity: 'role' } : { mark: 'later' };
       expect(a.build(a.params.parse({ report: 12, ...extra }), ctx).args.slice(1, 3), id).toEqual(['--report', '12']);
       expect(a.build(a.params.parse({ report: '012', ...extra }), ctx).args.slice(1, 3), id).toEqual(['--report', '012']);
-      for (const bad of [0, -3, 1.5, '12a', '']) expect(a.params.safeParse({ report: bad, ...extra }).success, `${id} ${JSON.stringify(bad)}`).toBe(false);
+      // The numeric form has the text form's six-digit ceiling.
+      expect(a.params.safeParse({ report: 999999, ...extra }).success, `${id} 999999`).toBe(true);
+      for (const bad of [0, -3, 1.5, '12a', '', 1_000_000, '1000000']) expect(a.params.safeParse({ report: bad, ...extra }).success, `${id} ${JSON.stringify(bad)}`).toBe(false);
     }
     expect(findAction('pipeline.releaseReportNums')!.build({ range: '12-14' }, ctx).args.slice(1)).toEqual(['--release', '12-14']);
     expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
