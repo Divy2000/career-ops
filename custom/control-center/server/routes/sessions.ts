@@ -4,7 +4,7 @@ import type { ServerConfig } from '../config.js';
 import { BusyError, NotFoundError, type SessionManager } from '../claude/manager.js';
 import { listModeIds } from '../claude/modes.js';
 import { EXPLICIT_HEADER } from './settings.js';
-import { rememberFact } from '../domains/memory.js';
+import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { readSettings } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 
@@ -125,6 +125,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.post<{ Body: unknown }>('/api/memory', async (req, reply) => {
     const parsed = z.object({ fact: z.string().min(1).max(300) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return { result: rememberFact(opts.cfg.dataRoot, parsed.data.fact) };
+    try {
+      return { result: rememberFact(opts.cfg.dataRoot, parsed.data.fact) };
+    } catch (err) {
+      if (err instanceof ProfileMissingError) return reply.code(409).send({ error: err.message });
+      throw err;
+    }
   });
 }

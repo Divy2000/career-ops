@@ -409,6 +409,15 @@ describe('Claude sessions', () => {
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'deduped' });
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_profile.md'), 'utf8')).toContain('- Prefers remote roles');
   });
+
+  it('refuses to remember a fact before onboarding created modes/_profile.md, and creates nothing that would hide the missing profile', async () => {
+    const profile = path.join(t.cfg.dataRoot, 'modes', '_profile.md');
+    fs.rmSync(profile, { force: true });
+    const res = await post('/api/memory', { fact: 'Prefers remote roles' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/onboarding/);
+    expect(fs.existsSync(profile)).toBe(false);
+  });
 });
 
 describe('projects-ingest sessions read the document text the app extracted', () => {

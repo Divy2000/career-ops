@@ -23,14 +23,21 @@ export function applyRememberedFact(md: string, fact: string): { text: string; r
   return { text: base + section, result: 'ok' };
 }
 
+/** Remember before onboarding: a bare modes/_profile.md would pass doctor's checks and stop --init-templates from copying the template. */
+export class ProfileMissingError extends Error {
+  constructor() {
+    super('modes/_profile.md does not exist yet: run the onboarding interview (Profile & CV > AI flows) first, then remember facts; nothing was written');
+  }
+}
+
 export function rememberFact(dataRoot: string, fact: string): 'ok' | 'deduped' {
   const p = path.join(dataRoot, 'modes', '_profile.md');
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  let md = '';
+  let md: string;
   try {
     md = fs.readFileSync(p, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new ProfileMissingError();
+    throw err;
   }
   const { text, result } = applyRememberedFact(md, fact);
   if (result === 'ok') {
