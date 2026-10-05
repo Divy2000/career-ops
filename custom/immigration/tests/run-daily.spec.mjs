@@ -23,7 +23,7 @@ function fillPrompt(env) {
 test('the policy prompt carries the watch JSON, the date and the data dir verbatim, even when they hold $ replacement patterns', () => {
   const watch = '{"items":[{"title":"Fee rises to $& and $$5 ($` then $\')"}]}';
   const imm = '/data/$&root/data/immigration';
-  const out = fillPrompt({ WATCH_JSON: watch, TODAY: '2026-10-04', IMM: imm });
+  const out = fillPrompt({ WATCH_JSON: watch, TODAY: '2026-10-04', IMM: imm, PROFILE: '/data/$&root/config/profile.yml' });
   assert.ok(out.includes(watch), out.slice(0, 2000));
   assert.ok(out.includes(`\`${imm}/policy-changes.tsv\``));
   assert.ok(out.includes('Today is 2026-10-04.'));
@@ -115,6 +115,18 @@ test('the policy pass runs claude --restricted with an exact tool list, no MCP s
   assert.deepEqual(r.leftovers, []);
   assert.match(r.steps, /^watch --ack /m, 'a successful pass acknowledges its batch');
   assert.ok(HOME_READ_DENY.length > 10);
+});
+
+test('the policy prompt names the profile by its absolute path in the data root, the one file the settings let it read (R8-14)', () => {
+  const w = dailyWorld();
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  const prompt = r.calls[0].argv[1];
+  const profile = path.join(w.data, 'config', 'profile.yml');
+  assert.ok(prompt.includes(`\`${profile}\``), prompt.slice(0, 400));
+  // A relative config/profile.yml resolves against the pass's cwd, the checkout, which has no profile.
+  assert.equal(/(^|[^/])config\/profile\.yml/.test(prompt.replaceAll(profile, '')), false, prompt.slice(0, 400));
+  assert.ok(r.calls[0].settings.permissions.allow.includes(`Read(/${profile})`));
 });
 
 test('the settings allow reads only of the immigration folder and the profile, writes only to the immigration folder, and deny the home credential stores and secret files', async () => {
