@@ -27,6 +27,22 @@ async function settle(id: string) {
   }
 }
 
+/** post, get and settle against an app of the test's own, for tests that need a data root nobody else changed. */
+function clientFor(app: TestApp) {
+  const post = (url: string, payload: Record<string, unknown> = {}) => app.app.inject({ method: 'POST', url, headers: app.authedWrite, payload });
+  const get = (url: string) => app.app.inject({ method: 'GET', url, headers: app.authed });
+  const settle = async (id: string) => {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const body = (await get(`/api/sessions/${id}`)).json();
+      if (['done', 'awaiting_user', 'error', 'cancelled'].includes(body.meta.status)) return body;
+      if (Date.now() > deadline) throw new Error('session did not settle');
+      await wait(100);
+    }
+  };
+  return { post, get, settle };
+}
+
 describe('Dev Chat', () => {
   it('policy: user layer and custom/** writable, supervisor and node_modules denied, read-only git allowed', () => {
     const p = getModePolicy('devchat')!;
@@ -43,59 +59,73 @@ describe('Dev Chat', () => {
   });
 
   it('a Dev Chat turn writes inside its scope, is blocked on the blacklist and the supervisor, and the change set lists diffs per turn', async () => {
-    const start = await post('/api/sessions', { mode: 'devchat', prompt: 'Add a rule to the house rules and leave a note' });
-    expect(start.statusCode).toBe(202);
-    const { id } = start.json();
-    const first = await settle(id);
-    expect(first.meta.status).toBe('done');
-    const denied = first.events.filter((e: { event: { type: string } }) => e.event.type === 'permission.denied').map((e: { event: { tool: string; input: { file_path?: string; command?: string } } }) => e.event.input.file_path ?? e.event.input.command);
-    expect(denied).toHaveLength(3);
-    expect(denied.some((d: string) => d.endsWith('data/blacklist.md'))).toBe(true);
-    expect(denied.some((d: string) => d.endsWith('supervisor/index.ts'))).toBe(true);
-    expect(denied).toContain('git push origin main');
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'data', 'blacklist.md'), 'utf8')).not.toContain('Dev Chat');
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_custom.md'), 'utf8')).toContain('Added by Dev Chat');
-    const gitStatus = first.events.filter((e: { event: { type: string; ok?: boolean; summary?: string } }) => e.event.type === 'tool.result').map((e: { event: { ok: boolean; summary: string } }) => e.event);
-    expect(gitStatus.some((r: { ok: boolean; summary: string }) => r.ok && r.summary.startsWith('exit 0'))).toBe(true);
+    // Its own data root: the diffs below are against the fixture's house rules, which other Dev Chat turns change.
+    const own = await makeTestApp();
+    const { post, get, settle } = clientFor(own);
+    try {
+      const start = await post('/api/sessions', { mode: 'devchat', prompt: 'Add a rule to the house rules and leave a note' });
+      expect(start.statusCode).toBe(202);
+      const { id } = start.json();
+      const first = await settle(id);
+      expect(first.meta.status).toBe('done');
+      const denied = first.events.filter((e: { event: { type: string } }) => e.event.type === 'permission.denied').map((e: { event: { tool: string; input: { file_path?: string; command?: string } } }) => e.event.input.file_path ?? e.event.input.command);
+      expect(denied).toHaveLength(3);
+      expect(denied.some((d: string) => d.endsWith('data/blacklist.md'))).toBe(true);
+      expect(denied.some((d: string) => d.endsWith('supervisor/index.ts'))).toBe(true);
+      expect(denied).toContain('git push origin main');
+      expect(fs.readFileSync(path.join(own.cfg.dataRoot, 'data', 'blacklist.md'), 'utf8')).not.toContain('Dev Chat');
+      expect(fs.readFileSync(path.join(own.cfg.dataRoot, 'modes', '_custom.md'), 'utf8')).toContain('Added by Dev Chat');
+      const gitStatus = first.events.filter((e: { event: { type: string; ok?: boolean; summary?: string } }) => e.event.type === 'tool.result').map((e: { event: { ok: boolean; summary: string } }) => e.event);
+      expect(gitStatus.some((r: { ok: boolean; summary: string }) => r.ok && r.summary.startsWith('exit 0'))).toBe(true);
 
-    await post(`/api/sessions/${id}/turns`, { prompt: 'Rewrite the note' });
-    await settle(id);
-    const changes = (await get(`/api/dev/changes/${id}`)).json();
-    expect(changes.turns).toHaveLength(2);
-    const t1 = changes.turns[0].files;
-    expect(t1.map((f: { path: string }) => f.path).sort()).toEqual(['data/notes/devchat.md', 'modes/_custom.md']);
-    expect(t1.find((f: { path: string }) => f.path === 'modes/_custom.md')).toMatchObject({ status: 'modified', additions: 1, deletions: 0 });
-    expect(t1.find((f: { path: string }) => f.path === 'data/notes/devchat.md')).toMatchObject({ status: 'added' });
-    expect(changes.turns[1].files).toEqual([expect.objectContaining({ path: 'data/notes/devchat.md', status: 'modified' })]);
+      await post(`/api/sessions/${id}/turns`, { prompt: 'Rewrite the note' });
+      await settle(id);
+      const changes = (await get(`/api/dev/changes/${id}`)).json();
+      expect(changes.turns).toHaveLength(2);
+      const t1 = changes.turns[0].files;
+      expect(t1.map((f: { path: string }) => f.path).sort()).toEqual(['data/notes/devchat.md', 'modes/_custom.md']);
+      expect(t1.find((f: { path: string }) => f.path === 'modes/_custom.md')).toMatchObject({ status: 'modified', additions: 1, deletions: 0 });
+      expect(t1.find((f: { path: string }) => f.path === 'data/notes/devchat.md')).toMatchObject({ status: 'added' });
+      expect(changes.turns[1].files).toEqual([expect.objectContaining({ path: 'data/notes/devchat.md', status: 'modified' })]);
 
-    // Revert turn 2 restores the turn-1 bytes; revert the house rules file alone restores the fixture.
-    const note = path.join(t.cfg.dataRoot, 'data', 'notes', 'devchat.md');
-    expect((await post('/api/dev/revert', { sessionId: id, turn: 2 })).json().reverted).toEqual([{ abs: note, result: 'restored' }]);
-    expect(fs.readFileSync(note, 'utf8')).toContain('written by the fake session');
-    const custom = path.join(t.cfg.dataRoot, 'modes', '_custom.md');
-    expect((await post('/api/dev/revert', { sessionId: id, turn: 1, abs: custom })).json().reverted[0].result).toBe('restored');
-    expect(fs.readFileSync(custom, 'utf8')).not.toContain('Added by Dev Chat');
-    expect((await post('/api/dev/revert', { sessionId: id, turn: 1, abs: '/etc/hosts' })).statusCode).toBe(404);
-    expect((await post('/api/dev/revert', { sessionId: id, turn: 1 })).json().reverted).toEqual(expect.arrayContaining([{ abs: note, result: 'deleted' }]));
-    expect(fs.existsSync(note)).toBe(false);
+      // Revert turn 2 restores the turn-1 bytes; revert the house rules file alone restores the fixture.
+      const note = path.join(own.cfg.dataRoot, 'data', 'notes', 'devchat.md');
+      expect((await post('/api/dev/revert', { sessionId: id, turn: 2 })).json().reverted).toEqual([{ abs: note, result: 'restored' }]);
+      expect(fs.readFileSync(note, 'utf8')).toContain('written by the fake session');
+      const custom = path.join(own.cfg.dataRoot, 'modes', '_custom.md');
+      expect((await post('/api/dev/revert', { sessionId: id, turn: 1, abs: custom })).json().reverted[0].result).toBe('restored');
+      expect(fs.readFileSync(custom, 'utf8')).not.toContain('Added by Dev Chat');
+      expect((await post('/api/dev/revert', { sessionId: id, turn: 1, abs: '/etc/hosts' })).statusCode).toBe(404);
+      expect((await post('/api/dev/revert', { sessionId: id, turn: 1 })).json().reverted).toEqual(expect.arrayContaining([{ abs: note, result: 'deleted' }]));
+      expect(fs.existsSync(note)).toBe(false);
+    } finally {
+      await own.close();
+    }
   });
 
   it('the blacklist checkbox unlocks data/blacklist.md for that turn only', async () => {
-    const explicit = { ...t.authedWrite, 'x-cc-explicit': 'blacklist' };
-    const { id } = (await t.app.inject({ method: 'POST', url: '/api/sessions', headers: explicit, payload: { mode: 'devchat', prompt: 'Blacklist Synthetic Corp', blacklistAllowed: true } })).json();
-    const first = await settle(id);
-    const denied = first.events.filter((e: { event: { type: string } }) => e.event.type === 'permission.denied');
-    expect(denied).toHaveLength(2);
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'data', 'blacklist.md'), 'utf8')).toContain('Added by Dev Chat');
-    const turnPolicy = (n: number) => JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', id, 'turns', String(n), 'policy.json'), 'utf8'));
-    expect(turnPolicy(1).allow).toContain('data/blacklist.md');
-    expect(turnPolicy(1).deny).toContain('custom/control-center/supervisor/**');
-    expect(turnPolicy(1).deny).not.toContain('data/blacklist.md');
-    await post(`/api/sessions/${id}/turns`, { prompt: 'next turn without the checkbox' });
-    await settle(id);
-    expect(turnPolicy(2).deny).toContain('data/blacklist.md');
-    expect(turnPolicy(2).allow).not.toContain('data/blacklist.md');
-    expect(turnPolicy(1).allow).toContain('data/blacklist.md');
+    // Its own data root: the unlocked turn really writes the blacklist and the house rules, which the other tests check.
+    const own = await makeTestApp();
+    const { post, settle } = clientFor(own);
+    try {
+      const explicit = { ...own.authedWrite, 'x-cc-explicit': 'blacklist' };
+      const { id } = (await own.app.inject({ method: 'POST', url: '/api/sessions', headers: explicit, payload: { mode: 'devchat', prompt: 'Blacklist Synthetic Corp', blacklistAllowed: true } })).json();
+      const first = await settle(id);
+      const denied = first.events.filter((e: { event: { type: string } }) => e.event.type === 'permission.denied');
+      expect(denied).toHaveLength(2);
+      expect(fs.readFileSync(path.join(own.cfg.dataRoot, 'data', 'blacklist.md'), 'utf8')).toContain('Added by Dev Chat');
+      const turnPolicy = (n: number) => JSON.parse(fs.readFileSync(path.join(own.cfg.guardRoot, 'sessions', id, 'turns', String(n), 'policy.json'), 'utf8'));
+      expect(turnPolicy(1).allow).toContain('data/blacklist.md');
+      expect(turnPolicy(1).deny).toContain('custom/control-center/supervisor/**');
+      expect(turnPolicy(1).deny).not.toContain('data/blacklist.md');
+      await post(`/api/sessions/${id}/turns`, { prompt: 'next turn without the checkbox' });
+      await settle(id);
+      expect(turnPolicy(2).deny).toContain('data/blacklist.md');
+      expect(turnPolicy(2).allow).not.toContain('data/blacklist.md');
+      expect(turnPolicy(1).allow).toContain('data/blacklist.md');
+    } finally {
+      await own.close();
+    }
   });
 
   it('a fork sent with the checkbox ticked unlocks data/blacklist.md for its first turn, and only with the header (SW-web-b-12)', async () => {

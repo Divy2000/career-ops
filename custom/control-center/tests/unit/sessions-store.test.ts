@@ -10,6 +10,9 @@ const guardRoot = tempDir('cc-sessions-guard-');
 describe('session store', () => {
   const store = new SessionStore(root, guardRoot);
   it('creates a session with meta.json under data/control-center/sessions and lists newest first', () => {
+    // Its own root: the list must hold exactly these two, whichever tests ran before.
+    const root = tempDir('cc-sessions-list-');
+    const store = new SessionStore(root, guardRoot);
     const a = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://x.example/1' }, model: null });
     expect(fs.existsSync(path.join(sessionsDir(root), a.id, 'meta.json'))).toBe(true);
     expect(a).toMatchObject({ status: 'queued', turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [] });

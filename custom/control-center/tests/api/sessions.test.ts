@@ -74,30 +74,36 @@ async function withScenario<T>(file: string, fn: () => Promise<T>): Promise<T> {
 
 describe('Claude sessions', () => {
   it('evaluate: streams events, the scripted report write passes the hook, the tracker merges and the honesty gate marks done', async () => {
-    const res = await post('/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/synthetic/8' }, prompt: 'Evaluate https://jobs.example.com/synthetic/8' });
-    expect(res.statusCode).toBe(202);
-    const { id } = res.json();
-    const { meta, events } = await settle(id);
-    const types = events.map((e) => e.event.type);
-    expect(types).toContain('session.init');
-    expect(types).toContain('text.delta');
-    expect(types.filter((x) => x === 'tool.use')).toHaveLength(3);
-    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
-    const evaluation = events.find((e) => e.event.type === 'evaluation')!.event as unknown as { reports: Array<{ num: number; file: string; score: number }> };
-    expect(evaluation.reports).toEqual([{ num: 8, file: '008-synthetic-corp.md', score: 4.1 }]);
-    expect(meta.status).toBe('done');
-    expect(meta.lastReason).toMatch(/008-synthetic-corp\.md created/);
-    expect(meta.totals).toEqual({ costUsd: 0.12, tokens: 1900 });
-    expect(meta.filesChanged).toEqual(expect.arrayContaining(['reports/008-synthetic-corp.md', 'batch/tracker-additions/008-synthetic-corp.tsv']));
-    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', '008-synthetic-corp.md'))).toBe(true);
-    const merge = events.filter((e) => e.event.type === 'tool.result').at(-1)!.event as unknown as { ok: boolean; summary: string };
-    expect(merge.ok, merge.summary).toBe(true);
-    const tracker = (await get('/api/tracker')).json();
-    expect(tracker.rows.some((r: { company: string }) => r.company === 'Synthetic Corp')).toBe(true);
-    const run = (await get(`/api/runs/${meta.turns[0]!.runId}`)).json();
-    expect(run.meta.claude).toBe(true);
-    expect(run.meta.cmd.args.join(' ')).not.toContain(FAKE_TOKEN);
-    expect(run.meta.cmd.args).toEqual(expect.arrayContaining(['--session-id', meta.claudeSessionId, '--permission-mode', 'dontAsk']));
+    // Its own data root (the fixture's reports end at 007), so report 008 is this turn's whichever tests ran before.
+    const app = await makeTestApp();
+    try {
+      const res = await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/synthetic/8' }, prompt: 'Evaluate https://jobs.example.com/synthetic/8' });
+      expect(res.statusCode).toBe(202);
+      const { id } = res.json();
+      const { meta, events } = await settleOn(app, id);
+      const types = events.map((e) => e.event.type);
+      expect(types).toContain('session.init');
+      expect(types).toContain('text.delta');
+      expect(types.filter((x) => x === 'tool.use')).toHaveLength(3);
+      expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+      const evaluation = events.find((e) => e.event.type === 'evaluation')!.event as unknown as { reports: Array<{ num: number; file: string; score: number }> };
+      expect(evaluation.reports).toEqual([{ num: 8, file: '008-synthetic-corp.md', score: 4.1 }]);
+      expect(meta.status).toBe('done');
+      expect(meta.lastReason).toMatch(/008-synthetic-corp\.md created/);
+      expect(meta.totals).toEqual({ costUsd: 0.12, tokens: 1900 });
+      expect(meta.filesChanged).toEqual(expect.arrayContaining(['reports/008-synthetic-corp.md', 'batch/tracker-additions/008-synthetic-corp.tsv']));
+      expect(fs.existsSync(path.join(app.cfg.dataRoot, 'reports', '008-synthetic-corp.md'))).toBe(true);
+      const merge = events.filter((e) => e.event.type === 'tool.result').at(-1)!.event as unknown as { ok: boolean; summary: string };
+      expect(merge.ok, merge.summary).toBe(true);
+      const tracker = (await call(app, 'GET', '/api/tracker')).json();
+      expect(tracker.rows.some((r: { company: string }) => r.company === 'Synthetic Corp')).toBe(true);
+      const run = (await call(app, 'GET', `/api/runs/${meta.turns[0]!.runId}`)).json();
+      expect(run.meta.claude).toBe(true);
+      expect(run.meta.cmd.args.join(' ')).not.toContain(FAKE_TOKEN);
+      expect(run.meta.cmd.args).toEqual(expect.arrayContaining(['--session-id', meta.claudeSessionId, '--permission-mode', 'dontAsk']));
+    } finally {
+      await app.close();
+    }
   });
 
   it('a write to data/blacklist.md is blocked by the hook and surfaces as permission.denied; in-scope writes still land', async () => {
@@ -183,18 +189,24 @@ describe('Claude sessions', () => {
   });
 
   it('fan-out reserves report numbers first, hands each session its number and no reservation is left behind', async () => {
-    const res = await post('/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/9', 'https://jobs.example.com/synthetic/10'] });
-    expect(res.statusCode).toBe(202);
-    const { sessions, reserved } = res.json();
-    expect(reserved).toEqual([9, 10]);
-    expect(sessions.map((s: { reportNum: number }) => s.reportNum)).toEqual([9, 10]);
-    const done = await Promise.all(sessions.map((s: { id: string }) => settle(s.id)));
-    expect(done.map((d) => d.meta.status)).toEqual(['done', 'done']);
-    const names = fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'));
-    expect(names).toEqual(expect.arrayContaining(['009-synthetic-corp.md', '010-synthetic-corp.md']));
-    expect(names.filter((n) => /^(009|010)-RESERVED/.test(n))).toEqual([]);
-    const run = (await get(`/api/runs/${done[0]!.meta.turns[0]!.runId}`)).json();
-    expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 9 is reserved/);
+    // Its own data root (the fixture's reports end at 007), so the numbers do not depend on the tests before it.
+    const app = await makeTestApp();
+    try {
+      const res = await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/9', 'https://jobs.example.com/synthetic/10'] });
+      expect(res.statusCode).toBe(202);
+      const { sessions, reserved } = res.json();
+      expect(reserved).toEqual([8, 9]);
+      expect(sessions.map((s: { reportNum: number }) => s.reportNum)).toEqual([8, 9]);
+      const done = await Promise.all(sessions.map((s: { id: string }) => settleOn(app, s.id)));
+      expect(done.map((d) => d.meta.status)).toEqual(['done', 'done']);
+      const names = fs.readdirSync(path.join(app.cfg.dataRoot, 'reports'));
+      expect(names).toEqual(expect.arrayContaining(['008-synthetic-corp.md', '009-synthetic-corp.md']));
+      expect(names.filter((n) => /^(008|009)-RESERVED/.test(n))).toEqual([]);
+      const run = (await call(app, 'GET', `/api/runs/${done[0]!.meta.turns[0]!.runId}`)).json();
+      expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 8 is reserved/);
+    } finally {
+      await app.close();
+    }
   });
 
   it('an evaluation of a pending pipeline URL moves its row to Processed once the report is written, as pipeline mode does (SW-web-a-09)', async () => {
@@ -563,12 +575,18 @@ describe('Claude sessions', () => {
   });
 
   it('refuses to remember a fact before onboarding created modes/_profile.md, and creates nothing that would hide the missing profile', async () => {
-    const profile = path.join(t.cfg.dataRoot, 'modes', '_profile.md');
-    fs.rmSync(profile, { force: true });
-    const res = await post('/api/memory', { fact: 'Prefers remote roles' });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatch(/onboarding/);
-    expect(fs.existsSync(profile)).toBe(false);
+    // Its own data root: removing the profile from the shared one would break every later test that needs it.
+    const app = await makeTestApp();
+    try {
+      const profile = path.join(app.cfg.dataRoot, 'modes', '_profile.md');
+      fs.rmSync(profile, { force: true });
+      const res = await call(app, 'POST', '/api/memory', { fact: 'Prefers remote roles' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toMatch(/onboarding/);
+      expect(fs.existsSync(profile)).toBe(false);
+    } finally {
+      await app.close();
+    }
   });
 });
 
