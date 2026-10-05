@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { makePdf } from '../helpers/pdf.js';
+import { hasRealPdftotext, installPdftotextStub } from '../helpers/pdftotext-stub.js';
 import { extractSourceText } from '../../server/domains/projects.js';
 
 describe('PDF text extraction runs off the event loop and matches intake', () => {
@@ -16,13 +17,36 @@ describe('PDF text extraction runs off the event loop and matches intake', () =>
     await t.close();
   });
 
-  it('gives the same text intake.mjs --text gives (the text intake --commit fingerprints)', async () => {
+  it.skipIf(!hasRealPdftotext())('with the real pdftotext (Poppler; skipped where it is not installed), gives the same text intake.mjs --text gives', async () => {
     const docs = path.join(t.cfg.dataRoot, 'documents', 'projects');
     fs.mkdirSync(docs, { recursive: true });
     fs.writeFileSync(path.join(docs, 'kites.pdf'), makePdf(['Kite Tracker (2024)', 'Tracked 40 kites with Kafka.']));
     const ours = await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/kites.pdf');
     const intake = execFileSync(process.execPath, [path.join(t.cfg.codeRoot, 'intake.mjs'), '--text', 'projects/kites.pdf'], { env: { ...process.env, CAREER_OPS_ROOT: t.cfg.dataRoot }, encoding: 'utf8' });
     expect(ours).toEqual({ ok: true, rel: 'projects/kites.pdf', text: intake });
+  });
+});
+
+describe('with a stub pdftotext (runs without Poppler)', () => {
+  let t: TestApp;
+  let restore: () => void;
+  beforeAll(async () => {
+    restore = installPdftotextStub().restore;
+    t = await makeTestApp();
+  });
+  afterAll(async () => {
+    restore();
+    await t.close();
+  });
+
+  it('extracts through intake\'s extractor in the worker: the same text intake.mjs --text gives, the text intake --commit fingerprints', async () => {
+    const docs = path.join(t.cfg.dataRoot, 'documents', 'projects');
+    fs.mkdirSync(docs, { recursive: true });
+    fs.writeFileSync(path.join(docs, 'stub.pdf'), makePdf(['Kite Tracker', 'Tracked 40 kites with Kafka.']));
+    const ours = await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/stub.pdf');
+    const intake = execFileSync(process.execPath, [path.join(t.cfg.codeRoot, 'intake.mjs'), '--text', 'projects/stub.pdf'], { env: { ...process.env, CAREER_OPS_ROOT: t.cfg.dataRoot }, encoding: 'utf8' });
+    expect(intake).toContain('Kite Tracker');
+    expect(ours).toEqual({ ok: true, rel: 'projects/stub.pdf', text: intake });
   });
 });
 

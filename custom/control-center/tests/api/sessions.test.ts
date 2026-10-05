@@ -5,6 +5,7 @@ import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { makePdf } from '../helpers/pdf.js';
+import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -411,6 +412,13 @@ describe('Claude sessions', () => {
 });
 
 describe('projects-ingest sessions read the document text the app extracted', () => {
+  // A stub pdftotext, so these run where Poppler is not installed; projects-extract.test.ts covers the real one.
+  let restorePath: () => void;
+  beforeAll(() => {
+    restorePath = installPdftotextStub().restore;
+  });
+  afterAll(() => restorePath());
+
   const docs = (...p: string[]) => path.join(t.cfg.dataRoot, 'documents', ...p);
 
   it('puts intake\'s extraction of the documents/ file into the first message; the session gets no command', async () => {

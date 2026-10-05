@@ -1,8 +1,9 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { makePdf } from '../helpers/pdf.js';
+import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
 
 let t: TestApp;
 beforeEach(async () => {
@@ -223,6 +224,13 @@ describe('POST /api/projects/append', () => {
 });
 
 describe('PDF uploads enter as intake sources under documents/projects', () => {
+  // A stub pdftotext, so these run where Poppler is not installed; projects-extract.test.ts covers the real one.
+  let restorePath: () => void;
+  beforeAll(() => {
+    restorePath = installPdftotextStub().restore;
+  });
+  afterAll(() => restorePath());
+
   const upload = (name: string, body: Buffer, type = 'application/pdf') =>
     t.app.inject({ method: 'POST', url: `/api/projects/upload?name=${encodeURIComponent(name)}`, headers: { ...t.authedWrite, 'content-type': type }, payload: body });
   const docs = (...p: string[]) => path.join(t.cfg.dataRoot, 'documents', ...p);
