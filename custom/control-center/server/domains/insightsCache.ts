@@ -33,7 +33,7 @@ export interface InsightRead {
   fromCache: boolean;
 }
 
-const INPUTS = ['data/applications.md', 'data/status-log.tsv', 'data/scan-history.tsv', 'data/pipeline.md', 'data/follow-ups.md', 'data/blacklist.md', 'reports', 'interview-prep', 'interview-prep/sessions', 'jds', 'config/profile.yml'];
+const INPUTS = ['cv.md', 'article-digest.md', 'data/applications.md', 'data/status-log.tsv', 'data/scan-history.tsv', 'data/pipeline.md', 'data/follow-ups.md', 'data/blacklist.md', 'reports', 'interview-prep', 'interview-prep/sessions', 'jds', 'config/profile.yml'];
 
 export function inputsKey(dataRoot: string): string {
   return INPUTS.map((rel) => {
