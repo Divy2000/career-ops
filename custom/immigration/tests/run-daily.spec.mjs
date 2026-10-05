@@ -32,6 +32,10 @@ test('the policy prompt carries the watch JSON, the date and the data dir verbat
 
 // ---- the policy pass runs confined, like a Control Center session ----
 
+// run-daily.sh is a macOS launchd job that runs under /usr/bin/lockf. Where that is missing (a Linux --core-only
+// install, whose self-test runs these specs), the tests that run the script are skipped rather than failed.
+const jobTest = fs.existsSync('/usr/bin/lockf') ? test : (name, fn) => test(name, { skip: 'run-daily.sh is a macOS launchd job and needs /usr/bin/lockf' }, fn);
+
 const CONFINEMENT = path.join(ROOT, 'custom/control-center/server/claude/confinement.mjs');
 const APPROVED = JSON.parse(readFileSync(path.join(ROOT, 'custom/control-center/server/core/contract.json'), 'utf8')).claude.approvedVersions;
 
@@ -94,7 +98,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
 
 const flagValue = (argv, flag) => argv[argv.indexOf(flag) + 1];
 
-test('the policy pass runs claude --restricted with an exact tool list, no MCP servers and a settings file, never a bare Read or Bash', async () => {
+jobTest('the policy pass runs claude --restricted with an exact tool list, no MCP servers and a settings file, never a bare Read or Bash', async () => {
   const { HOME_READ_DENY } = await import(CONFINEMENT);
   const w = dailyWorld();
   const r = w.run();
@@ -117,7 +121,7 @@ test('the policy pass runs claude --restricted with an exact tool list, no MCP s
   assert.ok(HOME_READ_DENY.length > 10);
 });
 
-test('the policy prompt names the profile by its absolute path in the data root, the one file the settings let it read (R8-14)', () => {
+jobTest('the policy prompt names the profile by its absolute path in the data root, the one file the settings let it read (R8-14)', () => {
   const w = dailyWorld();
   const r = w.run();
   assert.equal(r.status, 0, r.log);
@@ -129,7 +133,7 @@ test('the policy prompt names the profile by its absolute path in the data root,
   assert.ok(r.calls[0].settings.permissions.allow.includes(`Read(/${profile})`));
 });
 
-test('the settings allow reads only of the immigration folder and the profile, writes only to the immigration folder, and deny the home credential stores and secret files', async () => {
+jobTest('the settings allow reads only of the immigration folder and the profile, writes only to the immigration folder, and deny the home credential stores and secret files', async () => {
   const { HOME_READ_DENY, READ_DENY } = await import(CONFINEMENT);
   const w = dailyWorld();
   const r = w.run();
@@ -147,14 +151,14 @@ test('the settings allow reads only of the immigration folder and the profile, w
   assert.deepEqual(Object.keys(r.calls[0].settings), ['permissions', 'hooks']);
 });
 
-test('a data root inside the checkout adds no extra working directory', () => {
+jobTest('a data root inside the checkout adds no extra working directory', () => {
   const w = dailyWorld({ dataInside: true });
   const r = w.run();
   assert.equal(r.status, 0, r.log);
   assert.deepEqual(r.calls[0].settings.permissions.additionalDirectories, []);
 });
 
-test('a data root that is the home directory is refused: claude never runs, the step fails and the other steps still run', () => {
+jobTest('a data root that is the home directory is refused: claude never runs, the step fails and the other steps still run', () => {
   const w = dailyWorld({ homeIsData: true });
   const r = w.run();
   assert.equal(r.calls.length, 0, r.log);
@@ -167,7 +171,7 @@ test('a data root that is the home directory is refused: claude never runs, the 
   assert.deepEqual(r.leftovers, []);
 });
 
-test('the policy pass runs under the guard hook: loopback and metadata fetches, writes outside data/immigration and home secrets are refused', () => {
+jobTest('the policy pass runs under the guard hook: loopback and metadata fetches, writes outside data/immigration and home secrets are refused', () => {
   const w = dailyWorld();
   const imm = path.join(w.data, 'data', 'immigration');
   const probes = [
@@ -203,7 +207,7 @@ test('the policy pass runs under the guard hook: loopback and metadata fetches, 
   assert.deepEqual(r.leftovers, []);
 });
 
-test('the pass runs only on an approved Claude Code, asked with the autoupdater off, and runs with the autoupdater off', () => {
+jobTest('the pass runs only on an approved Claude Code, asked with the autoupdater off, and runs with the autoupdater off', () => {
   const w = dailyWorld();
   const r = w.run();
   assert.equal(r.status, 0, r.log);
@@ -213,7 +217,7 @@ test('the pass runs only on an approved Claude Code, asked with the autoupdater 
   assert.equal(r.calls[0].disableAutoupdater, '1');
 });
 
-test('an unapproved Claude Code skips the pass, not the job: a clear log line, a dated digest note, nothing acknowledged, the other steps run', () => {
+jobTest('an unapproved Claude Code skips the pass, not the job: a clear log line, a dated digest note, nothing acknowledged, the other steps run', () => {
   const w = dailyWorld();
   const today = new Date().toLocaleDateString('en-CA');
   const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)' });
@@ -232,7 +236,7 @@ test('an unapproved Claude Code skips the pass, not the job: a clear log line, a
   assert.deepEqual(r.leftovers, []);
 });
 
-test('a Claude Code whose version cannot be read fails the step and never runs the pass', () => {
+jobTest('a Claude Code whose version cannot be read fails the step and never runs the pass', () => {
   const w = dailyWorld();
   const r = w.run({ FAKE_CLAUDE_VERSION: 'Claude Code is updating...' });
   assert.equal(r.calls.length, 0, r.log);
@@ -242,7 +246,7 @@ test('a Claude Code whose version cannot be read fails the step and never runs t
   assert.notEqual(r.status, 0);
 });
 
-test('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shim: its call reaches claude with no tools, no MCP servers and dontAsk', () => {
+jobTest('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shim: its call reaches claude with no tools, no MCP servers and dontAsk', () => {
   const w = dailyWorld();
   const r = w.run({ CAREER_OPS_RANK_CLI: 'codex' });
   assert.equal(r.status, 0, `${r.log}\n${r.steps}`);
@@ -256,7 +260,7 @@ test('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shi
   assert.deepEqual(r.leftovers, [], 'the shim folder lives only for the rank step');
 });
 
-test('the Claude Code checked at the start is checked again right before each spawn: a binary updated meanwhile never runs the pass or the rank', () => {
+jobTest('the Claude Code checked at the start is checked again right before each spawn: a binary updated meanwhile never runs the pass or the rank', () => {
   // Both versions are approved: what refuses the calls is the change itself, between the job's check and the spawn.
   const w = dailyWorld({ approved: ['2.1.289', '2.1.300'] });
   const r = w.run({ FAKE_CLAUDE_VERSIONS: JSON.stringify(['2.1.289 (Claude Code)', '2.1.300 (Claude Code)']) });
@@ -270,14 +274,14 @@ test('the Claude Code checked at the start is checked again right before each sp
   assert.deepEqual(r.leftovers, []);
 });
 
-test('the log says which claude the job resolved, where from, and its real path and version', () => {
+jobTest('the log says which claude the job resolved, where from, and its real path and version', () => {
   const w = dailyWorld();
   const r = w.run();
   assert.equal(r.status, 0, r.log);
   assert.ok(r.log.includes(`claude: ${w.fakeClaude} (from CC_CLAUDE_BIN), ${fs.realpathSync(w.fakeClaude)}@${APPROVED[0]}`), r.log);
 });
 
-test('a rank call the shim refuses fails the rank step, though rank-pipeline.mjs catches the failed call and exits 0', () => {
+jobTest('a rank call the shim refuses fails the rank step, though rank-pipeline.mjs catches the failed call and exits 0', () => {
   // Both versions are approved and the job's own checks all see 2.1.289; only the shim, right before the call, sees 2.1.300.
   const w = dailyWorld({ approved: ['2.1.289', '2.1.300'] });
   const r = w.run({ FAKE_CLAUDE_VERSIONS: JSON.stringify(['2.1.289 (Claude Code)', '2.1.289 (Claude Code)', '2.1.289 (Claude Code)', '2.1.300 (Claude Code)']) });
@@ -294,7 +298,7 @@ test('a rank call the shim refuses fails the rank step, though rank-pipeline.mjs
   assert.deepEqual(r.leftovers, []);
 });
 
-test('a rank call the shim refuses for a flag it does not allow fails the rank step too', () => {
+jobTest('a rank call the shim refuses for a flag it does not allow fails the rank step too', () => {
   const w = dailyWorld();
   // The stand-in's argv, as an upstream change to rank-pipeline.mjs could make it.
   const stand = path.join(w.root, 'rank-pipeline.mjs');
@@ -308,7 +312,7 @@ test('a rank call the shim refuses for a flag it does not allow fails the rank s
   assert.deepEqual(r.leftovers, []);
 });
 
-test('a missing Keychain item ends the run with a !!! failure line the app reads as failed, before any step runs', () => {
+jobTest('a missing Keychain item ends the run with a !!! failure line the app reads as failed, before any step runs', () => {
   const w = dailyWorld();
   fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\nexit 44\n', { mode: 0o755 });
   const r = w.run();
@@ -319,7 +323,7 @@ test('a missing Keychain item ends the run with a !!! failure line the app reads
   assert.equal(r.calls.length, 0);
 });
 
-test('the pidfile the Control Center reads names the run while it holds the lock and is gone when the run ends, done or failed', () => {
+jobTest('the pidfile the Control Center reads names the run while it holds the lock and is gone when the run ends, done or failed', () => {
   const w = dailyWorld();
   // A step that sees the run from inside: the pidfile must name a live bash running run-daily.sh.
   const seen = path.join(w.T, 'pidfile-seen.txt');
@@ -336,7 +340,7 @@ test('the pidfile the Control Center reads names the run while it holds the lock
   assert.equal(fs.existsSync(path.join(r.imm, '.run-daily.pid')), false);
 });
 
-test('Given the plist pins a node (CC_NODE_BIN), every node the job runs is that one, though Homebrew comes first on its PATH', () => {
+jobTest('Given the plist pins a node (CC_NODE_BIN), every node the job runs is that one, though Homebrew comes first on its PATH', () => {
   const w = dailyWorld();
   const pinned = path.join(w.T, 'pinned');
   const calls = path.join(w.T, 'pinned-node.log');
@@ -349,7 +353,7 @@ test('Given the plist pins a node (CC_NODE_BIN), every node the job runs is that
   for (const step of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) assert.ok(seen.includes(step), `${step} ran on the pinned node:\n${seen}`);
 });
 
-test('a failed policy pass acknowledges nothing: its batch stays pending for the next run, the step fails and the other steps still run', () => {
+jobTest('a failed policy pass acknowledges nothing: its batch stays pending for the next run, the step fails and the other steps still run', () => {
   const w = dailyWorld();
   const r = w.run({ FAKE_CLAUDE_EXIT: '1' });
   assert.equal(r.calls.length, 1, r.log);
@@ -360,7 +364,7 @@ test('a failed policy pass acknowledges nothing: its batch stays pending for the
   assert.deepEqual(r.leftovers, []);
 });
 
-test('a run that starts while another holds the lock is skipped: a dated line in skipped.log, exit 0, no step runs', async () => {
+jobTest('a run that starts while another holds the lock is skipped: a dated line in skipped.log, exit 0, no step runs', async () => {
   const w = dailyWorld();
   const imm = path.join(w.data, 'data', 'immigration');
   fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
