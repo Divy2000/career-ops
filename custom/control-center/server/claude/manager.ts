@@ -19,6 +19,7 @@ import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, ge
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
+import { ackPolicyPass } from '../domains/policyPass.js';
 
 export type TokenReader = () => Promise<string>;
 
@@ -54,6 +55,8 @@ export interface StartInput {
   prompt: string;
   model?: string | null;
   reportNum?: number | null;
+  /** The immigration policy pass's batch file (see domains/policyPass.ts), acknowledged when a turn ends done. */
+  policyBatch?: string | null;
   blacklistAllowed?: boolean;
 }
 
@@ -157,7 +160,7 @@ export class SessionManager {
 
   async start(input: StartInput): Promise<SessionMeta> {
     const policy = this.turnPolicy(input.mode);
-    const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null });
+    const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null, policyBatch: input.policyBatch ?? null });
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
   }
 
@@ -467,6 +470,13 @@ export class SessionManager {
       // Claimed before the await, so no other finalize of this turn can release the number again.
       this.store.setReportNum(id, null);
       reason += `; ${await this.releaseReportNum(num, newReports.some((x) => x.num === num))}`;
+    }
+    // Only a pass that ends done acknowledges the items it was given; any other outcome leaves them queued for the next run.
+    const batch = meta.policyBatch ?? null;
+    if (batch !== null && outcome.status === 'done') {
+      // Claimed before the await, as the report number is.
+      this.store.setPolicyBatch(id, null);
+      reason += `; ${await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch)}`;
     }
     if (this.turnEnded(id, n)) return;
     this.store.endTurn(id, n, {

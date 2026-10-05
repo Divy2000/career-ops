@@ -47,6 +47,8 @@ test.describe('deterministic writes from the pages', () => {
       await page.goto('/profile');
       await page.getByLabel('CV markdown').fill('# Jane Candidate\n\nPlatform engineer.');
       await page.getByRole('button', { name: 'Save as cv.md' }).click();
+      // The link's target already holds text, so replacing it is confirmed first (SW-tests-09).
+      await page.getByRole('dialog', { name: 'Replace cv.md?' }).getByRole('button', { name: 'Replace cv.md' }).click();
       await expect(page.getByRole('alert')).toContainText(/Could not save cv\.md: .*outside the data root; nothing was written/);
       await expect(page.getByText('cv.md saved.')).toHaveCount(0);
       expect(fs.readFileSync(outside, 'utf8')).toBe('# Shared elsewhere\n');

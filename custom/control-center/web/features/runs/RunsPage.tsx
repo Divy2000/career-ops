@@ -20,7 +20,7 @@ function statusTone(s: RunStatus): 'ok' | 'danger' | 'warn' | 'info' | 'neutral'
   return 'neutral';
 }
 
-function LogViewer({ run }: { run: RunMeta }) {
+export function LogViewer({ run }: { run: RunMeta }) {
   const [lines, setLines] = useState<RawLine[]>([]);
   const [done, setDone] = useState<string | null>(null);
   const pre = useRef<HTMLPreElement>(null);
@@ -32,7 +32,7 @@ function LogViewer({ run }: { run: RunMeta }) {
       setDone((JSON.parse((ev as MessageEvent).data) as { status: string }).status);
       es.close();
     });
-    es.onerror = () => es.close();
+    // No onerror close: a dropped stream reconnects by itself and the server resumes after Last-Event-ID.
     return () => es.close();
   }, [run.id]);
   useEffect(() => {

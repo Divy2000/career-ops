@@ -148,14 +148,20 @@ describe('immigration overview', () => {
   });
 
   it('parses company files and the whole overview through the core lib', async () => {
-    const cf = parseCompanyFile('# Acme\n\nchecked_at: 2026-09-28\nverdict: strong\ndol_tier: strong\npolicy_changes_seen: 2\n', 'acme', '/x', (md) => md.match(/checked_at:\s*(\S+)/)?.[1] ?? null);
-    expect(cf).toMatchObject({ name: 'Acme', checkedAt: '2026-09-28', verdict: 'strong', dolTier: 'strong', policyChangesSeen: 2 });
+    // The shape the sponsorship check writes (custom/install/templates/_custom-sponsorship.md); the title's suffix is not part of the name.
+    const cf = parseCompanyFile('# Acme sponsorship check\nchecked_at: 2026-09-28\npolicy_changes_seen: 2\nverdict: sponsoring\ndol_tier: strong (120 LCAs FY2025)\npolicy_context: 2026-10-01 Fee rule\n', 'acme', '/x', (md) => md.match(/checked_at:\s*(\S+)/)?.[1] ?? null);
+    expect(cf).toMatchObject({ name: 'Acme', checkedAt: '2026-09-28', verdict: 'sponsoring', dolTier: 'strong (120 LCAs FY2025)', policyChangesSeen: 2 });
+    expect(parseCompanyFile('# Acme\nverdict: unclear\n', 'acme', '/x', () => null).name).toBe('Acme');
     const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04');
     expect(o.digest).toMatchObject({ kind: 'ok', latestDate: '2026-10-02', staleDays: 2 });
     expect(o.policyChanges).toHaveLength(2);
     expect(o.alerts.history).toHaveLength(2);
     expect(o.alerts.latest.map((a) => a.slug).sort()).toEqual(['globex-payments', 'initech-cloud']);
-    expect(o.companies.map((c) => c.slug)).toEqual(['acme-robotics', 'globex-payments']);
+    expect(o.companies.map((c) => [c.slug, c.name, c.verdict])).toEqual([
+      ['acme-robotics', 'Acme Robotics', 'sponsoring'],
+      ['globex-payments', 'Globex Payments', 'sponsoring'],
+      ['initech-cloud', 'Initech Cloud', 'paused'],
+    ]);
     expect(o.officialFeed).toHaveLength(2);
     expect(o.dailyLog?.status).toBe('failed');
     expect((o.tiers as { companies: Record<string, unknown> }).companies['acme robotics']).toBeDefined();

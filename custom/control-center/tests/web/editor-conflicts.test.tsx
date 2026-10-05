@@ -183,6 +183,7 @@ describe('structured editors (useStructuredConfig)', () => {
         'div',
         null,
         createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'delete', path: ['list', 0] }) }, 'Delete first'),
+        createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['a'], value: 2 }) }, 'Set a'),
         createElement('button', { type: 'button', onClick: () => void s.save() }, 'Save'),
         createElement('output', { 'aria-label': 'doc' }, JSON.stringify(s.doc)),
         createElement(EditorNoteView, { note: s.note }),
@@ -191,17 +192,23 @@ describe('structured editors (useStructuredConfig)', () => {
     await mount(createElement(Harness));
     await until(() => labelled('doc')?.textContent === JSON.stringify({ a: 1, list: ['x', 'y'] }), 'the loaded doc');
     await click(button('Delete first')!);
-    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 1, list: ['y'] }));
+    await click(button('Set a')!);
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, list: ['y'] }));
     // An index-based op made on [x, y] must not quietly delete "new" from the refetched list.
     await changeOnDisk('/api/config/portals', { raw: 'a: 1\nlist: [new, x, y]\n', etag: 'p2', doc: { a: 1, list: ['new', 'x', 'y'] } });
     await until(() => /portals\.yml changed on disk since you started editing/.test(alerts()), 'the changed-on-disk note');
-    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 1, list: ['y'] }));
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, list: ['y'] }));
     await click(button('Save')!);
     await until(() => /changed on disk since you loaded it/.test(alerts()), 'the conflict note');
-    expect(writes()).toEqual([expect.objectContaining({ method: 'PUT', headers: expect.objectContaining({ 'If-Match': 'p1' }), body: { ops: [{ op: 'delete', path: ['list', 0] }] } })]);
+    expect(writes()).toEqual([expect.objectContaining({ method: 'PUT', headers: expect.objectContaining({ 'If-Match': 'p1' }), body: { ops: [{ op: 'delete', path: ['list', 0] }, { op: 'set', path: ['a'], value: 2 }] } })]);
     expect(files['/api/config/portals']).toMatchObject({ etag: 'p2', doc: { a: 1, list: ['new', 'x', 'y'] } });
-    // After the 409 the pending op is shown on top of the current version, so saving again is the reviewed merge.
-    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 1, list: ['x', 'y'] }));
+    // After the 409 the delete by position is not replayed on the new list (it would remove "new", another writer's
+    // entry, and bring "x" back); the page says to redo it. The edit by key stays on top of the current version.
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, list: ['new', 'x', 'y'] }));
+    expect(alerts()).toMatch(/1 edit to a list item was dropped because the list changed; redo it on the current version/);
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', headers: expect.objectContaining({ 'If-Match': 'p2' }), body: { ops: [{ op: 'set', path: ['a'], value: 2 }] } }));
   });
 });
 

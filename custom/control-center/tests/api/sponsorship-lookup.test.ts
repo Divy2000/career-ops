@@ -35,7 +35,7 @@ describe('GET /api/sponsorship/lookup', () => {
       fetchedAt: '2026-10-03T12:00:00.000Z',
     });
     expect(body.check.redFlags.staffing_shop).toBeNull();
-    expect(body.companyFile).toMatchObject({ slug: 'acme-robotics', verdict: 'strong', checkedAt: '2026-09-28', path: 'data/immigration/companies/acme-robotics.md' });
+    expect(body.companyFile).toMatchObject({ slug: 'acme-robotics', name: 'Acme Robotics', verdict: 'sponsoring', dolTier: 'strong (120 LCAs FY2025)', checkedAt: '2026-09-28', path: 'data/immigration/companies/acme-robotics.md' });
     expect(body.markdown).toContain('120 approvals in the latest DOL disclosure');
     expect(body.freshness).toMatchObject({ slug: 'acme-robotics', checked_at: '2026-09-28' });
     expect(typeof body.freshness.refresh).toBe('boolean');

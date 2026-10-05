@@ -32,13 +32,13 @@ function json(status: number, body: unknown) {
 }
 
 /** Answers the cv.md GET and PUT that Save as cv.md sends; unset, they fall through to 404. */
-let cvFile: ((method: string) => Response) | null;
+let cvFile: ((method: string, init?: RequestInit) => Response) | null;
 
 async function mount() {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === '/api/files/user/cv' && cvFile) return cvFile(init?.method ?? 'GET');
+      if (String(input) === '/api/files/user/cv' && cvFile) return cvFile(init?.method ?? 'GET', init);
       const upload = String(input).match(/^\/api\/cv\/upload\?name=(.+)$/);
       if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'the CV parser reads PDF only: export it to PDF, or pick a .md or .txt file to load the text directly' });
       if (upload) {
@@ -51,11 +51,12 @@ async function mount() {
     }),
   );
   const { CvImport } = await import('@web/features/profile/ProfilePage');
+  const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(CvImport))));
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(CvImport)))));
 }
 
 async function choose(name: string, type: string, text = 'abc') {
@@ -159,7 +160,28 @@ describe('Import CV: one parser session per uploaded file', () => {
 });
 
 describe('Import CV: Save as cv.md', () => {
-  const CV = { key: 'cv', path: 'cv.md', kind: 'ok', text: '# Old CV\n', etag: 'e1' };
+  /** cv.md on disk; the server's 409 answers a PUT whose If-Match is not its current ETag, as the real route does. */
+  let disk: { text: string; etag: string | null };
+  let puts: Array<{ text: string; ifMatch: string | null }>;
+  let refusePut: Response | null;
+  const serveCv = () => {
+    cvFile = (method, init) => {
+      const read = { key: 'cv', path: 'cv.md', kind: disk.etag === null ? 'missing' : 'ok', text: disk.text, etag: disk.etag };
+      if (method !== 'PUT') return json(200, read);
+      const ifMatch = (init?.headers as Record<string, string> | undefined)?.['If-Match'] ?? null;
+      puts.push({ text: (JSON.parse(String(init?.body)) as { text: string }).text, ifMatch });
+      if (refusePut) return refusePut;
+      if (ifMatch !== disk.etag) return json(409, { error: 'the file changed since you loaded it', current: read });
+      disk = { text: (JSON.parse(String(init?.body)) as { text: string }).text, etag: `${disk.etag ?? 'e0'}-saved` };
+      return json(200, { ok: true, etag: disk.etag, path: 'cv.md' });
+    };
+  };
+  beforeEach(() => {
+    disk = { text: '# Alex Example\n\nBackend engineer, hand-written.\n', etag: 'e1' };
+    puts = [];
+    refusePut = null;
+    serveCv();
+  });
   async function typeDraft(text: string) {
     const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="CV markdown"]')!;
     await act(async () => {
@@ -167,45 +189,95 @@ describe('Import CV: Save as cv.md', () => {
       area.dispatchEvent(new Event('input', { bubbles: true }));
     });
   }
+  const settleSave = async () => {
+    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  };
   async function clickSave() {
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save as cv.md')!;
     await act(async () => button.click());
-    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    await settleSave();
+  }
+  /** The confirm dialog renders in a portal on document.body, outside the component's host. */
+  const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+  async function answer(name: 'Replace cv.md' | 'Cancel') {
+    const button = [...dialog()!.querySelectorAll('button')].find((b) => b.textContent?.trim() === name)!;
+    await act(async () => button.click());
+    await settleSave();
   }
   const alertText = () => host.querySelector('[role="alert"]')?.textContent ?? null;
 
-  it('shows the server\'s reason when the save is refused, and does not say it saved', async () => {
-    const reason = 'cv.md leads outside the data root; nothing was written';
-    cvFile = (method) => (method === 'PUT' ? json(403, { error: reason }) : json(200, CV));
+  it('asks before replacing a cv.md that already has text, naming what is there, and Cancel writes nothing', async () => {
     await mount();
     await typeDraft('# Imported CV');
     await clickSave();
+    expect(dialog()?.textContent).toContain('Replace cv.md?');
+    expect(dialog()?.textContent).toContain('# Alex Example');
+    await answer('Cancel');
+    expect(dialog()).toBeNull();
+    expect(puts).toEqual([]);
+    expect(disk.text).toBe('# Alex Example\n\nBackend engineer, hand-written.\n');
+    expect(host.textContent).not.toContain('cv.md saved');
+  });
+
+  it('Replace saves the import over the version the dialog described', async () => {
+    await mount();
+    await typeDraft('# Imported CV');
+    await clickSave();
+    await answer('Replace cv.md');
+    expect(puts).toEqual([{ text: '# Imported CV', ifMatch: 'e1' }]);
+    expect(disk.text).toBe('# Imported CV');
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('cv.md saved');
+  });
+
+  it('when cv.md changes on disk while the dialog is open, Replace gets the 409 and shows the current version instead of overwriting it', async () => {
+    await mount();
+    await typeDraft('# Imported CV');
+    await clickSave();
+    disk = { text: '# Edited in the cv.md editor\n', etag: 'e2' };
+    await answer('Replace cv.md');
+    expect(puts).toEqual([{ text: '# Imported CV', ifMatch: 'e1' }]);
+    expect(disk.text).toBe('# Edited in the cv.md editor\n');
+    expect(alertText()).toMatch(/changed on disk/);
+    expect(host.querySelector('details pre')?.textContent).toBe('# Edited in the cv.md editor\n');
+    expect(host.textContent).not.toContain('cv.md saved');
+  });
+
+  it('saves without asking when there is no cv.md yet, or it is blank', async () => {
+    disk = { text: '', etag: null };
+    await mount();
+    await typeDraft('# Imported CV');
+    await clickSave();
+    expect(dialog()).toBeNull();
+    expect(puts).toEqual([{ text: '# Imported CV', ifMatch: null }]);
+    disk = { text: '  \n', etag: 'e5' };
+    await typeDraft('# Imported CV, again');
+    await clickSave();
+    expect(dialog()).toBeNull();
+    expect(puts.at(-1)).toEqual({ text: '# Imported CV, again', ifMatch: 'e5' });
+  });
+
+  it('shows the server\'s reason when the save is refused, and does not say it saved', async () => {
+    const reason = 'cv.md leads outside the data root; nothing was written';
+    refusePut = json(403, { error: reason });
+    await mount();
+    await typeDraft('# Imported CV');
+    await clickSave();
+    await answer('Replace cv.md');
     expect(alertText()).toContain(reason);
     expect(host.textContent).not.toContain('cv.md saved');
   });
 
-  it('when cv.md changed between reading and saving, says so and shows the current version instead of overwriting it', async () => {
-    cvFile = (method) => (method === 'PUT' ? json(409, { error: 'the file changed since you loaded it', current: { ...CV, text: '# Changed on disk\n', etag: 'e2' } }) : json(200, CV));
+  it('saving again after a conflict asks again over the current version, saves, and clears the error and the shown version', async () => {
     await mount();
     await typeDraft('# Imported CV');
     await clickSave();
-    expect(alertText()).toMatch(/changed on disk/);
-    expect(host.querySelector('details pre')?.textContent).toBe('# Changed on disk\n');
-    expect(host.textContent).not.toContain('cv.md saved');
-  });
-
-  it('saving again after a conflict saves, and clears the error and the shown version', async () => {
-    let puts = 0;
-    cvFile = (method) => {
-      if (method !== 'PUT') return json(200, CV);
-      puts++;
-      return puts === 1 ? json(409, { error: 'the file changed since you loaded it', current: { ...CV, text: '# Changed on disk\n', etag: 'e2' } }) : json(200, { ok: true, etag: 'e3', path: 'cv.md' });
-    };
-    await mount();
-    await typeDraft('# Imported CV');
-    await clickSave();
+    disk = { text: '# Edited in the cv.md editor\n', etag: 'e2' };
+    await answer('Replace cv.md');
     expect(alertText()).toMatch(/changed on disk/);
     await clickSave();
+    expect(dialog()?.textContent).toContain('# Edited in the cv.md editor');
+    await answer('Replace cv.md');
+    expect(puts.at(-1)).toEqual({ text: '# Imported CV', ifMatch: 'e2' });
     expect(alertText()).toBeNull();
     expect(host.querySelector('details')).toBeNull();
     expect(host.querySelector('[role="status"]')?.textContent).toContain('cv.md saved');

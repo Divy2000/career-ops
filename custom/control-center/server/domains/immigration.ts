@@ -85,7 +85,8 @@ export function parseCompanyFile(md: string, slug: string, filePath: string, rea
   const seen = field('policy_changes_seen');
   return {
     slug,
-    name: md.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? slug,
+    // The check's title is "# <Company> sponsorship check" (custom/install/templates/_custom-sponsorship.md).
+    name: md.match(/^#\s+(.+)$/m)?.[1]?.trim().replace(/\s+sponsorship check$/i, '') || slug,
     checkedAt: readCheckedAt(md),
     verdict: field('verdict') ?? field('decision'),
     dolTier: field('dol_tier'),

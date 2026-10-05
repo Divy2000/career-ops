@@ -7,6 +7,7 @@ import { DataState, FilePicker, Pill, Tabs } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
 import { describeError } from '../../lib/actions';
 import { ProjectsLibrary } from './ProjectsLibrary';
+import { useConfirm } from '../../components/ConfirmDialog';
 
 interface UserFile {
   key: string;
@@ -122,6 +123,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
 
 export function CvImport({ onImported }: { onImported?: () => void }) {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [draft, setDraft] = useState('');
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -167,6 +169,18 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     setSaveError(null);
     try {
       const current = await apiGet<UserFile>('/api/files/user/cv');
+      // Replacing a written cv.md is confirmed, and the PUT carries the ETag of the version the dialog described:
+      // a change on disk while the user decides is a 409, never overwritten.
+      if (current.kind === 'ok' && current.text.trim() && current.text !== draft) {
+        const first = current.text.split('\n').find((l) => l.trim())!.trim();
+        const ok = await confirm({
+          title: 'Replace cv.md?',
+          body: `cv.md already holds a CV that starts with "${first.length > 80 ? `${first.slice(0, 79)}…` : first}". Saving the import replaces all of it.`,
+          confirmLabel: 'Replace cv.md',
+          danger: true,
+        });
+        if (!ok) return;
+      }
       await apiSend('PUT', '/api/files/user/cv', { text: draft }, current.etag ? { 'If-Match': current.etag } : {});
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {

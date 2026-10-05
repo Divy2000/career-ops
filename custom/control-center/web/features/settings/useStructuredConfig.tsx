@@ -15,9 +15,12 @@ export interface EditorNote {
 /**
  * Pending ops over a config file, applied to the version the first op was made on: a refetch after a change on
  * disk never moves them onto another version silently (index-based ops would land on other items), it is announced
- * and the save gets the 409. A 409 swaps the base for the server's current version and keeps the pending ops on
- * top, so "save again" is the merge.
+ * and the save gets the 409. A 409 swaps the base for the server's current version and keeps the ops that address
+ * keys on top, so "save again" is the merge. Ops that address a list item by position are dropped there: replayed on
+ * a list another writer changed they would edit or delete someone else's item, so the user redoes them.
  */
+const byPosition = (op: YamlOp) => op.path.some((seg) => typeof seg === 'number');
+
 export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', fileKey], queryFn: () => apiGet<ConfigRead>(`/api/config/${fileKey}`) });
@@ -55,9 +58,13 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         const current = (err.body as { current: ConfigRead }).current;
+        const kept = pending.filter((op) => !byPosition(op));
+        const dropped = pending.length - kept.length;
         setConflict(current);
         edit.rebase(current);
-        setNote({ tone: 'danger', text: `${current.path} changed on disk since you loaded it. Your ${pending.length} pending edit(s) are shown on top of the current version below; review them, then save again or discard.` });
+        setPending(kept);
+        const redo = dropped === 0 ? '' : ` ${dropped} edit${dropped === 1 ? '' : 's'} to a list item ${dropped === 1 ? 'was' : 'were'} dropped because the list changed; redo ${dropped === 1 ? 'it' : 'them'} on the current version.`;
+        setNote({ tone: 'danger', text: `${current.path} changed on disk since you loaded it. Your ${kept.length} pending edit(s) are shown on top of the current version below; review them, then save again or discard.${redo}` });
       } else if (err instanceof ApiError && (err.status === 422 || err.status === 400)) {
         const b = err.body as { error: string; findings?: unknown; stderr?: string };
         setNote({ tone: 'danger', text: b.error, details: `${typeof b.findings === 'string' ? b.findings : JSON.stringify(b.findings ?? '', null, 2)}\n${b.stderr ?? ''}`.trim() });

@@ -9,7 +9,6 @@ import { ActionButton, Message } from '../../components/ActionBar';
 import { SessionPanel } from '../../components/SessionPanel';
 import { summarizeWatcher } from '../../lib/watcherState';
 import { LookupTab } from './LookupTab';
-import { localDate } from '@shared/local-date';
 
 const route = getRouteApi('/sponsorship');
 
@@ -90,7 +89,8 @@ export function SponsorshipPage() {
           mode="immigration-policy"
           title="AI policy pass"
           autoStart
-          initialPrompt={`Run the daily immigration policy pass for ${localDate()}: read the pending watch items under data/immigration, update policy-digest.md and policy-changes.tsv, and append company alerts. Follow custom/immigration/daily-prompt.md.`}
+          // The server runs the pass on daily-prompt.md filled in with the queued items, and acknowledges them when it is done.
+          initialPrompt="Run the daily immigration policy pass."
         />
       )}
       <Tabs
@@ -189,7 +189,7 @@ export function SponsorshipPage() {
                         {d.officialFeed.map((row, i) => (
                           <tr key={i}>
                             {Object.entries(row).map(([k, v]) => (
-                              <td key={k} className={k === 'date' ? 'mono' : ''}>
+                              <td key={k} className={k === 'first_seen' || k === 'published' ? 'mono' : ''}>
                                 {k === 'url' ? (
                                   <a href={v} target="_blank" rel="noreferrer noopener">
                                     link

@@ -35,6 +35,14 @@ describe('project drafts', () => {
     expect(draftProblems({ ...emptyDraft(), title: 'Paper', kind: 'publication' })).toEqual([]);
   });
 
+  it('names a bullet that spans two lines before the server refuses it with a bare "invalid entry" (SW-web-b-03)', () => {
+    expect(draftProblems({ ...emptyDraft(), title: 'X', bullets: ['One line.', 'Built X\nShipped Y', 'Also\r\nthis'] })).toEqual([
+      'Bullet 2 spans more than one line; give each point its own bullet.',
+      'Bullet 3 spans more than one line; give each point its own bullet.',
+    ]);
+    expect(draftProblems({ ...emptyDraft(), title: 'X', bullets: ['  Trailing newline only.\n'] })).toEqual([]);
+  });
+
   it('moves a bullet up or down and ignores moves past either end', () => {
     expect(moveItem(['a', 'b', 'c'], 2, 1)).toEqual(['a', 'c', 'b']);
     expect(moveItem(['a', 'b', 'c'], 0, -1)).toEqual(['a', 'b', 'c']);
