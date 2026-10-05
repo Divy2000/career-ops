@@ -134,7 +134,9 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
       }
       if (text === '') continue;
       const like = rows.find((r) => r[col] !== undefined)?.[col];
-      row[col] = typeof like === 'boolean' ? text === 'true' : parseScalar(text, like ?? '');
+      // With no row to copy a type from (an empty list), true and false are switches, as in Add key.
+      const flag = like === undefined && (text === 'true' || text === 'false');
+      row[col] = typeof like === 'boolean' || flag ? text === 'true' : parseScalar(text, like ?? '');
     }
     if (Object.keys(row).length === 0) {
       setError('fill in at least one column');
@@ -260,6 +262,8 @@ export function ObjectFields({ path, value, onOp, rules, depth = 0 }: { path: Js
 export function KeyEditor({ path, value, onOp, rules, depth = 0, columnsHint, rowRule }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; depth?: number; columnsHint?: string[]; rowRule?: RowRule }): ReactNode {
   if (isScalar(value)) return <ScalarInput path={path} value={value} onOp={onOp} rules={rules} />;
   if (Array.isArray(value)) {
+    // An empty list is a scalar list by shape; a section with columns is a list of objects even with no entries yet.
+    if (value.length === 0 && columnsHint?.length) return <ObjectTable path={path} rows={[]} onOp={onOp} rules={rules} columnsHint={columnsHint} rowRule={rowRule} />;
     if (value.every(isScalar)) return <ScalarList path={path} items={value} onOp={onOp} rules={rules} />;
     if (value.every(isPlainObject)) return <ObjectTable path={path} rows={value} onOp={onOp} rules={rules} columnsHint={columnsHint} rowRule={rowRule} />;
   }
