@@ -87,7 +87,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const followupsRead = readText(path.join(cfg.dataRoot, 'data', 'follow-ups.md'));
     const followups = followupsRead.kind === 'ok' ? parseFollowupsTable(followupsRead.text).filter((f) => f.appNum === n) : [];
     const pin = followupsRead.kind === 'ok' ? (parseNextOverrides(followupsRead.text).get(n) ?? null) : null;
-    const statusLog = readStatusLog(cfg.dataRoot).filter((s) => s.num === n);
+    const statusLog = readStatusLog(tracker.path).filter((s) => s.num === n);
     const { normalizeTextKey } = await importCore<{ normalizeTextKey: NormalizeTextKey }>(cfg.codeRoot, 'tracker-parse.mjs');
     const key = normalizeTextKey(row.company, ' ');
     const companyHistory = tracker.rows.filter((r) => r.num !== n && normalizeTextKey(r.company, ' ') === key);
@@ -151,7 +151,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
   app.get('/api/insights/dashboard', async () => {
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     if (tracker.kind !== 'ok') return { kind: tracker.kind, path: tracker.path };
-    return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(cfg.dataRoot)) };
+    return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(tracker.path)) };
   });
 
   app.get('/api/modes', async () => listLaunchableModeIds().map((id) => getModePolicy(id)));

@@ -50,3 +50,15 @@ describe('the insights cache key covers every file the insights scripts read', (
     });
   }
 });
+
+describe('the insights cache key on a root-layout tracker (R7-14)', () => {
+  // set-status.mjs logs beside the tracker, so a tracker at the top keeps status-log.tsv at the top too.
+  for (const rel of ['applications.md', 'status-log.tsv']) {
+    it(`changes when the top-level ${rel} is added or edited`, () => {
+      const root = copyFixtureRoot();
+      const before = inputsKey(root);
+      fs.writeFileSync(path.join(root, rel), 'x\n');
+      expect(inputsKey(root)).not.toBe(before);
+    });
+  }
+});

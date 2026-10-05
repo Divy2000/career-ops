@@ -219,13 +219,13 @@ describe('fresh matches (whats-new port)', () => {
 describe('insights dashboard', () => {
   it('parses the status ledger and tolerates blank lines', () => {
     expect(parseStatusLog('1\t2026-09-20\t-\tEvaluated\tset-status\t\n\nbad\n')).toEqual([{ num: 1, date: '2026-09-20', from: '-', to: 'Evaluated', source: 'set-status', note: '' }]);
-    expect(readStatusLog(root)).toHaveLength(10);
+    expect(readStatusLog(path.join(root, 'data', 'applications.md'))).toHaveLength(10);
   });
 
   it('computes totals, funnel, rates, buckets and breakdowns from fixtures', async () => {
     const t = await readTracker(DEFAULT_CODE_ROOT, root);
     if (t.kind !== 'ok') throw new Error('fixture tracker unreadable');
-    const d = computeDashboard(t.rows, readStatusLog(root));
+    const d = computeDashboard(t.rows, readStatusLog(t.path));
     expect(d.totals).toMatchObject({ applications: 6, scored: 5, averageScore: 3.9 });
     expect(d.totals.byStatus).toMatchObject({ Applied: 1, Interview: 1, SKIP: 1, Rejected: 1 });
     expect(d.funnel).toEqual([

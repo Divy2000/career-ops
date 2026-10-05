@@ -41,6 +41,8 @@ const INPUT_FILES = [
   'config/benchmarks.yml',
   'data/applications.md',
   'data/status-log.tsv',
+  'applications.md',
+  'status-log.tsv',
   'data/scan-history.tsv',
   'data/pipeline.md',
   'data/follow-ups.md',
