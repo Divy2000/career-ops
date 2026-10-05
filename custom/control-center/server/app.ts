@@ -10,6 +10,7 @@ import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
 import { sweepStaleInputs } from './actions/tmp-inputs.js';
+import { OutsideRootsError } from './lib/atomic-write.js';
 import { writeRoutes } from './routes/writes.js';
 import { DailyJobWatch, maybeFakeDailyProbe } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
@@ -57,6 +58,11 @@ export interface BuiltApp {
 export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<BuiltApp> {
   const exec = deps.exec ?? execNoShell;
   const app = Fastify({ logger: cfg.nodeEnv === 'test' ? false : { level: 'info' }, trustProxy: false });
+  // A write refused for leaving the data root carries its reason in `error`, where the client looks for it.
+  app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof OutsideRootsError) return reply.code(err.statusCode).send({ error: err.message });
+    return reply.send(err);
+  });
   const closers: Array<() => Promise<void>> = [];
   const bus = new EventBus();
   // The runner reads this object live, so a settings save changes the slot cap without a restart.

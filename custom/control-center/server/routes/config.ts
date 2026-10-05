@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
-import { writeFileAtomic } from '../lib/atomic-write.js';
+import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
 import { etagOf } from '../domains/files.js';
@@ -110,7 +110,7 @@ async function saveConfigFileLocked(cfg: ServerConfig, exec: Exec, bus: EventBus
     // The file may have changed while the validator ran (a session, another editor): never clobber it.
     const latest = readConfigFile(cfg.dataRoot, key);
     if (latest.etag !== current.etag) return { status: 409, body: { error: 'the file changed while it was being validated; nothing was written', current: latest } };
-    writeFileAtomic(path.join(cfg.dataRoot, def.rel), raw);
+    writeFileAtomic(path.join(cfg.dataRoot, def.rel), raw, dataRootOnly(cfg.dataRoot));
     bus.publish('data.changed', { domain: 'config' });
     return { status: 200, body: { ok: true, etag: etagOf(raw), path: def.rel, warnings: findings, validatorExit: r.code } };
   } finally {
@@ -174,7 +174,7 @@ export async function configRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       if (err instanceof YamlOpsError) return reply.code(422).send({ error: `${err.message}; fix config/plugins.yml by hand first` });
       throw err;
     }
-    writeFileAtomic(path.join(cfg.dataRoot, PLUGINS_CONFIG_REL), raw);
+    writeFileAtomic(path.join(cfg.dataRoot, PLUGINS_CONFIG_REL), raw, dataRootOnly(cfg.dataRoot));
     bus.publish('data.changed', { domain: 'config' });
     return { ok: true, id: known.id, enabled: body.data.enabled, etag: etagOf(raw), path: PLUGINS_CONFIG_REL };
   });

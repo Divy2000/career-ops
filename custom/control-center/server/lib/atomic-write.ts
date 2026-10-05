@@ -2,14 +2,39 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveReal } from '../claude/guard-policy.mjs';
+import { inside } from './paths.js';
+
+/** A write refused because the path leads outside the roots it may write in (a symlink to /tmp, say). Fastify answers 403. */
+export class OutsideRootsError extends Error {
+  readonly statusCode = 403;
+}
+
+/** The real path `abs` writes to: symlinks followed in every component, a dangling final link included. */
+function realTarget(abs: string): string {
+  let p = path.resolve(abs);
+  for (let hops = 0; hops < 40; hops++) {
+    const st = fs.lstatSync(p, { throwIfNoEntry: false });
+    if (!st?.isSymbolicLink()) return resolveReal(p);
+    p = path.resolve(path.dirname(p), fs.readlinkSync(p));
+  }
+  throw new OutsideRootsError(`${abs}: too many levels of symbolic links; nothing was written`);
+}
 
 /**
- * Replaces the file at `abs` atomically: a temp file next to it, then one rename. A symlink is followed
- * (a cv.md linked to a synced copy): the temp file goes next to the link's target, which is replaced and
- * keeps its mode, so the link stays a link.
+ * Replaces the file at `abs` atomically: a temp file next to it, then one rename. The real path (symlinks followed,
+ * a cv.md linked to a synced copy included) must stay inside one of the `within` roots, or the write is refused
+ * with OutsideRootsError and nothing changes, neither the link nor its target. Inside, the temp file goes next to
+ * the real target, which is replaced and keeps its mode, so a link stays a link.
  */
-export function writeFileAtomic(abs: string, text: string): void {
-  const real = resolveReal(abs);
+export function writeFileAtomic(abs: string, text: string, opts: { within: Array<{ root: string; name: string }> }): void {
+  const real = realTarget(abs);
+  const roots = opts.within.map((w) => ({ ...w, real: resolveReal(path.resolve(w.root)) }));
+  const home = roots.find((r) => inside(r.real, real));
+  if (!home) {
+    const name = roots.map((r) => r.name).join(' and ');
+    const rel = path.relative(path.resolve(opts.within[0]!.root), path.resolve(abs)) || abs;
+    throw new OutsideRootsError(`${rel} leads to ${real}, outside the ${name}; nothing was written. Point the link inside the ${name}, or replace it with the file itself.`);
+  }
   fs.mkdirSync(path.dirname(real), { recursive: true });
   const tmp = `${real}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
   fs.writeFileSync(tmp, text);
@@ -22,3 +47,6 @@ export function writeFileAtomic(abs: string, text: string): void {
     throw err;
   }
 }
+
+/** The roots a user-layer file may be written in: the data root only. */
+export const dataRootOnly = (dataRoot: string) => ({ within: [{ root: dataRoot, name: 'data root' }] });

@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tempDir } from '../helpers/tmp.js';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 
 let t: TestApp;
@@ -38,8 +37,9 @@ describe('user files', () => {
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_brief.md'), 'utf8')).toBe('# Brief\n');
   });
 
-  it('saves a symlinked cv.md through the link: the synced target is updated and the link stays', async () => {
-    const synced = tempDir('cc-synced-cv-');
+  it('saves a symlinked cv.md through the link when its target is inside the data root: the target is updated and the link stays', async () => {
+    const synced = path.join(t.cfg.dataRoot, 'synced');
+    fs.mkdirSync(synced);
     const target = path.join(synced, 'cv.md');
     const link = path.join(t.cfg.dataRoot, 'cv.md');
     fs.renameSync(link, target);

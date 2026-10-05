@@ -3,7 +3,7 @@
 // TUI see them too.
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeFileAtomic } from '../lib/atomic-write.js';
+import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 
 export const NOTES_START = '<!-- co-web-notes:start -->';
 export const NOTES_END = '<!-- co-web-notes:end -->';
@@ -41,7 +41,7 @@ export function rememberFact(dataRoot: string, fact: string): 'ok' | 'deduped' {
   }
   const { text, result } = applyRememberedFact(md, fact);
   if (result === 'ok') {
-    writeFileAtomic(p, text);
+    writeFileAtomic(p, text, dataRootOnly(dataRoot));
   }
   return result;
 }

@@ -9,6 +9,7 @@ A local web app (light, dark or auto theme) that sits next to the career-ops che
 - **Never submits.** The Apply page drafts answers and (once Playwright MCP is probed) fills forms, but you press Submit. AI sessions never send mail or messages.
 - **Blacklist rule.** `data/blacklist.md` is written only from the Settings > Blacklist editor after an explicit confirm dialog; the request must carry `{confirm:true}` and `X-CC-Explicit: blacklist` or the server answers 403. Every AI session is denied that file by the guard hook.
 - **Data never committed.** CV, profile, portals, tracker, reports, immigration files and app state stay in the data root (`CAREER_OPS_ROOT`). Test fixtures are synthetic.
+- **Writes stay in the data root.** The editors save user files (cv.md, profiles, portals, the blacklist, the pipeline) with an atomic rename. A file that is a symlink is written through only when its real target is inside the data root (the link stays a link); a link, or a linked folder, that leads outside it is refused with a 403 and nothing changes.
 - **No shell.** Every child process is `spawn(cmd, args[], { shell: false })` from a static action registry; the client never sends a command string.
 - Responses carry `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`; untrusted markdown (reports, digests, plugin docs) is rendered through rehype-sanitize.
 
