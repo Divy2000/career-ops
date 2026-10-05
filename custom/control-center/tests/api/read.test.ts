@@ -41,6 +41,24 @@ describe('read endpoints', () => {
     expect(body.companyHistory).toEqual([]);
   });
 
+  it('GET /api/tracker/:n gives an unknown-employer (?) row no company history, company file or alert (SW-server-05)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.appendFileSync(
+        path.join(own.cfg.dataRoot, 'data', 'applications.md'),
+        '| 7 | 2026-10-01 | ? | Hays | Recruiter role | 3.0/5 | Applied | — | — | agency, employer not named |\n| 8 | 2026-10-02 | ? | Randstad | Data role | 3.1/5 | Applied | — | — | agency |\n',
+      );
+      const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json();
+      expect(body.row.company).toBe('?');
+      expect(body.companyHistory).toEqual([]);
+      expect(body.sponsorship).toEqual({ companyFile: null, alert: null });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n distinguishes a row without a report and rejects bad numbers', async () => {
     expect((await get('/api/tracker/5')).json().report).toEqual({ kind: 'none' });
     expect((await get('/api/tracker/99')).statusCode).toBe(404);
