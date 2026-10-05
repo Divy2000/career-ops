@@ -169,3 +169,15 @@ test('parseRow only treats trailing segments as labels', () => {
   assert.equal(r.location, 'Remote');
   assert.deepEqual(r.labels, {});
 });
+
+test('buildShortlist keeps every URL-only row (Pipeline > Add URLs), keyed by its URL', () => {
+  const rank = (score) => `rank: ${score}/5 — fit`;
+  const rows = [
+    `- [ ] https://jobs.example.com/1 | ${rank('4.0')}`,
+    `- [ ] https://jobs.example.com/2 | ${rank('3.5')}`,
+    `- [ ] https://jobs.example.com/3 | ${rank('3.2')}`,
+    `- [ ] https://jobs.example.com/3/#apply | ${rank('3.0')}`,
+  ].map(parseRow);
+  const { shortlist } = buildShortlist(rows, { tiers: new Map(), alerts: new Map(), minRank: 3 });
+  assert.deepEqual(shortlist.map((s) => s.url), ['https://jobs.example.com/1', 'https://jobs.example.com/2', 'https://jobs.example.com/3']);
+});

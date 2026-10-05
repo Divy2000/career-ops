@@ -17,7 +17,7 @@ export const USER_FILES = {
   briefMd: 'modes/_brief.md',
   voiceDna: 'voice-dna.md',
   storyBank: 'interview-prep/story-bank.md',
-  activeInterviews: 'interview-prep/active-interviews.md',
+  activeInterviews: 'data/active-interviews.md',
 } as const;
 
 export type UserFileKey = keyof typeof USER_FILES;

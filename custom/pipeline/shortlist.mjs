@@ -101,13 +101,23 @@ async function loadAlerts(companies) {
   return out;
 }
 
+// scan.mjs creates the pipeline only once a scan adds an offer, so a fresh root has none yet: an empty pipeline.
+async function readPipeline() {
+  try {
+    return await readFile(PIPELINE, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return '';
+    throw err;
+  }
+}
+
 const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 
 async function main() {
   const minRank = arg('--min-rank', 3);
   const top = arg('--top', 40);
   const today = localToday();
-  const rows = (await readFile(PIPELINE, 'utf8')).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
+  const rows = (await readPipeline()).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];
   const { tiers, looked } = await loadTiers(companies, today);
   const alerts = await loadAlerts(companies);
@@ -125,11 +135,11 @@ async function main() {
     '| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |',
     '|---|---|---|---|---|---|---|---|---|',
     ...shortlist.slice(0, top).map((s, i) =>
-      `| ${i + 1} | ${s.score} | ${s.rank} | ${cell(s.sponsor)} | ${cell(s.company)} | [${cell(s.title)}](${s.url}) | ${cell(s.location)} | ${s.posted ?? '-'} | ${cell(s.rankReason)} |`),
+      `| ${i + 1} | ${s.score} | ${s.rank} | ${cell(s.sponsor)} | ${cell(s.company)} | [${cell(s.title || s.url)}](${s.url}) | ${cell(s.location)} | ${s.posted ?? '-'} | ${cell(s.rankReason)} |`),
     '',
     `## Excluded by sponsorship alerts (${excluded.length})`,
     '',
-    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title)}](${s.url}) - ${cell(s.sponsor)}`) : ['- none']),
+    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title || s.url)}](${s.url}) - ${cell(s.sponsor)}`) : ['- none']),
     '',
   ].join('\n');
   await writeFile(OUT, md);

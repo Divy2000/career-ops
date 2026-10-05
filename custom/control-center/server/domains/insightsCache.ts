@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '../config.js';
-import { cliScriptPath, type CliId } from '../core/adapter.js';
+import { cliScriptPath, importCore, type CliId } from '../core/adapter.js';
 import type { Exec } from '../routes/system.js';
 
 export const INSIGHT_SCRIPTS: Record<string, { cli: CliId; label: string }> = {
@@ -33,23 +33,62 @@ export interface InsightRead {
   fromCache: boolean;
 }
 
-const INPUTS = ['cv.md', 'article-digest.md', 'data/applications.md', 'data/status-log.tsv', 'data/scan-history.tsv', 'data/pipeline.md', 'data/follow-ups.md', 'data/blacklist.md', 'reports', 'interview-prep', 'interview-prep/sessions', 'jds', 'config/profile.yml'];
+const INPUT_FILES = [
+  'cv.md',
+  'article-digest.md',
+  'portals.yml',
+  'config/profile.yml',
+  'config/benchmarks.yml',
+  'data/applications.md',
+  'data/status-log.tsv',
+  'applications.md',
+  'status-log.tsv',
+  'data/scan-history.tsv',
+  'data/pipeline.md',
+  'data/follow-ups.md',
+  'data/blacklist.md',
+  'data/assessments.tsv',
+  'data/salary-observations.tsv',
+  'data/active-interviews.md',
+  'active-interviews.md',
+];
+/** Folders whose files the scripts read; each file counts, since editing one in place leaves its folder's time alone. */
+const INPUT_DIRS = ['reports', 'interview-prep', 'interview-prep/sessions', 'jds'];
 
-export function inputsKey(dataRoot: string): string {
-  return INPUTS.map((rel) => {
-    try {
-      return `${rel}:${Math.round(fs.statSync(path.join(dataRoot, rel)).mtimeMs)}`;
-    } catch {
-      return `${rel}:-`;
-    }
-  }).join('|');
+const mtimeOf = (file: string): string => {
+  try {
+    return String(Math.round(fs.statSync(file).mtimeMs));
+  } catch {
+    return '-';
+  }
+};
+
+function dirKey(dir: string): string {
+  let names: string[];
+  try {
+    names = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return '-';
+  }
+  return names.map((n) => `${n}@${mtimeOf(path.join(dir, n))}`).join(',');
+}
+
+/** `trackerPath` is the tracker the scripts resolve (CAREER_OPS_TRACKER may put it outside the data root); its status log sits beside it. */
+export function inputsKey(dataRoot: string, trackerPath?: string): string {
+  const tracker = trackerPath ? [`tracker=${trackerPath}:${mtimeOf(trackerPath)}`, `tracker-log:${mtimeOf(path.join(path.dirname(trackerPath), 'status-log.tsv'))}`] : [];
+  return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`), ...tracker].join('|');
 }
 
 const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'data', 'control-center', 'insights', `${script}.json`);
 
 export async function readInsight(cfg: ServerConfig, exec: Exec, script: InsightScript, opts: { recompute?: boolean; now?: () => number } = {}): Promise<InsightRead> {
   const def = INSIGHT_SCRIPTS[script]!;
-  const key = inputsKey(cfg.dataRoot);
+  const { resolveTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+  const key = inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot));
   const file = cachePath(cfg.dataRoot, script);
   if (!opts.recompute) {
     try {

@@ -6,7 +6,7 @@ import type { Domain, EventBus } from './bus.js';
 export function domainFor(relPath: string): Domain | null {
   const p = relPath.split(path.sep).join('/');
   if (p.startsWith('data/control-center/')) return null;
-  if (p === 'data/applications.md' || p === 'applications.md' || p === 'data/status-log.tsv') return 'tracker';
+  if (p === 'data/applications.md' || p === 'applications.md' || p === 'data/status-log.tsv' || p === 'status-log.tsv') return 'tracker';
   if (p === 'data/pipeline.md' || p === 'data/scan-history.tsv') return 'pipeline';
   if (p.startsWith('reports/')) return 'reports';
   if (p.startsWith('data/immigration/')) return 'immigration';
@@ -18,7 +18,7 @@ export function domainFor(relPath: string): Domain | null {
 }
 
 export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300): FSWatcher {
-  const targets = ['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'applications.md'].map((t) => path.join(dataRoot, t));
+  const targets = ['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'applications.md', 'status-log.tsv'].map((t) => path.join(dataRoot, t));
   const watcher = chokidar.watch(targets, {
     ignoreInitial: true,
     ignored: (p: string) => p.includes(`${path.sep}node_modules${path.sep}`) || p.includes(`${path.sep}control-center${path.sep}`),

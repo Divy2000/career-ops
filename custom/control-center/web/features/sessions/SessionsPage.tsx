@@ -134,7 +134,9 @@ export function targetFor(value: string): SessionMeta['target'] {
 export function SessionDetailPage() {
   const { id } = detailRoute.useParams();
   const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`) });
-  const [deleted, setDeleted] = useState(false);
+  // The route keeps this page mounted when only $id changes, so the flag names the session it is about.
+  const [deletedId, setDeletedId] = useState<string | null>(null);
+  const deleted = deletedId === id;
   const confirm = useConfirm();
   const navigate = useNavigate();
   // A fork is a new session: the page follows it instead of showing the source.
@@ -154,7 +156,7 @@ export function SessionDetailPage() {
       return;
     }
     toast.success('Session deleted');
-    setDeleted(true);
+    setDeletedId(id);
   };
   return (
     <section aria-labelledby="page-title">

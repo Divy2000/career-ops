@@ -33,10 +33,12 @@ advertised_comp: "$210k-$240k"
 ```
 
 ## A) Role Summary
-- Archetype detected: Backend Platform Engineer
-- Remote: onsite (New York, NY)
-- Comp: $210k-$240k base
-- TL;DR: Staff-level payments platform role; excellent fit.
+
+| Field | Value |
+|-------|-------|
+| **Archetype** | Backend Platform Engineer |
+| **Remote** | onsite (New York, NY) |
+| **TL;DR** | Staff-level payments platform role; excellent fit. |
 
 ## Cover Letter Draft
 PDF generated: output/globex-payments-cover.pdf

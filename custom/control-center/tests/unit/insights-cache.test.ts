@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { inputsKey } from '../../server/domains/insightsCache.js';
-import { copyFixtureRoot } from '../helpers/app.js';
+import { inputsKey, readInsight } from '../../server/domains/insightsCache.js';
+import { copyFixtureRoot, FIXTURE_ROOT, testConfig } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
+import type { Exec } from '../../server/routes/system.js';
 
 describe('the insights cache key', () => {
   // upskill leaves out skills cv.md already has and story provenance traces stories to cv.md and the digest.
@@ -16,4 +18,79 @@ describe('the insights cache key', () => {
       expect(inputsKey(root)).not.toBe(before);
     });
   }
+});
+
+describe('the insights cache key covers every file the insights scripts read', () => {
+  // assessment-log.mjs, salary-gap.mjs:39, process-quality.mjs:45 and rejection-latency.mjs:64 (data/ first, then the
+  // root copy), funnel-velocity.mjs:251, detect-reposts.mjs:76.
+  for (const rel of ['data/assessments.tsv', 'data/salary-observations.tsv', 'data/active-interviews.md', 'active-interviews.md', 'config/benchmarks.yml', 'portals.yml']) {
+    it(`changes when ${rel} is added or edited`, () => {
+      const root = copyFixtureRoot();
+      const file = path.join(root, rel);
+      fs.rmSync(file, { force: true });
+      const before = inputsKey(root);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'x\n');
+      const added = inputsKey(root);
+      expect(added).not.toBe(before);
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(file, later, later);
+      expect(inputsKey(root)).not.toBe(added);
+    });
+  }
+
+  for (const rel of ['reports/001-acme-robotics.md', 'interview-prep/story-bank.md']) {
+    it(`changes when ${rel} is edited in place (its folder's own time does not move)`, () => {
+      const root = copyFixtureRoot();
+      const dir = path.dirname(path.join(root, rel));
+      const dirTime = fs.statSync(dir).mtime;
+      const before = inputsKey(root);
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(path.join(root, rel), later, later);
+      fs.utimesSync(dir, dirTime, dirTime);
+      expect(inputsKey(root)).not.toBe(before);
+    });
+  }
+});
+
+describe('the insights cache key on a root-layout tracker (R7-14)', () => {
+  // set-status.mjs logs beside the tracker, so a tracker at the top keeps status-log.tsv at the top too.
+  for (const rel of ['applications.md', 'status-log.tsv']) {
+    it(`changes when the top-level ${rel} is added or edited`, () => {
+      const root = copyFixtureRoot();
+      const before = inputsKey(root);
+      fs.writeFileSync(path.join(root, rel), 'x\n');
+      expect(inputsKey(root)).not.toBe(before);
+    });
+  }
+});
+
+describe('the insights cache with CAREER_OPS_TRACKER outside the data root (R7-14 review)', () => {
+  it('recomputes when that tracker or the status-log.tsv beside it changes', async () => {
+    const outside = tempDir('cc-outside-tracker-');
+    const tracker = path.join(outside, 'applications.md');
+    fs.copyFileSync(path.join(FIXTURE_ROOT, 'data', 'applications.md'), tracker);
+    fs.writeFileSync(path.join(outside, 'status-log.tsv'), '2\t2026-10-01\tEvaluated\tApplied\tweb\t\n');
+    const before = process.env.CAREER_OPS_TRACKER;
+    process.env.CAREER_OPS_TRACKER = tracker;
+    let runs = 0;
+    const exec: Exec = async () => ((runs += 1), { code: 0, stdout: '{"ok":true}', stderr: '' });
+    try {
+      const cfg = testConfig();
+      await readInsight(cfg, exec, 'funnelVelocity');
+      await readInsight(cfg, exec, 'funnelVelocity');
+      expect(runs).toBe(1);
+      for (const file of [path.join(outside, 'status-log.tsv'), tracker]) {
+        const later = new Date(Date.now() + 60_000 * (runs + 1));
+        fs.utimesSync(file, later, later);
+        const ran = runs;
+        await readInsight(cfg, exec, 'funnelVelocity');
+        expect(runs, `${file} changed`).toBe(ran + 1);
+      }
+      expect(runs).toBe(3);
+    } finally {
+      if (before === undefined) delete process.env.CAREER_OPS_TRACKER;
+      else process.env.CAREER_OPS_TRACKER = before;
+    }
+  });
 });

@@ -84,8 +84,15 @@ export function parseScore(raw: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Header labels as the localized report templates write them (modes/<lang>/); URL, PDF, Via and Work Auth stay English.
+const SCORE_KEY = 'Score|Punteggio|Puan|Бал';
+const DATE_KEY = 'Date|Datum|Data|Dato|Tanggal|Tarih|Дата';
+const ARCHETYPE_KEY = 'Archetype|Archetyp|Arketype|Archetipo|Arquétipo|Arketipe|Arketip|Архетип';
+const LEGITIMACY_KEY = 'Legitimacy|Легітимність|Meşruiyet';
+
+/** A `**Key:**` header line; French and Korean reports write `**Key :**`. */
 function headerField(md: string, key: string): string | null {
-  const re = new RegExp(`^\\*\\*${key}:\\*\\*\\s*(.*)$`, 'mi');
+  const re = new RegExp(`^\\*\\*(?:${key})\\s*:\\*\\*\\s*(.*)$`, 'mi');
   const m = md.match(re);
   if (!m) return null;
   const v = m[1]!.trim();
@@ -131,7 +138,10 @@ function machineSummary(md: string, file: string): Record<string, unknown> | nul
   }
 }
 
-function bullet(sectionContent: string, label: string): string | null {
+/** A Block A field: a `| **Label** | value |` table row (what oferta writes) or a legacy `- Label: value` bullet. */
+function blockField(sectionContent: string, label: string): string | null {
+  const row = sectionContent.match(new RegExp(`^\\|\\s*\\**${label}\\**\\s*\\|\\s*(.*?)\\s*\\|\\s*$`, 'mi'));
+  if (row && row[1]) return row[1];
   const re = new RegExp(`^\\s*[-*]?\\s*\\**${label}\\**\\s*(?:\\([^)]*\\))?\\s*:\\s*(.+)$`, 'mi');
   const m = sectionContent.match(re);
   return m ? m[1]!.trim() : null;
@@ -139,12 +149,14 @@ function bullet(sectionContent: string, label: string): string | null {
 
 export function parseReport(markdown: string, file: string, num: number): ReportFull {
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
-  const scoreRaw = headerField(markdown, 'Score');
-  if (!title || !/^Evaluation:/i.test(title) || (scoreRaw === null && !/^\*\*Score:\*\*/m.test(markdown))) {
-    throw new ParseError('Not an evaluation report: missing "# Evaluation:" title or **Score:** header', file, 1);
+  const scoreRaw = headerField(markdown, SCORE_KEY);
+  // The title word is localized ("# Bewertung:", "# Evaluation :"), so a report is told apart by its score header or Machine Summary.
+  const scored = new RegExp(`^\\*\\*(?:${SCORE_KEY})\\s*:\\*\\*`, 'mi').test(markdown) || /^##\s+Machine Summary\s*$/m.test(markdown);
+  if (!title || !/^[^:]+:\s*\S/.test(title) || !scored) {
+    throw new ParseError('Not an evaluation report: missing a "# Evaluation: Company - Role" title, a **Score:** header or a Machine Summary', file, 1);
   }
   const machine = machineSummary(markdown, file);
-  const [companyPart, rolePart] = title.replace(/^Evaluation:\s*/i, '').split(new RegExp(`\\s+${EM_DASH}\\s+|\\s+-\\s+`));
+  const [companyPart, rolePart] = title.replace(/^[^:]+:\s*/, '').split(new RegExp(`\\s+${EM_DASH}\\s+|\\s+--?\\s+`));
   const { intro, sections } = splitSections(markdown);
   const blockA = sections.find((s) => s.letter === 'A')?.content ?? '';
   const cover = sections.find((s) => /cover letter/i.test(s.heading))?.content ?? '';
@@ -157,18 +169,19 @@ export function parseReport(markdown: string, file: string, num: number): Report
     title,
     company: str(machine?.company) ?? companyPart?.trim() ?? '',
     role: str(machine?.role) ?? rolePart?.trim() ?? '',
-    date: headerField(markdown, 'Date'),
+    date: headerField(markdown, DATE_KEY),
     url: headerField(markdown, 'URL'),
     via: headerField(markdown, 'Via'),
     // The Machine Summary carries the normalized archetype; the header may read "Not a target - closest default: X".
-    archetype: str(machine?.archetype) ?? headerField(markdown, 'Archetype'),
+    archetype: str(machine?.archetype) ?? headerField(markdown, ARCHETYPE_KEY),
     score: parseScore(scoreRaw) ?? (typeof machine?.score === 'number' ? (machine.score as number) : null),
-    legitimacy: headerField(markdown, 'Legitimacy') ?? str(machine?.legitimacy_tier),
+    legitimacy: headerField(markdown, LEGITIMACY_KEY) ?? str(machine?.legitimacy_tier),
     workAuth: headerField(markdown, 'Work Auth'),
     pdf: headerField(markdown, 'PDF'),
-    tldr: bullet(blockA, 'TL;DR'),
-    remote: bullet(blockA, 'Remote'),
-    comp: bullet(blockA, 'Comp'),
+    tldr: blockField(blockA, 'TL;DR'),
+    remote: blockField(blockA, 'Remote'),
+    // Block A has no Comp row; the Machine Summary carries the JD's own figure.
+    comp: str(machine?.advertised_comp) ?? blockField(blockA, 'Comp'),
     finalDecision: str(machine?.final_decision),
     discardReasons: discard,
     machine,

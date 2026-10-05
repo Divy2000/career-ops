@@ -291,3 +291,64 @@ describe('events', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe('status log next to the tracker (R7-14)', () => {
+  // set-status.mjs appends the ledger beside the tracker it wrote: join(dirname(APPS_FILE), 'status-log.tsv').
+  it('a root-layout tracker (applications.md at the top) shows the change set-status.mjs logged beside it, on the Timeline and the dashboard', async () => {
+    const t2 = await makeTestApp();
+    const root = t2.cfg.dataRoot;
+    try {
+      fs.renameSync(path.join(root, 'data', 'applications.md'), path.join(root, 'applications.md'));
+      fs.rmSync(path.join(root, 'data', 'status-log.tsv'));
+      const res = await t2.app.inject({ method: 'POST', url: '/api/actions/tracker.setStatus', headers: t2.authedWrite, payload: { params: { row: 2, state: 'Applied' } } });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fs.existsSync(path.join(root, 'status-log.tsv'))).toBe(true);
+      const row = (await t2.app.inject({ method: 'GET', url: '/api/tracker/2', headers: t2.authed })).json();
+      expect(row.timeline.statusLog).toMatchObject([{ num: 2, from: 'Evaluated', to: 'Applied', source: 'web' }]);
+      const dash = (await t2.app.inject({ method: 'GET', url: '/api/insights/dashboard', headers: t2.authed })).json();
+      expect(dash.dashboard.weeklyActivity.reduce((a: number, w: { transitions: number }) => a + w.transitions, 0)).toBe(1);
+    } finally {
+      await t2.close();
+    }
+  });
+
+  it('the watcher maps the root-layout ledger to the tracker domain', () => {
+    expect(domainFor('status-log.tsv')).toBe('tracker');
+  });
+});
+
+describe('the Timeline pin follows the cadence (R7-17)', () => {
+  const FOLLOWUPS = (logged: string) =>
+    `# Follow-ups\n\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 1 | ${logged} | Acme Robotics | Senior Backend Engineer | Email | Pat Example | nudged |\n\n- next #1 2026-10-10 (set 2026-10-01)\n`;
+  const pinFor = async (logged: string) => {
+    const t2 = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'follow-ups.md'), FOLLOWUPS(logged));
+      return (await t2.app.inject({ method: 'GET', url: '/api/tracker/1', headers: t2.authed })).json().timeline.pin;
+    } finally {
+      await t2.close();
+    }
+  };
+
+  it('drops a pin once a follow-up is logged after the day it was set', async () => {
+    expect(await pinFor('2026-10-02')).toBeNull();
+  });
+
+  it('drops it too when the later follow-up is a legacy bullet line (`- date · #N Company <dash> note`)', async () => {
+    const t2 = await makeTestApp();
+    try {
+      const legacy = `# Follow-ups\n\n- 2026-10-02 \u00b7 #1 Acme Robotics ${String.fromCharCode(0x2014)} nudged\n\n- next #1 2026-10-10 (set 2026-10-01)\n`;
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'follow-ups.md'), legacy);
+      const body = (await t2.app.inject({ method: 'GET', url: '/api/tracker/1', headers: t2.authed })).json();
+      expect(body.timeline.followups).toMatchObject([{ num: null, appNum: 1, date: '2026-10-02', company: 'Acme Robotics', notes: 'nudged' }]);
+      expect(body.timeline.pin).toBeNull();
+    } finally {
+      await t2.close();
+    }
+  });
+
+  it('keeps a pin set the same day as the last follow-up, or after it', async () => {
+    expect(await pinFor('2026-10-01')).toMatchObject({ date: '2026-10-10', setOn: '2026-10-01' });
+    expect(await pinFor('2026-09-28')).toMatchObject({ date: '2026-10-10', setOn: '2026-10-01' });
+  });
+});

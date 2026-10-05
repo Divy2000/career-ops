@@ -38,3 +38,14 @@ test('prioritize runs on a root with no scan history yet (URLs added by hand), w
   assert.deepEqual([...pending].sort(), [...rows].sort());
   assert.equal(fs.existsSync(path.join(root, 'data', 'scan-history.tsv')), false);
 });
+
+test('prioritize treats a root with no data/pipeline.md yet (a first scan that added nothing) as an empty pipeline', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /prioritized 0 pending rows/);
+  assert.doesNotMatch(r.stdout, /backup/);
+  assert.equal(fs.existsSync(path.join(root, 'data', 'pipeline.md')), false);
+  assert.equal(fs.existsSync(path.join(root, 'data', 'pipeline.md.bak')), false);
+});

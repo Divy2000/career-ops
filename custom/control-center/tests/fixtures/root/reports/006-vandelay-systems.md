@@ -33,7 +33,9 @@ advertised_comp: null
 ```
 
 ## A) Role Summary
-- Archetype detected: Backend Platform Engineer
-- Remote: full remote
-- Comp: not advertised
-- TL;DR: Senior Python role at a logistics software vendor; good fit.
+
+| Field | Value |
+|-------|-------|
+| **Archetype** | Backend Platform Engineer |
+| **Remote** | full remote |
+| **TL;DR** | Senior Python role at a logistics software vendor; good fit. |

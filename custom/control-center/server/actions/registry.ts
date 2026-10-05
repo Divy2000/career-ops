@@ -69,6 +69,11 @@ const opt = (value: string | number | undefined, name: string): string[] => (val
 const none = z.object({});
 const dryRun = z.object({ dryRun: z.boolean().default(false) });
 const positive = z.number().int().positive();
+/**
+ * A tracker Report label as written ("012"); hired-share.mjs compares it as text, so "12" would miss "012".
+ * A positive number is still accepted (sent as its plain digits) for callers that hold the report as a number.
+ */
+const reportLabel = z.union([z.string().regex(/^\d{1,6}$/), z.number().int().positive()]);
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
 const outputPath = (ext: RegExp, what: string) =>
@@ -136,7 +141,7 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: true,
-    params: z.object({ report: positive, anonymity: z.enum(['handle', 'role', 'count']), story: z.string().max(2000).optional() }),
+    params: z.object({ report: reportLabel, anonymity: z.enum(['handle', 'role', 'count']), story: z.string().max(2000).optional() }),
     build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--anonymity', p.anonymity, ...opt(p.story, '--story')]),
   }),
   define({
@@ -146,7 +151,7 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: true,
-    params: z.object({ report: positive, mark: z.enum(['shared', 'later', 'never']) }),
+    params: z.object({ report: reportLabel, mark: z.enum(['shared', 'later', 'never']) }),
     build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--mark', p.mark]),
   }),
   // ---- pipeline ----
@@ -350,13 +355,14 @@ export const ACTIONS: ActionDef[] = [
       ['insights.processQuality', 'Process quality', 'processQuality'],
       ['insights.weeklyDigest', 'Weekly digest', 'weeklyDigest'],
       ['insights.assessmentLog', 'Assessment log', 'assessmentLog'],
-      ['insights.jdSkillGap', 'JD skill gap', 'jdSkillGap'],
       ['insights.storyProvenance', 'Story provenance check', 'storyProvenanceCheck'],
       ['insights.contacts', 'Contacts summary', 'contacts'],
     ] as Array<[string, string, CliId]>
   ).map(([id, label, cli]) => define({ id, label, cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, cli, ['--summary']) })),
   define({ id: 'insights.companyHistory', label: 'Company history', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company')]) }),
   define({ id: 'insights.keywordMatch', label: 'Keyword match', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ n: positive.optional() }), build: (p, ctx) => node(ctx, 'keywordMatch', ['--json', ...(p.n ? [String(p.n)] : [])]) }),
+  // jd-skill-gap.mjs needs a JD file (it exits 1 with its usage text without one): the pasted JD goes to a temp file.
+  define({ id: 'insights.jdSkillGap', label: 'JD skill gap', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ text: z.string().min(1).max(50_000) }), build: (p, ctx) => node(ctx, 'jdSkillGap', [tmpFile(ctx, 'md', p.text), '--summary']) }),
   define({ id: 'insights.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),
   define({ id: 'insights.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
   // ---- follow-ups ----
@@ -414,6 +420,7 @@ export function actionMetadata() {
     resources: a.resources,
     claude: a.claude,
     sync: a.sync,
-    params: z.toJSONSchema(a.params),
+    // The input schema: a field with a default is optional to the caller, as it is to the zod parse.
+    params: z.toJSONSchema(a.params, { io: 'input' }),
   }));
 }

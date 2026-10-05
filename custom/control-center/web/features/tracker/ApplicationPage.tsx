@@ -158,8 +158,8 @@ export function ApplicationPage() {
                     <Empty>No follow-ups logged.</Empty>
                   ) : (
                     <ul className="bullets">
-                      {q.data.timeline.followups.map((f) => (
-                        <li key={f.num}>
+                      {q.data.timeline.followups.map((f, i) => (
+                        <li key={`${f.date}-${i}`}>
                           <span className="mono">{f.date}</span> <Pill>{f.channel}</Pill> {f.contact} <span className="muted">{f.notes}</span>
                         </li>
                       ))}

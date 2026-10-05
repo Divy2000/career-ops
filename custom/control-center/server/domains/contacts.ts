@@ -76,11 +76,19 @@ function listMd(dir: string, rel: string, exclude: Set<string>): PrepDoc[] {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+/** data/active-interviews.md, else the root copy: the order process-quality.mjs, rejection-latency.mjs and tracker-sync-check.mjs use. */
+function readActiveInterviews(dataRoot: string): TextRead {
+  const documented = readText(path.join(dataRoot, 'data', 'active-interviews.md'));
+  if (documented.kind === 'ok') return documented;
+  const legacy = readText(path.join(dataRoot, 'active-interviews.md'));
+  return legacy.kind === 'ok' ? legacy : documented;
+}
+
 export function readInterviews(dataRoot: string): InterviewsRead {
   const dir = path.join(dataRoot, 'interview-prep');
   const strip = (r: TextRead): TextRead => (r.kind === 'ok' ? { ...r, path: path.relative(dataRoot, r.path) } : { kind: 'missing', path: path.relative(dataRoot, r.path) });
   return {
-    active: strip(readText(path.join(dir, 'active-interviews.md'))),
+    active: strip(readActiveInterviews(dataRoot)),
     storyBank: strip(readText(path.join(dir, 'story-bank.md'))),
     prepDocs: listMd(dir, 'interview-prep', new Set(['active-interviews.md', 'story-bank.md'])),
     sessions: listMd(path.join(dir, 'sessions'), 'interview-prep/sessions', new Set()),

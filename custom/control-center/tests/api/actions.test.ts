@@ -104,6 +104,18 @@ describe('action registry', () => {
     expect((await get('/api/runs/does-not-exist')).statusCode).toBe(404);
   });
 
+  it('JD skill gap runs jd-skill-gap.mjs on the pasted JD and finishes, and asks for the JD instead of running without one (R7-15)', async () => {
+    expect((await post('/api/actions/insights.jdSkillGap', { params: {} })).statusCode).toBe(400);
+    const res = await post('/api/actions/insights.jdSkillGap', { params: { text: '## Requirements\n\n- 5+ years of experience with Python\n- Experience with Kafka and Kubernetes\n' } });
+    expect(res.statusCode, res.body).toBe(202);
+    const meta = await waitForRun(res.json().runId);
+    expect(meta).toMatchObject({ actionId: 'insights.jdSkillGap', status: 'done', exitCode: 0 });
+    const lines = ((await get(`/api/runs/${res.json().runId}`)).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
+    expect(lines).not.toMatch(/Usage: node jd-skill-gap\.mjs/);
+    expect(lines).toMatch(/JD skills found: 3/);
+    expect(lines).toMatch(/Real gaps \(not found anywhere\): Kafka, Kubernetes/);
+  });
+
   it('an async action records the input files it wrote with its run, the network scan filters file passed only in the env included', async () => {
     const started: Array<Parameters<typeof t.runner.start>[0]> = [];
     // Captured, not run: the network scan would fetch the public ATS dataset.
@@ -396,6 +408,32 @@ describe('stale action inputs', () => {
     const app = await makeTestApp({ dataRoot });
     try {
       expect(Object.values(files).map((f) => fs.existsSync(f))).toEqual([false, true, false]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('Hired Wall answers (R7-01)', () => {
+  // The oferta mode writes the Report cell with a zero-padded label (`[001](reports/001-...)`, modes/oferta.md);
+  // hired-share.mjs matches the cell's first digit run as text, so "006" must reach it, never 6.
+  it('records the answer and drafts the story for a row whose report label is zero-padded, using the report the tracker API gives the row', async () => {
+    const dataRoot = copyFixtureRoot();
+    const trackerFile = path.join(dataRoot, 'data', 'applications.md');
+    const text = fs.readFileSync(trackerFile, 'utf8').replace('| Responded |', '| Hired |').replace('[6](../reports/006-vandelay-systems.md)', '[006](../reports/006-vandelay-systems.md)');
+    fs.writeFileSync(trackerFile, text);
+    const app = await makeTestApp({ dataRoot });
+    try {
+      const rows = (await app.app.inject({ method: 'GET', url: '/api/tracker', headers: app.authed })).json().rows as Array<{ num: number; reportLabel: unknown }>;
+      const row = rows.find((r) => r.num === 6)!;
+      expect(row.reportLabel).toBe('006');
+      const send = (id: string, params: Record<string, unknown>) => app.app.inject({ method: 'POST', url: `/api/actions/${id}`, headers: app.authedWrite, payload: { params } });
+      const draft = await send('tracker.hiredShare', { report: row.reportLabel, anonymity: 'role' });
+      expect(draft.statusCode, draft.body).toBe(200);
+      const mark = await send('tracker.hiredMark', { report: row.reportLabel, mark: 'later' });
+      expect(mark.statusCode, mark.body).toBe(200);
+      const state = JSON.parse(fs.readFileSync(path.join(dataRoot, 'data', '.hired-share-state.json'), 'utf8'));
+      expect(state.byReport['006'].status).toBe('later');
     } finally {
       await app.close();
     }

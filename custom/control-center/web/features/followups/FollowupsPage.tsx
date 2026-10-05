@@ -7,7 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, StatusPill, Tabs, TableScroll } from '../../components/ui';
 import { ModeLauncher } from '../../components/ModeLauncher';
-import type { ContactsRead, FollowupCadenceEntry } from '@shared/api';
+import type { ContactsRead, FollowupCadenceEntry, FollowupEntry } from '@shared/api';
 import { localDate, localDatePlusDays } from '@shared/local-date';
 
 const route = getRouteApi('/followups');
@@ -298,6 +298,24 @@ export function FollowupsPage() {
   );
 }
 
+/** Logged follow-ups; a legacy bullet line (num null) has no row number to delete by, so it has no Delete. */
+export function FollowupHistory({ company, followups, onDelete }: { company: string; followups: FollowupEntry[]; onDelete: (num: number) => void }) {
+  return (
+    <ul className="bullets" aria-label={`Follow-up history for ${company}`}>
+      {followups.map((f, i) => (
+        <li key={`${f.date}-${i}`}>
+          <span className="mono">{f.date}</span> {f.channel} {f.contact && <span className="muted">to {f.contact}</span>} <span className="faint">{f.notes}</span>{' '}
+          {f.num !== null && (
+            <button type="button" aria-label={`Delete follow-up ${f.num}`} onClick={() => onDelete(f.num!)}>
+              Delete
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; onLog: () => void; onLogged: (m: string) => void; onPin: (appNum: number, date: string | null) => void; onDelete: (num: number) => void }) {
   return (
     <>
@@ -351,16 +369,7 @@ function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete
             {e.followups.length === 0 ? (
               <Empty>No follow-ups logged yet.</Empty>
             ) : (
-              <ul className="bullets" aria-label={`Follow-up history for ${e.company}`}>
-                {e.followups.map((f) => (
-                  <li key={f.num}>
-                    <span className="mono">{f.date}</span> {f.channel} {f.contact && <span className="muted">to {f.contact}</span>} <span className="faint">{f.notes}</span>{' '}
-                    <button type="button" aria-label={`Delete follow-up ${f.num}`} onClick={() => onDelete(f.num)}>
-                      Delete
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <FollowupHistory company={e.company} followups={e.followups} onDelete={onDelete} />
             )}
           </td>
         </tr>

@@ -23,8 +23,9 @@ export function parseStatusLog(text: string): StatusLogRow[] {
   return rows;
 }
 
-export function readStatusLog(dataRoot: string): StatusLogRow[] {
-  const read = readText(path.join(dataRoot, 'data', 'status-log.tsv'));
+/** The transition ledger set-status.mjs appends beside the tracker it wrote (root layout and CAREER_OPS_TRACKER included). */
+export function readStatusLog(trackerPath: string): StatusLogRow[] {
+  const read = readText(path.join(path.dirname(trackerPath), 'status-log.tsv'));
   return read.kind === 'ok' ? parseStatusLog(read.text) : [];
 }
 

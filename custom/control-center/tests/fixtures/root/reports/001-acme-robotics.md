@@ -33,10 +33,12 @@ advertised_comp: "$170k-$195k"
 ```
 
 ## A) Role Summary
-- Archetype detected: Backend Platform Engineer
-- Remote: hybrid (Austin, TX, 3 days on site)
-- Comp: $170k-$195k base plus equity
-- TL;DR: Senior backend role on a robotics fleet platform; strong fit with the Python and event-driven background.
+
+| Field | Value |
+|-------|-------|
+| **Archetype** | Backend Platform Engineer |
+| **Remote** | hybrid (Austin, TX, 3 days on site) |
+| **TL;DR** | Senior backend role on a robotics fleet platform; strong fit with the Python and event-driven background. |
 
 ## B) Match with CV
 Strong match on Python, Postgres and Kafka. Gap: Go.

@@ -16,7 +16,10 @@ export interface ShortlistRow {
 
 export interface ExcludedRow {
   company: string;
+  role: string;
+  url: string | null;
   alert: string;
+  date: string | null;
   headline: string;
 }
 
@@ -43,6 +46,18 @@ function dash(v: string | undefined): string | null {
   return v;
 }
 
+// shortlist.mjs writes `- Company - [Title](url) - label`, the label being `status (date): headline` (custom/pipeline/lib.mjs sponsorAdjustment).
+const EXCLUDED_BULLET = /^- (.+?) - \[(.*)\]\((\S*)\) - (.*)$/;
+const ALERT_LABEL = /^(\S+) \((\d{4}-\d{2}-\d{2})\): (.*)$/;
+
+function excludedRow(line: string): ExcludedRow | null {
+  const m = line.match(EXCLUDED_BULLET);
+  if (!m) return null;
+  const label = m[4]!.trim();
+  const alert = label.match(ALERT_LABEL);
+  return { company: m[1]!.trim(), role: m[2]!, url: m[3] || null, alert: alert ? alert[1]! : label, date: alert ? alert[2]! : null, headline: alert ? alert[3]! : '' };
+}
+
 export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 'ok' }>, 'kind' | 'path' | 'etag'> {
   const date = md.match(/^#\s+Shortlist\s*-\s*(\d{4}-\d{2}-\d{2})/m)?.[1] ?? null;
   const summary = md.split('\n').find((l) => /^Ranked rows/i.test(l)) ?? null;
@@ -58,6 +73,11 @@ export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 
       table = null;
       continue;
     }
+    if (table === 'excluded') {
+      const row = excludedRow(line);
+      if (row) excluded.push(row);
+      continue;
+    }
     if (!line.startsWith('|')) continue;
     const c = cells(line);
     if (c.every((x) => /^:?-+:?$/.test(x))) continue;
@@ -65,7 +85,6 @@ export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 
       table = 'ranked';
       continue;
     }
-    if (table === 'excluded' && /^company$/i.test(c[0] ?? '')) continue;
     if (table === 'ranked') {
       const rank = parseInt(c[0] ?? '', 10);
       if (Number.isNaN(rank)) continue;
@@ -83,8 +102,6 @@ export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 
         posted: dash(c[7]),
         why: dash(c[8]),
       });
-    } else if (table === 'excluded') {
-      excluded.push({ company: c[0] ?? '', alert: c[1] ?? '', headline: c[2] ?? '' });
     }
   }
   return { date, summary, rows, excluded };

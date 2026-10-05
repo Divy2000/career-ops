@@ -5,7 +5,7 @@ import { parseReport, readReport, listReportFiles, parseScore, splitSections, is
 import { readTracker, postedFromNotes, pdfPresent } from '../../server/domains/tracker.js';
 import { parsePipeline, parseRankCell, readPipeline, seniorityOf, sourceOf } from '../../server/domains/pipeline.js';
 import { parseShortlist, readShortlist } from '../../server/domains/shortlist.js';
-import { parseFollowupsTable, parseNextOverrides } from '../../server/domains/followups.js';
+import { parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
 import { parseTsv, readText } from '../../server/domains/files.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { copyFixtureRoot } from '../helpers/app.js';
@@ -33,7 +33,7 @@ describe('reports', () => {
     expect(readReport(root, 5)).toMatchObject({ kind: 'reserved', file: '005-RESERVED.md' });
   });
 
-  it('parses the header, Machine Summary and Block A details', () => {
+  it('parses the header, Machine Summary and the Block A table oferta writes', () => {
     const r = readReport(root, 1);
     expect(r.kind).toBe('ok');
     if (r.kind !== 'ok') return;
@@ -46,11 +46,16 @@ describe('reports', () => {
       finalDecision: 'Apply',
       discardReasons: [],
       remote: 'hybrid (Austin, TX, 3 days on site)',
-      comp: '$170k-$195k base plus equity',
+      comp: '$170k-$195k',
     });
     expect(r.report.tldr).toMatch(/^Senior backend role/);
     expect(r.report.via).toBeNull();
     expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'G']);
+  });
+
+  it('still reads a Block A written as bullets, and its Comp line when the Machine Summary has no advertised_comp', () => {
+    const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## A) Role Summary\n- Remote: full remote\n- Comp: $150k\n- TL;DR: Good fit.\n';
+    expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: 'full remote', comp: '$150k', tldr: 'Good fit.' });
   });
 
   it('reads discard reasons and the cover letter PDF path', () => {
@@ -198,7 +203,7 @@ describe('pipeline', () => {
 });
 
 describe('shortlist', () => {
-  it('parses the date, ranked rows with links and the excluded table', () => {
+  it('parses the date, ranked rows with links and the excluded bullets shortlist.mjs writes', () => {
     const s = readShortlist(root);
     expect(s.kind).toBe('ok');
     if (s.kind !== 'ok') return;
@@ -206,7 +211,16 @@ describe('shortlist', () => {
     expect(s.rows).toHaveLength(3);
     expect(s.rows[0]).toMatchObject({ rank: 1, score: 5.3, relevance: 4.8, sponsor: 'strong', company: 'Globex Payments', role: 'Staff Software Engineer', url: 'https://careers.example.com/globex/777', posted: '2026-09-24' });
     expect(s.rows[2]).toMatchObject({ posted: null, sponsor: 'unknown' });
-    expect(s.excluded).toEqual([{ company: 'Initech Cloud', alert: 'paused', headline: 'Initech pauses visa sponsorship for new hires' }]);
+    expect(s.excluded).toEqual([
+      { company: 'Initech Cloud', role: 'Backend Engineer II', url: 'https://jobs.example.com/initech/9', alert: 'paused', date: '2026-09-29', headline: 'Initech pauses visa sponsorship for new hires' },
+    ]);
+  });
+  it('reads the "- none" line of an empty excluded section as no rows', () => {
+    expect(parseShortlist('# Shortlist - 2026-10-03\n\n## Excluded by sponsorship alerts (0)\n\n- none\n').excluded).toEqual([]);
+  });
+  it('keeps a company whose name has a dash and a headline with a colon', () => {
+    const md = '## Excluded by sponsorship alerts (1)\n\n- Hewlett - Packard - [SRE](https://x.example/1) - stopped (2026-09-01): Update: H-1B paused\n';
+    expect(parseShortlist(md).excluded).toEqual([{ company: 'Hewlett - Packard', role: 'SRE', url: 'https://x.example/1', alert: 'stopped', date: '2026-09-01', headline: 'Update: H-1B paused' }]);
   });
   it('handles an empty document', () => {
     expect(parseShortlist('')).toEqual({ date: null, summary: null, rows: [], excluded: [] });
@@ -216,7 +230,7 @@ describe('shortlist', () => {
 describe('follow-ups file', () => {
   it('parses table rows and pin directives', () => {
     const text = fs.readFileSync(path.join(root, 'data', 'follow-ups.md'), 'utf8');
-    const entries = parseFollowupsTable(text);
+    const entries = parseFollowups(text);
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ num: 1, appNum: 1, date: '2026-09-28', channel: 'Email' });
     const pins = parseNextOverrides(text);

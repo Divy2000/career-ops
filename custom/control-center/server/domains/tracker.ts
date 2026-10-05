@@ -2,7 +2,7 @@ import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { readText } from './files.js';
 import { parseScore, readReport, summaryOf, type ReportSummary } from './reports.js';
-import { parseFollowupsTable } from './followups.js';
+import { parseFollowups } from './followups.js';
 
 export const STATUS_ORDER = ['Interview', 'Offer', 'Hired', 'Responded', 'Applied', 'Evaluated', 'Rejected', 'Discarded', 'SKIP'] as const;
 export type TrackerStatus = (typeof STATUS_ORDER)[number];
@@ -18,6 +18,8 @@ export interface TrackerRow {
   pdf: boolean;
   pdfRaw: string;
   report: number | null;
+  /** The Report cell's first digit run as written ("012"): hired-share.mjs matches rows by this text, not the number. */
+  reportLabel: string | null;
   notes: string;
   location: string | null;
   url: string | null;
@@ -86,6 +88,7 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
       pdf: pdfPresent(raw.pdf ?? ''),
       pdfRaw: raw.pdf ?? '',
       report: reportNum,
+      reportLabel: reportNum === null ? null : (raw.report ?? '').match(/\d+/)?.[0] ?? null,
       notes: raw.notes ?? '',
       location: raw.location ?? null,
       url: raw.url ?? summary?.url ?? null,
@@ -105,7 +108,7 @@ function lastContactByApp(dataRoot: string): Map<number, string> {
   const read = readText(path.join(dataRoot, 'data', 'follow-ups.md'));
   const out = new Map<number, string>();
   if (read.kind !== 'ok') return out;
-  for (const e of parseFollowupsTable(read.text)) {
+  for (const e of parseFollowups(read.text)) {
     const prev = out.get(e.appNum);
     if (!prev || e.date > prev) out.set(e.appNum, e.date);
   }

@@ -3,7 +3,7 @@ import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 
 /** Hired Wall ask (AGENTS.md cadence): draft, not now (later) or no (never); one ask per hire. */
-export function HiredDialog({ report, company, onClose }: { report: number; company: string; onClose: () => void }) {
+export function HiredDialog({ report, company, onClose }: { report: string; company: string; onClose: () => void }) {
   const [anonymity, setAnonymity] = useState<'handle' | 'role' | 'count'>('role');
   const [story, setStory] = useState('');
   const [output, setOutput] = useState<string | null>(null);
@@ -42,6 +42,9 @@ export function HiredDialog({ report, company, onClose }: { report: number; comp
         </button>
         <button type="button" onClick={() => void act({ report, mark: 'never' }, 'tracker.hiredMark', true)}>
           No, never ask again
+        </button>
+        <button type="button" onClick={onClose}>
+          Close
         </button>
       </div>
       {issueUrl && (

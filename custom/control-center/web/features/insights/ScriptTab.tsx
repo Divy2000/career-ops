@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { apiGet } from '../../lib/api';
 import { isPlainObject, isScalar } from '../../lib/yamlOpsClient';
 import { DataState, Empty, Pill } from '../../components/ui';
-import { emptyReason } from '../../lib/insightEmpty';
+import { emptyReason, failedEmptyReason } from '../../lib/insightEmpty';
 import type { InsightRead } from '@shared/api';
 import { formatLocalMinute } from '../../lib/time';
 
@@ -75,6 +75,7 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
   const qc = useQueryClient();
   const q = useInsight(script);
   const [busy, setBusy] = useState(false);
+  const empty = !q.data ? null : q.data.kind === 'ok' ? emptyReason(q.data.json) : failedEmptyReason(q.data.json);
   const recompute = async () => {
     setBusy(true);
     try {
@@ -102,7 +103,8 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
         </div>
       </div>
       <DataState query={q}>
-        {q.data?.kind === 'failed' && (
+        {q.data?.kind === 'failed' && empty !== null && <Empty>{empty}</Empty>}
+        {q.data?.kind === 'failed' && empty === null && (
           <div className="card card--danger" role="alert">
             <strong>The script exited {q.data.exit}.</strong>
             <details>
@@ -111,8 +113,8 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
             </details>
           </div>
         )}
-        {q.data?.kind === 'ok' && emptyReason(q.data.json) !== null && <Empty>{emptyReason(q.data.json)}</Empty>}
-        {q.data?.kind === 'ok' && emptyReason(q.data.json) === null && (children ? children(q.data) : q.data.json !== null ? <JsonView value={q.data.json} /> : q.data.text ? <pre tabIndex={0} className="log mono small">{q.data.text}</pre> : <Empty>The script printed nothing.</Empty>)}
+        {q.data?.kind === 'ok' && empty !== null && <Empty>{empty}</Empty>}
+        {q.data?.kind === 'ok' && empty === null && (children ? children(q.data) : q.data.json !== null ? <JsonView value={q.data.json} /> : q.data.text ? <pre tabIndex={0} className="log mono small">{q.data.text}</pre> : <Empty>The script printed nothing.</Empty>)}
       </DataState>
     </div>
   );

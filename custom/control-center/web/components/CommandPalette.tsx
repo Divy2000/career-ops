@@ -18,6 +18,8 @@ import type { ActionMeta, ModePolicy } from '@shared/api';
 interface JsonProp {
   type?: string | string[];
   enum?: unknown[];
+  /** zod writes a union of literals (the network scan's sinceDays) as an anyOf of consts with no top-level type. */
+  anyOf?: Array<{ const?: unknown; type?: string }>;
   items?: { type?: string };
   default?: unknown;
   description?: string;
@@ -27,9 +29,21 @@ interface JsonSchema {
   required?: string[];
 }
 
-/** Actions whose params are all optional run straight from the palette; the rest open the params dialog. */
+/** The params the caller must fill in (a field with a default is not one). */
 export function requiredParams(a: ActionMeta): string[] {
   return (a.params as JsonSchema).required ?? [];
+}
+
+/** Actions whose params are all optional with no default run straight from the palette; the rest open the params dialog. */
+export function needsParamsDialog(a: ActionMeta): boolean {
+  return requiredParams(a).length > 0 || Object.values((a.params as JsonSchema).properties ?? {}).some((p) => p.default !== undefined);
+}
+
+/** The fixed choices of a field (an enum, or an anyOf of consts), in their own types; null for a free field. */
+export function paramOptions(p: JsonProp): unknown[] | null {
+  if (p.enum) return p.enum;
+  if (p.anyOf?.length && p.anyOf.every((o) => 'const' in o)) return p.anyOf.map((o) => o.const);
+  return null;
 }
 
 const typeOf = (p: JsonProp): string => (Array.isArray(p.type) ? (p.type.find((t) => t !== 'null') ?? 'string') : (p.type ?? 'string'));
@@ -45,7 +59,9 @@ export function parseParamValues(schema: JsonSchema, values: Record<string, stri
       continue;
     }
     if (typeof raw !== 'string' || raw.trim() === '') continue;
-    if (t === 'number' || t === 'integer') out[key] = Number(raw);
+    const options = paramOptions(prop);
+    if (options) out[key] = options.find((o) => String(o) === raw) ?? raw;
+    else if (t === 'number' || t === 'integer') out[key] = Number(raw);
     else if (t === 'array') out[key] = raw.split('\n').map((s) => s.trim()).filter(Boolean).map((s) => (prop.items?.type === 'number' || prop.items?.type === 'integer' ? Number(s) : s));
     else out[key] = raw;
   }
@@ -80,13 +96,14 @@ function ActionParamsDialog({ action, onClose, onRun }: { action: ActionMeta; on
                   <input type="checkbox" checked={values[key] === true} onChange={(e) => setValues({ ...values, [key]: e.target.checked })} /> {label}
                 </label>
               );
-            if (prop.enum)
+            const options = paramOptions(prop);
+            if (options)
               return (
                 <label key={key} className="stack">
                   <span className="muted small">{label}</span>
                   <select aria-label={key} value={typeof values[key] === 'string' ? (values[key] as string) : ''} onChange={(e) => setValues({ ...values, [key]: e.target.value })}>
-                    <option value="">choose</option>
-                    {prop.enum.map((v) => (
+                    <option value="">{prop.default !== undefined ? `default (${String(prop.default)})` : 'choose'}</option>
+                    {options.map((v) => (
                       <option key={String(v)} value={String(v)}>
                         {String(v)}
                       </option>
@@ -106,7 +123,13 @@ function ActionParamsDialog({ action, onClose, onRun }: { action: ActionMeta; on
                 <span className="muted small">
                   {label} {prop.description && <span className="faint">{prop.description}</span>}
                 </span>
-                <input aria-label={key} type={t === 'number' || t === 'integer' ? 'number' : 'text'} value={typeof values[key] === 'string' ? (values[key] as string) : ''} onChange={(e) => setValues({ ...values, [key]: e.target.value })} />
+                <input
+                  aria-label={key}
+                  type={t === 'number' || t === 'integer' ? 'number' : 'text'}
+                  placeholder={prop.default !== undefined ? `default (${String(prop.default)})` : undefined}
+                  value={typeof values[key] === 'string' ? (values[key] as string) : ''}
+                  onChange={(e) => setValues({ ...values, [key]: e.target.value })}
+                />
               </label>
             );
           })}
@@ -203,7 +226,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   };
   const pick = (a: ActionMeta) => {
     onOpenChange(false);
-    if (requiredParams(a).length > 0) setWithParams(a);
+    if (needsParamsDialog(a)) setWithParams(a);
     else void execute(a, {});
   };
   return (
