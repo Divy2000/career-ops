@@ -34,6 +34,8 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
           </span>
           {f.type === 'select' && f.options ? (
             <select value={f.value} onChange={(e) => set(f.id, e.target.value)}>
+              {/* Without an option for the held value the browser shows the first option, while the held value is what Fill sends. */}
+              {!f.options.includes(f.value) && <option value={f.value}>{f.value === '' ? 'Choose an answer' : f.value}</option>}
               {f.options.map((o) => (
                 <option key={o} value={o}>
                   {o}
