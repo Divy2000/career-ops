@@ -174,9 +174,15 @@ function NetworkScan() {
     });
   const add = async (postings: ScanPosting[]) => {
     let added = 0;
+    let skipped = 0;
     try {
-      for (const body of pipelineAddBatches(postings)) added += (await apiSend<{ added: number }>('POST', '/api/pipeline/add', body)).added;
-      setMessage({ tone: 'ok', text: `Added ${added} to the pipeline` });
+      // The route skips postings the pipeline already lists, so a retry after a partial failure adds nothing twice.
+      for (const body of pipelineAddBatches(postings)) {
+        const r = await apiSend<{ added: number; skipped: number }>('POST', '/api/pipeline/add', body);
+        added += r.added;
+        skipped += r.skipped;
+      }
+      setMessage({ tone: 'ok', text: `Added ${added} to the pipeline${skipped ? `; ${skipped} ${skipped === 1 ? 'was' : 'were'} already there` : ''}` });
     } catch (err) {
       setMessage({ tone: 'danger', text: `${added ? `Added ${added}, then could not add the rest` : 'Could not add'}: ${describeError(err)}` });
     }

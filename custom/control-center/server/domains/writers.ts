@@ -15,19 +15,38 @@ export interface PipelineOffer {
 
 const env = (dataRoot: string) => ({ CAREER_OPS_ROOT: dataRoot, NO_COLOR: '1' });
 
-/** Append offers to data/pipeline.md (and scan-history) through the core writers in a child. */
-export async function appendOffers(codeRoot: string, dataRoot: string, offers: PipelineOffer[], history: boolean): Promise<{ added: number }> {
-  const code = `
+/**
+ * Append offers to data/pipeline.md (and scan-history) through the core writers in a child. Idempotent, so a retried
+ * request adds nothing twice: an offer whose URL the pipeline already lists (pending or processed), or that came earlier
+ * in the same request, is skipped, with the URL keys and pipeline parsing the scanners dedupe with (scan.mjs
+ * collectSeenUrls and normalizeUrlForDedup).
+ * The in-process queue serializes this server's adds; appendToPipeline takes the pipeline lock only around its own
+ * write, so a scanner appending the very same new URL in between is the one race left (the scanners dedupe too).
+ */
+export function appendOffers(codeRoot: string, dataRoot: string, offers: PipelineOffer[], history: boolean): Promise<{ added: number; skipped: number }> {
+  return serialized(async () => {
+    const code = `
 import fs from 'node:fs';
-import { appendToPipeline, appendToScanHistory } from ${JSON.stringify(coreModuleUrl(codeRoot, 'scan.mjs'))};
+import { appendToPipeline, appendToScanHistory, collectSeenUrls, normalizeUrlForDedup, PIPELINE_PATH } from ${JSON.stringify(coreModuleUrl(codeRoot, 'scan.mjs'))};
 const req = JSON.parse(fs.readFileSync(0, 'utf8'));
-await appendToPipeline(req.offers);
-if (req.history) await appendToScanHistory(req.offers, req.date, 'added');
-process.stdout.write(JSON.stringify({ ok: true, added: req.offers.length }));
+const pipelineText = fs.existsSync(PIPELINE_PATH) ? fs.readFileSync(PIPELINE_PATH, 'utf8') : '';
+const { seen } = collectSeenUrls({ pipelineText });
+const fresh = [];
+for (const offer of req.offers) {
+  const key = normalizeUrlForDedup(offer.url);
+  if (seen.has(key)) continue;
+  seen.add(key);
+  fresh.push(offer);
+}
+await appendToPipeline(fresh);
+if (req.history && fresh.length) await appendToScanHistory(fresh, req.date, 'added');
+process.stdout.write(JSON.stringify({ ok: true, added: fresh.length, skipped: req.offers.length - fresh.length }));
 `;
-  const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers, history, date: localDate() }, timeoutMs: 30_000 });
-  if (r.code !== 0) throw new Error(`pipeline writer exited ${r.code}: ${r.stderr.trim().slice(-600)}`);
-  return childJson<{ added: number }>(r);
+    const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { offers, history, date: localDate() }, timeoutMs: 30_000 });
+    if (r.code !== 0) throw new Error(`pipeline writer exited ${r.code}: ${r.stderr.trim().slice(-600)}`);
+    const out = childJson<{ added: number; skipped: number }>(r);
+    return { added: out.added, skipped: out.skipped };
+  });
 }
 
 // In-process queue outside, the core file lock inside (alpha ordering): the

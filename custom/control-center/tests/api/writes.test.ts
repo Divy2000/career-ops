@@ -54,6 +54,33 @@ describe('pipeline writes', () => {
     expect(readData('data/pipeline.md')).toContain('https://jobs.example.com/offerco/7');
     expect(readData('data/scan-history.tsv')).toContain('https://jobs.example.com/offerco/7');
   });
+  it('adding is idempotent: URLs already in the pipeline (pending or processed, however spelled) and repeats within the request are skipped and counted', async () => {
+    const fresh = 'https://boards.example.com/idem/1';
+    const other = 'https://boards.example.com/idem/2';
+    const offer = (url: string) => ({ url, company: 'Idem Co', title: 'Platform Engineer' });
+    const body = {
+      offers: [
+        offer(fresh),
+        // The same posting with a tracking parameter and a trailing slash.
+        offer(`${fresh}/?utm_source=x`),
+        // Already pending, and already processed, in the fixture pipeline.
+        offer('https://jobs.example.com/acme/123'),
+        offer('https://jobs.example.com/oldcorp/1'),
+        offer(other),
+      ],
+    };
+    const first = await post('/api/pipeline/add', body);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toEqual({ added: 2, skipped: 3 });
+    // A retry of the same request (an Add all that failed part way) adds nothing.
+    const again = await post('/api/pipeline/add', body);
+    expect(again.json()).toEqual({ added: 0, skipped: 5 });
+    const pipeline = readData('data/pipeline.md');
+    for (const url of [fresh, other, 'https://jobs.example.com/acme/123', 'https://jobs.example.com/oldcorp/1']) expect(pipeline.split(`${url} `).length - 1, url).toBe(1);
+    expect(pipeline).not.toContain('utm_source');
+    const history = readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${fresh}\t`) || l.startsWith(`${other}\t`));
+    expect(history).toHaveLength(2);
+  });
   it('Network scan results with no location, a very long location and more rows than one request takes are all added', async () => {
     const postings: ScanPostingInput[] = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: 'Remote', source: 'greenhouse' }));
     postings[0]!.location = null;
