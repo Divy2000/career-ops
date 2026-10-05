@@ -1,5 +1,6 @@
 // Extra synthetic data roots for the e2e suite, derived from the shared fixture root.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
@@ -21,6 +22,17 @@ const ROLES = [
   'Machine Learning Engineer, Level 3',
   'Software Development Engineer, AWS Agentic AI',
 ];
+
+/**
+ * One parent dir for every e2e temp root. The Playwright process makes it and gets `cleanup`; workers
+ * and spec files re-import the config and find it through CC_E2E_TMP, so they make nothing.
+ */
+export function e2eTempParent(env: NodeJS.ProcessEnv = process.env, base = os.tmpdir()): { dir: string; cleanup: (() => void) | null } {
+  if (env.CC_E2E_TMP) return { dir: env.CC_E2E_TMP, cleanup: null };
+  const dir = fs.mkdtempSync(path.join(base, 'cc-e2e-'));
+  env.CC_E2E_TMP = dir;
+  return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
 
 /** Same data as the fixture, minus the tracker, follow-ups and status ledger: a new user's first launch with a header-only tracker. */
 export function writeEmptyRoot(dir: string, fixtureRoot: string): void {
