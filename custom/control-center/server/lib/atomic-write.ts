@@ -9,12 +9,17 @@ export class OutsideRootsError extends Error {
   readonly statusCode = 403;
 }
 
-/** The real path `abs` writes to: symlinks followed in every component, a dangling final link included. */
+/**
+ * The real path `abs` writes to: symlinks followed in every component, a dangling final link included. Each hop
+ * first resolves the folder the name sits in, so a relative link is read against its real folder, not the linked
+ * path it was reached by (modes -> /tmp/out holding _profile.md -> ../secret.md is /tmp/secret.md).
+ */
 function realTarget(abs: string): string {
   let p = path.resolve(abs);
   for (let hops = 0; hops < 40; hops++) {
+    p = path.join(resolveReal(path.dirname(p)), path.basename(p));
     const st = fs.lstatSync(p, { throwIfNoEntry: false });
-    if (!st?.isSymbolicLink()) return resolveReal(p);
+    if (!st?.isSymbolicLink()) return p;
     p = path.resolve(path.dirname(p), fs.readlinkSync(p));
   }
   throw new OutsideRootsError(`${abs}: too many levels of symbolic links; nothing was written`);

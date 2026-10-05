@@ -64,6 +64,31 @@ describe('writeFileAtomic', () => {
     });
   }
 
+  it('resolves a relative link against the real folder it sits in, not the linked path it was reached by', () => {
+    // dataRoot/modes -> <out>, and <out>/_profile.md -> ../secret.md, which is <out>/../secret.md (outside), not dataRoot/secret.md.
+    const root = fs.realpathSync(tempDir('cc-atomic-rel-'));
+    const base = fs.realpathSync(tempDir('cc-atomic-rel-out-'));
+    const out = path.join(base, 'out');
+    fs.mkdirSync(out);
+    fs.writeFileSync(path.join(base, 'secret.md'), 'secret');
+    fs.symlinkSync('../secret.md', path.join(out, '_profile.md'));
+    fs.symlinkSync(out, path.join(root, 'modes'));
+    expect(() => writeFileAtomic(path.join(root, 'modes', '_profile.md'), 'new', dataRootOnly(root))).toThrow(new RegExp(`leads to ${path.join(base, 'secret.md').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, outside the data root`));
+    expect(fs.existsSync(path.join(root, 'secret.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(base, 'secret.md'), 'utf8')).toBe('secret');
+  });
+
+  it('follows a relative link under a linked folder inside the root to its real target', () => {
+    const root = fs.realpathSync(tempDir('cc-atomic-rel-in-'));
+    fs.mkdirSync(path.join(root, 'real', 'modes'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'real', 'profile.md'), 'old');
+    fs.symlinkSync('../profile.md', path.join(root, 'real', 'modes', '_profile.md'));
+    fs.symlinkSync(path.join(root, 'real', 'modes'), path.join(root, 'modes'));
+    writeFileAtomic(path.join(root, 'modes', '_profile.md'), 'new', dataRootOnly(root));
+    expect(fs.readFileSync(path.join(root, 'real', 'profile.md'), 'utf8')).toBe('new');
+    expect(fs.existsSync(path.join(root, 'profile.md'))).toBe(false);
+  });
+
   it('gives the refusal a 403 status for the HTTP layer', () => {
     expect(new OutsideRootsError('x').statusCode).toBe(403);
   });
