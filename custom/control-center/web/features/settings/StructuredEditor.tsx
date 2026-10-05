@@ -19,7 +19,8 @@ export function matchRule(rules: FieldRules | undefined, path: JsonPath): ((valu
 }
 
 function parseScalar(text: string, like: unknown): unknown {
-  if (typeof like === 'number') return Number(text);
+  // Number('') is 0: a cleared field is not a number, or clearing auto_pdf_score_threshold would save 0.
+  if (typeof like === 'number') return text.trim() === '' ? NaN : Number(text);
   if (typeof like === 'boolean') return text === 'true';
   return text;
 }
