@@ -33,6 +33,7 @@ async function mount() {
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const upload = String(input).match(/^\/api\/cv\/upload\?name=(.+)$/);
+      if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'the CV parser reads PDF only: export it to PDF, or pick a .md or .txt file to load the text directly' });
       if (upload) return json(200, { path: `/data/uploads/${decodeURIComponent(upload[1]!)}`, bytes: 3 });
       return json(404, { error: 'not stubbed' });
     }),
@@ -100,5 +101,17 @@ describe('Import CV: one parser session per uploaded file', () => {
     expect(draft()).toBe('# Picked Markdown');
     await act(async () => stale('cv', { markdown: '# From A' }, 1));
     expect(draft()).toBe('# Picked Markdown');
+  });
+
+  it('shows the server\'s reason when it refuses a DOCX, and starts no parser', async () => {
+    await mount();
+    await choose('cv.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('export it to PDF');
+    expect(panelsShown()).toEqual([]);
+  });
+
+  it('offers only PDF, Markdown and text files', async () => {
+    await mount();
+    expect(host.querySelector<HTMLInputElement>('input[type="file"][aria-label="CV file"]')!.accept).toBe('.md,.txt,.markdown,.pdf');
   });
 });

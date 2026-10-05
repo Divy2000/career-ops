@@ -46,4 +46,16 @@ describe('user files', () => {
     expect(fs.readFileSync(saved, 'utf8')).toBe('%PDF-1.4 fake');
     expect((await t.app.inject({ method: 'POST', url: '/api/cv/upload', headers: { ...t.authedWrite, 'content-type': 'text/plain' }, payload: 'nope' })).statusCode).toBe(415);
   });
+
+  it('refuses DOCX and DOC, which the read-only parser session cannot read, with a 415 that says what to do, and stores nothing', async () => {
+    const uploads = path.join(t.cfg.dataRoot, 'data', 'control-center', 'uploads');
+    const stored = () => (fs.existsSync(uploads) ? fs.readdirSync(uploads) : []);
+    const before = stored();
+    for (const type of ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']) {
+      const res = await t.app.inject({ method: 'POST', url: '/api/cv/upload?name=cv.docx', headers: { ...t.authedWrite, 'content-type': type }, payload: Buffer.from('PK fake zip') });
+      expect(res.statusCode).toBe(415);
+      expect(res.json().error).toMatch(/export it to PDF/);
+    }
+    expect(stored()).toEqual(before);
+  });
 });

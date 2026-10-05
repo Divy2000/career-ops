@@ -120,10 +120,11 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       setDraft(await file.text());
       return;
     }
-    const type = file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
     const res = await fetch(`/api/cv/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
     if (!res.ok) {
-      setNote(`Upload failed (${res.status}). PDF and DOCX only.`);
+      const reason = ((await res.json().catch(() => ({}))) as { error?: string }).error;
+      setNote(`Upload failed (${res.status}): ${reason ?? 'PDF only'}.`);
       return;
     }
     showUpload(((await res.json()) as { path: string }).path);
@@ -138,9 +139,9 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   return (
     <div className="card import-card">
       <h2>Import CV</h2>
-      <p className="muted">Paste the text, drop a .md or .txt file, or upload a PDF or DOCX for the parser session (uses tokens, read-only scope).</p>
+      <p className="muted">Paste the text, drop a .md or .txt file, or upload a PDF for the parser session (uses tokens, read-only scope).</p>
       <div className="row gap import-card__controls">
-        <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf,.docx" onFile={(f) => void onFile(f)} />
+        <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf" onFile={(f) => void onFile(f)} />
       </div>
       {uploadPath && <SessionPanel key={uploadPath} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
       <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="# Your name ..." />

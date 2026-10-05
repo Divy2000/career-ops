@@ -1,6 +1,6 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
-// parser session for PDF/DOCX) and a rank preview against a pasted JD.
+// parser session for PDF) and a rank preview against a pasted JD.
 import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';

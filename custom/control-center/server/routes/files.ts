@@ -62,9 +62,10 @@ export function writeUserFile(dataRoot: string, key: UserFileKey, text: string, 
 
 const UPLOAD_TYPES: Record<string, string> = {
   'application/pdf': '.pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-  'application/msword': '.doc',
 };
+// The cv-ingest session is read-only (no Bash) and Claude Code's Read handles text, images and PDF, not Word files.
+const REFUSED_TYPES = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'];
+const UPLOAD_ERROR = 'the CV parser reads PDF only: export it to PDF, or pick a .md or .txt file to load the text directly';
 
 export async function fileRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; bus: EventBus }): Promise<void> {
   const { cfg, bus } = opts;
@@ -89,13 +90,13 @@ export async function fileRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
   });
 
   // Binary uploads for the cv-ingest session: the file lands under the data root, never in the repo.
-  for (const type of Object.keys(UPLOAD_TYPES)) {
+  for (const type of [...Object.keys(UPLOAD_TYPES), ...REFUSED_TYPES]) {
     if (!app.hasContentTypeParser(type)) app.addContentTypeParser(type, { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
   }
   app.post<{ Body: Buffer; Querystring: { name?: string } }>('/api/cv/upload', { bodyLimit: 20 * 1024 * 1024 }, async (req, reply) => {
     const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
     const ext = UPLOAD_TYPES[type];
-    if (!ext || !Buffer.isBuffer(req.body)) return reply.code(415).send({ error: 'upload a PDF or DOCX file', accepted: Object.keys(UPLOAD_TYPES) });
+    if (!ext || !Buffer.isBuffer(req.body)) return reply.code(415).send({ error: UPLOAD_ERROR, accepted: Object.keys(UPLOAD_TYPES) });
     const dir = path.join(cfg.dataRoot, 'data', 'control-center', 'uploads');
     fs.mkdirSync(dir, { recursive: true });
     const safeName = (req.query.name ?? 'cv').replace(/[^\w.-]+/g, '_').replace(/\.[^.]*$/, '').slice(0, 60) || 'cv';
