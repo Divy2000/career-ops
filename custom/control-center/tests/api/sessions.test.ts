@@ -192,6 +192,15 @@ describe('Claude sessions', () => {
     expect(fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'))).toEqual(before);
   });
 
+  it('the fan-out limit counts distinct URLs: more than BATCH_MAX_URLS copies of one posting start one session', async () => {
+    const res = await post('/api/sessions/fanout', { mode: 'oferta', urls: Array.from({ length: BATCH_MAX_URLS + 1 }, () => 'https://jobs.example.com/synthetic/11') });
+    expect(res.statusCode, res.body).toBe(202);
+    const { sessions, reserved } = res.json();
+    expect(reserved).toHaveLength(1);
+    expect(sessions).toHaveLength(1);
+    expect((await settle(sessions[0].id)).meta.status).toBe('done');
+  });
+
   it('a missing Keychain token fails the session loudly without spawning', async () => {
     const other = await makeTestApp({}, { readToken: async () => { throw new Error('Keychain item career-ops-claude-token not found'); } });
     try {

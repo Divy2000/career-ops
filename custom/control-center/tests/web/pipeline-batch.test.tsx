@@ -140,4 +140,22 @@ describe('Pipeline > Inbox > Evaluate visible', () => {
     expect(sent.filter((s) => s.method === 'POST')).toEqual([]);
     expect(document.body.textContent).not.toMatch(/Start 60 evaluation sessions/);
   });
+
+  it('counts and sends distinct URLs: two rows with the same posting are one evaluation', async () => {
+    const withCopies = [...urls(50), ...urls(10)];
+    await mount({ inboxUrls: withCopies });
+    const evaluate = button('Evaluate visible (50)')!;
+    expect(evaluate.disabled).toBe(false);
+    expect(host.textContent).not.toMatch(/At most 50/);
+    await click(evaluate);
+    expect(document.body.textContent).toMatch(/Start 50 evaluation sessions\?/);
+    await click(button('Start them')!);
+    await until(() => sent.find((s) => s.url === '/api/sessions/fanout'), 'the fan-out request');
+    expect(sent.filter((s) => s.method === 'POST')).toEqual([{ method: 'POST', url: '/api/sessions/fanout', body: { mode: 'oferta', urls: urls(50) } }]);
+  });
+
+  it('more distinct URLs than one fan-out takes stay disabled even when copies are left out', async () => {
+    await mount({ inboxUrls: [...urls(51), ...urls(51)] });
+    expect(button('Evaluate visible (51)')!.disabled).toBe(true);
+  });
 });
