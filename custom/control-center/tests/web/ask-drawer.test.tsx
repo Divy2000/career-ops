@@ -14,9 +14,10 @@ vi.mock('@web/components/SessionPanel', () => ({
     return null;
   },
 }));
+const navigations = vi.hoisted(() => [] as unknown[]);
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  useRouter: () => ({ navigate: async () => undefined }),
+  useRouter: () => ({ navigate: async (to: unknown) => void navigations.push(to) }),
   useRouterState: () => '/',
 }));
 
@@ -26,6 +27,7 @@ let root: Root;
 beforeEach(async () => {
   document.body.innerHTML = '';
   emitEnvelope = null;
+  navigations.length = 0;
   const { AskDrawer } = await import('@web/components/AskDrawer');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -60,5 +62,13 @@ describe('Ask drawer: proposed actions', () => {
     expect(item.dataset.proposalState).toBe('pending');
     expect(item.textContent).toContain('Open /pipeline');
     expect([...item.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Run', 'Dismiss']);
+  });
+
+  it('Filter the pipeline opens the Inbox filtered by the proposed query (SW-web-a-07)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'filterPipeline', params: { q: 'Stripe' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => [...item.querySelectorAll('button')].find((b) => b.textContent === 'Run')!.click());
+    expect(navigations).toEqual([{ to: '/pipeline', search: { tab: 'inbox', q: 'Stripe' } }]);
+    expect(item.dataset.proposalState).toBe('done');
   });
 });

@@ -95,6 +95,16 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByText('This row has no report linked.')).toBeVisible();
   });
 
+  test('Pipeline opened with a query (the advisor\'s "Filter the pipeline") shows the Inbox filtered by it (SW-web-a-07)', async ({ page }) => {
+    await page.goto('/pipeline?q=soylent');
+    await expect(page.getByLabel('Filter inbox')).toHaveValue('soylent');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await expect(page.getByRole('row', { name: /Soylent Foods/ })).toBeVisible();
+    await page.getByLabel('Filter inbox').fill('');
+    await expect(page.locator('tbody tr')).toHaveCount(4);
+    await expect(page).not.toHaveURL(/q=soylent/);
+  });
+
   test('Pipeline inbox and shortlist tabs', async ({ page }) => {
     await page.goto('/pipeline');
     await expect(page.getByRole('heading', { level: 1, name: 'Pipeline' })).toBeVisible();

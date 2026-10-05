@@ -82,9 +82,11 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         case 'navigate':
           await router.navigate({ to: String(p.params.to ?? '/') as '/' });
           break;
-        case 'filterPipeline':
-          await router.navigate({ to: '/pipeline', search: { tab: 'inbox' } });
+        case 'filterPipeline': {
+          const q = String(p.params.q ?? p.params.query ?? '').trim();
+          await router.navigate({ to: '/pipeline', search: { tab: 'inbox', ...(q ? { q } : {}) } });
           break;
+        }
         case 'explore':
           await router.navigate({ to: '/discover', search: { tab: 'network' } });
           break;

@@ -11,6 +11,10 @@ import { BatchTab } from './BatchTab';
 
 const route = getRouteApi('/pipeline');
 export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
+export interface PipelineSearch {
+  tab: PipelineTab;
+  q?: string;
+}
 
 export function PipelinePage() {
   const { tab } = route.useSearch();
@@ -87,6 +91,10 @@ function AddUrls({ onDone }: { onDone: (added: number) => void }) {
 }
 
 function Inbox() {
+  // The filter lives in the URL, so a link (the advisor's "Filter the pipeline") can open the Inbox already filtered.
+  const { q: text = '' } = route.useSearch();
+  const navigate = useNavigate({ from: '/pipeline' });
+  const setText = (q: string) => void navigate({ search: (prev: PipelineSearch) => ({ ...prev, q: q || undefined }), replace: true });
   const q = usePipeline();
   const qc = useQueryClient();
   const actions = useActions();
@@ -101,7 +109,6 @@ function Inbox() {
       setSkipError(`Could not ${done ? 'skip' : 'restore'}: ${describeError(err)}`);
     }
   };
-  const [text, setText] = useState('');
   const [source, setSource] = useState('');
   const [seniority, setSeniority] = useState('');
   const [showDone, setShowDone] = useState(false);
