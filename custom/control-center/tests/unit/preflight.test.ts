@@ -11,6 +11,8 @@ import { configFromEnv } from '../../server/config.js';
 const execOk = async (cmd: string) => (cmd === 'claude' ? { code: 0, stdout: '2.1.289 (Claude Code)\n' } : 0);
 const approvedVersions = ['2.1.289'];
 const fakeVersion = { code: 0, stdout: '0.0.0-fake (Control Center test double)\n' };
+/** The host these checks assume, never this machine's: macOS and no managed settings (Linux or an MDM profile would fail them). */
+const host = () => ({ platform: 'darwin' as const, managedSettings: { dir: tempDir('cc-managed-'), plists: [] } });
 
 describe('preflight', () => {
   it('compares versions numerically against the Node floor', () => {
@@ -21,32 +23,32 @@ describe('preflight', () => {
   });
 
   it('passes with a runnable claude, a Keychain item and no API key', async () => {
-    const r = await preflight({ claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec: execOk, approvedVersions });
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec: execOk, approvedVersions });
     expect(r).toEqual({ ok: true, errors: [], warnings: [] });
   });
 
   it('fails loudly when the claude binary is missing', async () => {
     const exec = async (cmd: string) => (cmd === 'claude' ? 127 : 0);
-    const r = await preflight({ claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec });
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec });
     expect(r.ok).toBe(false);
     expect(r.errors[0]).toContain('CC_CLAUDE_BIN');
   });
 
   it('prints the setup-token instructions when the Keychain item is missing', async () => {
     const exec = async (cmd: string) => (cmd === 'security' ? 44 : 0);
-    const r = await preflight({ claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec });
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec });
     expect(r.ok).toBe(false);
     expect(r.errors).toContain(KEYCHAIN_HELP);
   });
 
   it('skips the Keychain check under NODE_ENV=test so the fake Claude runs anywhere', async () => {
     const exec = async (cmd: string) => (cmd === 'security' ? 44 : cmd === 'claude' ? fakeVersion : 0);
-    const r = await preflight({ claudeBin: 'claude', nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test' }, exec });
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test' }, exec });
     expect(r.ok).toBe(true);
   });
 
   it('fails below the Node floor and warns about ANTHROPIC_API_KEY', async () => {
-    const r = await preflight({ claudeBin: 'claude', nodeVersion: 'v20.0.0', env: { ANTHROPIC_API_KEY: 'x' }, exec: execOk });
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v20.0.0', env: { ANTHROPIC_API_KEY: 'x' }, exec: execOk });
     expect(r.ok).toBe(false);
     expect(r.errors[0]).toContain('below the floor');
     expect(r.warnings[0]).toContain('ANTHROPIC_API_KEY');
@@ -60,7 +62,7 @@ function fakeClaude(body: string): string {
   fs.writeFileSync(bin, `#!${process.execPath}\n${body}\n`, { mode: 0o755 });
   return bin;
 }
-const base = { nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test' } };
+const base = { nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test' }, ...host() };
 
 describe('preflight claude probe', () => {
   it('warns when more than one claude binary is installed, naming the one in use', async () => {
