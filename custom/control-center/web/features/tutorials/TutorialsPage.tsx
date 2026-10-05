@@ -348,7 +348,10 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
               onSeeked={update}
               onLoadedMetadata={update}
               onPlay={() => setEnded(false)}
-              onSeeking={() => setEnded(false)}
+              onSeeking={() => {
+                // Seeking away from the end dismisses Up next; the seek a theme swap makes to restore the place does not.
+                if (!themed.isSwapping()) setEnded(false);
+              }}
               onPause={() => {
                 const v = video.current;
                 if (v && v.readyState >= 1 && !v.ended) tracker.save(v.currentTime, lengthOf(v));

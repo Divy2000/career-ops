@@ -111,6 +111,23 @@ test.describe('Tutorials in parts', () => {
     await expect.poll(() => srcOf(page)).toBe(media('b.mp4'));
   });
 
+  test('a theme change during the Up next prompt keeps the prompt, and its countdown still opens b', async ({ page }) => {
+    await open(page, '&part=a');
+    await playToEnd(page);
+    await expect(upNext(page)).toBeVisible();
+    const secondsLeft = async () => Number(/(\d+) s/.exec((await upNext(page).locator('.tut-upnext__count').textContent()) ?? '')?.[1]);
+    await expect.poll(secondsLeft).toBeLessThanOrEqual(6);
+    const before = await secondsLeft();
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect.poll(() => srcOf(page)).toBe(media('a-light.mp4'));
+    await expect.poll(async () => (await state(page)).ready).toBeGreaterThanOrEqual(2);
+    await expect(page.locator('.tut__freeze')).toHaveAttribute('data-state', 'off');
+    await expect(upNext(page)).toBeVisible();
+    expect(await secondsLeft()).toBeLessThanOrEqual(before);
+    await expect(page).toHaveURL(/part=b/, { timeout: 12_000 });
+    await expect.poll(() => srcOf(page)).toBe(media('b-light.mp4'));
+  });
+
   test('the last part ending shows no prompt', async ({ page }) => {
     await open(page, '&part=c');
     await playToEnd(page);

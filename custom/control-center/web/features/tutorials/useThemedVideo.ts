@@ -15,6 +15,8 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
   const shown = useRef(initialSrc);
   const swap = useRef<MediaSwap | null>(null);
   const pending = useRef(pendingSeek);
+  // From freeze to release a swap is reloading the element: the seek it makes then restores the viewer's place, it is not theirs.
+  const swapping = useRef(false);
   const [warning, setWarning] = useState<string | null>(null);
 
   useEffect(() => {
@@ -26,11 +28,13 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
     if (!el) return;
     const controller = createMediaSwap(el, {
       freeze: () => {
+        swapping.current = true;
         setWarning(null);
         const canvas = cover.current;
         if (canvas && drawFreezeFrame(el, canvas)) canvas.dataset.state = 'on';
       },
       release: () => {
+        swapping.current = false;
         if (cover.current) cover.current.dataset.state = 'off';
       },
       warn: setWarning,
@@ -54,6 +58,8 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
 
   return {
     initialSrc,
+    /** True while a theme swap reloads the element, so its events (the restoring seek among them) can be told from the viewer's. */
+    isSwapping: () => swapping.current,
     warning,
     poster: (resolved === 'light' && part.posterLight ? part.posterLight : part.poster)?.url,
     lightMissing: resolved === 'light' && part.videoLight === null,
