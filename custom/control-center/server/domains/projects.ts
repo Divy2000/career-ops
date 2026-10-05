@@ -117,8 +117,13 @@ interface IntakeExtraction {
 }
 
 const EXTRACT_WORKER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'extract-worker.mjs');
-/** intake's own extractor timeout is 30 s; the worker is stopped a little after it. */
-const EXTRACT_TIMEOUT_MS = 35_000;
+/** intake.mjs's own timeouts: the `pdftotext -v` probe and the `pdftotext -layout` extraction (a test keeps them in step). */
+export const INTAKE_PROBE_TIMEOUT_MS = 5_000;
+export const INTAKE_EXTRACT_TIMEOUT_MS = 30_000;
+/** Worker startup and importing intake.mjs on a busy machine. */
+export const WORKER_MARGIN_MS = 10_000;
+/** The worker is stopped only after an uncached probe and a full extraction could both have run out, plus the margin. */
+export const EXTRACT_DEADLINE_MS = INTAKE_PROBE_TIMEOUT_MS + INTAKE_EXTRACT_TIMEOUT_MS + WORKER_MARGIN_MS;
 /** Code roots whose PDF extractor has answered its probe; a missing one is probed again next time (it may get installed). */
 const probedRoots = new Set<string>();
 
@@ -136,7 +141,7 @@ function extractPdf(codeRoot: string, abs: string): Promise<PdfResult> {
       void worker.terminate();
       resolve(r);
     };
-    const timer = setTimeout(() => done({ ok: false, error: `text extraction took longer than ${EXTRACT_TIMEOUT_MS / 1000} s` }), EXTRACT_TIMEOUT_MS);
+    const timer = setTimeout(() => done({ ok: false, error: `text extraction took longer than ${EXTRACT_DEADLINE_MS / 1000} s` }), EXTRACT_DEADLINE_MS);
     worker.once('message', (m: { ok: boolean; text?: string; missing?: boolean; error?: string }) => {
       if (m.ok) {
         probedRoots.add(codeRoot);
