@@ -92,14 +92,23 @@ export function locateRead(policy, target) {
   return null;
 }
 
+/**
+ * Why a tool's file path is refused before it is resolved, or null: a leading ~ (the tool may expand it), or a ..
+ * segment (after a symlink, .. resolves differently on disk than on paper; refuse it rather than guess which the tool opens).
+ */
+export function unresolvedPathReason(target, label) {
+  if (target.startsWith('~')) return `${label}: ${target} starts with ~; use the absolute path`;
+  if (target.split(/[\\/]/).includes('..')) return `${label}: ${target} has a .. segment; use the absolute path`;
+  return null;
+}
+
 /** Null when a read of `input.file_path` is allowed, else the reason. */
 export function checkRead(policy, input, cwd, label = 'Read') {
   if (!Array.isArray(policy.readDeny)) return `${label}: the session policy predates read confinement, so every read is refused`;
   const target = input?.file_path;
   if (typeof target !== 'string' || !target) return `${label}: no file path`;
-  if (target.startsWith('~')) return `${label}: ${target} starts with ~; use the absolute path`;
-  // After a symlink, .. resolves differently on disk than on paper: refuse it rather than guess which the tool opens.
-  if (target.split(/[\\/]/).includes('..')) return `${label}: ${target} has a .. segment; use the absolute path`;
+  const unresolved = unresolvedPathReason(target, label);
+  if (unresolved) return unresolved;
   if (!path.isAbsolute(target) && cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${label}: ${target} is a relative path, it resolves against the repo root and the session is not running from it; use the absolute path`;
   const found = locateRead(policy, target);
   if (!found) return `${label}: ${target} is outside the repo and data roots; sessions read only inside them`;

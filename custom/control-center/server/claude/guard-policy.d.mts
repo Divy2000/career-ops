@@ -28,6 +28,7 @@ export function resolveReal(p: string): string;
 export function relativeToRoot(codeRoot: string, target: string): string | null;
 export function locate(policy: PathPolicy, target: string): { rel: string; abs: string; root: 'code' | 'data' } | null;
 export function locateRead(policy: ReadPolicy, target: string): { rel: string; abs: string; root: 'code' | 'data' | 'readonly' } | null;
+export function unresolvedPathReason(target: string, label: string): string | null;
 export function checkRead(policy: ReadPolicy, input: { file_path?: unknown }, cwd?: string, label?: string): string | null;
 export function checkSearch(policy: ReadPolicy, tool: string, input: Record<string, unknown>, cwd?: string): string | null;
 export function isPublicAddress(ip: string): boolean;

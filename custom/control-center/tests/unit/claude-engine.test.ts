@@ -243,6 +243,26 @@ describe('guard hook', () => {
     expect(pre('Edit', { file_path: path.join(realRoot, 'data', 'applications.md'), old_string: 'a', new_string: 'b' }).status).toBe(2);
     expect(pre('MultiEdit', { file_path: path.join(realRoot, 'reports', '..', 'cv.md'), edits: [] }).status).toBe(2);
   });
+  it('refuses a write path with a .. segment or a leading ~: after a symlink the kernel resolves .. against its target, not on paper', () => {
+    const outside = fs.realpathSync(tempDir('cc-hook-outside-'));
+    fs.mkdirSync(path.join(outside, 'inner'));
+    fs.symlinkSync(path.join(outside, 'inner'), path.join(realRoot, 'link-out'));
+    // On paper this is reports/002-x.md, in scope; opened as written it lands in <outside>/reports/.
+    for (const [tool, input] of [
+      ['Write', { file_path: `${realRoot}/link-out/../reports/002-x.md`, content: 'x' }],
+      ['Edit', { file_path: `${realRoot}/link-out/../reports/001-existing.md`, old_string: 'old', new_string: 'new' }],
+      ['MultiEdit', { file_path: `${realRoot}/reports/../reports/001-existing.md`, edits: [] }],
+      ['NotebookEdit', { notebook_path: `${realRoot}/link-out/../reports/n.ipynb`, new_source: 'x' }],
+      ['Write', { file_path: 'link-out/../reports/002-x.md', content: 'x' }],
+      ['Write', { file_path: '~/reports/002-x.md', content: 'x' }],
+    ] as const) {
+      const out = pre(tool, input);
+      expect(out.status, JSON.stringify(input)).toBe(2);
+      expect(out.stderr).toMatch(/has a \.\. segment|starts with ~/);
+    }
+    expect(fs.existsSync(path.join(outside, 'reports'))).toBe(false);
+    expect(pre('Write', { file_path: path.join(realRoot, 'reports', '002-x.md'), content: 'x' }).status).toBe(0);
+  });
   it('allows Bash only for exact script prefixes and rejects chaining, git and network tools', () => {
     expect(pre('Bash', { command: 'node set-status.mjs --row 3 Applied --source web' }).status).toBe(0);
     expect(pre('Bash', { command: 'node set-status.mjs --row 3 Applied; rm -rf /' }).status).toBe(2);
@@ -1032,6 +1052,13 @@ describe('read confinement: guard policy', () => {
     expect(read(path.join(data, 'cv.md'))).toBeNull();
     expect(read(path.join(data, 'cv.md'), outside)).toBeNull();
     expect(locateRead(policy, path.join(data, 'cv.md'))).toMatchObject({ abs: path.join(data, 'cv.md'), root: 'data', rel: 'cv.md' });
+  });
+
+  it('a .. segment is refused before any resolution, even when the path stays inside a root on paper', () => {
+    expect(read(`${code}/link-out/../cv.md`)).toMatch(/has a \.\. segment/);
+    expect(read(`${code}/data/../cv.md`)).toMatch(/has a \.\. segment/);
+    expect(read('link-out/../cv.md')).toMatch(/has a \.\. segment/);
+    expect(read(`${code}/cv.md`)).toBeNull();
   });
 
   it('the root itself is allowed', () => {

@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkRead, checkSearch, httpUrlsIn, locate, matches, readUrlList, snapshotKey, urlListFilesIn } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkRead, checkSearch, httpUrlsIn, locate, matches, readUrlList, snapshotKey, unresolvedPathReason, urlListFilesIn } from './guard-policy.mjs';
 
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -58,6 +58,8 @@ async function main() {
   if (WRITE_TOOLS.has(tool)) {
     const target = input.file_path ?? input.notebook_path;
     if (typeof target !== 'string' || !target) deny(`${tool}: no file path`);
+    const unresolved = unresolvedPathReason(target, tool);
+    if (unresolved) deny(unresolved);
     const found = locate(policy, target);
     if (!found) deny(`${tool}: ${target} is outside the repo and data roots; sessions may only write inside them`);
     const { rel, abs } = found;
