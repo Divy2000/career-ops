@@ -57,6 +57,16 @@ test.describe('Tutorials in parts', () => {
     await expect(page.getByRole('heading', { level: 2, name: 'Today and the inbox' })).toBeVisible();
   });
 
+  test('describes the part under its title, and a part without a description shows the tutorial description', async ({ page }) => {
+    await open(page, '&part=b');
+    const meta = page.locator('.tut__meta');
+    await expect(meta.locator('.tut__description')).toHaveText('Where new roles land, and how to sort them.');
+    await expect(meta.getByText('A tour in three parts.', { exact: true })).toHaveCount(0);
+    await partRow(page, 'Tracker').click();
+    await expect(page).toHaveURL(/part=c/);
+    await expect(meta.locator('.tut__description')).toHaveText('A tour in three parts.');
+  });
+
   test('an unknown part opens the first one', async ({ page }) => {
     await open(page, '&part=nope');
     expect(await srcOf(page)).toBe(media('a.mp4'));

@@ -333,7 +333,7 @@ const partSrt = (text: string) => `1\n00:00:00,100 --> 00:00:00,900\n${text}\n`;
 /**
  * A tutorial in three parts, each with a dark and a light recording, subtitles and posters. Part a is 30 seconds long so a resume
  * point fits (more than 5 s in, more than 10 s before the end); parts b and c are the 2 second demo clips.
- * Its guide points one subsection at a chapter in part a and one at a chapter in part c.
+ * Its guide points one subsection at a chapter in part a and one at a chapter in part c. Only part b has a description of its own.
  */
 function writePartsTour(root: string, demo: string): void {
   const dir = path.join(root, 'parts-tour');
@@ -350,10 +350,11 @@ function writePartsTour(root: string, demo: string): void {
     fs.copyFileSync(path.join(demo, 'poster-light.jpg'), path.join(dir, `${id}-poster-light.jpg`));
     fs.writeFileSync(path.join(dir, `${id}.srt`), partSrt(`Part ${id} begins.`));
   }
-  const part = (id: string, title: string, short: string, duration: number, chapters: Array<{ title: string; start: number }>) => ({
+  const part = (id: string, title: string, short: string, duration: number, chapters: Array<{ title: string; start: number }>, description?: string) => ({
     id,
     title,
     short,
+    ...(description ? { description } : {}),
     video: `${id}.mp4`,
     videoLight: `${id}-light.mp4`,
     subtitles: `${id}.srt`,
@@ -388,7 +389,7 @@ function writePartsTour(root: string, demo: string): void {
       guide: 'guide.json',
       parts: [
         part('a', 'Start here: safety and launch', 'Start here', 30, [{ title: 'Intro and safety', start: 0 }, { title: 'Launch and token', start: 12 }]),
-        part('b', 'Today and the inbox', 'Today & inbox', 2, [{ title: 'Today', start: 0 }, { title: 'Pipeline', start: 1 }]),
+        part('b', 'Today and the inbox', 'Today & inbox', 2, [{ title: 'Today', start: 0 }, { title: 'Pipeline', start: 1 }], 'Where new roles land, and how to sort them.'),
         part('c', 'The tracker', 'Tracker', 2, [{ title: 'Tracker', start: 0 }, { title: 'Application detail', start: 1 }]),
       ],
     }),

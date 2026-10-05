@@ -36,6 +36,7 @@ describe('writeDemoTutorials', () => {
       ['c', 2, 'c-light.mp4', 'srt', 'c-poster-light.jpg'],
     ]);
     expect(tour.guideDocs?.sections[0]?.subsections.map((u) => tour.chapters[u.chapter!]?.part)).toEqual(['a', 'c']);
+    expect(tour.parts.map((p) => p.description)).toEqual([null, 'Where new roles land, and how to sort them.', null]);
   });
 
   it('makes the light video a different file from the dark one', () => {
