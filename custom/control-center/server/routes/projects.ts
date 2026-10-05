@@ -162,9 +162,18 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const stored = storeUnique(path.join(docsDir, 'projects'), `${stem}.pdf`, req.body);
     const rel = `projects/${stored.name}`;
     // Read it now, as the parser will, so a PDF intake cannot read is refused up front and not left behind.
-    const extracted = await extractSourceText(cfg.codeRoot, cfg.dataRoot, rel);
+    const discard = () => {
+      if (stored.created) fs.rmSync(path.join(docsDir, rel), { force: true });
+    };
+    let extracted: Awaited<ReturnType<typeof extractSourceText>>;
+    try {
+      extracted = await extractSourceText(cfg.codeRoot, cfg.dataRoot, rel);
+    } catch (err) {
+      discard();
+      throw err;
+    }
     if (!extracted.ok) {
-      if (stored.created) fs.rmSync(path.join(docsDir, rel));
+      discard();
       return reply.code(422).send({ error: extracted.error });
     }
     return { path: rel, file: `documents/${rel}`, bytes: req.body.length, chars: extracted.text.length };
