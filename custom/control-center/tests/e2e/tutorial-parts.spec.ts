@@ -128,6 +128,28 @@ test.describe('Tutorials in parts', () => {
     await expect.poll(() => srcOf(page)).toBe(media('b-light.mp4'));
   });
 
+  test('a seek by the viewer while a theme swap loads wins: Up next goes away, the place sticks and nothing advances', async ({ page }) => {
+    // Hold the light file back so the swap is still waiting for it when the key is pressed.
+    await page.route('**/a-light.mp4', async (route) => {
+      await new Promise((r) => setTimeout(r, 2000));
+      await route.continue();
+    });
+    await open(page, '&part=a');
+    await playToEnd(page);
+    await expect(upNext(page)).toBeVisible();
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect.poll(() => srcOf(page)).toBe(media('a-light.mp4'));
+    expect((await state(page)).ready).toBe(0);
+    await page.keyboard.press('j');
+    await expect(upNext(page)).toHaveCount(0);
+    await expect.poll(async () => (await state(page)).ready, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    await expect(page.locator('.tut__freeze')).toHaveAttribute('data-state', 'off');
+    await expect.poll(async () => (await state(page)).t).toBeCloseTo(20, 0);
+    await expect(upNext(page)).toHaveCount(0);
+    await page.waitForTimeout(9000);
+    await expect(page).toHaveURL(/part=a/);
+  });
+
   test('the last part ending shows no prompt', async ({ page }) => {
     await open(page, '&part=c');
     await playToEnd(page);

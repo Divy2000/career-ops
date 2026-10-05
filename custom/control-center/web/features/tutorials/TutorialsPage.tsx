@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, getRouteApi, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Md } from '../../components/Md';
@@ -206,12 +206,17 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
   };
   useEffect(() => () => void (osdTimer.current && clearTimeout(osdTimer.current)), []);
 
-  const seekTo = (seconds: number) => {
-    const v = video.current;
-    if (!v) return;
-    v.currentTime = seconds;
-    setCurrent(chapterIndexAt(chapters, seconds));
-  };
+  const { position, seek, isRestoreSeek } = themed;
+  // Every seek the viewer asks for (keys, a chapter) goes through the swap controller, so one made while a theme swap loads sticks,
+  // and it dismisses Up next.
+  const seekTo = useCallback(
+    (seconds: number) => {
+      seek(seconds);
+      setCurrent(chapterIndexAt(chapters, seconds));
+      setEnded(false);
+    },
+    [seek, chapters],
+  );
 
   // Once, when the part has loaded: go where the page asked (the guide's chapter, or 0 for the next part), else where the viewer left
   // off; then play when moving on. Only the arrival moves the playhead: later renders and chapter edits must not.
@@ -254,12 +259,12 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
       // Capture phase plus stopPropagation: a focused <video> would otherwise also act on the key natively and undo it.
       e.preventDefault();
       e.stopPropagation();
-      const idx = chapterIndexAt(chapters, v.currentTime);
+      const now = position() ?? v.currentTime;
+      const idx = chapterIndexAt(chapters, now);
       const goChapter = (i: number) => {
         const c = chapters[i];
         if (!c) return;
-        v.currentTime = c.start;
-        setCurrent(i);
+        seekTo(c.start);
         say(`Chapter ${i + 1}: ${c.title}`);
       };
       switch (action) {
@@ -268,13 +273,15 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
           else v.pause();
           break;
         case 'back':
-          v.currentTime = Math.max(0, v.currentTime - 10);
+          seekTo(Math.max(0, now - 10));
           say('Back 10 seconds');
           break;
-        case 'forward':
-          v.currentTime = Number.isFinite(v.duration) ? Math.min(v.duration, v.currentTime + 10) : v.currentTime + 10;
+        case 'forward': {
+          const length = Number.isFinite(v.duration) ? v.duration : part.duration;
+          seekTo(length === null ? now + 10 : Math.min(length, now + 10));
           say('Forward 10 seconds');
           break;
+        }
         case 'captions':
           if (hasCaptions) {
             const next = !Array.from(v.textTracks).some((t) => t.mode === 'showing');
@@ -293,7 +300,7 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [chapters, hasCaptions]);
+  }, [chapters, hasCaptions, part.duration, position, seekTo]);
 
   const update = () => {
     const v = video.current;
@@ -349,8 +356,9 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
               onLoadedMetadata={update}
               onPlay={() => setEnded(false)}
               onSeeking={() => {
-                // Seeking away from the end dismisses Up next; the seek a theme swap makes to restore the place does not.
-                if (!themed.isSwapping()) setEnded(false);
+                // Any seek dismisses Up next (the native controls too), except the one a theme swap makes to restore the place.
+                const v = video.current;
+                if (v && !isRestoreSeek(v.currentTime)) setEnded(false);
               }}
               onPause={() => {
                 const v = video.current;

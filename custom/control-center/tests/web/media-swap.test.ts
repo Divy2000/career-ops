@@ -77,7 +77,7 @@ class FakeMedia extends EventTarget implements SwapMedia {
 
 function setup(withFrameCallback = true) {
   const media = new FakeMedia(withFrameCallback);
-  const hooks = { freeze: vi.fn(), release: vi.fn(), warn: vi.fn(), onSource: vi.fn(), pendingSeek: vi.fn<() => number | null>(() => null) } satisfies SwapHooks;
+  const hooks = { freeze: vi.fn(), release: vi.fn(), warn: vi.fn(), onSource: vi.fn(), pendingSeek: vi.fn<() => number | null>(() => null), onRestore: vi.fn<(time: number) => void>() } satisfies SwapHooks;
   const swap = createMediaSwap(media, hooks);
   return { media, hooks, swap };
 }
@@ -341,6 +341,65 @@ describe('swapping again while a swap is under way', () => {
     expect(media.seeks).toEqual([5]);
     media.loaded(60);
     expect(media.seeks).toEqual([5, 5]);
+  });
+});
+
+describe('a viewer seek during a swap', () => {
+  const swapping = () => {
+    const ctx = setup();
+    ctx.media.src = 'dark.mp4';
+    ctx.media.duration = 60;
+    ctx.media.currentTime = 12.5;
+    ctx.media.seeks.length = 0;
+    ctx.swap.swapTo('light.mp4', 'dark.mp4');
+    return ctx;
+  };
+
+  it('tells the page the time of its own restoring seek just before it makes it, so that seek can be told from the viewer\'s', () => {
+    const { media, hooks } = swapping();
+    hooks.onRestore.mockImplementation(() => expect(media.seeks).toEqual([]));
+    media.loaded(60);
+    expect(hooks.onRestore).toHaveBeenCalledWith(12.5);
+    expect(media.seeks).toEqual([12.5]);
+  });
+
+  it('reports the place it will restore while the new file loads (the element reads 0 then), and nothing once it is parsed', () => {
+    const { media, swap } = swapping();
+    expect(media.currentTime).toBe(0);
+    expect(swap.position()).toBe(12.5);
+    media.loaded(60);
+    expect(swap.position()).toBeNull();
+  });
+
+  it('lets a seek made while the new file loads win: the swap restores to it, not to the old place', () => {
+    const { media, hooks, swap } = swapping();
+    swap.seekTo(2.5);
+    expect(swap.position()).toBe(2.5);
+    media.loaded(60);
+    expect(media.seeks).toEqual([2.5]);
+    expect(hooks.onRestore).toHaveBeenCalledWith(2.5);
+  });
+
+  it('keeps that seek through a revert to the fallback', () => {
+    const { media, swap } = swapping();
+    swap.seekTo(3);
+    media.failed();
+    media.loaded(60);
+    expect(media.seeks).toEqual([3]);
+  });
+
+  it('moves the element itself when no swap is waiting for its file: none under way, or the restore already made', () => {
+    const { media, swap } = setup();
+    media.src = 'dark.mp4';
+    media.duration = 60;
+    swap.seekTo(4);
+    expect(media.seeks).toEqual([4]);
+    swap.swapTo('light.mp4', 'dark.mp4');
+    media.loaded(60);
+    swap.seekTo(9);
+    // 4 by the viewer, 4 again by the swap restoring it in the new file, then 9 by the viewer.
+    expect(media.seeks).toEqual([4, 4, 9]);
+    expect(swap.position()).toBeNull();
   });
 });
 

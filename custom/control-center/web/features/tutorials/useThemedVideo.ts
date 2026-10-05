@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { createMediaSwap, drawFreezeFrame, type MediaSwap } from '../../lib/media-swap';
 import { useTheme } from '../../lib/theme';
 import type { TutorialPart } from '@shared/api';
@@ -15,8 +15,8 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
   const shown = useRef(initialSrc);
   const swap = useRef<MediaSwap | null>(null);
   const pending = useRef(pendingSeek);
-  // From freeze to release a swap is reloading the element: the seek it makes then restores the viewer's place, it is not theirs.
-  const swapping = useRef(false);
+  /** The time of the swap's own restoring seek until its `seeking` event is seen: that one seek is not the viewer's. */
+  const restoreAt = useRef<number | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,13 +28,12 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
     if (!el) return;
     const controller = createMediaSwap(el, {
       freeze: () => {
-        swapping.current = true;
         setWarning(null);
         const canvas = cover.current;
         if (canvas && drawFreezeFrame(el, canvas)) canvas.dataset.state = 'on';
       },
       release: () => {
-        swapping.current = false;
+        restoreAt.current = null;
         if (cover.current) cover.current.dataset.state = 'off';
       },
       warn: setWarning,
@@ -42,6 +41,9 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
         shown.current = src;
       },
       pendingSeek: () => pending.current,
+      onRestore: (time) => {
+        restoreAt.current = time;
+      },
     });
     swap.current = controller;
     return () => {
@@ -56,10 +58,22 @@ export function useThemedVideo(video: RefObject<HTMLVideoElement | null>, cover:
     else setWarning(null);
   }, [wanted, dark]);
 
+  /** While a swap waits for the new file (the element reads 0 then), the place it will restore; otherwise null, and the element's time holds. */
+  const position = useCallback(() => swap.current?.position() ?? null, []);
+  /** A seek by the viewer, through the swap controller (it exists whenever the element does): during a swap it replaces the place the swap restores. */
+  const seek = useCallback((time: number) => swap.current?.seekTo(time), []);
+  /** True once, for the `seeking` event of the swap's own restoring seek; any other seek is the viewer's. */
+  const isRestoreSeek = useCallback((time: number) => {
+    if (restoreAt.current === null || Math.abs(time - restoreAt.current) > 0.05) return false;
+    restoreAt.current = null;
+    return true;
+  }, []);
+
   return {
     initialSrc,
-    /** True while a theme swap reloads the element, so its events (the restoring seek among them) can be told from the viewer's. */
-    isSwapping: () => swapping.current,
+    position,
+    seek,
+    isRestoreSeek,
     warning,
     poster: (resolved === 'light' && part.posterLight ? part.posterLight : part.poster)?.url,
     lightMissing: resolved === 'light' && part.videoLight === null,
