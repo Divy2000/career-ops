@@ -189,7 +189,7 @@ export function SponsorshipPage() {
                         {d.officialFeed.map((row, i) => (
                           <tr key={i}>
                             {Object.entries(row).map(([k, v]) => (
-                              <td key={k} className={k === 'date' ? 'mono' : ''}>
+                              <td key={k} className={k === 'first_seen' || k === 'published' ? 'mono' : ''}>
                                 {k === 'url' ? (
                                   <a href={v} target="_blank" rel="noreferrer noopener">
                                     link

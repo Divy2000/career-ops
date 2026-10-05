@@ -83,7 +83,7 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByText('At or above the 4.0 apply line')).toBeVisible();
     await expect(page.getByText('Recommendation: Apply')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'A) Role Summary' })).toBeVisible();
-    await expect(page.getByText('sponsor: strong')).toBeVisible();
+    await expect(page.getByText('sponsor: sponsoring')).toBeVisible();
     await axeClean(page);
     await page.getByRole('tab', { name: 'Timeline' }).click();
     await expect(page.getByRole('heading', { name: 'Status log' })).toBeVisible();
@@ -131,7 +131,11 @@ test.describe('read-only pages render fixture data', () => {
     await page.getByRole('tab', { name: /Company alerts/ }).click();
     await expect(page.getByRole('link', { name: 'Initech pauses visa sponsorship for new hires' })).toBeVisible();
     await page.getByRole('tab', { name: /Company checks/ }).click();
-    await expect(page.getByRole('cell', { name: 'Acme Robotics' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Acme Robotics', exact: true })).toBeVisible();
+    // A paused sponsor is a hard blocker (SW-tests-01): its verdict pill is the danger tone, not the grey of an unknown value.
+    const initech = page.getByRole('row', { name: /Initech Cloud/ });
+    await expect(initech.getByText('sponsor: paused')).toHaveClass(/chip--danger/);
+    await expect(page.getByRole('row', { name: /Acme Robotics/ }).getByText('sponsor: sponsoring')).toHaveClass(/chip--ok/);
     await axeClean(page);
   });
 

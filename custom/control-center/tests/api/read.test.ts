@@ -37,7 +37,7 @@ describe('read endpoints', () => {
     expect(body.timeline.statusLog).toHaveLength(2);
     expect(body.timeline.followups).toHaveLength(1);
     expect(body.timeline.pin).toMatchObject({ date: '2026-10-10' });
-    expect(body.sponsorship.companyFile).toMatchObject({ slug: 'acme-robotics', verdict: 'strong' });
+    expect(body.sponsorship.companyFile).toMatchObject({ slug: 'acme-robotics', name: 'Acme Robotics', verdict: 'sponsoring' });
     expect(body.companyHistory).toEqual([]);
   });
 
@@ -58,7 +58,7 @@ describe('read endpoints', () => {
   it('GET /api/immigration/overview and a company file with its freshness verdict', async () => {
     const o = (await get('/api/immigration/overview')).json();
     expect(o.digest.kind).toBe('ok');
-    expect(o.companies).toHaveLength(2);
+    expect(o.companies.map((c: { slug: string }) => c.slug)).toEqual(['acme-robotics', 'globex-payments', 'initech-cloud']);
     const c = await get('/api/immigration/companies/acme-robotics');
     expect(c.statusCode).toBe(200);
     expect(c.json().company.slug).toBe('acme-robotics');
