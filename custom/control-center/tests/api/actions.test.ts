@@ -70,6 +70,14 @@ describe('action registry', () => {
     }
   });
 
+  it('Match invite runs invite-match.mjs with flags it accepts and returns its JSON verdict, from Insights and from Follow-ups', async () => {
+    for (const id of ['insights.inviteMatch', 'followups.inviteMatch']) {
+      const res = await post(`/api/actions/${id}`, { params: { text: 'Hi, this is Jordan from Example Corp. Can we schedule an interview for the backend role?' } });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().result).toMatchObject({ classification: expect.any(String), candidates: expect.any(Array) });
+    }
+  });
+
   it('maps set-status exit codes to HTTP statuses', async () => {
     const missing = await post('/api/actions/tracker.setStatus', { params: { row: 99, state: 'Applied' } });
     expect(missing.statusCode).toBe(404);
