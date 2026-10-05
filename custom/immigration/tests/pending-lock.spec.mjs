@@ -10,13 +10,16 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { acquirePipelineLock } from '../../../pipeline-lock.mjs';
+import { localToday } from '../../../lib/local-today.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WATCH = path.join(REPO, 'custom', 'immigration', 'watch.mjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Dated now: the watcher only keeps items inside its lookback window, so a fixed date would age out of it.
+const PUB_DATE = new Date().toUTCString();
 // Ids as watch.mjs makes them for the USCIS feed: the source and the item URL.
-const item = (slug, title) => ({ id: `uscis:https://www.uscis.gov/news/${slug}`, source: 'USCIS news', title, url: `https://www.uscis.gov/news/${slug}`, published: '2026-10-01' });
+const item = (slug, title) => ({ id: `uscis:https://www.uscis.gov/news/${slug}`, source: 'USCIS news', title, url: `https://www.uscis.gov/news/${slug}`, published: localToday() });
 const A = item('a', 'H-1B fee rule A');
 const C = item('c', 'H-1B registration rule C');
 
@@ -30,7 +33,7 @@ function world() {
   const batch = path.join(imm, 'batch.json');
   fs.writeFileSync(batch, JSON.stringify({ new_items: [A] }));
   const preload = path.join(root, 'feeds.mjs');
-  const rss = `<rss><channel><item><title>${C.title}</title><link>${C.url}</link><pubDate>Thu, 01 Oct 2026 12:00:00 GMT</pubDate></item></channel></rss>`;
+  const rss = `<rss><channel><item><title>${C.title}</title><link>${C.url}</link><pubDate>${PUB_DATE}</pubDate></item></channel></rss>`;
   fs.writeFileSync(preload, `globalThis.fetch = async (url) => new Response(String(url).includes('federalregister') ? JSON.stringify({ results: [] }) : ${JSON.stringify(rss)}, { status: 200 });\n`);
   return { root, pending: path.join(imm, 'pending.json'), batch, preload };
 }
@@ -86,7 +89,7 @@ test('an ack and a watcher run started together keep the fresh item and drop onl
 /** An offline USCIS feed that answers with `items` after `delayMs`; the Federal Register answers with nothing, at once. */
 function feed(w, name, items, delayMs = 0) {
   const file = path.join(w.root, `${name}.mjs`);
-  const rss = `<rss><channel>${items.map((i) => `<item><title>${i.title}</title><link>${i.url}</link><pubDate>Thu, 01 Oct 2026 12:00:00 GMT</pubDate></item>`).join('')}</channel></rss>`;
+  const rss = `<rss><channel>${items.map((i) => `<item><title>${i.title}</title><link>${i.url}</link><pubDate>${PUB_DATE}</pubDate></item>`).join('')}</channel></rss>`;
   fs.writeFileSync(file, `globalThis.fetch = async (url) => String(url).includes('federalregister') ? new Response(JSON.stringify({ results: [] }), { status: 200 }) : new Promise((r) => setTimeout(() => r(new Response(${JSON.stringify(rss)}, { status: 200 })), ${delayMs}));\n`);
   return file;
 }
