@@ -116,7 +116,8 @@ let t = fs.readFileSync(process.argv[1], "utf8");
 for (const k of ["CONFLICTS", "BASELINE", "TODAY", "BEHIND", "REPORT"]) t = t.replaceAll(`{{${k}}}`, process.env[k] || "(none)");
 process.stdout.write(t);
 ' "$LIVE/custom/upstream-sync/sync-prompt.md")"
-CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
+# Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
+CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
   --model "$MODEL" \
   --permission-mode dontAsk \
   --add-dir "$STATE_DIR" \
