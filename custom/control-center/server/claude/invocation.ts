@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { ALWAYS_DENIED_WRITES, HOME_READ_DENY, READ_DENY, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, READ_DENY, type ModePolicy } from './modes.js';
+import { buildReadDenyRules, spellings } from './confinement.mjs';
+
+// Shared with the daily job's policy pass (custom/immigration/run-daily.sh).
+export { assertRootsConfinable, buildReadDenyRules } from './confinement.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const GUARD_HOOK_PATH = path.join(here, 'guard-hook.mjs');
@@ -72,30 +76,6 @@ export function buildDisallowedTools(policy: ModePolicy): string[] {
   return out;
 }
 
-/** `//abs/path` permission-rule spelling of an absolute path. */
-function absRule(p: string): string {
-  return `//${p.replace(/^\/+/, '')}`;
-}
-
-/** A path and its real path when they differ (a root reached through a symlink), so rules hold for either spelling. */
-function spellings(p: string): string[] {
-  let real = p;
-  try {
-    real = fs.realpathSync.native(p);
-  } catch {
-    /* not on disk (unit tests): the given spelling only */
-  }
-  return [...new Set([p, real])];
-}
-
-/** Read deny rules: the home credential stores, the guard root, and READ_DENY under every root. */
-export function buildReadDenyRules(roots: string[], guardRoot: string): string[] {
-  const out = HOME_READ_DENY.map((p) => `Read(${p})`);
-  for (const g of spellings(guardRoot)) out.push(`Read(${absRule(g)}/**)`);
-  for (const root of [...new Set(roots)]) for (const spelled of spellings(root)) for (const glob of READ_DENY) out.push(`Read(${absRule(spelled)}/${glob})`);
-  return [...new Set(out)];
-}
-
 export interface SessionPermissions {
   additionalDirectories: string[];
   allow: string[];
@@ -133,29 +113,6 @@ export function toolResultsDirs(projectsDir: string, codeRoot: string, claudeSes
  */
 export function neutralizeFileMentions(text: string): string {
   return text.replace(/(^|[^\w.+\-/:=?&%])@(?!\u2060)/g, '$1@\u2060');
-}
-
-/**
- * Refuses roots a session could not be confined to: the filesystem root, the home directory, or a parent of it,
- * compared by real path (the on-disk case on macOS). A root that cannot be resolved is refused too.
- */
-export function assertRootsConfinable(codeRoot: string, dataRoot: string, home: string): void {
-  const real = (label: string, p: string): string => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch (err) {
-      throw new Error(`the ${label} ${p} cannot be resolved (${(err as Error).message}); sessions are refused`, { cause: err });
-    }
-  };
-  const homeReal = real('home directory', home);
-  for (const [label, p] of [['repo root', codeRoot], ['data root', dataRoot]] as const) {
-    const r = real(label, p);
-    if (r === path.parse(r).root) throw new Error(`the ${label} is the filesystem root, so a session could read every file; sessions are refused`);
-    const rel = path.relative(r, homeReal);
-    if (rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))) {
-      throw new Error(`the ${label} ${r} is or contains your home directory (${homeReal}), so a session could read all of it; sessions are refused. Point CAREER_OPS_ROOT at a dedicated folder.`);
-    }
-  }
 }
 
 export function buildArgv(input: InvocationInput): string[] {

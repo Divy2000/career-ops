@@ -50,7 +50,7 @@ step() {
 }
 
 policy_watch() {
-  local watch_json prompt batch
+  local watch_json prompt batch settings_dir rc
   watch_json="$(node custom/immigration/watch.mjs)" || return 1
   echo "$watch_json"
   # One immutable batch file per run: only what THIS run gave the AI is acked.
@@ -63,14 +63,44 @@ const t = fs.readFileSync("custom/immigration/daily-prompt.md", "utf8");
 // Replacer functions: a string replacement would expand $&, $` and the like inside the feed JSON or the path.
 process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceAll("{{IMM}}", () => process.env.IMM).replace("{{WATCH_JSON}}", () => process.env.WATCH_JSON));
 ')" || return 1
-  # Absolute path rule (leading //) so the AI writes where watch.mjs reads,
-  # even when the data root is outside the checkout.
-  claude -p "$prompt" \
+  # The pass reads untrusted web pages, so it runs confined like a Control Center session
+  # (custom/control-center README section 4): --restricted keeps Read inside the checkout and the
+  # data root, the settings file (outside both, removed after the pass) denies the home credential
+  # stores and the secret files in them, and the only writes allowed are under $IMM, by absolute
+  # path rule (leading //) so the AI writes where watch.mjs reads. A data root that is the home
+  # directory, or contains it, is refused.
+  settings_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
+  if ! ROOT="$ROOT" DATA="$DATA" IMM="$IMM" OUT="$settings_dir/settings.json" node --input-type=module -e '
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const { absRule, assertRootsConfinable, buildReadDenyRules, spellings } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
+const { ROOT, DATA, IMM, OUT } = process.env;
+assertRootsConfinable(ROOT, DATA, os.homedir());
+const code = new Set(spellings(ROOT));
+const data = spellings(DATA);
+const permissions = {
+  additionalDirectories: data.some((d) => code.has(d)) ? [] : data,
+  allow: ["WebSearch", "WebFetch", `Read(${absRule(IMM)}/**)`, `Edit(${absRule(IMM)}/**)`, `Read(${absRule(path.join(DATA, "config", "profile.yml"))})`],
+  deny: buildReadDenyRules([ROOT, DATA]),
+};
+fs.writeFileSync(OUT, JSON.stringify({ permissions }, null, 2));
+'; then
+    rm -rf "$settings_dir"
+    return 1
+  fi
+  rc=0
+  "${CC_CLAUDE_BIN:-claude}" -p "$prompt" \
+    --restricted \
+    --tools "Read,Edit,Write,WebFetch,WebSearch" \
     --permission-mode dontAsk \
-    --add-dir "$IMM" \
-    --allowedTools "WebSearch" "WebFetch" "Read" "Edit(/$IMM/**)" \
+    --disallowedTools "Bash,Agent,Task,NotebookEdit,PowerShell" \
+    --settings "$settings_dir/settings.json" \
+    --strict-mcp-config \
     --max-turns 40 \
-    --output-format text || return 1
+    --output-format text || rc=$?
+  rm -rf "$settings_dir"
+  [ "$rc" -eq 0 ] || return 1
   # Only a successful pass acknowledges the batch; failures retry tomorrow.
   node custom/immigration/watch.mjs --ack "$batch"
 }

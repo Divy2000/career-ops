@@ -180,58 +180,9 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
   },
 };
 
-/**
- * Secret files no session may read, relative to each root and matched case-insensitively (an over-deny on
- * case-sensitive volumes, by design). Enforced as Read deny rules in the per-turn settings file (under each
- * root's given and real path) and by the guard hook. File-name based: a secret under another name is readable.
- */
-export const READ_DENY = [
-  '**/.env',
-  '**/.env.*',
-  '**/*.pem',
-  '**/*.key',
-  '**/*.p12',
-  '**/*.pfx',
-  '**/*.jks',
-  '**/*.keystore',
-  '**/*.ppk',
-  '**/id_rsa*',
-  '**/id_dsa*',
-  '**/id_ecdsa*',
-  '**/id_ed25519*',
-  '**/.npmrc',
-  '**/.pypirc',
-  '**/.netrc',
-  '**/.git-credentials',
-  '**/.git/config',
-  '**/credentials*.json',
-  '**/client_secret*.json',
-  '**/service-account*.json',
-  '**/*.token',
-];
-
-/** Credential stores in the home directory, denied as Read rules (they are outside every root anyway). */
-export const HOME_READ_DENY = [
-  '~/.ssh/**',
-  '~/.aws/**',
-  '~/.gnupg/**',
-  '~/.azure/**',
-  '~/.kube/**',
-  '~/.config/gh/**',
-  '~/.config/gcloud/**',
-  '~/.docker/config.json',
-  '~/.netrc',
-  '~/.npmrc',
-  '~/.pypirc',
-  '~/.git-credentials',
-  '~/.claude.json',
-  '~/.claude/.credentials.json',
-  '~/Library/Keychains/**',
-  '~/Library/Cookies/**',
-  '~/Library/Safari/**',
-  '~/Library/Application Support/Google/Chrome/**',
-  '~/Library/Application Support/Firefox/**',
-];
+// READ_DENY (secret files under each root) and HOME_READ_DENY (home credential stores) live in confinement.mjs, which
+// the daily job's policy pass imports too.
+export { HOME_READ_DENY, READ_DENY } from './confinement.mjs';
 
 /**
  * Version of the confinement a session's turns run under. Sessions created before read confinement (no
