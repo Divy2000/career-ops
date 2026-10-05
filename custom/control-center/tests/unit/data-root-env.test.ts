@@ -32,3 +32,15 @@ describe('configFromEnv dataRootFromEnv', () => {
     expect(configFromEnv(base).dataRootFromEnv).toBe(true);
   });
 });
+
+describe('configFromEnv claudeBin', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => {
+    for (const [k, v] of Object.entries({ CC_DATA_ROOT: '/d', CC_GUARD_DIR: '/g', CC_TOKEN: 't', CC_SESSION_SECRET: 's' })) vi.stubEnv(k, v);
+  });
+  const base = { CC_PUBLIC_PORT: '4999', PATH: '' };
+  it('resolves a relative CC_CLAUDE_BIN to an absolute path once, so sessions, the plist and Run the daily job now share it', () => {
+    expect(configFromEnv({ ...base, CC_CLAUDE_BIN: './bin/claude', INIT_CWD: '/work/here' }).claudeBin).toBe('/work/here/bin/claude');
+    expect(configFromEnv({ ...base, CC_CLAUDE_BIN: '/opt/custom/claude' }).claudeBin).toBe('/opt/custom/claude');
+  });
+});
