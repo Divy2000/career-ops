@@ -1,9 +1,9 @@
 // Test helpers: a made-up data root whose cv.md matches a payload, so the fact
 // check and the section-order check have a real source to compare against.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(HERE, '..', '..', '..');
@@ -30,7 +30,7 @@ export function cvMarkdownFor(payload) {
 }
 
 export function dataRoot({ cv = null, library = null } = {}) {
-  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cv-root-')));
+  const d = fs.realpathSync(tempDir('cv-root-'));
   if (cv !== null) fs.writeFileSync(path.join(d, 'cv.md'), cv);
   if (library !== null) fs.writeFileSync(path.join(d, 'article-digest.md'), library);
   fs.mkdirSync(path.join(d, 'output'));

@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..', '..');
@@ -27,7 +27,7 @@ const rule = (selector) => {
 
 // Builds with upstream build-cv-html.mjs and the fork pack, as custom/cv/build-html.mjs will.
 function build(payload) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-pack-'));
+  const dir = tempDir('cv-pack-');
   const input = path.join(dir, 'payload.json');
   const output = path.join(dir, 'cv.html');
   fs.writeFileSync(input, JSON.stringify(payload));

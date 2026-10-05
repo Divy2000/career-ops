@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import os from 'node:os';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const README_REL = '.github/README.md';
@@ -495,7 +495,7 @@ test('every path-resolver command in ONBOARDING.md is anchored to the checkout, 
 });
 
 test('the documented path-resolver commands print the data root when run from a directory outside the checkout', () => {
-  const tmp = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'readme-resolver-')));
+  const tmp = realpathSync(tempDir('readme-resolver-'));
   const checkout = path.join(tmp, 'my checkout');
   const elsewhere = path.join(tmp, 'elsewhere');
   mkdirSync(checkout);

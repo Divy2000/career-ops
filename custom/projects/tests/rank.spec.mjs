@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseLibrary, rankProjects } from '../lib.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -18,7 +19,7 @@ const entries = parseLibrary(LIBRARY).entries;
 const rank = (jdText, cvText = CV, list = entries) => rankProjects(list, { jdText, cvText });
 
 const dataRoot = ({ library = LIBRARY, cv = CV } = {}) => {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-rank-'));
+  const d = tempDir('projects-rank-');
   if (library !== null) fs.writeFileSync(path.join(d, 'article-digest.md'), library);
   if (cv !== null) fs.writeFileSync(path.join(d, 'cv.md'), cv);
   fs.mkdirSync(path.join(d, 'jds'));

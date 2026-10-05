@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
   validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput,
 } from '../lib.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ci-lib-'));
+const tmp = () => tempDir('ci-lib-');
 const write = (dir, name, data) => {
   const f = path.join(dir, name);
   fs.writeFileSync(f, data);
@@ -159,6 +159,9 @@ test('validateMarkdownInput enforces 1 MiB for the resume and 2 MiB for a doc', 
   assert.equal(validateMarkdownInput(f, { kind: 'doc' }).ok, true);
   const g = write(dir, 'y.md', big(2 * 1024 * 1024 + 10));
   assert.match(validateMarkdownInput(g, { kind: 'doc' }).error, /2 MiB/);
+  // Megabyte files go as soon as they are checked, not at the end of the file's run.
+  fs.rmSync(f);
+  fs.rmSync(g);
 });
 
 test('validateMarkdownInput rejects a resume that is the target cv.md itself', () => {
@@ -182,6 +185,7 @@ test('validateInputs names the failing file and caps the doc count and total siz
   const chunk = '# h\n' + 'a'.repeat(1900 * 1024);
   const docs = Array.from({ length: 6 }, (_, i) => write(dir, `d${i}.md`, chunk));
   assert.match(validateInputs({ resume: ok, docs }).errors.join('\n'), /10 MiB/);
+  for (const d of docs) fs.rmSync(d);
 });
 
 test('validateInputs passes with no inputs at all', () => {
@@ -219,6 +223,8 @@ test('validateProjectsInput applies the --docs byte checks to a projects .md or 
   assert.match(ok('nul.json', '[{"name":"A\u0000"}]').error, /NUL/);
   assert.match(ok('empty.md', '\n  \n').error, /empty/);
   assert.match(ok('notes.txt', '## A\n- One.\n').error, /\.md, \.markdown or \.json/);
-  assert.match(ok('big.md', `## A\n- ${'x'.repeat(LIMITS.docBytes)}\n`).error, /over the 2 MiB limit/);
+  const big = write(d, 'big.md', `## A\n- ${'x'.repeat(LIMITS.docBytes)}\n`);
+  assert.match(validateProjectsInput(big).error, /over the 2 MiB limit/);
+  fs.rmSync(big);
   assert.match(validateProjectsInput(path.join(d, 'missing.md')).error, /does not exist/);
 });

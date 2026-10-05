@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEED = path.join(HERE, '..', 'seed.mjs');
@@ -12,7 +12,7 @@ const VALIDATE = path.join(HERE, '..', 'validate-md.mjs');
 const LIB = path.join(HERE, '..', 'lib.mjs');
 const CLI = path.join(HERE, '..', 'cli.mjs');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ci-seed-'));
+const tmp = () => tempDir('ci-seed-');
 const run = (script, args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
 const seed = (args) => run(SEED, args);
 const put = (file, data) => {

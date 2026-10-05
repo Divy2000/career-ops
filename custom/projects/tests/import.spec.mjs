@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findCvEntry, findCvBlock, wordDiff, validateLibrary, parseLibrary } from '../lib.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -13,7 +13,7 @@ const IMPORT = path.join(HERE, '..', 'import.mjs');
 const read = (f) => fs.readFileSync(path.join(FIX, f), 'utf8');
 
 const dataRoot = ({ library = null, cv = read('cv-sample.md') } = {}) => {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-import-'));
+  const d = tempDir('projects-import-');
   if (library !== null) fs.writeFileSync(path.join(d, 'article-digest.md'), library);
   if (cv !== null) fs.writeFileSync(path.join(d, 'cv.md'), cv);
   return d;
