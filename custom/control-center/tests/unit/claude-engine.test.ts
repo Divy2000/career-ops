@@ -10,6 +10,7 @@ import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
 import { checkBash, snapshotKey } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
+import { foldsCase } from '../helpers/case.js';
 
 const codeRoot = '/repo/career-ops';
 const base = { claudeBin: 'claude', codeRoot, dataRoot: '/data/root', sessionDir: '/data/root/data/control-center/sessions/s1', policyFile: '/data/root/data/control-center/sessions/s1/policy.json', settingsFile: '/data/root/data/control-center/sessions/s1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: '11111111-1111-4111-8111-111111111111', preamble: 'PREAMBLE', resume: false };
@@ -137,8 +138,9 @@ describe('guard hook', () => {
     expect(pre('mcp__playwright__browser_click', { element: 'Next page', ref: 'e13' }).status).toBe(0);
     expect(pre('mcp__playwright__browser_press_key', { key: 'Enter', element: 'Apply now' }).status).toBe(2);
   });
-  it('folds case on a case-insensitive volume: Blacklist.md, APPLICATIONS.md and Supervisor/ are still protected', () => {
+  it('protects Blacklist.md, APPLICATIONS.md and Supervisor/ in any case, on a case-insensitive or a case-sensitive volume', () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-hook-case-')));
+    const folding = foldsCase(root);
     fs.mkdirSync(path.join(root, 'data'));
     fs.writeFileSync(path.join(root, 'data', 'blacklist.md'), '# blacklist\n');
     fs.mkdirSync(path.join(root, 'custom', 'control-center', 'supervisor'), { recursive: true });
@@ -146,10 +148,16 @@ describe('guard hook', () => {
     const dir = path.join(root, 'guard');
     const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
     const write = (p: string, tool = 'Write') => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { file_path: p, content: 'x' }, cwd: root, session_id: 's' });
-    // Existing protected file reached through a different case: realpath.native returns the on-disk case.
     const viaCase = write(path.join(root, 'data', 'Blacklist.md'));
     expect(viaCase.status, viaCase.stderr).toBe(2);
-    expect(viaCase.stderr).toMatch(/data\/blacklist\.md is always protected/);
+    if (folding) {
+      // The same file reached through a different case: realpath.native returns the on-disk case.
+      expect(viaCase.stderr).toMatch(/data\/blacklist\.md is always protected/);
+    } else {
+      // A different (not yet existing) file: its path keeps the caller's case, and the deny globs compare case-insensitively.
+      expect(viaCase.stderr).toMatch(/data\/Blacklist\.md is always protected/);
+      expect(fs.existsSync(path.join(root, 'data', 'Blacklist.md'))).toBe(false);
+    }
     expect(write(path.join(root, 'DATA', 'BLACKLIST.MD'), 'Edit').status).toBe(2);
     // Not-yet-existing protected file: the tail keeps the caller's case, so globs compare case-insensitively.
     expect(write(path.join(root, 'data', 'APPLICATIONS.md')).status).toBe(2);
