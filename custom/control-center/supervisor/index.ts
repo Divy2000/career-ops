@@ -166,7 +166,7 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: u
         const files = t.files
           .map(
             (f) =>
-              `<li><code>${escapeHtml(f.path)}</code> <span class="s">${f.status} +${f.additions} -${f.deletions}</span>` +
+              `<li><code>${escapeHtml(f.path)}</code> <span class="s">${f.status} +${f.additions} -${f.deletions}${f.error ? ` (${escapeHtml(f.error)})` : ''}</span>` +
               (f.canRevert ? `<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><input type="hidden" name="abs" value="${escapeHtml(f.abs)}"><button>Revert file</button></form>` : '') +
               (f.patch ? `<details><summary>diff</summary><pre>${escapeHtml(f.patch)}</pre></details>` : '') +
               `</li>`,
@@ -280,7 +280,8 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`, location: '/__recovery' }).end();
         return true;
       }
-      res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(renderRecovery(sessionsDir, guardRoot, bg.status));
+      const html = renderRecovery(sessionsDir, guardRoot, bg.status);
+      res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(html);
       return true;
     }
     if (url.pathname === '/__recovery/revert' && req.method === 'POST') {
@@ -299,7 +300,13 @@ async function main(): Promise<void> {
   };
 
   const proxy = http.createServer((req, res) => {
-    void handleLocal(req, res).then((handled) => {
+    // A request that throws (a disk error on /__recovery) answers 500; an unhandled rejection would exit the supervisor and the app.
+    const failed = (err: unknown) => {
+      console.error(`[supervisor] ${req.method} ${req.url} failed: ${(err as Error).stack ?? String(err)}`);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' });
+      res.end(`supervisor error: ${(err as Error).message}`);
+    };
+    handleLocal(req, res).then((handled) => {
       if (handled) return;
       const upstream = http.request({ host: '127.0.0.1', port: bg.active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
         res.writeHead(ures.statusCode ?? 502, ures.headers);
@@ -314,7 +321,7 @@ async function main(): Promise<void> {
         if (!res.writableFinished) upstream.destroy();
       });
       req.pipe(upstream);
-    });
+    }).catch(failed);
   });
   proxy.on('upgrade', (req, socket, head) => {
     const target = net.connect(bg.active.port, '127.0.0.1', () => {

@@ -27,11 +27,13 @@ export interface FileDiff {
   path: string;
   abs: string;
   root: 'code' | 'data';
-  status: 'added' | 'modified' | 'deleted' | 'unchanged' | 'no-snapshot';
+  status: 'added' | 'modified' | 'deleted' | 'unchanged' | 'no-snapshot' | 'unreadable';
   additions: number;
   deletions: number;
   patch: string;
   canRevert: boolean;
+  /** Why the file or its snapshot could not be read (status 'unreadable'). */
+  error?: string;
 }
 
 export interface TurnChanges {
@@ -90,7 +92,7 @@ function turnOffset(sessionDir: string, n: number): number | null {
 /** Change records grouped by turn using the files.ndjson offsets recorded at each turn start. */
 export function changesByTurn(sessionDir: string, meta: MetaLike): Array<{ n: number; records: ChangeRecord[] }> {
   const all = readFilesLog(sessionDir);
-  const turns = meta.turns.map((t) => t.n).sort((a, b) => a - b);
+  const turns = (Array.isArray(meta.turns) ? meta.turns : []).map((t) => t.n).sort((a, b) => a - b);
   return turns.map((n, i) => {
     const start = turnOffset(sessionDir, n) ?? 0;
     const next = turns[i + 1];
@@ -137,15 +139,20 @@ export function listChanges(sessionDir: string, meta: MetaLike): TurnChanges[] {
   return grouped.map(({ n, records }, i) => ({
     n,
     files: records.map((r) => {
-      let after: { exists: boolean; text: string } | undefined;
-      for (const later of grouped.slice(i + 1)) {
-        const snap = snapshotState(path.join(sessionDir, 'turns', String(later.n)), r.abs);
-        if (snap) {
-          after = snap;
-          break;
+      try {
+        let after: { exists: boolean; text: string } | undefined;
+        for (const later of grouped.slice(i + 1)) {
+          const snap = snapshotState(path.join(sessionDir, 'turns', String(later.n)), r.abs);
+          if (snap) {
+            after = snap;
+            break;
+          }
         }
+        return diffFile(path.join(sessionDir, 'turns', String(n)), r, after);
+      } catch (err) {
+        // One file the disk no longer matches (now a directory, unreadable) must not hide the rest of the change set.
+        return { ...r, status: 'unreadable' as const, additions: 0, deletions: 0, patch: '', canRevert: false, error: (err as Error).message };
       }
-      return diffFile(path.join(sessionDir, 'turns', String(n)), r, after);
     }),
   }));
 }
@@ -299,7 +306,7 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     return { status: 200, text: results.map((r) => `${path.basename(r.abs)}: ${r.result}`).join('\n') || 'nothing to revert' };
   } catch (err) {
     if (err instanceof RevertRefused) return { status: err.status, text: err.message };
-    throw err;
+    return { status: 500, text: `revert failed: ${(err as Error).message}` };
   }
 }
 

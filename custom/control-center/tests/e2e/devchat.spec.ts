@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
@@ -101,5 +103,48 @@ test.describe('Dev Chat', () => {
     await page.locator('article', { has: page.getByRole('heading', { name: new RegExp(id) }) }).getByRole('button', { name: 'Revert whole turn' }).click();
     await expect.poll(async () => (await (await page.request.get('/api/files/user/customMd')).json()).text).toBe(preSession);
     expect(errors).toEqual([]);
+  });
+
+  test('a recorded file that became a directory, or a session with no turns, does not take the recovery page or the app down', async ({ page }) => {
+    // The e2e roots sit under CC_E2E_TMP (playwright.config.ts): root/ is the main app's data root, guard/ its guard dir.
+    const tmp = process.env.CC_E2E_TMP!;
+    const sessions = path.join(tmp, 'root', 'data', 'control-center', 'sessions');
+    const guard = path.join(tmp, 'guard', 'sessions');
+    const target = path.join(tmp, 'root', 'data', 'notes', 'became-a-dir');
+    const ids = ['e2e-recovery-dir', 'e2e-recovery-no-turns', 'e2e-recovery-bad-id'];
+    const meta = (id: string, extra: object) => JSON.stringify({ id, mode: 'devchat', status: 'done', createdAt: '2000-01-01T00:00:00.000Z', ...extra });
+    try {
+      fs.mkdirSync(target, { recursive: true });
+      for (const id of ids.slice(0, 2)) fs.mkdirSync(path.join(sessions, id), { recursive: true });
+      fs.writeFileSync(path.join(sessions, ids[0]!, 'meta.json'), meta(ids[0]!, { turns: [{ n: 1 }] }));
+      fs.writeFileSync(path.join(sessions, ids[1]!, 'meta.json'), meta(ids[1]!, {}));
+      const turn = path.join(guard, ids[0]!, 'turns', '1');
+      fs.mkdirSync(path.join(turn, 'before'), { recursive: true });
+      fs.writeFileSync(path.join(turn, 'turn.json'), JSON.stringify({ filesOffset: 0 }));
+      fs.writeFileSync(path.join(turn, 'before', encodeURIComponent(target)), 'old text\n');
+      fs.writeFileSync(path.join(guard, ids[0]!, 'files.ndjson'), `${JSON.stringify({ path: 'data/notes/became-a-dir', abs: target, root: 'data', tool: 'Write', ts: 't' })}\n`);
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      const recovery = await page.request.get('/__recovery');
+      expect(recovery.status()).toBe(200);
+      const html = await recovery.text();
+      expect(html).toContain('data/notes/became-a-dir');
+      expect(html).toMatch(/unreadable \+0 -0 \(EISDIR/);
+      expect(html).toContain(ids[1]);
+      expect((await page.request.get('/__supervisor/status')).status()).toBe(200);
+      // Anything else that throws while the supervisor answers is a 500, never a crash: an id the guard dir refuses.
+      fs.mkdirSync(path.join(sessions, ids[2]!));
+      fs.writeFileSync(path.join(sessions, ids[2]!, 'meta.json'), meta('../escape', { turns: [{ n: 1 }] }));
+      const broken = await page.request.get('/__recovery');
+      expect(broken.status()).toBe(500);
+      expect(await broken.text()).toContain('supervisor error: bad session id');
+      expect((await page.request.get('/__supervisor/status')).status()).toBe(200);
+      expect((await page.request.get('/healthz')).status()).toBe(200);
+    } finally {
+      for (const id of ids) {
+        fs.rmSync(path.join(sessions, id), { recursive: true, force: true });
+        fs.rmSync(path.join(guard, id), { recursive: true, force: true });
+      }
+      fs.rmSync(target, { recursive: true, force: true });
+    }
   });
 });

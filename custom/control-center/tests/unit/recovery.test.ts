@@ -168,6 +168,38 @@ describe('Dev Chat change sets', () => {
   });
 });
 
+describe('change sets the disk no longer matches', () => {
+  it('lists a recorded file that became a directory as unreadable, with no revert, and still diffs the other files', () => {
+    const { sessionDir, created, meta, file } = fakeSession();
+    fs.rmSync(created);
+    fs.mkdirSync(created);
+    const [turn1] = listChanges(sessionDir, meta);
+    const dir = turn1!.files.find((f) => f.abs === created)!;
+    expect(dir).toMatchObject({ status: 'unreadable', canRevert: false, patch: '' });
+    expect(dir.error).toMatch(/EISDIR/);
+    expect(turn1!.files.find((f) => f.abs === file)!.status).toBe('modified');
+  });
+
+  it('reads a session meta without a turns list as having no turns', () => {
+    const { sessionDir } = fakeSession();
+    const meta = { id: 's1', mode: 'devchat' } as unknown as Parameters<typeof listChanges>[1];
+    expect(changesByTurn(sessionDir, meta)).toEqual([]);
+    expect(listChanges(sessionDir, meta)).toEqual([]);
+  });
+
+  it('answers a revert that fails for a reason other than a refusal with a 500 naming it, instead of throwing', () => {
+    const { sessionDir: guardSession, t1, ctx } = fakeSession();
+    const guardRoot = fs.realpathSync(tempDir('cc-recovery-root-'));
+    const sessionsDir = fs.realpathSync(tempDir('cc-recovery-sessions-'));
+    fs.mkdirSync(path.join(guardRoot, 'sessions'));
+    fs.writeFileSync(path.join(t1, 'policy.json'), '{ torn');
+    fs.renameSync(guardSession, path.join(guardRoot, 'sessions', 's1'));
+    fs.mkdirSync(path.join(sessionsDir, 's1'));
+    fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
+    expect(recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn: 1 })).toMatchObject({ status: 500, text: expect.stringMatching(/revert failed: .*JSON/) });
+  });
+});
+
 describe('/__recovery revert requests', () => {
   it('require the app origin and the X-CC header, like the server', () => {
     expect(recoveryRequestAllowed({ origin: 'http://127.0.0.1:4317', 'x-cc': '1' }, 4317)).toBe(true);

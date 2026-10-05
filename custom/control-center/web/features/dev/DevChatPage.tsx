@@ -12,7 +12,7 @@ interface FileDiff {
   path: string;
   abs: string;
   root: 'code' | 'data';
-  status: 'added' | 'modified' | 'deleted' | 'unchanged' | 'no-snapshot';
+  status: 'added' | 'modified' | 'deleted' | 'unchanged' | 'no-snapshot' | 'unreadable';
   additions: number;
   deletions: number;
   patch: string;
