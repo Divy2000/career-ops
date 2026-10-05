@@ -87,6 +87,18 @@ async function loadTiers(companies, today) {
 async function loadAlerts(companies) {
   if (!existsSync(ALERTS)) return new Map();
   const bySlug = parseCompanyAlerts(await readFile(ALERTS, 'utf8'));
+  // The slug column is whatever the writing session derived; the company name, slugged here like the pipeline rows,
+  // matches even when its rule differed (AT&T as at-t, a kept "corporation").
+  for (const [, alert] of [...bySlug]) {
+    let own;
+    try {
+      own = companySlug(alert.company);
+    } catch {
+      continue;
+    }
+    const prev = bySlug.get(own);
+    if (!prev || alert.date >= prev.date) bySlug.set(own, alert);
+  }
   const out = new Map();
   for (const c of companies) {
     let slug;

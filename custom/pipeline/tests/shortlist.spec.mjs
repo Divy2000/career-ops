@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
+import { localToday } from '../../../lib/local-today.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHORTLIST = path.join(REPO, 'custom', 'pipeline', 'shortlist.mjs');
@@ -53,4 +54,25 @@ test('URL-only pipeline rows each get a shortlist row whose link reads as the UR
   assert.equal(r.status, 0, r.stderr);
   const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
   for (const u of urls) assert.ok(md.includes(`[${u}](${u})`), `${u} in\n${md}`);
+});
+
+test('a paused sponsor is excluded whatever slug the alert row carries, keyed by its company name like the pipeline row (R8-05)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  const companies = ['AT&T', 'Acme Corporation', 'Globex Co', 'Initech plc', 'Umbrella GmbH'];
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${companies.map((c, i) => `- [ ] https://jobs.example.com/${i} | ${c} | Backend Engineer | Remote | rank: 4.0/5 — fit`).join('\n')}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  // Fresh tier cache entries, so the run looks nothing up over the network.
+  const tier = { tier: 'strong', matched: 'X', checked: localToday() };
+  const tiers = Object.fromEntries(companies.map((c) => [c, tier]));
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify(tiers));
+  // Slugs as a session following the old prompt rule wrote them: & became a hyphen, only inc/llc/corp/ltd dropped.
+  const slugs = ['at-t', 'acme-corporation', 'globex-co', 'initech-plc', 'umbrella-gmbh'];
+  fs.writeFileSync(
+    path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
+    `date\tcompany\tslug\tstatus\theadline\turl\n${companies.map((c, i) => `2026-09-29\t${c}\t${slugs[i]}\tpaused\t${c} pauses sponsorship\thttps://news.example/${i}`).join('\n')}\n`,
+  );
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /shortlist: 0 kept, 5 excluded/);
 });
