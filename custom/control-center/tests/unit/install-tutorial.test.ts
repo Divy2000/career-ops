@@ -466,6 +466,19 @@ const webpExtended = (w: number, h: number, animated: boolean) =>
     ...(animated ? [chunk('ANIM', Buffer.alloc(6)), chunk('ANMF', Buffer.concat([u24le(0), u24le(0), u24le(7), u24le(3), u24le(40), Buffer.from([0]), Buffer.alloc(8)]))] : [chunk('VP8 ', Buffer.concat([Buffer.from([0x50, 0x02, 0x00, 0x9d, 0x01, 0x2a]), u16le(w), u16le(h), Buffer.alloc(8)]))]),
   );
 
+const u16be = (n: number) => Buffer.from([(n >> 8) & 255, n & 255]);
+const segment = (marker: number, body: Buffer) => Buffer.concat([Buffer.from([0xff, marker]), u16be(body.length + 2), body]);
+/** A JPEG header: SOI, a JFIF APP0, a large EXIF APP1 and a quantization table before the frame header (progressive SOF2 by default). */
+const jpeg = (w: number, h: number, sof = 0xc2, exifBytes = 300) =>
+  Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    segment(0xe0, Buffer.from('4a46494600010100000100010000', 'hex')),
+    segment(0xe1, Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), Buffer.alloc(exifBytes)])),
+    segment(0xdb, Buffer.alloc(65)),
+    segment(sof, Buffer.concat([Buffer.from([8]), u16be(h), u16be(w), Buffer.from([3, 1, 0x11, 0, 2, 0x11, 1, 3, 0x11, 1])])),
+    Buffer.from([0xff, 0xd9]),
+  ]);
+
 describe('imageSize', () => {
   it.each([
     ['a PNG', png(1440, 900), '.png', { width: 1440, height: 900 }],
@@ -480,6 +493,9 @@ describe('imageSize', () => {
     ['a still extended WebP (VP8X)', webpExtended(1440, 900, false), '.webp', { width: 1440, height: 900 }],
     ['an animated WebP (VP8X with ANIM), whose canvas is larger than its first frame', webpExtended(960, 540, true), '.webp', { width: 960, height: 540 }],
     ['an extended WebP with a 24-bit canvas', webpExtended(70000, 3, false), '.webp', { width: 70000, height: 3 }],
+    ['a progressive JPEG with APP segments before SOF2', jpeg(1920, 1080), '.jpg', { width: 1920, height: 1080 }],
+    ['a baseline JPEG (SOF0) named .jpeg', jpeg(1280, 720, 0xc0), '.jpeg', { width: 1280, height: 720 }],
+    ['a JPEG whose APP1 segment is 40 KB', jpeg(640, 360, 0xc2, 40_000), '.JPG', { width: 640, height: 360 }],
   ])('reads the size of %s', (_label, bytes, ext, expected) => {
     expect(imageSize(bytes, ext)).toEqual(expected);
   });
@@ -496,7 +512,10 @@ describe('imageSize', () => {
     ['a WebP whose first chunk is unknown', riff(chunk('ABCD', Buffer.alloc(20))), '.webp', /ABCD/],
     ['a lossy WebP without the VP8 start code', riff(chunk('VP8 ', Buffer.alloc(20))), '.webp', /start code/],
     ['a lossless WebP without the VP8L signature', riff(chunk('VP8L', Buffer.alloc(20))), '.webp', /VP8L/],
-    ['a JPEG', Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...Array(40).fill(0)]), '.jpg', /cannot check.*\.jpg.*PNG, GIF and WebP/],
+    ['a .jpg that is really a PNG', png(2, 2), '.jpg', /is not a JPEG file/],
+    ['a JPEG segment with a bad length', Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...Array(40).fill(0)]), '.jpg', /not a valid JPEG file.*length/],
+    ['a JPEG whose image data starts before any frame header', Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xda, Buffer.alloc(10))]), '.jpg', /no frame header/],
+    ['a JPEG cut off before its frame header', jpeg(10, 10).subarray(0, 40), '.jpg', /ends before its frame header/],
     ['a file type it does not know', Buffer.alloc(40), '.bmp', /cannot check.*\.bmp/],
   ])('refuses %s', (_label, bytes, ext, message) => {
     expect(() => imageSize(bytes, ext)).toThrow(message);
@@ -661,11 +680,17 @@ describe('installTutorial with a documentation guide (version 2)', () => {
       noTutorial();
     });
 
-    it('cannot check a .jpg and says so rather than skipping it silently', () => {
+    it('refuses a .jpg it cannot read a size from rather than skipping it silently', () => {
       const guide = { ...V2, sections: [{ ...V2.sections[0]!, subsections: [{ ...V2.sections[0]!.subsections[0]!, blocks: [{ ...image, file: 'shot.dark.jpg' }] }] }] };
       folder({ guide: JSON.stringify(guide), media: { ...MEDIA, 'shot.dark.jpg': Buffer.from([0xff, 0xd8, 0xff, 0xd9]) } });
-      expect(strict).toThrow(/guide image file "shot\.dark\.jpg" cannot check the size of a \.jpg file/);
+      expect(strict).toThrow(/guide image file "shot\.dark\.jpg" has no frame header/);
       expect(() => installTutorial({ source: src(), dataRoot })).not.toThrow();
+    });
+
+    it('checks a .jpg image against the declared size', () => {
+      const guide = { ...V2, sections: [{ ...V2.sections[0]!, subsections: [{ ...V2.sections[0]!.subsections[0]!, blocks: [{ ...image, file: 'shot.dark.jpg' }] }] }] };
+      folder({ guide: JSON.stringify(guide), media: { ...MEDIA, 'shot.dark.jpg': jpeg(1440, 900) } });
+      expect(strict().files).toContain('shot.dark.jpg');
     });
 
     it('is not applied without the flag: a mismatched and an unreadable image are copied', () => {
@@ -704,6 +729,89 @@ describe('installTutorial with a documentation guide (version 2)', () => {
       expect(bad.stderr).toMatch(/shot\.dark\.webp" is 2x2 but guide\.json declares 1440x900/);
       expect(run().status).toBe(0);
     });
+  });
+});
+
+describe('installTutorial with a tutorial in parts', () => {
+  const part = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    title: `Part ${id}`,
+    video: `${id}.mp4`,
+    videoLight: `${id}-light.mp4`,
+    subtitles: `${id}.vtt`,
+    poster: `${id}-poster.jpg`,
+    posterLight: `${id}-poster-light.jpg`,
+    duration: 263.2,
+    chapters: [{ title: `${id} one`, start: 0 }],
+    ...over,
+  });
+  const manifest = {
+    id: 'parts-tour',
+    title: 'Parts tour',
+    transcript: 'script.md',
+    guide: 'guide.json',
+    parts: [part('start', { chapters: [{ title: 'Intro', start: 0 }, { title: 'Launch', start: 148.734 }] }), part('intel', { duration: 377 })],
+  };
+  const partFiles = ['intel-light.mp4', 'intel-poster-light.jpg', 'intel-poster.jpg', 'intel.mp4', 'intel.vtt', 'start-light.mp4', 'start-poster-light.jpg', 'start-poster.jpg', 'start.mp4', 'start.vtt'];
+  const folder = (over: { manifest?: unknown; skip?: string[]; posters?: Record<string, Buffer> } = {}) => {
+    write('tutorial.json', JSON.stringify(over.manifest ?? manifest));
+    for (const name of partFiles) {
+      if (over.skip?.includes(name)) continue;
+      write(name, name.endsWith('.jpg') ? (over.posters?.[name] ?? jpeg(1920, 1080)) : `BYTES ${name}`);
+    }
+    write('script.md', '# Script\n');
+    write('guide.json', JSON.stringify(GUIDE));
+    write('today.gif', 'GIF');
+    write('today.jpg', 'JPEG');
+    write('tracker.webp', 'WEBP');
+    write('full-length.mp4', 'superseded single video, must not be copied');
+    write('unreferenced.vtt', 'must not be copied');
+  };
+
+  it('given a parts folder, when installed, then exactly the part files, the transcript and the guide set are copied', () => {
+    folder();
+    const r = installTutorial({ source: src(), dataRoot });
+    const expected = [...partFiles, 'guide.json', 'script.md', 'today.gif', 'today.jpg', 'tracker.webp', 'tutorial.json'].sort();
+    expect(r.files.sort()).toEqual(expected);
+    expect(fs.readdirSync(dest('parts-tour')).sort()).toEqual(expected);
+    expect(fs.readFileSync(path.join(dest('parts-tour'), 'intel-light.mp4'), 'utf8')).toBe('BYTES intel-light.mp4');
+  });
+
+  it("given a part's light video is missing, when installed, then the error names the part and writes nothing", () => {
+    folder({ skip: ['intel-light.mp4'] });
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/part "intel" light video file "intel-light\.mp4" not found in the source folder/);
+    expect(fs.existsSync(dest('parts-tour'))).toBe(false);
+  });
+
+  it('given --strict-dims and posters of 1920x1080 (dark) and 1280x720 (light), when installed, then the error names both files', () => {
+    folder({ posters: { 'intel-poster-light.jpg': jpeg(1280, 720) } });
+    expect(() => installTutorial({ source: src(), dataRoot, strictDims: true })).toThrow(/part "intel".*"intel-poster\.jpg" is 1920x1080.*"intel-poster-light\.jpg" is 1280x720/);
+    expect(fs.existsSync(dest('parts-tour'))).toBe(false);
+  });
+
+  it('given --strict-dims and posters of equal size, when installed, then it passes', () => {
+    folder();
+    expect(installTutorial({ source: src(), dataRoot, strictDims: true, dryRun: true }).files).toContain('intel-poster-light.jpg');
+  });
+
+  it('given --strict-dims and a poster that is not a JPEG, when installed, then the error names the part and the file', () => {
+    folder({ posters: { 'start-poster.jpg': png(1920, 1080) } });
+    expect(() => installTutorial({ source: src(), dataRoot, strictDims: true })).toThrow(/part "start" poster file "start-poster\.jpg" is not a JPEG file/);
+  });
+
+  it('checks a guide chapter against the chapters of every part', () => {
+    folder({ manifest: { ...manifest, parts: [part('start'), part('intel')] } });
+    write('guide.json', JSON.stringify({ sections: [{ ...GUIDE.sections[0], chapter: 2 }] }));
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/chapter 2.*2 chapters/);
+  });
+
+  it('prints the number of parts and the length of each on the command line', () => {
+    folder();
+    const r = spawnSync(process.execPath, [SCRIPT, src(), '--data-root', dataRoot, '--dry-run'], { encoding: 'utf8', env: { ...process.env, CAREER_OPS_ROOT: '', CC_DATA_ROOT: '' } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/parts: 2\n/);
+    expect(r.stdout).toMatch(/1\. start .*4:23/);
+    expect(r.stdout).toMatch(/2\. intel .*6:17/);
   });
 });
 
