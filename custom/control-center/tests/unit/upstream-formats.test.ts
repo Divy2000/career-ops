@@ -10,7 +10,7 @@ import { parseReport } from '../../server/domains/reports.js';
 import { readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
 import { readScanHistory } from '../../server/domains/pipeline.js';
-import { activePin, parseFollowups } from '../../server/domains/followups.js';
+import { activePin, parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
 import { pathToFileURL } from 'node:url';
 import { localDate } from '../../shared/local-date.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -224,5 +224,29 @@ process.stdout.write(JSON.stringify(m.parseFollowups(${JSON.stringify(text)})));
     const cadence = JSON.parse(r.stdout) as unknown[];
     expect(cadence).toHaveLength(4);
     expect(parseFollowups(text)).toEqual(cadence);
+  });
+});
+
+describe('follow-up pin lines (followup-cadence.mjs parseNextOverrides)', () => {
+  it('the app reads the same pins as the cadence: trailing reasons kept, junk suffixes and impossible dates refused', () => {
+    const D = String.fromCharCode(0x2014);
+    const lines = [
+      `- next #1 2026-10-10 (set 2026-10-01) ${D} recruiter requested delay`,
+      '- next #2 2026-10-11 (set 2026-10-02) \u2013 en dash reason',
+      '- next #3 2026-10-12 - hyphen reason',
+      '- next #4 2026-10-13',
+      '- next #5 2026-10-14 (set 2026-10-03) and then some',
+      '- next #6 2026-02-31 (set 2026-10-03)',
+      '- NEXT #7 2026-10-15 (set 2026-10-04)',
+      '- next #1 2026-10-20 (set 2026-10-05)',
+    ];
+    const text = `# Follow-ups\n\n${lines.join('\n')}\n`;
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'followup-cadence.mjs')).href)});
+process.stdout.write(JSON.stringify([...m.parseNextOverrides(${JSON.stringify(text)}).values()].map((o) => ({ appNum: o.appNum, date: o.date, setOn: o.setDate }))));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const cadence = JSON.parse(r.stdout) as unknown[];
+    expect(cadence).toContainEqual({ appNum: 1, date: '2026-10-20', setOn: '2026-10-05' });
+    expect([...parseNextOverrides(text).values()]).toEqual(cadence);
   });
 });

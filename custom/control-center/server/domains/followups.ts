@@ -50,16 +50,23 @@ export function activePin(pin: NextOverride | null, followups: Array<{ date: str
   return last !== null && last > pin.setOn ? null : pin;
 }
 
-const OVERRIDE_RE = /^-\s+next\s+#(\d+)\s+(\d{4}-\d{2}-\d{2})(?:\s+\(set\s+(\d{4}-\d{2}-\d{2})\))?/i;
+// followup-cadence.mjs OVERRIDE_RE: an optional trailing `<dash> reason` (em dash, en dash or hyphen) and nothing else.
+const OVERRIDE_RE = new RegExp(`^-\\s+next\\s+#(\\d+)\\s+(\\d{4}-\\d{2}-\\d{2})(?:\\s+\\(set\\s+(\\d{4}-\\d{2}-\\d{2})\\))?(?:\\s*[${String.fromCharCode(0x2014)}\u2013-].*)?\\s*$`, 'i');
+
+/** followup-cadence.mjs parseDate: a real calendar day, so 2026-02-31 is no date. */
+function isCalendarDate(s: string): boolean {
+  const d = new Date(s);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
 
 /** Pin directives (`- next #42 2026-07-10 (set 2026-07-02)`); the last one per application wins. */
 export function parseNextOverrides(text: string): Map<number, NextOverride> {
   const out = new Map<number, NextOverride>();
   for (const line of text.split('\n')) {
     const m = line.match(OVERRIDE_RE);
-    if (!m) continue;
+    if (!m || !isCalendarDate(m[2]!)) continue;
     const appNum = parseInt(m[1]!, 10);
-    out.set(appNum, { appNum, date: m[2]!, setOn: m[3] ?? m[2]! });
+    out.set(appNum, { appNum, date: m[2]!, setOn: m[3] || m[2]! });
   }
   return out;
 }
