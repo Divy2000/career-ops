@@ -859,6 +859,16 @@ describe('checkBash: exact per-command argument grammars', () => {
       no(outreach, cmd);
   });
 
+  it('doctor: its checks and onboarding copies run on the configured root, never on a --target the session names', () => {
+    for (const mode of ['intake', 'update', 'triage']) {
+      const p = { ...policyFor(mode, [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+      for (const cmd of ['node doctor.mjs', 'node doctor.mjs --json', 'node doctor.mjs --json --init-templates', 'node doctor.mjs --strict', 'node doctor.mjs --cli claude --json']) ok(p, cmd);
+      // The audit trigger: --target makes data/, output/ and reports/ and seeds data/pipeline.md and the onboarding templates there.
+      for (const cmd of ['node doctor.mjs --target modes', 'node doctor.mjs --target custom/control-center --json --init-templates', 'node doctor.mjs --target=output', 'node doctor.mjs --json --target .', 'node doctor.mjs --cli=claude', 'node doctor.mjs modes'])
+        no(p, cmd);
+    }
+  });
+
   it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
     ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
     no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');

@@ -380,6 +380,8 @@ const WRITER_SCRIPTS = {
   'reconcile-pipeline.mjs': { switches: ['--dry-run', '--help', '-h'], next: RECONCILE_FLAGS, eq: RECONCILE_FLAGS, positionals: [], readOnlyWith: ['--dry-run'], outputSuffixes: ['.pre-reconcile.bak'] },
   // Its first positional is the candidates file, created with mock candidates when it does not exist.
   'reply-watch.mjs': { switches: ['--help', '-h'], positionals: ['output'] },
+  // --target <dir> runs every check on that folder, creating data/, output/, reports/ and seed files there; sessions use the configured root.
+  'doctor.mjs': { switches: ['--json', '--init-templates', '--strict', '--help', '-h'], next: { '--cli': 'value' }, positionals: [] },
   'application-artifacts.mjs': { switches: ['--init', '--help', '-h'], next: ARTIFACT_FLAGS, eq: ARTIFACT_FLAGS, positionals: [] },
   'contacts.mjs': { switches: ['--summary', '--self-test', '--caller-id', '--vcf', '--help', '-h'], optionalNext: { '--vcf': 'output' }, eq: { '--vcf': 'output' }, positionals: [] },
   'discover-new-companies.mjs': { switches: ['--added-only', '--summary', '--json', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
