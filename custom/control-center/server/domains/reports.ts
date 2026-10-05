@@ -84,8 +84,12 @@ export function parseScore(raw: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// The score header as the localized modes write it (modes/it, modes/tr, modes/ua); the rest keep **Score:**.
+const SCORE_KEY = 'Score|Punteggio|Puan|\u0411\u0430\u043b';
+
+/** A `**Key:**` header line; French and Korean reports write `**Key :**`. */
 function headerField(md: string, key: string): string | null {
-  const re = new RegExp(`^\\*\\*${key}:\\*\\*\\s*(.*)$`, 'mi');
+  const re = new RegExp(`^\\*\\*(?:${key})\\s*:\\*\\*\\s*(.*)$`, 'mi');
   const m = md.match(re);
   if (!m) return null;
   const v = m[1]!.trim();
@@ -142,12 +146,14 @@ function blockField(sectionContent: string, label: string): string | null {
 
 export function parseReport(markdown: string, file: string, num: number): ReportFull {
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
-  const scoreRaw = headerField(markdown, 'Score');
-  if (!title || !/^Evaluation:/i.test(title) || (scoreRaw === null && !/^\*\*Score:\*\*/m.test(markdown))) {
-    throw new ParseError('Not an evaluation report: missing "# Evaluation:" title or **Score:** header', file, 1);
+  const scoreRaw = headerField(markdown, SCORE_KEY);
+  // The title word is localized ("# Bewertung:", "# Evaluation :"), so a report is told apart by its score header or Machine Summary.
+  const scored = new RegExp(`^\\*\\*(?:${SCORE_KEY})\\s*:\\*\\*`, 'mi').test(markdown) || /^##\s+Machine Summary\s*$/m.test(markdown);
+  if (!title || !/^[^:]+:\s*\S/.test(title) || !scored) {
+    throw new ParseError('Not an evaluation report: missing a "# Evaluation: Company - Role" title, a **Score:** header or a Machine Summary', file, 1);
   }
   const machine = machineSummary(markdown, file);
-  const [companyPart, rolePart] = title.replace(/^Evaluation:\s*/i, '').split(new RegExp(`\\s+${EM_DASH}\\s+|\\s+-\\s+`));
+  const [companyPart, rolePart] = title.replace(/^[^:]+:\s*/, '').split(new RegExp(`\\s+${EM_DASH}\\s+|\\s+--?\\s+`));
   const { intro, sections } = splitSections(markdown);
   const blockA = sections.find((s) => s.letter === 'A')?.content ?? '';
   const cover = sections.find((s) => /cover letter/i.test(s.heading))?.content ?? '';

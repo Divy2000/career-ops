@@ -64,3 +64,46 @@ describe('oferta report format (modes/oferta.md, examples/sample-report.md)', ()
     expect(parseReport(md, '002-acme.md', 2).comp).toBe('80-90k EUR');
   });
 });
+
+/** Every report template a mode defines: an H1 with placeholders whose next line is a dated `**...:**` header field. */
+function reportTemplates(): Array<{ file: string; header: string }> {
+  const out: Array<{ file: string; header: string }> = [];
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.md')) {
+        const lines = fs.readFileSync(p, 'utf8').split('\n');
+        lines.forEach((line, i) => {
+          const next = lines.slice(i + 1).find((l) => l.trim() !== '') ?? '';
+          if (!/^# .*\{/.test(line) || !/^\*\*.*\{YYYY-MM-DD\}/.test(next)) return;
+          const end = lines.findIndex((l, j) => j > i && (l.startsWith('---') || l.startsWith('## ')));
+          out.push({ file: path.relative(DEFAULT_CODE_ROOT, p), header: lines.slice(i, end).join('\n') });
+        });
+      }
+    }
+  };
+  walk(path.join(DEFAULT_CODE_ROOT, 'modes'));
+  return out;
+}
+
+describe('localized report templates (modes/<lang>/)', () => {
+  const templates = reportTemplates();
+  it('finds the English and the localized templates', () => {
+    expect(templates.map((t) => t.file)).toEqual(expect.arrayContaining(['modes/oferta.md', 'modes/de/angebot.md', 'modes/fr/offre.md', 'modes/it/annuncio.md', 'modes/zh/oferta.md']));
+  });
+  for (const t of templates) {
+    it(`a report written from ${t.file} parses, score included`, () => {
+      const filled = t.header
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/\{X(?:\.X)?\/5\}|\{X(?:\.X)?\}\/5/g, '4.2/5')
+        .replace(/\{YYYY-MM-DD\}/g, '2026-10-01')
+        .replace(/\{[^}]*\}/g, 'Acme');
+      const r = parseReport(`${filled}\n\n---\n\n## A) Role Summary\n`, '010-acme.md', 10);
+      expect(r.score).toBe(4.2);
+      expect(r.company).toBe('Acme');
+      expect(r.role).toBe('Acme');
+      if (/^\*\*Date\s*:\*\*/m.test(t.header)) expect(r.date).toBe('2026-10-01');
+    });
+  }
+});
