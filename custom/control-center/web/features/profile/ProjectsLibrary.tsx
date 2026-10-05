@@ -324,6 +324,15 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
     showUpload(body.path);
   };
 
+  // A manual edit or format change makes the draft the user's own: it no longer restates the document, so provenance goes.
+  const editDraft = (patch: { text?: string; format?: 'json' | 'markdown' }) => {
+    generation.current += 1;
+    if (patch.text !== undefined) setText(patch.text);
+    if (patch.format !== undefined) setFormat(patch.format);
+    setSource(null);
+    setPreviewed(null);
+  };
+
   const convert = async () => {
     const mine = generation.current;
     const forSource = source;
@@ -366,7 +375,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       <div className="row gap projects-import__controls">
         <label className="project-field project-field--inline">
           <span className="project-field__label">Format</span>
-          <select aria-label="Import format" value={format} onChange={(e) => setFormat(e.target.value as 'json' | 'markdown')}>
+          <select aria-label="Import format" value={format} onChange={(e) => editDraft({ format: e.target.value as 'json' | 'markdown' })}>
             <option value="json">Projects JSON</option>
             <option value="markdown">Library markdown</option>
           </select>
@@ -388,10 +397,10 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       {source && (
         <p className="row gap small projects-source" aria-label="Import source">
           <Pill tone="info">Source: documents/{source}</Pill>
-          <span className="muted">Each block gets a Source line; Append records the document as ingested, as intake does.</span>
+          <span className="muted">Each block gets a Source line; Append records the document as ingested, as intake does. Editing the text drops the source.</span>
         </p>
       )}
-      <textarea aria-label="Projects to import" className="mono projects-import__text" rows={8} value={text} onChange={(e) => (setText(e.target.value), setPreviewed(null))} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
+      <textarea aria-label="Projects to import" className="mono projects-import__text" rows={8} value={text} onChange={(e) => editDraft({ text: e.target.value })} placeholder={format === 'json' ? '[{"name": "...", "description": "...", "highlights": []}]' : '## Project -- https://...\n- What you built.'} />
       <div className="row gap">
         <button type="button" disabled={!text.trim()} onClick={() => void convert()}>
           Preview

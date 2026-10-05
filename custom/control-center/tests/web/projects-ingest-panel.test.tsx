@@ -148,6 +148,13 @@ describe('Import projects: parser sessions per uploaded document', () => {
     for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
   };
   const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(label));
+  const typeInto = async (value: string) => {
+    const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Projects to import"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, value);
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
   const fileWith = async (name: string, content: string, type: string) => {
     const input = host.querySelector<HTMLInputElement>('input[type="file"][aria-label="Projects file"]')!;
     await act(async () => {
@@ -190,4 +197,24 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(sent.filter((c) => c.url === '/api/projects/append').map((c) => c.body)).toEqual([{ markdown: '## From Second\n- b.\n<!-- projects/second.pdf -->\n', source: 'projects/second.pdf' }]);
   });
 
+  it('typing in the box or changing the format drops the document as the source', async () => {
+    await mount();
+    await choose('first.pdf', 'application/pdf');
+    const fill = () => act(async () => panels.onEnvelope.get('projects/first.pdf')!('projects', { markdown: '## From First\n- a.' }, 1));
+    await fill();
+    expect(host.querySelector('[aria-label="Import source"]')).not.toBeNull();
+    await typeInto('[{"name":"Unrelated","description":"Pasted."}]');
+    expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
+    await act(async () => button('Preview')!.click());
+    await settle();
+    expect(sent.filter((c) => c.url === '/api/projects/convert').at(-1)?.body).toEqual({ format: 'markdown', text: '[{"name":"Unrelated","description":"Pasted."}]' });
+    await fill();
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Import format"]')!;
+    await act(async () => {
+      select.value = 'json';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Import preview"]')).toBeNull();
+  });
 });
