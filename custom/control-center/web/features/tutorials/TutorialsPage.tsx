@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, getRouteApi, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Md } from '../../components/Md';
@@ -13,6 +13,7 @@ import type { GuideLocation, GuideSearchParams } from '../../lib/guide';
 import { PartList } from './PartList';
 import { UpNext } from './UpNext';
 import { useThemedVideo } from './useThemedVideo';
+import { useTutorialProgress } from './useTutorialProgress';
 import type { Tutorial, TutorialPart, TutorialsRead } from '@shared/api';
 
 const route = getRouteApi('/tutorials');
@@ -147,7 +148,7 @@ interface PlayerProps {
   onStartApplied: () => void;
   progress: TutorialProgress;
   /** Must be stable across renders: the progress tracker of a part keeps the first one. */
-  onProgress: (partId: string, progress: PartProgress) => void;
+  onProgress: (tutorialId: string, partId: string, progress: PartProgress) => void;
   onOpenPart: (partId: string, opts?: { play: boolean }) => void;
   partHref: (partId: string) => string;
 }
@@ -173,8 +174,8 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
   useEffect(() => {
     latest.current = { onStartApplied };
   });
-  // `onProgress` is stable (the page's state setter), so the tracker made once per part can keep it.
-  const [tracker] = useState(() => createProgressTracker(tutorial.id, part.id, { onSave: (p) => onProgress(part.id, p) }));
+  // `onProgress` is stable (the page's state setter), so the tracker made once per part can keep it, with the ids it was made for.
+  const [tracker] = useState(() => createProgressTracker(tutorial.id, part.id, { onSave: (p) => onProgress(tutorial.id, part.id, p) }));
 
   useEffect(() => {
     const v = video.current;
@@ -425,18 +426,6 @@ interface StartIntent {
   part: string;
   at: number;
   play: boolean;
-}
-
-/** The progress of every part of one tutorial, read when the tutorial changes and kept up to date as the player saves. */
-function useTutorialProgress(tutorialId: string | undefined) {
-  const [state, setState] = useState(() => ({ id: tutorialId, progress: tutorialId ? readProgress(tutorialId) : {} }));
-  let progress = state.progress;
-  if (state.id !== tutorialId) {
-    progress = tutorialId ? readProgress(tutorialId) : {};
-    setState({ id: tutorialId, progress });
-  }
-  const record = useCallback((partId: string, p: PartProgress) => setState((prev) => ({ ...prev, progress: { ...prev.progress, [partId]: p } })), []);
-  return { progress, record };
 }
 
 function Loaded({ data }: { data: TutorialsRead }) {
