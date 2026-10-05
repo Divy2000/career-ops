@@ -52,7 +52,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), text, { mode });
   };
-  for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'path-resolver.mjs', 'lib/is-main-module.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
+  for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'custom/launchd/pinned-node.sh', 'path-resolver.mjs', 'lib/is-main-module.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
   for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs', 'claude-shim.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
   put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: approved } }));
   put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
@@ -334,4 +334,17 @@ test('the pidfile the Control Center reads names the run while it holds the lock
   fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\nexit 44\n', { mode: 0o755 });
   assert.equal(w.run().status, 1);
   assert.equal(fs.existsSync(path.join(r.imm, '.run-daily.pid')), false);
+});
+
+test('Given the plist pins a node (CC_NODE_BIN), every node the job runs is that one, though Homebrew comes first on its PATH', () => {
+  const w = dailyWorld();
+  const pinned = path.join(w.T, 'pinned');
+  const calls = path.join(w.T, 'pinned-node.log');
+  fs.mkdirSync(pinned);
+  fs.writeFileSync(path.join(pinned, 'node'), `#!/bin/bash\necho "$*" >> "${calls}"\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+  const r = w.run({ CC_NODE_BIN: path.join(pinned, 'node') });
+  assert.equal(r.status, 0, r.log);
+  const seen = fs.existsSync(calls) ? readFileSync(calls, 'utf8') : '';
+  assert.match(seen, /path-resolver\.mjs/, 'the data root was resolved with the pinned node');
+  for (const step of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) assert.ok(seen.includes(step), `${step} ran on the pinned node:\n${seen}`);
 });

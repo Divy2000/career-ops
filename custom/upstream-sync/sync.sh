@@ -22,6 +22,8 @@ LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$LIVE/custom/upstream-sync/lib.sh"
 WT="$HOME/.career-ops-sync"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# shellcheck source=custom/launchd/pinned-node.sh
+source "$LIVE/custom/launchd/pinned-node.sh"
 # Logs and reports follow career-ops' data-root contract (CAREER_OPS_ROOT /
 # .career-ops-data), the same root the control center reads them from.
 DATA="$(cd "$LIVE" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
@@ -42,7 +44,6 @@ mkdir -p "$STATE_DIR"
 LOG="$STATE_DIR/$TODAY.log"
 exec >>"$LOG" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"career-ops upstream sync\"" >/dev/null 2>&1 || true

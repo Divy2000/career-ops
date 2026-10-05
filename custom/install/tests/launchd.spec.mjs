@@ -100,7 +100,11 @@ const DAILY = 'com.career-ops.immigration-watch';
 const SYNC = 'com.career-ops.upstream-sync';
 const plistText = (r, label) => fs.readFileSync(path.join(r.home, 'Library', 'LaunchAgents', `${label}.plist`), 'utf8');
 
-const ENV_KEY = (dir) => `<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${dir}</string></dict>`;
+// The test's bin/node links to this node, so the plist pins its real path.
+const NODE = fs.realpathSync(process.execPath);
+const NODE_KEY = `<key>CC_NODE_BIN</key><string>${NODE}</string>`;
+const ENV_KEY = (dir) => `<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${dir}</string>${NODE_KEY}</dict>`;
+const ONLY_NODE = `<key>EnvironmentVariables</key><dict>${NODE_KEY}</dict>`;
 
 test('CAREER_OPS_ROOT from the environment is written into the plist and used for the launchd logs', () => {
   const data = mkTmp('ci-launchd-data-');
@@ -121,11 +125,12 @@ test('CAREER_OPS_DATA_DIR from the environment is written too, and CAREER_OPS_RO
   assert.ok(plistText(run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: a, CAREER_OPS_DATA_DIR: b } }), DAILY).includes(ENV_KEY(a)));
 });
 
-test('a blank environment variable is not an override: no EnvironmentVariables entry and the checkout is the data root', () => {
+test('a blank environment variable is not an override: no CAREER_OPS_ROOT entry (only the node pin) and the checkout is the data root', () => {
   const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: '   ', CAREER_OPS_DATA_DIR: '\t' } });
   assert.equal(r.status, 0, r.stderr);
   const xml = plistText(r, DAILY);
-  assert.doesNotMatch(xml, /EnvironmentVariables|CAREER_OPS_ROOT/);
+  assert.ok(xml.includes(ONLY_NODE), xml);
+  assert.doesNotMatch(xml, /CAREER_OPS_ROOT/);
   assert.ok(xml.includes(`${r.root}/data/immigration/logs/launchd.out.log`), xml);
 });
 
@@ -133,14 +138,18 @@ test('a marker is resolved at run time: the plist carries no CAREER_OPS_ROOT, bu
   const r = run(['--jobs', 'daily'], { marker: '$T/markerdata' });
   assert.equal(r.status, 0, r.stderr);
   const xml = plistText(r, DAILY);
-  assert.doesNotMatch(xml, /EnvironmentVariables|CAREER_OPS_ROOT/);
+  assert.ok(xml.includes(ONLY_NODE), xml);
+  assert.doesNotMatch(xml, /CAREER_OPS_ROOT/);
   assert.ok(xml.includes(`<string>${r.T}/markerdata/data/immigration/logs/launchd.out.log</string>`), xml);
   assert.ok(fs.statSync(path.join(r.T, 'markerdata', 'data', 'immigration', 'logs')).isDirectory());
 });
 
 test('with neither, no CAREER_OPS_ROOT is written and the logs live in the checkout', () => {
   const r = run(['--jobs', 'all']);
-  for (const label of [DAILY, SYNC]) assert.doesNotMatch(plistText(r, label), /EnvironmentVariables|CAREER_OPS_ROOT/);
+  for (const label of [DAILY, SYNC]) {
+    assert.ok(plistText(r, label).includes(ONLY_NODE), plistText(r, label));
+    assert.doesNotMatch(plistText(r, label), /CAREER_OPS_ROOT/);
+  }
   assert.ok(plistText(r, SYNC).includes(`${r.root}/data/upstream-sync/launchd.out.log`));
 });
 
@@ -194,7 +203,7 @@ test('the daily plist pins the approved claude found on PATH (CC_CLAUDE_BIN), an
   const r = run(['--jobs', 'all'], { claude: '2.1.289' });
   assert.equal(r.status, 0, r.stderr);
   const bin = path.join(r.T, 'bin', 'claude');
-  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict>${CLAUDE_KEY(bin)}</dict>`), plistText(r, DAILY));
+  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict>${CLAUDE_KEY(bin)}${NODE_KEY}</dict>`), plistText(r, DAILY));
   assert.doesNotMatch(plistText(r, SYNC), /CC_CLAUDE_BIN/);
   assert.match(r.stdout, new RegExp(`daily job uses claude ${bin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(Claude Code 2\\.1\\.289\\)`));
 });
@@ -205,7 +214,7 @@ test('CC_CLAUDE_BIN from the environment wins and is written next to CAREER_OPS_
   fs.writeFileSync(other, "#!/bin/sh\necho '2.1.289 (Claude Code)'\n", { mode: 0o755 });
   const r = run(['--jobs', 'daily'], { claude: '2.1.289', env: { CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: other } });
   assert.equal(r.status, 0, r.stderr);
-  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${data}</string>${CLAUDE_KEY(other)}</dict>`), plistText(r, DAILY));
+  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${data}</string>${CLAUDE_KEY(other)}${NODE_KEY}</dict>`), plistText(r, DAILY));
 });
 
 test('a relative CC_CLAUDE_BIN is a usage error that installs nothing', () => {
@@ -250,4 +259,46 @@ test('a claude only behind relative PATH entries falls back to ~/.local/bin/clau
   assert.equal(none.status, 0, none.stderr);
   assert.doesNotMatch(plistText(none, DAILY), /CC_CLAUDE_BIN/);
   assert.match(none.stderr, /warning: no claude found .*CC_CLAUDE_BIN=/);
+});
+
+// ---- the node the jobs run on ----
+
+test('both plists pin the node the installer ran, by its real path (CC_NODE_BIN): launchd never sees a node from nvm, fnm or volta', () => {
+  const r = run(['--jobs', 'all']);
+  assert.equal(r.status, 0, r.stderr);
+  for (const label of [DAILY, SYNC]) assert.ok(plistText(r, label).includes(NODE_KEY), plistText(r, label));
+  assert.ok(r.stdout.includes(`jobs use node ${NODE} (${process.version})`), r.stdout);
+});
+
+const PINNED_NODE = path.resolve(HERE, '..', '..', 'launchd', 'pinned-node.sh');
+
+/** Sources pinned-node.sh the way the jobs do, after a launchd-like PATH, and reports which node the job would run. */
+function pinnedNode(env) {
+  const r = spawnSync('bash', ['-c', `export PATH=/usr/bin:/bin\nsource "${PINNED_NODE}"\nprintf '%s\\n%s' "$PATH" "$(command -v node || true)"`], { env, encoding: 'utf8' });
+  const [pathLine, node] = r.stdout.split('\n');
+  return { status: r.status, stderr: r.stderr, path: pathLine, node };
+}
+
+test('a job that sources pinned-node.sh runs the pinned node first, ahead of everything on its PATH', () => {
+  const dir = mkTmp('ci-launchd-node-');
+  fs.writeFileSync(path.join(dir, 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  const r = pinnedNode({ CC_NODE_BIN: path.join(dir, 'node') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.path, `${dir}:/usr/bin:/bin`);
+  assert.equal(r.node, path.join(dir, 'node'));
+  assert.equal(r.stderr, '');
+});
+
+test('with no pin, pinned-node.sh leaves PATH alone', () => {
+  const r = pinnedNode({});
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.path, '/usr/bin:/bin');
+  assert.equal(r.stderr, '');
+});
+
+test('a pinned node that is gone (its version was uninstalled) leaves PATH alone and warns how to pin again', () => {
+  const r = pinnedNode({ CC_NODE_BIN: path.join(mkTmp('ci-launchd-node-'), 'node') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.path, '/usr/bin:/bin');
+  assert.match(r.stderr, /warning: CC_NODE_BIN .*node is not an executable.*custom\/launchd\/install\.sh/);
 });

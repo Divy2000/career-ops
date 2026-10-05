@@ -71,14 +71,20 @@ else
   echo "warning: no claude found on PATH or in ~/.local/bin; the daily job looks it up on launchd's PATH at run time. To pin one: CC_CLAUDE_BIN=/path/to/claude $(shell_quote "$0")" >&2
 fi
 
+# The node both jobs run on, pinned as CC_NODE_BIN (custom/launchd/pinned-node.sh puts it first on the job's PATH):
+# launchd's PATH never reaches a node from nvm, fnm, volta or asdf. Its real path, so an fnm per-shell link is not pinned.
+NODE_BIN="$(node -p process.execPath)"
+echo "jobs use node $NODE_BIN ($("$NODE_BIN" --version))"
+
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd="" envxml="" vars="" xdata xroot
+  local wd="" envxml vars="" xdata xroot
   xdata="$(xml_escape "$DATA")"
   xroot="$(xml_escape "$ROOT")"
   if [ "$ENV_ROOT" = 1 ]; then vars="<key>CAREER_OPS_ROOT</key><string>$xdata</string>"; fi
   if [ "$label" = com.career-ops.immigration-watch ] && [ -n "$CLAUDE_BIN" ]; then vars="$vars<key>CC_CLAUDE_BIN</key><string>$(xml_escape "$CLAUDE_BIN")</string>"; fi
-  if [ -n "$vars" ]; then envxml="<key>EnvironmentVariables</key><dict>$vars</dict>"; fi
+  vars="$vars<key>CC_NODE_BIN</key><string>$(xml_escape "$NODE_BIN")</string>"
+  envxml="<key>EnvironmentVariables</key><dict>$vars</dict>"
   [ -n "$weekday" ] && wd="<key>Weekday</key><integer>$weekday</integer>"
   cat > "$AGENTS/$label.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

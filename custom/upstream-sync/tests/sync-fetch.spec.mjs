@@ -217,6 +217,8 @@ function runSync(world, { home, inherited = {} }) {
   const syncDir = path.join(world.live, 'custom/upstream-sync');
   mkdirSync(syncDir, { recursive: true });
   for (const f of ['sync.sh', 'keep-fork-readme.sh', 'lib.sh', 'sync-prompt.md']) copyFileSync(path.join(SYNC_DIR, f), path.join(syncDir, f));
+  mkdirSync(path.join(world.live, 'custom/launchd'), { recursive: true });
+  copyFileSync(path.join(REPO_ROOT, 'custom/launchd/pinned-node.sh'), path.join(world.live, 'custom/launchd/pinned-node.sh'));
   copyFileSync(path.join(REPO_ROOT, 'path-resolver.mjs'), path.join(world.live, 'path-resolver.mjs'));
   const bin = path.join(world.base, 'bin');
   // The Keychain is never touched: a stub that finds no item stops the run right after the fetch checks.
@@ -295,5 +297,20 @@ test('Given the shell exports a data root (as the launchd plist does), sync.sh u
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.log, /nothing to do/);
     assert.deepEqual(readdirSync(decoy), []);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
+  const w = makeWorld({ upstreamAhead: false });
+  const home = path.join(w.base, 'home');
+  const pinned = path.join(w.base, 'pinned');
+  const calls = path.join(w.base, 'pinned-node.log');
+  mkdirSync(home);
+  stub(pinned, 'node', `echo "$*" >> "${calls}"\nexec "${process.execPath}" "$@"`);
+  try {
+    const res = runSync(w, { home, inherited: { CC_NODE_BIN: path.join(pinned, 'node') } });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.log, /nothing to do/);
+    assert.match(existsSync(calls) ? readFileSync(calls, 'utf8') : '', /path-resolver\.mjs/);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
