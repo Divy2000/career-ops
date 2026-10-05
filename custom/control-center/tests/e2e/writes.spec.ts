@@ -170,6 +170,29 @@ test.describe('deterministic writes from the pages', () => {
     expect(answers).toEqual([]);
   });
 
+  test('Network scan results arrive after the event stream drops mid-scan: the page reconnects and shows each line once (SW-web-a-04)', async ({ page }) => {
+    const progress = { line: 'scanning greenhouse', stream: 'stderr', seq: 1, ts: '2026-10-05T12:00:00.000Z' };
+    const postings = [{ url: 'https://boards.example.com/resume/1', company: 'Resume Co', title: 'Platform Engineer', location: 'Remote', postedAt: null, source: 'greenhouse' }];
+    const summary = { line: JSON.stringify({ postings }), stream: 'stdout', seq: 2, ts: '2026-10-05T12:00:01.000Z' };
+    const frame = (l: typeof progress) => `id: ${l.seq}\nevent: line\ndata: ${JSON.stringify(l)}\n\n`;
+    await page.route('**/api/actions/scan.network', (route) => route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ runId: 'e2e-network-scan-drop' }) }));
+    // Until the run ends, every connection ends after line 1 (a server reload, a laptop waking up). The browser reconnects
+    // on its own; each reply replays line 1 (the interception cannot see Last-Event-ID), which must still show once.
+    let running = true;
+    await page.route('**/api/runs/e2e-network-scan-drop/events', async (route) => {
+      const body = running ? `retry: 100\n\n${frame(progress)}` : `${frame(progress)}${frame(summary)}event: run.done\ndata: {"status":"done"}\n\n`;
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+    });
+    await page.goto('/discover');
+    await page.getByRole('button', { name: /Run network scan/ }).click();
+    const log = page.getByLabel('Scan log');
+    await expect(log).toContainText('scanning greenhouse');
+    running = false;
+    await expect(page.getByRole('button', { name: 'Add all (1)' })).toBeVisible();
+    await expect(page.getByText('scan done')).toBeVisible();
+    await expect(log.getByText('scanning greenhouse')).toHaveCount(1);
+  });
+
   test('Discover renders the network scan form and the Fresh tab', async ({ page }) => {
     await page.goto('/discover');
     await expect(page.getByRole('heading', { level: 1, name: 'Discover' })).toBeVisible();

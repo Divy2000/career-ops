@@ -128,12 +128,16 @@ function useRunLines(runId: string | null) {
     if (!runId) return;
     const es = new EventSource(`/api/runs/${runId}/events`);
     const forRun = (update: (prev: RunTailState) => RunTailState) => setState((prev) => update(prev.runId === runId ? prev : { runId, lines: [], status: null }));
-    es.addEventListener('line', (ev) => forRun((prev) => ({ ...prev, lines: [...prev.lines, JSON.parse((ev as MessageEvent).data) as RawLine] })));
+    es.addEventListener('line', (ev) => {
+      const line = JSON.parse((ev as MessageEvent).data) as RawLine;
+      forRun((prev) => (prev.lines.some((l) => l.seq === line.seq) ? prev : { ...prev, lines: [...prev.lines, line] }));
+    });
     es.addEventListener('run.done', (ev) => {
       forRun((prev) => ({ ...prev, status: (JSON.parse((ev as MessageEvent).data) as { status: string }).status }));
       es.close();
     });
-    es.onerror = () => es.close();
+    // No close on error: the browser reconnects with Last-Event-ID and the server replays the lines after it, so a
+    // dropped stream (a server reload, a laptop waking up) still ends with the scan's results.
     return () => es.close();
   }, [runId]);
   return state.runId === runId ? { lines: state.lines, status: state.status } : { lines: [], status: null };
