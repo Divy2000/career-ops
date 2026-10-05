@@ -417,6 +417,7 @@ export function actionMetadata() {
     resources: a.resources,
     claude: a.claude,
     sync: a.sync,
-    params: z.toJSONSchema(a.params),
+    // The input schema: a field with a default is optional to the caller, as it is to the zod parse.
+    params: z.toJSONSchema(a.params, { io: 'input' }),
   }));
 }

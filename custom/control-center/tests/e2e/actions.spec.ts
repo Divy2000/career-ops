@@ -56,6 +56,35 @@ test.describe('deterministic writes through the action registry', () => {
   });
 });
 
+test.describe('Command palette actions with params', () => {
+  test('Network scan (dry run) asks only for the ATS, offers sinceDays as a choice and sends it as a number the action accepts', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/runs');
+    // The real scan fetches the public ATS dataset: the request is captured and answered with the 202 the route sends.
+    const sent: unknown[] = [];
+    await page.route('**/api/actions/scan.network', async (route) => {
+      sent.push(route.request().postDataJSON());
+      await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ runId: '20261005000000-e2e000' }) });
+    });
+    await page.keyboard.press('Control+k');
+    await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('Network scan');
+    const item = page.locator('[cmdk-item]', { hasText: 'Network scan (dry run)' });
+    await expect(item).toContainText('asks for ats');
+    await item.click();
+    const dialog = page.getByRole('dialog', { name: /Network scan/ });
+    await expect(dialog.getByRole('button', { name: 'Run' })).toBeDisabled();
+    // A field left blank takes the action's default, so the dialog says what that is.
+    await expect(dialog.getByLabel('sinceDays').locator('option').first()).toHaveText('default (7)');
+    await expect(dialog.getByLabel('limit')).toHaveAttribute('placeholder', 'default (100)');
+    await dialog.getByLabel('sinceDays').selectOption('7');
+    await dialog.getByLabel('ats').fill('greenhouse');
+    await dialog.getByRole('button', { name: 'Run' }).click();
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0]).toEqual({ params: { sinceDays: 7, ats: ['greenhouse'] } });
+    await page.unrouteAll();
+  });
+});
+
 test.describe('Today: shortlist and decisions act on the row', () => {
   const setStatus = (page: Page, row: number, state: string) =>
     page.request.post('/api/actions/tracker.setStatus', { data: { params: { row, state } }, headers: { 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
