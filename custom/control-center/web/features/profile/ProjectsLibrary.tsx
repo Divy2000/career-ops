@@ -277,6 +277,8 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const [source, setSource] = useState<string | null>(null);
   // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
   const currentUpload = useRef<string | null>(null);
+  // Bumped by every new file choice; an async step that finishes under an older generation is dropped.
+  const generation = useRef(0);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
     setUploadPath(p);
@@ -294,29 +296,29 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const onUploadEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
 
   const onFile = async (file: File) => {
+    const mine = ++generation.current;
+    const current = () => generation.current === mine;
     setError(null);
     setPreview(null);
     setSource(null);
     showUpload(null);
-    if (/\.json$/i.test(file.name)) {
-      setFormat('json');
-      setText(await file.text());
-      return;
-    }
-    if (/\.(md|markdown|txt)$/i.test(file.name)) {
-      setFormat('markdown');
-      setText(await file.text());
+    if (/\.(json|md|markdown|txt)$/i.test(file.name)) {
+      const content = await file.text();
+      if (!current()) return;
+      setFormat(/\.json$/i.test(file.name) ? 'json' : 'markdown');
+      setText(content);
       return;
     }
     // A PDF is kept under documents/projects/ as an intake source; the server refuses what intake cannot read.
     const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
     const res = await fetch(`/api/projects/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
+    if (!current()) return;
+    if (!res.ok || !body?.path) {
       setError(body?.error ?? `Upload failed (${res.status}). JSON, Markdown or PDF only.`);
       return;
     }
-    showUpload(((await res.json()) as { path: string }).path);
+    showUpload(body.path);
   };
 
   const convert = async () => {
