@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { isNestedCheckout } from '../../../lib/mjs-files.mjs';
 
@@ -257,17 +257,21 @@ test('projects-check accepts a valid library or projects JSON and rejects an inv
   assert.equal(seed(['projects-check', '--lib', PROJECTS_LIB, '--file', notList]).status, 2);
 });
 
-test('projects-seed copies the file to documents/projects and creates article-digest.md only when absent', () => {
+test('projects-seed keeps a projects JSON under documents/projects as the Markdown intake reads, names it as each entry\'s Source, and creates article-digest.md only when absent', async () => {
   const d = tmp();
   const data = path.join(d, 'data');
   const json = put(path.join(d, 'src', 'projects.json'), JSON.stringify([{ name: 'Kite Tracker', url: 'https://example.org/kites', description: 'Tracked kites.', highlights: ['Plotted paths.'], keywords: ['python'] }]));
   const r = seed(['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', json]);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(r.stdout.trim().split('\n'), [`copied\tprojects\t${path.join(data, 'documents/projects/projects.json')}`, 'created']);
-  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), '# Projects library\n\n## Kite Tracker -- https://example.org/kites\nTags: python\n- Tracked kites.\n- Plotted paths.\n');
+  assert.deepEqual(r.stdout.trim().split('\n'), [`copied\tprojects\t${path.join(data, 'documents/projects/projects.md')}`, 'created']);
+  assert.deepEqual(fs.readdirSync(path.join(data, 'documents/projects')), ['projects.md']);
+  assert.equal(fs.readFileSync(path.join(data, 'documents/projects/projects.md'), 'utf8'), '# Projects library\n\n## Kite Tracker -- https://example.org/kites\nTags: python\n- Tracked kites.\n- Plotted paths.\n');
+  const { classifySource } = await import(pathToFileURL(path.join(HERE, '..', '..', '..', 'intake.mjs')).href);
+  assert.equal(classifySource('projects/projects.md').kind, 'direct', 'intake can read the kept source');
+  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), '# Projects library\n\n## Kite Tracker -- https://example.org/kites\nTags: python\nSource: documents/projects/projects.md\n- Tracked kites.\n- Plotted paths.\n');
   fs.writeFileSync(path.join(data, 'article-digest.md'), 'MINE\n');
   const again = seed(['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', json]);
-  assert.equal(again.stdout.trim().split('\n').at(-1), 'exists');
+  assert.deepEqual(again.stdout.trim().split('\n'), [`present\tprojects\t${path.join(data, 'documents/projects/projects.md')}`, 'exists']);
   assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), 'MINE\n');
 });
 

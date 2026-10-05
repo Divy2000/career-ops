@@ -457,11 +457,13 @@ test('--projects with a library .md and no article-digest.md creates it and keep
   assert.match(r.out, /created article-digest\.md/);
 });
 
-test('--projects with a projects JSON converts it into the library format', () => {
+test('--projects with a projects JSON converts it into the library format, keeps the conversion as the source and names it in each entry', () => {
   const { w, D, args } = fresh();
   const json = md(w, 'projects.json', JSON.stringify([{ id: 'k', name: 'Kite Tracker', url: 'https://example.org/kites', description: 'Tracked 40 kites.', highlights: [], keywords: ['python'] }]));
   w.run(args('--projects', json));
-  assert.equal(read(D, 'article-digest.md'), LIBRARY);
+  assert.equal(read(D, 'article-digest.md'), LIBRARY.replace('Tags: python\n', 'Tags: python\nSource: documents/projects/projects.md\n'));
+  assert.equal(read(D, 'documents', 'projects', 'projects.md'), LIBRARY);
+  assert.equal(exists(D, 'documents', 'projects', 'projects.json'), false, 'intake cannot read JSON, so the JSON itself is not kept there');
 });
 
 test('an invalid --projects library exits 2 and changes nothing', () => {
