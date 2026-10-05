@@ -38,6 +38,30 @@ test.describe('Dev Chat', () => {
     expect(restored.text).not.toContain('Added by Dev Chat');
   });
 
+  test('a second turn shows up in Changes with its own revert, and the turns revert newest first', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/dev');
+    await page.getByLabel('Prompt for devchat').fill('Add a scoring rule, then more');
+    await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+    await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
+    const changes = page.getByLabel('Changes');
+    await expect(changes.getByRole('heading', { name: 'Turn 1' })).toBeVisible();
+    await page.getByLabel('Reply to the session').fill('Rewrite the note');
+    await page.getByRole('button', { name: 'Send', exact: true }).last().click();
+    await expect(page.locator('p', { hasText: 'Rewrote the note in turn two.' })).toBeVisible({ timeout: 20_000 });
+    const turn2 = changes.locator('.card', { has: page.getByRole('heading', { name: 'Turn 2' }) });
+    await expect(turn2).toBeVisible();
+    await expect(turn2.getByText('data/notes/devchat.md', { exact: true })).toBeVisible();
+    await expect(turn2.getByRole('button', { name: 'Revert turn' })).toBeEnabled();
+    await turn2.getByRole('button', { name: 'Revert turn' }).click();
+    await page.getByRole('dialog', { name: 'Revert turn 2?' }).getByRole('button', { name: 'Revert' }).click();
+    await expect(page.getByText(/^Reverted: devchat\.md/)).toBeVisible();
+    const turn1 = changes.locator('.card', { has: page.getByRole('heading', { name: 'Turn 1' }) });
+    await turn1.getByRole('button', { name: 'Revert turn' }).click();
+    await page.getByRole('dialog', { name: 'Revert turn 1?' }).getByRole('button', { name: 'Revert' }).click();
+    await expect.poll(async () => (await (await page.request.get('/api/files/user/customMd')).json()).text).not.toContain('Added by Dev Chat');
+  });
+
   test('a transcript taller than its box scrolls with the keyboard (axe: scrollable-region-focusable)', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 420 });
     await page.goto(`/auth?t=${E2E_TOKEN}`);

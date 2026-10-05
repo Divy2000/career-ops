@@ -4,11 +4,13 @@ import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import type { Exec } from '../../server/routes/system.js';
 import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
+import { dailyPidfile } from '../../server/system/daily.js';
 
 let t: TestApp;
-let pgrepRunning = false;
+let jobRunning = false;
 const fakeExec: Exec = async (cmd, args, opts) => {
-  if (cmd === 'pgrep') return { code: pgrepRunning ? 0 : 1, stdout: pgrepRunning ? '4242\n' : '', stderr: '' };
+  // The daily probe asks ps about the pid in the job's pidfile.
+  if (cmd === 'ps') return jobRunning ? { code: 0, stdout: '/bin/bash /checkout/custom/immigration/run-daily.sh\n', stderr: '' } : { code: 1, stdout: '', stderr: '' };
   const { execNoShell } = await import('../../server/routes/system.js');
   return execNoShell(cmd, args, opts);
 };
@@ -80,6 +82,38 @@ describe('pipeline writes', () => {
     expect(pipeline).not.toContain('utm_source');
     const history = readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${fresh}\t`) || l.startsWith(`${other}\t`));
     expect(history).toHaveLength(2);
+  });
+  it('a retry after the history write failed records the missing history row once, and nothing for a URL history already has', async () => {
+    // The state a failed add leaves: the pipeline write landed, appendToScanHistory did not (lock timeout, full disk).
+    const halfway = 'https://boards.example.com/halfway/1';
+    const pipelinePath = path.join(t.cfg.dataRoot, 'data', 'pipeline.md');
+    fs.writeFileSync(pipelinePath, readData('data/pipeline.md').replace('## Pending\n\n', `## Pending\n\n- [ ] ${halfway} | Halfway Co | Backend Engineer\n`));
+    const rowsFor = (url: string) => readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${url}\t`));
+    expect(rowsFor(halfway)).toEqual([]);
+    const body = { offers: [{ url: halfway, company: 'Halfway Co', title: 'Backend Engineer' }, { url: 'https://jobs.example.com/acme/123', company: 'Acme Robotics', title: 'Senior Backend Engineer' }] };
+    const retry = await post('/api/pipeline/add', body);
+    expect(retry.statusCode, retry.body).toBe(200);
+    expect(retry.json()).toEqual({ added: 0, skipped: 2 });
+    expect(rowsFor(halfway)).toHaveLength(1);
+    expect(rowsFor(halfway)[0]!.split('\t').slice(3, 6)).toEqual(['Backend Engineer', 'Halfway Co', 'added']);
+    expect(rowsFor('https://jobs.example.com/acme/123')).toHaveLength(1);
+    expect((await post('/api/pipeline/add', body)).json()).toEqual({ added: 0, skipped: 2 });
+    expect(rowsFor(halfway)).toHaveLength(1);
+    expect(readData('data/pipeline.md').split(`${halfway} `).length - 1).toBe(1);
+  });
+  it('a headerless scan-history (legacy) keeps its first row: a listed URL recorded there gets no second history row', async () => {
+    const listed = 'https://boards.example.com/legacy/1';
+    const historyPath = path.join(t.cfg.dataRoot, 'data', 'scan-history.tsv');
+    const before = readData('data/scan-history.tsv');
+    try {
+      fs.writeFileSync(historyPath, `${listed}\t2026-09-01\tgreenhouse\tBackend Engineer\tLegacy Co\tadded\n`);
+      fs.writeFileSync(path.join(t.cfg.dataRoot, 'data', 'pipeline.md'), readData('data/pipeline.md').replace('## Pending\n\n', `## Pending\n\n- [ ] ${listed} | Legacy Co | Backend Engineer\n`));
+      const r = await post('/api/pipeline/add', { offers: [{ url: listed, company: 'Legacy Co', title: 'Backend Engineer' }] });
+      expect(r.json()).toEqual({ added: 0, skipped: 1 });
+      expect(readData('data/scan-history.tsv').split('\n').filter((l) => l.startsWith(`${listed}\t`))).toHaveLength(1);
+    } finally {
+      fs.writeFileSync(historyPath, before);
+    }
   });
   it('Network scan results with no location, a very long location and more rows than one request takes are all added', async () => {
     const postings: ScanPostingInput[] = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: 'Remote', source: 'greenhouse' }));
@@ -264,11 +298,18 @@ describe('documents for a row whose number differs from its report', () => {
 });
 
 describe('daily job awareness', () => {
-  it('reports whether run-daily.sh is running from pgrep', async () => {
+  it('reports whether run-daily.sh is running from its pidfile', async () => {
     expect((await get('/api/system/daily')).json()).toMatchObject({ running: false });
-    pgrepRunning = true;
-    await new Promise((r) => setTimeout(r, 200));
-    expect((await get('/api/system/daily')).json()).toMatchObject({ running: true });
-    pgrepRunning = false;
+    const pidfile = dailyPidfile(t.cfg.dataRoot);
+    fs.mkdirSync(path.dirname(pidfile), { recursive: true });
+    fs.writeFileSync(pidfile, '4242\n');
+    jobRunning = true;
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      expect((await get('/api/system/daily')).json()).toMatchObject({ running: true });
+    } finally {
+      jobRunning = false;
+      fs.rmSync(pidfile);
+    }
   });
 });

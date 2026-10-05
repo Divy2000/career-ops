@@ -25,3 +25,16 @@ test('prioritize puts the rows the scanner first saw on the local today first, a
   const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
   assert.deepEqual(pending, [fresh, backlog]);
 });
+
+test('prioritize runs on a root with no scan history yet (URLs added by hand), with no first-seen dates', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const rows = ['- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote', '- [ ] https://jobs.example.com/b | B Co | Backend Engineer | Remote'];
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${rows.join('\n')}\n`);
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /prioritized 2 pending rows \(0 first seen 2026-10-05\)/);
+  const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
+  assert.deepEqual([...pending].sort(), [...rows].sort());
+  assert.equal(fs.existsSync(path.join(root, 'data', 'scan-history.tsv')), false);
+});

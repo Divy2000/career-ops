@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router';
 import { SafeMarkdown } from './Md';
 import { Empty, Pill } from './ui';
 import { describeError } from '../lib/actions';
-import { cancelSession, forkSession, isTerminal, sendTurn, startSession, useSessionStream, type Target, type Transcript } from '../lib/sessions';
+import { cancelSession, forkSession, sendTurn, startSession, useSessionStream, type Target, type Transcript } from '../lib/sessions';
 
 export function statusTone(status: string): 'ok' | 'warn' | 'danger' | 'info' | 'neutral' {
   if (status === 'done') return 'ok';
@@ -111,6 +111,7 @@ export interface SessionPanelProps {
   sessionId?: string | null;
   /** Called with every envelope the session emits (kind, payload). */
   onEnvelope?: (kind: string, payload: unknown, turn: number) => void;
+  /** Called on every status change, running included, so a host can tell a later turn is live. */
   onStatus?: (status: string, reason: string | null) => void;
   /** Called when the panel starts or forks a session. */
   onSessionId?: (id: string) => void;
@@ -127,7 +128,9 @@ export function SessionPanel(props: SessionPanelProps) {
   // A session id passed by the host wins; otherwise the panel tracks the one it started.
   const [localId, setSessionId] = useState<string | null>(null);
   const sessionId = props.sessionId ?? localId;
-  const [prompt, setPrompt] = useState(props.initialPrompt ?? '');
+  // The host's prompt follows its inputs (Apply builds it from the posting URL) until the user types their own.
+  const [editedPrompt, setPrompt] = useState<string | null>(null);
+  const prompt = editedPrompt ?? props.initialPrompt ?? '';
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +143,7 @@ export function SessionPanel(props: SessionPanelProps) {
     seen.current = transcript.envelopes.length;
   }, [transcript.envelopes, onEnvelope]);
   useEffect(() => {
-    if (onStatus && isTerminal(transcript.status)) onStatus(transcript.status, transcript.reason);
+    onStatus?.(transcript.status, transcript.reason);
   }, [transcript.status, transcript.reason, onStatus]);
   const start = async (text: string) => {
     setBusy(true);

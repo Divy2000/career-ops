@@ -33,14 +33,14 @@ export interface ScanSummary {
   companiesAvailable?: number;
 }
 
-/** scan-ats-full --json prints one JSON object on stdout; progress goes to stderr. */
+/** scan-ats-full --json prints one JSON object on stdout; progress goes to stderr. A SIGTERM partial says stoppedEarly, a DNS-outage stop says stoppedByOutage. */
 export function parseScanOutput(lines: RawLine[]): ScanSummary | null {
   for (const l of [...lines].reverse()) {
     if (l.stream !== 'stdout' || !l.line.trim().startsWith('{')) continue;
     try {
       const obj = JSON.parse(l.line) as Record<string, unknown>;
       const list = (obj.postings ?? obj.offers ?? obj.results ?? []) as ScanPosting[];
-      return { postings: Array.isArray(list) ? list : [], capHit: Boolean(obj.capHit), stoppedEarly: Boolean(obj.stoppedEarly), datasetStatus: obj.datasetStatus as string | undefined, companiesScanned: obj.companiesScanned as number | undefined, companiesAvailable: obj.companiesAvailable as number | undefined };
+      return { postings: Array.isArray(list) ? list : [], capHit: Boolean(obj.capHit), stoppedEarly: Boolean(obj.stoppedEarly || obj.stoppedByOutage), datasetStatus: obj.datasetStatus as string | undefined, companiesScanned: obj.companiesScanned as number | undefined, companiesAvailable: obj.companiesAvailable as number | undefined };
     } catch {
       /* not the summary line */
     }

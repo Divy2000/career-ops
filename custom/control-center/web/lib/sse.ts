@@ -27,10 +27,11 @@ export function useLiveInvalidation(): void {
       }
     };
     es.addEventListener('data.changed', onChanged);
-    // A job log's status is decided when it is read (a run killed before its done line turns interrupted), so the logs refetch too.
+    // A job log's status is decided when it is read (a run killed before its done line turns interrupted), so every
+    // reader refetches too: the job logs under ['immigration', 'logs'] and the Today chip's overview under ['immigration'].
     es.addEventListener('daily.status', () => {
       void qc.invalidateQueries({ queryKey: ['system', 'daily'] });
-      void qc.invalidateQueries({ queryKey: ['immigration', 'logs'] });
+      void qc.invalidateQueries({ queryKey: ['immigration'] });
     });
     es.addEventListener('run.status', () => void qc.invalidateQueries({ queryKey: ['runs'] }));
     return () => es.close();

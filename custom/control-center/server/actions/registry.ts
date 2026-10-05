@@ -206,7 +206,7 @@ export const ACTIONS: ActionDef[] = [
     }),
     build: (p, ctx) => {
       const portals = YAML.stringify({
-        title_filter: { include: p.roles, exclude: p.exclude },
+        title_filter: { positive: p.roles, negative: p.exclude },
         location_filter: { strict: false, allow: p.locationAllow, block: p.block },
         tracked_companies: [],
         job_boards: [],

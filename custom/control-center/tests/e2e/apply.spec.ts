@@ -57,3 +57,26 @@ test.describe('Apply: zero-token prefill', () => {
     await expect(page.getByText(/Greenhouse, Ashby and Lever apply links only, and www\.builtinaustin\.com is not one/)).toBeVisible();
   });
 });
+
+test.describe('Apply: draft session prompt', () => {
+  test.beforeEach(async ({ page }) => login(page));
+
+  test('a URL typed into Posting URL fills the draft prompt and enables Draft answers', async ({ page }) => {
+    await page.goto('/apply');
+    const prompt = page.getByLabel('Prompt for apply');
+    await expect(prompt).toHaveValue('');
+    await page.getByLabel('Posting URL').fill(GREENHOUSE);
+    await expect(prompt).toHaveValue(`Read the application form at ${GREENHOUSE}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.`);
+    await expect(page.getByRole('button', { name: 'Draft answers' })).toBeEnabled();
+  });
+
+  test("editing an application's URL moves the prompt to the new URL, until the user edits the prompt", async ({ page }) => {
+    await page.goto('/apply/1');
+    const prompt = page.getByLabel('Prompt for apply');
+    await page.getByLabel('Posting URL').fill(GREENHOUSE);
+    await expect(prompt).toHaveValue(new RegExp(`^Read the application form at ${GREENHOUSE.replaceAll('.', '\\.')}, `));
+    await prompt.fill('Only read the form, my own words.');
+    await page.getByLabel('Posting URL').fill(`${GREENHOUSE}0`);
+    await expect(prompt).toHaveValue('Only read the form, my own words.');
+  });
+});

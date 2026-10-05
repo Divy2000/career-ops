@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import type { ServerConfig } from '../config.js';
@@ -7,34 +9,64 @@ export interface DailyStatus {
   checkedAt: string | null;
 }
 
-/** Test builds only: answer the run-daily.sh probe from the override so a real daily job on the host never leaks into a run. */
-export function maybeFakeDailyProbe(cfg: ServerConfig, exec: Exec): Exec {
-  if (!cfg.fakeDaily || cfg.nodeEnv !== 'test') return exec;
+/** Answers whether the daily job runs now. */
+export type DailyProbe = () => Promise<boolean>;
+
+/** Test builds only: answer the probe from the override so a real daily job on the host never leaks into a run. */
+export function maybeFakeDailyProbe(cfg: ServerConfig, probe: DailyProbe): DailyProbe {
+  if (!cfg.fakeDaily || cfg.nodeEnv !== 'test') return probe;
   const running = cfg.fakeDaily === 'running';
-  return async (cmd, args, opts) => (cmd === 'pgrep' ? { code: running ? 0 : 1, stdout: running ? '4242\n' : '', stderr: '' } : exec(cmd, args, opts));
+  return async () => running;
 }
 
-/**
- * The job's own command line: bash running run-daily.sh as its script (launchd, the lock re-exec and the app all start
- * it so). Anchored, because pgrep -f matches the whole argument list and a Claude prompt that merely names the script
- * must not read as the job running. Probing the lock with lockf instead could make a scheduled run skip.
- */
-export const DAILY_JOB_PATTERN = '^([^ ]*/)?bash [^-].*custom/immigration/run-daily\\.sh( |$)';
+/** run-daily.sh writes its pid here once it holds the job lock, and removes it when it exits. */
+export const dailyPidfile = (dataRoot: string) => path.join(dataRoot, 'data', 'immigration', '.run-daily.pid');
 
-/** Polls `pgrep -f DAILY_JOB_PATTERN`; never blocks anything (core locks do). */
+/**
+ * The job's own command line: bash running run-daily.sh as its script, by any path (launchd and the app pass an
+ * absolute one; a manual run types `bash custom/immigration/run-daily.sh` or `bash run-daily.sh`, which the lock
+ * re-exec keeps). Anchored, so a Claude prompt or a `bash -c` that merely names the script is not the job.
+ */
+export const DAILY_JOB_PATTERN = '^([^ ]*/)?bash ([^-].*/)?run-daily\\.sh( |$)';
+const DAILY_JOB_RE = new RegExp(DAILY_JOB_PATTERN);
+
+/**
+ * The job runs when the pid in this data root's pidfile is alive and is bash running run-daily.sh. Only the lock
+ * holder writes the file, so it names this data root's run however the script was started, and never another
+ * project's run-daily.sh; the command line check keeps a stale file whose pid was reused from counting. Probing the
+ * lock with lockf instead could make a scheduled run skip.
+ */
+export function dailyPidfileProbe(dataRoot: string, exec: Exec): DailyProbe {
+  return async () => {
+    let pid: string;
+    try {
+      pid = fs.readFileSync(dailyPidfile(dataRoot), 'utf8').trim();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+    if (!/^[1-9]\d*$/.test(pid)) return false;
+    const r = await exec('ps', ['-o', 'command=', '-p', pid], { timeoutMs: 4000 });
+    return r.code === 0 && DAILY_JOB_RE.test(r.stdout.trim());
+  };
+}
+
+/** Polls the probe; never blocks anything (core locks do). */
 export class DailyJobWatch {
   private timer: NodeJS.Timeout | null = null;
   private state: DailyStatus = { running: false, checkedAt: null };
 
   constructor(
-    private exec: Exec,
+    private probe: DailyProbe,
     private bus: EventBus,
     private intervalMs = 10_000,
   ) {}
 
   start(): void {
-    void this.poll();
-    this.timer = setInterval(() => void this.poll(), this.intervalMs);
+    // A pidfile that cannot be read (not one that is missing) is reported, and the next poll asks again.
+    const tick = () => void this.poll().catch((err: Error) => console.error(`[daily] probe failed: ${err.message}`));
+    tick();
+    this.timer = setInterval(tick, this.intervalMs);
     this.timer.unref();
   }
 
@@ -54,8 +86,7 @@ export class DailyJobWatch {
   }
 
   async poll(): Promise<void> {
-    const r = await this.exec('pgrep', ['-f', DAILY_JOB_PATTERN], { timeoutMs: 4000 });
-    const running = r.code === 0 && r.stdout.trim().length > 0;
+    const running = await this.probe();
     const changed = running !== this.state.running;
     this.state = { running, checkedAt: new Date().toISOString() };
     if (changed) this.bus.publish('daily.status', { running });

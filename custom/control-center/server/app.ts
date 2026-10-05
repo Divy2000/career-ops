@@ -12,7 +12,7 @@ import { Runner } from './runner/runner.js';
 import { sweepStaleInputs } from './actions/tmp-inputs.js';
 import { OutsideRootsError, unresolvablePath } from './lib/atomic-write.js';
 import { writeRoutes } from './routes/writes.js';
-import { DailyJobWatch, maybeFakeDailyProbe } from './system/daily.js';
+import { DailyJobWatch, dailyPidfileProbe, maybeFakeDailyProbe } from './system/daily.js';
 import { execNoShell, type Exec } from './routes/system.js';
 import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
 import { sessionRoutes } from './routes/sessions.js';
@@ -31,7 +31,7 @@ import { readSettings, type AppSettings } from './domains/settings.js';
 const STALE_INPUT_MS = 24 * 3_600_000;
 
 export interface AppDeps {
-  /** Injectable process runner (tests fake pgrep, launchctl and plutil). */
+  /** Injectable process runner (tests fake ps, launchctl and plutil). */
   exec?: Exec;
   dailyPollMs?: number;
   /** Keychain token reader for Claude sessions (tests inject a constant). */
@@ -84,7 +84,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   // Called directly, not registered: its hooks must live on the root context so
   // they guard every route, including the encapsulated plugins below.
   await authPlugin(app, cfg);
-  const daily = new DailyJobWatch(maybeFakeDailyProbe(cfg, exec), bus, deps.dailyPollMs);
+  const daily = new DailyJobWatch(maybeFakeDailyProbe(cfg, dailyPidfileProbe(cfg.dataRoot, exec)), bus, deps.dailyPollMs);
   daily.start();
   closers.push(async () => daily.stop());
   await app.register(systemRoutes, { cfg, exec });

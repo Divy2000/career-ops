@@ -2,6 +2,8 @@ import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useTracker } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
+import { describeError } from '../../lib/actions';
+import { pipelineAddBatches } from '@shared/pipeline-add';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill, TableScroll } from '../../components/ui';
 
@@ -28,14 +30,19 @@ export function AiSearchTab() {
   const add = async (list: Offer[]) => {
     const fresh = list.filter((o) => !known.has(o.url) && !added.has(o.url));
     if (fresh.length === 0) return;
+    let count = 0;
     try {
-      await apiSend('POST', '/api/pipeline/add', { offers: fresh.map((o) => ({ url: o.url, company: o.company, title: o.title, location: o.location })) });
-      setAdded((prev) => new Set([...prev, ...fresh.map((o) => o.url)]));
-      setNote(`Added ${fresh.length} to the pipeline`);
-      await qc.invalidateQueries({ queryKey: ['pipeline'] });
+      // The envelope has no length limits and the route does: long fields are shortened, big lists split.
+      for (const body of pipelineAddBatches(fresh.map((o) => ({ url: o.url, company: o.company, title: o.title, location: o.location })))) {
+        await apiSend('POST', '/api/pipeline/add', body);
+        count += body.offers.length;
+        setAdded((prev) => new Set([...prev, ...body.offers.map((o) => o.url)]));
+      }
+      setNote(`Added ${count} to the pipeline`);
     } catch (err) {
-      setNote(`Could not add: ${(err as Error).message}`);
+      setNote(`${count ? `Added ${count}, then could not add the rest` : 'Could not add'}: ${describeError(err)}`);
     }
+    await qc.invalidateQueries({ queryKey: ['pipeline'] });
   };
   const newOnes = offers.filter((o) => !known.has(o.url) && !added.has(o.url));
   return (

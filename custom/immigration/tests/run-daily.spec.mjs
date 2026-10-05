@@ -306,3 +306,20 @@ test('a missing Keychain item ends the run with a !!! failure line the app reads
   assert.equal(r.steps, '');
   assert.equal(r.calls.length, 0);
 });
+
+test('the pidfile the Control Center reads names the run while it holds the lock and is gone when the run ends, done or failed', () => {
+  const w = dailyWorld();
+  // A step that sees the run from inside: the pidfile must name a live bash running run-daily.sh.
+  const seen = path.join(w.T, 'pidfile-seen.txt');
+  fs.writeFileSync(
+    path.join(w.T, 'root', 'scan.mjs'),
+    `import fs from 'node:fs';\nimport { execFileSync } from 'node:child_process';\nconst pid = fs.readFileSync(${JSON.stringify(path.join(w.T, 'data', 'data', 'immigration', '.run-daily.pid'))}, 'utf8').trim();\nfs.writeFileSync(${JSON.stringify(seen)}, execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }));\n`,
+  );
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.match(readFileSync(seen, 'utf8').trim(), /^\/bin\/bash .*\/custom\/immigration\/run-daily\.sh$/);
+  assert.equal(fs.existsSync(path.join(r.imm, '.run-daily.pid')), false);
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\nexit 44\n', { mode: 0o755 });
+  assert.equal(w.run().status, 1);
+  assert.equal(fs.existsSync(path.join(r.imm, '.run-daily.pid')), false);
+});

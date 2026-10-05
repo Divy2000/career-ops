@@ -1,9 +1,9 @@
 # Synthetic portals config for tests
 title_filter:
-  include:
+  positive:
     - backend # keep this comment
     - platform
-  exclude:
+  negative:
     - intern
 
 location_filter:

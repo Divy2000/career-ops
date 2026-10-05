@@ -29,9 +29,10 @@ const fetches: Record<string, number> = {};
 
 function Probe() {
   useLiveInvalidation();
-  // The two job-log readers: the top-bar chip and the Job logs card.
+  // The job-log readers: the top-bar chip, the Job logs card, and the Today page chip (the immigration overview).
   useQuery({ queryKey: ['immigration', 'logs', 'immigration-watch'], queryFn: () => ((fetches.chip = (fetches.chip ?? 0) + 1), { ok: true }) });
   useQuery({ queryKey: ['immigration', 'logs', 'immigration-watch', '2026-10-05'], queryFn: () => ((fetches.log = (fetches.log ?? 0) + 1), { ok: true }) });
+  useQuery({ queryKey: ['immigration'], queryFn: () => ((fetches.today = (fetches.today ?? 0) + 1), { ok: true }) });
   return null;
 }
 
@@ -50,10 +51,10 @@ afterEach(async () => {
 });
 
 describe('live invalidation', () => {
-  it('a daily.status event refetches the job-log status, so a run that died without its done line stops reading running', async () => {
-    expect(fetches).toEqual({ chip: 1, log: 1 });
+  it('a daily.status event refetches the job-log status, so a run that died without its done line stops reading running, on Today too', async () => {
+    expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
     await act(async () => FakeEventSource.last!.emit('daily.status', { running: false }));
     await act(async () => new Promise((r) => setTimeout(r, 20)));
-    expect(fetches).toEqual({ chip: 2, log: 2 });
+    expect(fetches).toEqual({ chip: 2, log: 2, today: 2 });
   });
 });

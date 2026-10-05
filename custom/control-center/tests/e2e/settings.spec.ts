@@ -30,6 +30,31 @@ test.describe('Settings', () => {
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
+  test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/settings');
+    const companies = page.locator('section[aria-labelledby="portals-tracked_companies"]');
+    await companies.getByLabel('New tracked_companies name').fill('Umbrella Corp');
+    await companies.getByRole('button', { name: 'Add row' }).click();
+    await expect(companies.getByRole('alert')).toContainText('Umbrella Corp: needs a careers_url or an api URL');
+    await expect(page.getByText('0 pending changes')).toBeVisible();
+    await companies.getByLabel('New tracked_companies careers_url').fill('https://job-boards.greenhouse.io/umbrella');
+    await companies.getByRole('button', { name: 'Add row' }).click();
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    await page.getByRole('button', { name: 'Discard changes' }).click();
+
+    // An existing company whose URL is cleared: the save is held back and the page says which one and why.
+    const url = page.getByLabel('careers_url of Acme Robotics');
+    await url.fill('');
+    await url.press('Enter');
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Acme Robotics: needs a careers_url or an api URL' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Validate and save' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.getByRole('button', { name: 'Validate and save' })).toBeDisabled();
+    await expect(page.getByRole('alert').filter({ hasText: 'Acme Robotics' })).toHaveCount(0);
+  });
+
   test('an unapproved Claude Code leaves the app running: the setup chip and Settings > AI engine say sessions are refused', async ({ page }) => {
     const problem = 'Claude Code 2.1.290 is not approved for Control Center sessions (approved: 2.1.289); run `npm run probe:reads` and add it. Sessions are refused until then; the rest of the app works.';
     await page.route('**/api/system/status', async (route) => {
