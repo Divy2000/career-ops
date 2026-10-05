@@ -163,6 +163,11 @@ describe('tracker', () => {
     expect(pdfPresent('-')).toBe(false);
     expect(pdfPresent('✅')).toBe(true);
   });
+
+  it('reads merge-tracker.mjs\'s no-PDF marker as no PDF (SW-tests-19)', () => {
+    // merge-tracker.mjs writes ❌ for a row without a PDF and flips it to ✅ once pdf-index.tsv has one.
+    expect(pdfPresent('❌')).toBe(false);
+  });
 });
 
 describe('pipeline', () => {
