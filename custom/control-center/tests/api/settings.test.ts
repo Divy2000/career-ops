@@ -262,7 +262,15 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(`<key>StandardOutPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.out.log')}</string>`);
     expect(xml).toContain(`<key>StandardErrorPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.err.log')}</string>`);
     expect(fs.statSync(path.join(t.cfg.dataRoot, 'data', 'upstream-sync')).isDirectory()).toBe(true);
-    expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string></dict>`);
+    expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string><key>CC_NODE_BIN</key><string>${process.execPath}</string></dict>`);
+  });
+
+  it('both plists pin the node the app runs on (CC_NODE_BIN): launchd\'s PATH never reaches an nvm or volta node (SW-scripts-03)', async () => {
+    for (const [label, weekday] of [['com.career-ops.immigration-watch', undefined], ['com.career-ops.upstream-sync', 0]] as const) {
+      const res = await send('PUT', `/api/schedule/${label}`, { hour: 3, minute: 0, weekday, enabled: true });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fs.readFileSync(path.join(t.cfg.launchAgentsDir, `${label}.plist`), 'utf8')).toContain(`<key>CC_NODE_BIN</key><string>${process.execPath}</string>`);
+    }
   });
 
   it('the daily plist pins the claude the app runs (CC_CLAUDE_BIN), so launchd never picks another one on its own PATH', async () => {

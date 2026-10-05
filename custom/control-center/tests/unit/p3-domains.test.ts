@@ -172,6 +172,13 @@ describe('launchd schedule helpers', () => {
     expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { claudeBin: 'claude' })).not.toContain('CC_CLAUDE_BIN');
     expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { claudeBin: '/opt/homebrew/bin/claude' })).not.toContain('CC_CLAUDE_BIN');
   });
+  it('pins both jobs to the absolute node the app runs on (CC_NODE_BIN), escaped and last, and never a bare name (SW-scripts-03)', () => {
+    expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { claudeBin: '/b/claude', nodeBin: '/Users/me/.nvm/versions/node/v22.6.0/bin/node' })).toContain(
+      '<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>/data</string><key>CC_CLAUDE_BIN</key><string>/b/claude</string><key>CC_NODE_BIN</key><string>/Users/me/.nvm/versions/node/v22.6.0/bin/node</string></dict>',
+    );
+    expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { pinDataRoot: false, nodeBin: '/R&D <n>/node' })).toContain('<key>EnvironmentVariables</key><dict><key>CC_NODE_BIN</key><string>/R&amp;D &lt;n&gt;/node</string></dict>');
+    expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { nodeBin: 'node' })).not.toContain('CC_NODE_BIN');
+  });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';
     expect(parsePrintDisabled(out, 'com.career-ops.immigration-watch')).toBe(true);
