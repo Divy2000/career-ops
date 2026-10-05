@@ -9,6 +9,7 @@ import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import type { RawLine } from '@shared/api';
+import { pipelineAddBatches } from '@shared/pipeline-add';
 
 const route = getRouteApi('/discover');
 export type DiscoverTab = 'network' | 'portal' | 'ai' | 'fresh' | 'funded' | 'reposts';
@@ -18,7 +19,7 @@ export interface ScanPosting {
   url: string;
   company: string;
   title: string;
-  location?: string;
+  location?: string | null;
   postedAt?: string | null;
   source?: string;
 }
@@ -172,13 +173,14 @@ function NetworkScan() {
       if (out && 'runId' in out) setRunId(out.runId);
     });
   const add = async (postings: ScanPosting[]) => {
+    let added = 0;
     try {
-      const r = await apiSend<{ added: number }>('POST', '/api/pipeline/add', { offers: postings.map((p) => ({ url: p.url, company: p.company ?? '', title: p.title ?? '', location: p.location, portal: p.source })) });
-      setMessage({ tone: 'ok', text: `Added ${r.added} to the pipeline` });
-      await qc.invalidateQueries({ queryKey: ['pipeline'] });
+      for (const body of pipelineAddBatches(postings)) added += (await apiSend<{ added: number }>('POST', '/api/pipeline/add', body)).added;
+      setMessage({ tone: 'ok', text: `Added ${added} to the pipeline` });
     } catch (err) {
-      setMessage({ tone: 'danger', text: `Could not add: ${describeError(err)}` });
+      setMessage({ tone: 'danger', text: `${added ? `Added ${added}, then could not add the rest` : 'Could not add'}: ${describeError(err)}` });
     }
+    await qc.invalidateQueries({ queryKey: ['pipeline'] });
   };
   const visible = (summary?.postings ?? []).filter((p) => !filter || `${p.company} ${p.title} ${p.location ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
   return (

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import type { Exec } from '../../server/routes/system.js';
+import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
 
 let t: TestApp;
 let pgrepRunning = false;
@@ -52,6 +53,20 @@ describe('pipeline writes', () => {
     expect(r.statusCode, r.body).toBe(200);
     expect(readData('data/pipeline.md')).toContain('https://jobs.example.com/offerco/7');
     expect(readData('data/scan-history.tsv')).toContain('https://jobs.example.com/offerco/7');
+  });
+  it('Network scan results with no location, a very long location and more rows than one request takes are all added', async () => {
+    const postings: ScanPostingInput[] = Array.from({ length: 205 }, (_, i) => ({ url: `https://boards.example.com/bulk/${i}`, company: `Bulk ${i}`, title: 'Platform Engineer', location: 'Remote', source: 'greenhouse' }));
+    postings[0]!.location = null;
+    postings[1]!.location = '';
+    postings[2]!.location = Array.from({ length: 40 }, (_, i) => `Office ${i}`).join('; ');
+    const batches = pipelineAddBatches(postings);
+    expect(batches.map((b) => b.offers.length)).toEqual([200, 5]);
+    for (const body of batches) {
+      const r = await post('/api/pipeline/add', body);
+      expect(r.statusCode, r.body).toBe(200);
+    }
+    const pipeline = readData('data/pipeline.md');
+    expect(postings.filter((p) => !pipeline.includes(`${p.url} `)).map((p) => p.url)).toEqual([]);
   });
 });
 
