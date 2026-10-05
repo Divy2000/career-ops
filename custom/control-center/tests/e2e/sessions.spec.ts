@@ -153,6 +153,10 @@ test.describe('AI sessions through the fake Claude', () => {
     await page.goto('/profile');
     await page.getByLabel('CV markdown').fill('# Jane Candidate\n\nPlatform engineer.');
     await page.getByRole('button', { name: 'Save as cv.md' }).click();
+    // The fixture root has a cv.md, so replacing it is confirmed first, naming the CV that is there (SW-tests-09).
+    const replace = page.getByRole('dialog', { name: 'Replace cv.md?' });
+    await expect(replace).toContainText('# Alex Example');
+    await replace.getByRole('button', { name: 'Replace cv.md' }).click();
     await expect(page.getByText('cv.md saved.')).toBeVisible();
     const cv = await (await page.request.get('/api/files/user/cv')).json();
     expect(cv.text).toContain('Jane Candidate');
