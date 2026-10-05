@@ -97,14 +97,18 @@ export function claudeCandidates(bin: string, opts: { env?: NodeJS.ProcessEnv; h
 }
 
 /**
- * Absolute path of the claude binary: a name with a slash is made absolute against the folder the user started from
- * (INIT_CWD, which npm sets, else the cwd), a bare name is looked up in claudeCandidates order. A bare name that is
- * found nowhere is returned unchanged so the probe reports ENOENT.
+ * Absolute path of the claude binary: an absolute path is kept as given, a relative one with a slash is joined to the
+ * folder the user started from (INIT_CWD, which npm sets, else the cwd), a bare name is looked up in claudeCandidates
+ * order. A bare name that is found nowhere is returned unchanged so the probe reports ENOENT.
+ * The join is textual: path.resolve collapses `..` on paper, and through a symlinked folder that names a different file
+ * than the kernel opens (and than launchd/install.sh pins). Only `.` and empty segments go, as they name the same folder.
  */
 export function resolveClaudeBin(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string {
+  if (path.isAbsolute(bin)) return bin;
   if (bin.includes('/')) {
     const from = (opts.env ?? process.env).INIT_CWD;
-    return path.resolve(from && path.isAbsolute(from) ? from : process.cwd(), bin);
+    const base = from && path.isAbsolute(from) ? from : process.cwd();
+    return [base.replace(/\/+$/, ''), ...bin.split('/').filter((seg) => seg !== '.' && seg !== '')].join('/');
   }
   return claudeCandidates(bin, opts)[0] ?? bin;
 }

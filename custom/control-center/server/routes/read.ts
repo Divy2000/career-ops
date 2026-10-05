@@ -7,7 +7,7 @@ import { readTracker } from '../domains/tracker.js';
 import { readReport } from '../domains/reports.js';
 import { readPipeline, readScanHistory } from '../domains/pipeline.js';
 import { readShortlist } from '../domains/shortlist.js';
-import { readImmigrationOverview } from '../domains/immigration.js';
+import { localDate, readImmigrationOverview } from '../domains/immigration.js';
 import { collectWhatsNew, resolveOfferLimit, type NormalizeTextKey } from '../domains/whatsNew.js';
 import { computeDashboard, readStatusLog } from '../domains/insights.js';
 import { parseFollowupsTable, parseNextOverrides } from '../domains/followups.js';
@@ -16,6 +16,7 @@ import { inside } from '../lib/paths.js';
 import { execNoShell, type Exec } from './system.js';
 import { listLaunchableModeIds, getModePolicy } from '../claude/modes.js';
 import type { EventBus } from '../watch/bus.js';
+import type { DailyJobWatch } from '../system/daily.js';
 import type { FollowupCadence } from '../../shared/api.js';
 
 const SERVE_ROOTS = ['output', 'jds', 'reports'] as const;
@@ -60,7 +61,7 @@ function emptyFollowups(cadenceDefaults: Record<string, number> | undefined, now
   };
 }
 
-export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; bus: EventBus; exec?: Exec; now?: () => number }): Promise<void> {
+export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; bus: EventBus; exec?: Exec; now?: () => number; daily: DailyJobWatch }): Promise<void> {
   const { cfg, bus } = opts;
   const exec = opts.exec ?? execNoShell;
   const now = opts.now ?? (() => Date.now());
@@ -108,7 +109,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     return collectWhatsNew({ history: readScanHistory(cfg.dataRoot), applications, norm: normalizeTextKey, now: now(), days, limit });
   });
 
-  app.get('/api/immigration/overview', async () => readImmigrationOverview(cfg.codeRoot, cfg.dataRoot));
+  app.get('/api/immigration/overview', async () => readImmigrationOverview(cfg.codeRoot, cfg.dataRoot, localDate(new Date(now())), () => opts.daily.runningNow()));
 
   app.get<{ Params: { slug: string } }>('/api/immigration/companies/:slug', async (req, reply) => {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(req.params.slug)) return reply.code(400).send({ error: 'bad slug' });

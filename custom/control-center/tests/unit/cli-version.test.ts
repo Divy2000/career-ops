@@ -50,6 +50,21 @@ describe('Claude CLI version gate', () => {
     await expect(assertApprovedClaude(path.join(os.tmpdir(), 'cc-no-such-claude'), 'production', { approved: ['2.1.289'] })).rejects.toThrow(/could not read the Claude Code version/);
   });
 
+  it('caches a path through a symlinked folder and .. under the file the kernel opens, so updating that file is noticed', async () => {
+    const dir = tempDir('cc-cliver-link-');
+    fs.mkdirSync(path.join(dir, 'real', 'bin'), { recursive: true });
+    fs.symlinkSync(path.join(dir, 'real', 'bin'), path.join(dir, 'link'));
+    // sh, not node: node resolves its script path on paper too, so a node fake would run the wrong file.
+    const write = (file: string, version: string, pad = '') => fs.writeFileSync(file, `#!/bin/sh\necho '${version} (Claude Code)'${pad}\n`, { mode: 0o755 });
+    write(path.join(dir, 'real', 'claude'), '2.1.289');
+    // The file the path names on paper (path.resolve collapses link/..); it never changes.
+    write(path.join(dir, 'claude'), '2.1.289');
+    const bin = `${dir}/link/../claude`;
+    await expect(assertApprovedClaude(bin, 'production', { approved: ['2.1.289'] })).resolves.toBe('2.1.289');
+    write(path.join(dir, 'real', 'claude'), '2.1.290', ' # updated');
+    await expect(assertApprovedClaude(bin, 'production', { approved: ['2.1.289'] })).rejects.toThrow(/Claude Code 2\.1\.290 is not approved/);
+  });
+
   it('given a stat-cached approved binary, skips `--version` until its mtime changes, then runs it again', async () => {
     const { bin, runs } = fakeClaude('2.1.289');
     await assertApprovedClaude(bin, 'production', { approved: ['2.1.289'] });

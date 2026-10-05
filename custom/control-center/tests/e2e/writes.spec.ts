@@ -34,6 +34,28 @@ test.describe('deterministic writes from the pages', () => {
     }
   });
 
+  test('Import CV: Save as cv.md through a link that leads outside the data root shows why it was refused and writes nothing', async ({ page }) => {
+    const root = path.join(process.env.CC_E2E_TMP!, 'root');
+    const cv = path.join(root, 'cv.md');
+    const original = fs.readFileSync(cv, 'utf8');
+    const outside = path.join(process.env.CC_E2E_TMP!, 'outside-cv.md');
+    fs.writeFileSync(outside, '# Shared elsewhere\n');
+    fs.rmSync(cv);
+    fs.symlinkSync(outside, cv);
+    try {
+      await page.goto('/profile');
+      await page.getByLabel('CV markdown').fill('# Jane Candidate\n\nPlatform engineer.');
+      await page.getByRole('button', { name: 'Save as cv.md' }).click();
+      await expect(page.getByRole('alert')).toContainText(/Could not save cv\.md: .*outside the data root; nothing was written/);
+      await expect(page.getByText('cv.md saved.')).toHaveCount(0);
+      expect(fs.readFileSync(outside, 'utf8')).toBe('# Shared elsewhere\n');
+    } finally {
+      fs.rmSync(cv, { force: true });
+      fs.writeFileSync(cv, original);
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
   test('inbox Skip flips the pipeline checkbox, Undo restores it, and Add URLs appends a row', async ({ page }) => {
     await page.goto('/pipeline');
     const row = page.getByRole('row', { name: /Soylent Foods/ });

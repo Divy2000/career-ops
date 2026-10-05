@@ -55,6 +55,14 @@ describe('mode registry', () => {
     expect(getModePolicy('no-such-mode')).toBeNull();
   });
 
+  it('a mode id named after an Object property is no mode, and its class is the read-only default', () => {
+    for (const id of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      expect(getModePolicy(id), id).toBeNull();
+      expect(classForMode(id), id).toBe('read-only');
+      expect(classForMode(`de/${id}`), id).toBe('read-only');
+    }
+  });
+
   it('virtual modes exist and the read-only class grants no writes', () => {
     for (const id of Object.keys(VIRTUAL_MODES)) expect(getModePolicy(id)).not.toBeNull();
     expect(getModePolicy('advisor')?.writeGlobs).toEqual([]);

@@ -6,7 +6,7 @@ import { listLaunchableModeIds } from '../claude/modes.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
-import { readSettings } from '../domains/settings.js';
+import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 
@@ -34,8 +34,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
-    // App settings supply the default model when the client sends none (empty means the CLI default).
-    const chosenModel = parsed.data.model ?? (readSettings(opts.cfg.dataRoot).settings.modelDefault || null);
+    const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
     let userPrompt = parsed.data.prompt;
     // projects-ingest runs no command: the app extracts its documents/ source (as intake does) and the text rides in the first message.
     if (parsed.data.mode === 'projects-ingest') {
@@ -57,7 +56,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     try {
-      const out = await manager.fanOut({ mode: parsed.data.mode, urls: parsed.data.urls, model: parsed.data.model ?? null });
+      const out = await manager.fanOut({ mode: parsed.data.mode, urls: parsed.data.urls, model: sessionModel(opts.cfg.dataRoot, parsed.data.model) });
       return reply.code(202).send(out);
     } catch (err) {
       return reply.code(err instanceof ModeRefusedError ? 422 : 502).send({ error: (err as Error).message });

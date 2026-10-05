@@ -155,6 +155,13 @@ export function LogBrowser() {
                 {one.data.startedAt ?? ''} to {one.data.finishedAt ?? 'n/a'}
               </span>
             </div>
+            {one.data.problems.length > 0 && (
+              <ul className="bullets small danger-text" aria-label="Failures">
+                {one.data.problems.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            )}
             <ul className="bullets small">
               {one.data.steps.map((s) => (
                 <li key={`${s.time}-${s.name}`} className={s.failed ? 'danger-text' : ''}>

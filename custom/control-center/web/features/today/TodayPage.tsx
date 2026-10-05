@@ -29,8 +29,17 @@ function DailyJobChip() {
   if (q.isError || !q.data) return <Pill tone="danger">Daily job: unknown</Pill>;
   const log = q.data.dailyLog;
   if (!log) return <Pill tone="warn">Daily job: no log yet</Pill>;
-  if (log.status === 'failed') return <Pill tone="danger" title={`Failed steps: ${log.failedSteps.join(', ')}`}>Daily job {log.date}: failed ({log.failedSteps.join(', ') || 'see log'})</Pill>;
+  if (log.status === 'failed') {
+    // A failure line can run long (it says how to fix it); the chip keeps its first sentence and the title has it all.
+    const reason = log.failedSteps.join(', ') || log.problems[0]?.split(/\.\s/)[0] || 'see log';
+    return (
+      <Pill tone="danger" title={[...log.failedSteps.map((s) => `Failed step: ${s}`), ...log.problems].join('\n')}>
+        Daily job {log.date}: failed ({reason})
+      </Pill>
+    );
+  }
   if (log.status === 'running') return <Pill tone="info">Daily job {log.date}: running</Pill>;
+  if (log.status === 'interrupted') return <Pill tone="warn" title="The last run has no done line and run-daily.sh is not running: it was cancelled, killed or stopped early. See Runs & Schedule > Job logs.">Daily job {log.date}: interrupted</Pill>;
   return <Pill tone="ok">Daily job {log.date}: ok</Pill>;
 }
 

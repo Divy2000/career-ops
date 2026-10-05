@@ -47,7 +47,8 @@ const cache = new Map<string, string>();
 
 function statKey(bin: string): string | null {
   try {
-    const real = fs.realpathSync(bin);
+    // .native asks the OS; fs.realpathSync collapses `..` on paper first, which through a symlinked folder is another file.
+    const real = fs.realpathSync.native(bin);
     const st = fs.statSync(real);
     return `${real}\0${st.dev}\0${st.ino}\0${st.size}\0${st.mtimeMs}`;
   } catch {

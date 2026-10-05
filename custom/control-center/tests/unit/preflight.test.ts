@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { preflight, resolveClaudeBin, claudeCandidates, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
 import { tempDir } from '../helpers/tmp.js';
+import { configFromEnv } from '../../server/config.js';
 
 // Preflight also requires an approved `claude --version`: read confinement is probed per CLI version.
 const execOk = async (cmd: string) => (cmd === 'claude' ? { code: 0, stdout: '2.1.289 (Claude Code)\n' } : 0);
@@ -130,6 +131,43 @@ describe('resolveClaudeBin', () => {
     expect(resolveClaudeBin('./bin/claude', { env: { PATH: '', INIT_CWD: '/work/here' }, home: '/h' })).toBe('/work/here/bin/claude');
     expect(resolveClaudeBin('tools/claude', { env: { PATH: '', INIT_CWD: '/work/here' }, home: '/h' })).toBe('/work/here/tools/claude');
     expect(resolveClaudeBin('./bin/claude', { env: { PATH: '' }, home: '/h' })).toBe(path.resolve('bin/claude'));
+  });
+
+  // realpathSync.native asks the OS; plain fs.realpathSync collapses `..` on paper first, like path.resolve.
+  describe('through a symlinked folder (link -> real/bin, claude at real/claude), as the kernel and install.sh read it', () => {
+    const layout = () => {
+      const dir = tempDir('cc-symlink-');
+      fs.mkdirSync(path.join(dir, 'real', 'bin'), { recursive: true });
+      const real = touch(path.join(dir, 'real'));
+      fs.symlinkSync(path.join(dir, 'real', 'bin'), path.join(dir, 'link'));
+      return { dir, real: fs.realpathSync.native(real) };
+    };
+
+    it('keeps an absolute path with .. verbatim, so it opens the file the shell would', () => {
+      const { dir, real } = layout();
+      const given = `${dir}/link/../claude`;
+      const resolved = resolveClaudeBin(given, { env: { PATH: '' }, home: '/h' });
+      expect(resolved).toBe(given);
+      expect(fs.realpathSync.native(resolved)).toBe(real);
+    });
+
+    it('joins a relative path with .. to the start folder as text, without collapsing the ..', () => {
+      const { dir, real } = layout();
+      const resolved = resolveClaudeBin('link/../claude', { env: { PATH: '', INIT_CWD: dir }, home: '/h' });
+      expect(resolved).toBe(`${dir}/link/../claude`);
+      expect(fs.realpathSync.native(resolved)).toBe(real);
+    });
+
+    it('configFromEnv pins the same file for sessions, the daily plist and Run the daily job now', () => {
+      const { dir, real } = layout();
+      for (const [k, v] of Object.entries({ CC_DATA_ROOT: '/d', CC_GUARD_DIR: '/g', CC_TOKEN: 't', CC_SESSION_SECRET: 's' })) vi.stubEnv(k, v);
+      try {
+        expect(fs.realpathSync.native(configFromEnv({ CC_PUBLIC_PORT: '4999', CC_CLAUDE_BIN: `${dir}/link/../claude` }).claudeBin)).toBe(real);
+        expect(fs.realpathSync.native(configFromEnv({ CC_PUBLIC_PORT: '4999', CC_CLAUDE_BIN: 'link/../claude', INIT_CWD: dir }).claudeBin)).toBe(real);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
   });
 
   it('finds claude on PATH and returns an absolute path', () => {

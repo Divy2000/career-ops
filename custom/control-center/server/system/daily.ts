@@ -40,6 +40,12 @@ export class DailyJobWatch {
     return this.state;
   }
 
+  /** Probes now instead of trusting the last poll (up to intervalMs old): a run just started from the app must not read as interrupted. */
+  async runningNow(): Promise<boolean> {
+    await this.poll();
+    return this.state.running;
+  }
+
   async poll(): Promise<void> {
     const r = await this.exec('pgrep', ['-f', 'custom/immigration/run-daily.sh'], { timeoutMs: 4000 });
     const running = r.code === 0 && r.stdout.trim().length > 0;

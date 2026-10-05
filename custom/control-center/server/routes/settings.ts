@@ -10,8 +10,9 @@ import { execNoShell, type Exec } from './system.js';
 import { etagMatches } from './config.js';
 import { BLACKLIST_DATE, blacklistRowSchema, readBlacklist, writeBlacklist } from '../domains/blacklist.js';
 import { listPlugins } from '../domains/plugins.js';
-import { LOG_JOBS, type ScheduleService } from '../system/schedule.js';
-import { listLogDates, parseDailyLog } from '../domains/immigration.js';
+import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/schedule.js';
+import type { DailyJobWatch } from '../system/daily.js';
+import { listLogDates, localDate, parseDailyLog, withJobState } from '../domains/immigration.js';
 import { readText } from '../domains/files.js';
 import { appSettingsPatchSchema, readSettings, writeSettings, type AppSettings } from '../domains/settings.js';
 import { computeUsage, type UsageRead } from '../domains/usage.js';
@@ -27,6 +28,8 @@ export interface SettingsDeps {
   schedule: ScheduleService;
   /** Applies a saved settings object to the live runner (slot cap, retention). */
   applySettings: (s: AppSettings) => void;
+  /** Answers whether run-daily.sh runs now, so a daily log with no done line reads running or interrupted. */
+  daily: DailyJobWatch;
 }
 
 export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): Promise<void> {
@@ -91,20 +94,24 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     return r.state;
   });
 
-  const logJob = (q: { job?: string }) => LOG_JOBS[q.job ?? 'immigration-watch'];
+  const logJob = (q: { job?: string }) => {
+    const name = q.job ?? 'immigration-watch';
+    // Own keys only: `constructor` or `__proto__` would otherwise find Object's members.
+    return Object.hasOwn(LOG_JOBS, name) ? LOG_JOBS[name] : undefined;
+  };
   app.get<{ Querystring: { job?: string } }>('/api/schedule/logs', async (req, reply) => {
     const job = logJob(req.query);
     if (!job) return reply.code(400).send({ error: 'job must be immigration-watch or upstream-sync' });
     const dates = listLogDates(cfg.dataRoot, job.logDir);
     const latestDate = dates[0];
-    const latest = latestDate ? readJobLog(cfg.dataRoot, job.logDir, latestDate) : null;
+    const latest = latestDate ? await readJobLog(cfg.dataRoot, job, latestDate, opts.daily) : null;
     return { job: job.label, dates, latest };
   });
   app.get<{ Params: { date: string }; Querystring: { job?: string } }>('/api/schedule/logs/:date', async (req, reply) => {
     const job = logJob(req.query);
     if (!job) return reply.code(400).send({ error: 'job must be immigration-watch or upstream-sync' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return reply.code(400).send({ error: 'date must be YYYY-MM-DD' });
-    const log = readJobLog(cfg.dataRoot, job.logDir, req.params.date);
+    const log = await readJobLog(cfg.dataRoot, job, req.params.date, opts.daily);
     if (!log) return reply.code(404).send({ error: 'no log for that date' });
     return log;
   });
@@ -143,8 +150,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
   app.get('/api/interviews', async () => readInterviews(cfg.dataRoot));
 }
 
-function readJobLog(dataRoot: string, logDir: string, date: string) {
-  const raw = readText(path.join(dataRoot, logDir, `${date}.log`));
+/** Only the daily job has a process probe; a weekly log dated today with no done line keeps reading running (older ones read interrupted, see withJobState). */
+async function readJobLog(dataRoot: string, job: ScheduleJob, date: string, daily: DailyJobWatch) {
+  const raw = readText(path.join(dataRoot, job.logDir, `${date}.log`));
   if (raw.kind !== 'ok') return null;
-  return { ...parseDailyLog(raw.text, date), raw: raw.text };
+  const probe = async () => (job.kind === 'daily' ? daily.runningNow() : null);
+  return { ...(await withJobState(parseDailyLog(raw.text, date), localDate(), probe)), raw: raw.text };
 }

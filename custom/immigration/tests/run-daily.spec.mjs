@@ -295,3 +295,14 @@ test('a rank call the shim refuses for a flag it does not allow fails the rank s
   assert.notEqual(r.status, 0);
   assert.deepEqual(r.leftovers, []);
 });
+
+test('a missing Keychain item ends the run with a !!! failure line the app reads as failed, before any step runs', () => {
+  const w = dailyWorld();
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\nexit 44\n', { mode: 0o755 });
+  const r = w.run();
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! Keychain item 'career-ops-claude-token' not found\. Run: claude setup-token/m);
+  assert.doesNotMatch(r.log, /^=== .* done/m);
+  assert.equal(r.steps, '');
+  assert.equal(r.calls.length, 0);
+});

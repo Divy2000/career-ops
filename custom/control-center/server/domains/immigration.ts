@@ -28,9 +28,12 @@ export interface DailyLog {
   date: string;
   startedAt: string | null;
   finishedAt: string | null;
-  status: 'ok' | 'failed' | 'running' | 'empty';
+  /** interrupted: the last run has no done line and the job is known not to be running (cancelled, killed or exited early). */
+  status: 'ok' | 'failed' | 'running' | 'interrupted' | 'empty';
   steps: DailyLogStep[];
   failedSteps: string[];
+  /** Other `!!!` lines of the last run (sync.sh's fail, run-daily.sh's early exits), without the marker: each fails the run. */
+  problems: string[];
   failedCount: number | null;
 }
 
@@ -90,28 +93,63 @@ export function parseCompanyFile(md: string, slug: string, filePath: string, rea
   };
 }
 
+const RUN_START = /^===\s+(\S+\s+\S+)\s+start/;
+
+/** A dated log gets one block per run of that day (run-daily.sh appends); only the last run counts. */
 export function parseDailyLog(text: string, date: string): DailyLog {
+  const lines = text.split('\n');
+  const lastStart = lines.findLastIndex((line) => RUN_START.test(line));
   const steps: DailyLogStep[] = [];
   const failedSteps: string[] = [];
+  const problems: string[] = [];
   let startedAt: string | null = null;
   let finishedAt: string | null = null;
   let failedCount: number | null = null;
-  for (const line of text.split('\n')) {
+  for (const line of lines.slice(Math.max(lastStart, 0))) {
     let m: RegExpMatchArray | null;
-    if ((m = line.match(/^===\s+(\S+\s+\S+)\s+start/))) startedAt = m[1]!;
-    else if ((m = line.match(/^===\s+(\S+\s+\S+)\s+done\s*\(failed=(\d+)\)/))) {
+    if ((m = line.match(RUN_START))) startedAt = m[1]!;
+    // run-daily.sh ends with `done (failed=N)`; the weekly sync.sh with a bare `done` or `done (up to date)`.
+    else if ((m = line.match(/^===\s+(\S+\s+\S+)\s+done\b(?:\s*\(failed=(\d+)\))?/))) {
       finishedAt = m[1]!;
-      failedCount = Number(m[2]);
+      failedCount = m[2] === undefined ? null : Number(m[2]);
     } else if ((m = line.match(/^---\s+(\d{2}:\d{2}:\d{2})\s+(.+)$/))) steps.push({ name: m[2]!.trim(), time: m[1]!, failed: false });
     else if ((m = line.match(/^!!!\s+step failed:\s+(.+)$/))) {
       const name = m[1]!.trim();
       failedSteps.push(name);
       const step = steps.find((s) => s.name === name);
       if (step) step.failed = true;
-    }
+    } else if ((m = line.match(/^!!!\s+(.+)$/))) problems.push(m[1]!.trim());
   }
-  const status: DailyLog['status'] = !startedAt ? 'empty' : !finishedAt ? 'running' : failedSteps.length || (failedCount ?? 0) > 0 ? 'failed' : 'ok';
-  return { date, startedAt, finishedAt, status, steps, failedSteps, failedCount };
+  // A failure line fails the run even with no done line: the scripts write one and exit.
+  const failed = failedSteps.length > 0 || problems.length > 0 || (failedCount ?? 0) > 0;
+  const status: DailyLog['status'] = !startedAt ? 'empty' : failed ? 'failed' : !finishedAt ? 'running' : 'ok';
+  return { date, startedAt, finishedAt, status, steps, failedSteps, problems, failedCount };
+}
+
+/** The local calendar date (YYYY-MM-DD) the job scripts name their logs by (`date +%Y-%m-%d`). */
+export function localDate(d = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** The local date the day before `date` (YYYY-MM-DD). */
+function dayBefore(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return localDate(new Date(y!, m! - 1, d! - 1));
+}
+
+/**
+ * A run with no done line is running only while the job runs, and only a log dated today or yesterday (a run that
+ * crossed midnight writes to the file of the day it started) can belong to the run going on now: an older one is
+ * interrupted without asking. Today's log asks the probe and null (unknown) keeps it running; yesterday's runs on only
+ * when the probe says so, so a job with no probe (the weekly sync) does not keep yesterday's run alive.
+ */
+export async function withJobState<T extends DailyLog>(log: T, today: string, jobRunning: () => Promise<boolean | null>): Promise<T> {
+  if (log.status !== 'running') return log;
+  const interrupted = { ...log, status: 'interrupted' as const };
+  if (log.date === today) return (await jobRunning()) === false ? interrupted : log;
+  if (log.date === dayBefore(today)) return (await jobRunning()) === true ? log : interrupted;
+  return interrupted;
 }
 
 export function listLogDates(dataRoot: string, logDir = path.join('data', 'immigration', 'logs')): string[] {
@@ -152,7 +190,11 @@ function readJson(p: string): unknown {
   }
 }
 
-export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = new Date().toISOString().slice(0, 10)): Promise<ImmigrationOverview> {
+/**
+ * `today` is the local date, as the scripts date their logs and digest sections; it dates digest staleness and the
+ * latest log. dailyRunning answers whether run-daily.sh runs now (null: unknown), asked only for a recent run with no done line.
+ */
+export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = localDate(), dailyRunning: () => Promise<boolean | null> = async () => null): Promise<ImmigrationOverview> {
   const lib = await importCore<ImmigrationLib>(codeRoot, 'custom/immigration/lib.mjs');
   const imm = path.join(dataRoot, 'data', 'immigration');
   const digestRead = readText(path.join(imm, 'policy-digest.md'));
@@ -181,6 +223,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   }
   const logDates = listLogDates(dataRoot);
   const pending = pendingOf(readJson(path.join(imm, 'pending.json')));
+  const latestLog = logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null;
   return {
     digest,
     policyChanges: changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : [],
@@ -191,7 +234,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,
     pendingError: pending.error,
-    dailyLog: logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null,
+    dailyLog: latestLog && (await withJobState(latestLog, today, dailyRunning)),
     logDates,
   };
 }
