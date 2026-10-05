@@ -52,14 +52,20 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), text, { mode });
   };
-  for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'path-resolver.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
-  for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
+  for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'path-resolver.mjs', 'lib/is-main-module.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
+  for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs', 'claude-shim.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
   put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: APPROVED } }));
   put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
   const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
-  for (const rel of ['scan.mjs', 'rank-pipeline.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
+  for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
+  // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
+  // claude (the first one on PATH must be the shim's wrapper, or it records that and stops).
+  put(
+    'rank-pipeline.mjs',
+    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { execFileSync } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nconst out = execFileSync('claude', ['-p', 'RANK PROMPT', '--model', 'sonnet'], { encoding: 'utf8' });\nfs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n`,
+  );
   fs.writeFileSync(path.join(data, 'config/profile.yml'), 'location:\n  needs_sponsorship: true\n');
   fs.writeFileSync(path.join(bin, 'security'), '#!/bin/bash\necho fake-keychain-token\n', { mode: 0o755 });
   const record = path.join(T, 'claude-calls.ndjson');
@@ -67,19 +73,20 @@ function dailyWorld({ dataInside = false, homeIsData = false } = {}) {
   fs.writeFileSync(fakeClaude, `#!${process.execPath}\n${readFileSync(path.join(HERE, 'fixtures', 'fake-claude.mjs'), 'utf8')}`, { mode: 0o755 });
   const run = (extraEnv = {}) => {
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
-    assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-claude\}/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
+    assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
     const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
     const log = logs.map((f) => readFileSync(path.join(imm, 'logs', f), 'utf8')).join('\n');
     const records = fs.existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
-    const calls = records.filter((c) => !c.versionCall);
+    const calls = records.filter((c) => !c.versionCall && c.argv[1] !== 'RANK PROMPT');
+    const rankCalls = records.filter((c) => !c.versionCall && c.argv[1] === 'RANK PROMPT');
     const versionCalls = records.filter((c) => c.versionCall);
     const steps = fs.existsSync(stepLog) ? readFileSync(stepLog, 'utf8') : '';
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
-    return { status: r.status, log, calls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    return { status: r.status, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, run };
 }
@@ -204,6 +211,11 @@ test('an unapproved Claude Code skips the pass, not the job: a clear log line, a
   assert.match(r.digest, new RegExp(`^# Immigration policy digest\\n\\n## ${today}\\n- AI policy pass skipped: Claude Code 2\\.1\\.290 is not approved`));
   assert.doesNotMatch(r.steps, /^watch --ack/m, 'the official items stay pending for the next run');
   assert.match(r.steps, /^scan\.mjs/m);
+  // The scheduled rank calls Claude too: it is skipped the same way, not failed.
+  assert.equal(r.rankCalls.length, 0);
+  assert.match(r.log, /rank skipped: Claude Code 2\.1\.290 is not approved/);
+  assert.doesNotMatch(r.log, /!!! step failed: rank/);
+  assert.doesNotMatch(r.steps, /^rank-pipeline\.mjs/m);
   assert.deepEqual(r.leftovers, []);
 });
 
@@ -215,4 +227,18 @@ test('a Claude Code whose version cannot be read fails the step and never runs t
   assert.match(r.log, /!!! step failed: policy watch/);
   assert.equal(r.digest, null);
   assert.notEqual(r.status, 0);
+});
+
+test('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shim: its call reaches claude with no tools, no MCP servers and dontAsk', () => {
+  const w = dailyWorld();
+  const r = w.run({ CAREER_OPS_RANK_CLI: 'codex' });
+  assert.equal(r.status, 0, `${r.log}\n${r.steps}`);
+  assert.match(r.steps, /^rank-pipeline\.mjs --cli claude --limit 100 --model sonnet$/m, 'the CLI is pinned to claude, whatever CAREER_OPS_RANK_CLI says');
+  assert.doesNotMatch(r.steps, /unwrapped claude/);
+  assert.equal(r.rankCalls.length, 1, r.steps);
+  assert.deepEqual(r.rankCalls[0].argv, ['-p', 'RANK PROMPT', '--model', 'sonnet', '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell']);
+  assert.equal(r.rankCalls[0].disableAutoupdater, '1');
+  assert.equal(r.rankCalls[0].token, true);
+  assert.match(r.steps, /^rank got: SUMMARY/m);
+  assert.deepEqual(r.leftovers, [], 'the shim folder lives only for the rank step');
 });

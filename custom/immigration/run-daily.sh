@@ -49,33 +49,39 @@ step() {
   fi
 }
 
-policy_watch() {
-  local watch_json prompt batch settings_dir policy_sha rc gate
-  watch_json="$(node custom/immigration/watch.mjs)" || return 1
-  echo "$watch_json"
-  # Only a Claude Code version whose confinement was probed (contract.json claude.approvedVersions)
-  # runs the pass: another version can change what these flags and rules do. An unapproved one
-  # skips the pass without failing the job: the digest says why, and the official items stay
-  # pending for the next run. A version that cannot be read fails the step.
-  rc=0
-  gate="$(CLAUDE_BIN="${CC_CLAUDE_BIN:-claude}" node --input-type=module -e '
+# Every Claude call of this job (the policy pass, and the rank through claude-shim.mjs) runs only
+# on a Claude Code whose confinement was probed (contract.json claude.approvedVersions), asked with
+# the autoupdater off: another version can change what the confinement flags and rules do.
+# CLAUDE_GATE_RC is 0 (approved), 3 (another version: those steps are skipped, not failed) or 1 (the
+# version cannot be read: those steps fail). CC_CLAUDE_BIN chooses the binary (tests use a fake).
+CLAUDE_REAL="${CC_CLAUDE_BIN:-$(command -v claude || true)}"
+CLAUDE_GATE_RC=0
+CLAUDE_GATE="$(CLAUDE_BIN="$CLAUDE_REAL" node --input-type=module -e '
 import path from "node:path";
 const { claudeVersionGate } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
 let problem;
 try {
-  ({ problem } = claudeVersionGate(process.env.CLAUDE_BIN));
+  ({ problem } = claudeVersionGate(process.env.CLAUDE_BIN || "claude"));
 } catch (err) {
-  process.stdout.write(`${err.message}; the policy pass needs an approved Claude Code`);
+  process.stdout.write(`${err.message}; the Claude steps need an approved Claude Code`);
   process.exit(1);
 }
 if (problem) {
   process.stdout.write(problem);
   process.exit(3);
 }
-' 2>&1)" || rc=$?
-  if [ "$rc" -eq 3 ]; then
-    echo "policy pass skipped: $gate"
-    REASON="$gate" TODAY="$TODAY" FILE="$IMM/policy-digest.md" node --input-type=module -e '
+' 2>&1)" || CLAUDE_GATE_RC=$?
+
+policy_watch() {
+  local watch_json prompt batch settings_dir policy_sha rc
+  watch_json="$(node custom/immigration/watch.mjs)" || return 1
+  echo "$watch_json"
+  # Only an approved Claude Code runs the pass (see claude_gate). An unapproved one skips the pass
+  # without failing the job: the digest says why, and the official items stay pending for the next
+  # run. A version that cannot be read fails the step.
+  if [ "$CLAUDE_GATE_RC" -eq 3 ]; then
+    echo "policy pass skipped: $CLAUDE_GATE"
+    REASON="$CLAUDE_GATE" TODAY="$TODAY" FILE="$IMM/policy-digest.md" node --input-type=module -e '
 import fs from "node:fs";
 import path from "node:path";
 const { noteSkippedPass } = await import(path.resolve("custom/immigration/lib.mjs"));
@@ -89,8 +95,8 @@ if (after !== before) {
 ' || return 1
     return 0
   fi
-  if [ "$rc" -ne 0 ]; then
-    echo "$gate"
+  if [ "$CLAUDE_GATE_RC" -ne 0 ]; then
+    echo "$CLAUDE_GATE"
     return 1
   fi
   # One immutable batch file per run: only what THIS run gave the AI is acked.
@@ -136,7 +142,7 @@ process.stdout.write(policy.sha256);
   fi
   rc=0
   DISABLE_AUTOUPDATER=1 CC_POLICY_FILE="$settings_dir/policy.json" CC_POLICY_SHA256="$policy_sha" CC_SESSION_DIR="$settings_dir" \
-  "${CC_CLAUDE_BIN:-claude}" -p "$prompt" \
+  "$CLAUDE_REAL" -p "$prompt" \
     --restricted \
     --tools "Read,Edit,Write,WebFetch,WebSearch" \
     --permission-mode dontAsk \
@@ -154,7 +160,37 @@ process.stdout.write(policy.sha256);
 step "policy watch" policy_watch
 step "portal scan" node scan.mjs --quiet
 step "prioritize pipeline" node custom/pipeline/prioritize.mjs
-step "rank top $RANK_LIMIT" node rank-pipeline.mjs --limit "$RANK_LIMIT" --model sonnet
+# rank-pipeline.mjs (upstream) runs `claude -p` on untrusted posting text. It runs with --cli claude
+# (whatever CAREER_OPS_RANK_CLI says) and a wrapper for claude-shim.mjs first on PATH, so that call
+# gets no tools, no MCP servers and dontAsk on the approved binary; the folder is removed after.
+rank_top() {
+  local shim_dir rc
+  if [ "$CLAUDE_GATE_RC" -eq 3 ]; then
+    echo "rank skipped: $CLAUDE_GATE"
+    return 0
+  fi
+  if [ "$CLAUDE_GATE_RC" -ne 0 ]; then
+    echo "$CLAUDE_GATE"
+    return 1
+  fi
+  shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
+  if ! DIR="$shim_dir" node --input-type=module -e '
+import fs from "node:fs";
+import path from "node:path";
+const { shellQuote } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
+const shim = path.resolve("custom/control-center/server/claude/claude-shim.mjs");
+fs.writeFileSync(path.join(process.env.DIR, "claude"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@"\n`, { mode: 0o755 });
+'; then
+    rm -rf "$shim_dir"
+    return 1
+  fi
+  rc=0
+  PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
+  rm -rf "$shim_dir"
+  return "$rc"
+}
+
+step "rank top $RANK_LIMIT" rank_top
 step "sponsorship shortlist" node custom/pipeline/shortlist.mjs
 
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') done (failed=$FAILED)"
