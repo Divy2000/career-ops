@@ -7,6 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { Empty, Pill } from '../../components/ui';
+import { formatLocalMinute } from '../../lib/time';
 
 interface FileDiff {
   path: string;
@@ -24,7 +25,10 @@ interface Changes {
 }
 export interface ReloadStatus {
   state: 'idle' | 'reloading' | 'ok' | 'failed' | 'unavailable';
+  /** When a reload finished (ok or failed). */
   at?: string;
+  /** When the running reload began. */
+  startedAt?: string;
   error?: string;
   stderrTail?: string;
 }
@@ -143,7 +147,14 @@ export function ReloadStatusCard() {
         </div>
       ) : (
         <p className="muted small">
-          <Pill tone={s.state === 'reloading' ? 'info' : 'ok'}>{s.state}</Pill> {s.at ? `last reload ${s.at}` : 'no reload yet; server edits trigger a blue/green restart'}
+          <Pill tone={s.state === 'reloading' ? 'info' : 'ok'}>{s.state}</Pill>{' '}
+          {s.state === 'reloading'
+            ? s.startedAt
+              ? `since ${formatLocalMinute(s.startedAt)}`
+              : 'in progress'
+            : s.at
+              ? `last reload ${formatLocalMinute(s.at)}`
+              : 'no reload yet; server edits trigger a blue/green restart'}
         </p>
       )}
     </div>
