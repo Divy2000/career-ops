@@ -67,10 +67,7 @@ describe('reports', () => {
     const doc = (title: string) => `# ${title}\n\n**Score:** 4/5\n\n## A) Role Summary\n`;
     expect(parseReport(doc('Bewertung: Acme -- Software Engineer - Platform'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
     expect(parseReport(doc(`Evaluation: Acme ${EM_DASH} Software Engineer - Platform`), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Software Engineer - Platform' });
-    // The first separator by position wins, whichever kind it is (R8-18 review): a legacy plain-dash title keeps the
-    // em dash inside its role. A company name containing " - " followed by an em dash splits at the company's dash.
-    expect(parseReport(doc(`Evaluation: Acme - Principal Engineer ${EM_DASH} AI Platform`), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: `Principal Engineer ${EM_DASH} AI Platform` });
-    expect(parseReport(doc(`Evaluation: Acme ${EM_DASH} Engineer -- Data - Platform`), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Engineer -- Data - Platform' });
+    expect(parseReport(doc(`Evaluation: Acme - Labs ${EM_DASH} Engineer -- Data`), '011-acme.md', 11)).toMatchObject({ company: 'Acme - Labs', role: 'Engineer -- Data' });
     // A hand-written title with only a plain dash still splits there.
     expect(parseReport(doc('Evaluation: Acme - Engineer'), '011-acme.md', 11)).toMatchObject({ company: 'Acme', role: 'Engineer' });
   });

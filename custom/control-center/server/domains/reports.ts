@@ -148,12 +148,11 @@ function blockField(sectionContent: string, label: string): string | null {
 }
 
 /**
- * "Company <sep> Role", split once at the first separator by position, whichever it is: the em dash or " -- " the
- * templates write, or the " - " of a legacy hand-written title. A role such as "Software Engineer - Platform" after an
- * em dash, or one with an em dash in it after a plain dash, stays whole.
+ * "Company <sep> Role", split once: at the first em dash or " -- " (what the templates write), and at " - " only when
+ * neither is there, so a role such as "Software Engineer - Platform" stays whole.
  */
 function splitTitle(rest: string): [string, string | undefined] {
-  const sep = rest.match(new RegExp(`\\s+(?:${EM_DASH}|--?)\\s+`));
+  const sep = rest.match(new RegExp(`\\s+(?:${EM_DASH}|--)\\s+`)) ?? rest.match(/\s+-\s+/);
   if (!sep || sep.index === undefined) return [rest, undefined];
   return [rest.slice(0, sep.index), rest.slice(sep.index + sep[0].length)];
 }
