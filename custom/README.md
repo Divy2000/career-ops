@@ -32,7 +32,7 @@ node custom/projects/rank.mjs --check              # validate article-digest.md
 node custom/projects/import.mjs projects.json      # dry run; --write creates the file, --merge adds only new titles
 ```
 
-`rank.mjs` is deterministic and spends no tokens: skill overlap with the job description plus tag keywords. Its `libraryCoverage` lists job skills that `cv.md` lacks but a library project shows, so they are not reported as gaps.
+`rank.mjs` is deterministic and spends no tokens. It scores every skill from the upstream vocabulary that the job description names and a project shows anywhere in its block (title 3, tags 2, any section or bullet 1), tags the job names literally, and the job's other words a project uses (half weight, scaled by how rare the word is across the library). Ties go to the project matching more distinct terms. Its `libraryCoverage` lists job skills that `cv.md` lacks but a library project shows, so they are not reported as gaps.
 
 The always-on house rule (`install/templates/_custom-projects.md`, added to `modes/_custom.md` by the installer and onboarding) makes every `pdf`, `text`, `latex`, `cover`, `apply`, `oferta`, `auto-pipeline` and batch item pick projects from `rank.mjs` output, and build with the fork pipeline:
 

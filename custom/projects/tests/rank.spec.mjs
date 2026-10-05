@@ -181,3 +181,46 @@ test('given an unknown flag or a flag with a value, when run, then it exits non-
   assert.notEqual(run(root, ['jds/role.md', '--top=3']).status, 0);
   assert.notEqual(run(root, ['jds/role.md', '--json', '--summary']).status, 0);
 });
+
+test('given a Python backend JD and a mixed library, when ranked, then the backend projects come first and unrelated ones last, whatever the library order', () => {
+  const library = parseLibrary(read('backend-library.md')).entries;
+  const r = rank(read('jd-python-backend.md'), '', library);
+  const order = r.candidates.map((c) => c.id);
+  const backend = ['payments-rest-api', 'order-event-pipeline', 'report-job-queue'];
+  const unrelated = ['portfolio-website', 'habit-tracker-ios-app', 'shelf-defender', 'regional-sales-dashboard'];
+  assert.deepEqual(order.slice(0, 3).sort(), [...backend].sort(), JSON.stringify(r.candidates.map((c) => [c.id, c.score])));
+  assert.equal(order[0], 'payments-rest-api');
+  assert.equal(order[3], 'plant-disease-classifier');
+  assert.deepEqual(order.slice(4).sort(), [...unrelated].sort());
+  const score = Object.fromEntries(r.candidates.map((c) => [c.id, c.score]));
+  for (const u of unrelated) assert.ok(score[u] < score['plant-disease-classifier'], `${u} scores ${score[u]}`);
+  assert.ok(r.recommended.every((id) => backend.includes(id)), JSON.stringify(r.recommended));
+  assert.ok(r.recommended.length >= 2);
+});
+
+test('given a digest block whose skills sit in Architecture and Key decisions, when ranked, then they are matched', () => {
+  const library = parseLibrary(read('backend-library.md')).entries;
+  const pipeline = rank(read('jd-python-backend.md'), '', library).candidates.find((c) => c.id === 'order-event-pipeline');
+  for (const skill of ['Kafka', 'Kubernetes', 'AWS', 'PostgreSQL', 'Python']) assert.ok(pipeline.matchedSkills.includes(skill), JSON.stringify(pipeline.matchedSkills));
+});
+
+test('given JD words outside the skill vocabulary in a project body, when ranked, then they add to the score and are listed as matched', () => {
+  const md = '## Queue Worker\n- Moved report generation to Celery background workers.\n\n## Static Site\n- A plain brochure page.';
+  const r = rank('We run background jobs with Celery.', '', parseLibrary(md).entries);
+  assert.equal(r.candidates[0].id, 'queue-worker');
+  assert.ok(r.candidates[0].score > 0);
+  assert.ok(r.candidates[0].matchedSkills.includes('celery'), JSON.stringify(r.candidates[0].matchedSkills));
+  assert.equal(r.candidates[1].score, 0);
+});
+
+test('given two projects with the same score, when ranked, then the one matching more distinct terms comes first', () => {
+  const md = '## Narrow One\nTags: python\n- Plain words.\n\n## Broad One\n- Uses Docker and Redis.';
+  const r = rank('Python, Docker and Redis.', '', parseLibrary(md).entries);
+  assert.deepEqual(r.candidates.map((c) => [c.id, c.score]), [['broad-one', 2], ['narrow-one', 2]]);
+});
+
+test('given the same library and JD, when ranked twice, then the result is identical', () => {
+  const library = parseLibrary(read('backend-library.md')).entries;
+  const jd = read('jd-python-backend.md');
+  assert.deepEqual(rank(jd, '', library), rank(jd, '', library));
+});
