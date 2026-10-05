@@ -29,4 +29,20 @@ test.describe('Settings', () => {
     const axe = await (await axeBuilder(page)).exclude('[data-sonner-toaster]').analyze();
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
+
+  test('an unapproved Claude Code leaves the app running: the setup chip and Settings > AI engine say sessions are refused', async ({ page }) => {
+    const problem = 'Claude Code 2.1.290 is not approved for Control Center sessions (approved: 2.1.289); run `npm run probe:reads` and add it. Sessions are refused until then; the rest of the app works.';
+    await page.route('**/api/system/status', async (route) => {
+      const res = await route.fetch();
+      const body = (await res.json()) as { claude: Record<string, unknown> };
+      await route.fulfill({ response: res, json: { ...body, claude: { ...body.claude, version: '2.1.290 (Claude Code)', approved: false, problem } } });
+    });
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    const chip = page.getByRole('link', { name: 'Setup needs attention' });
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveAttribute('title', /2\.1\.290 is not approved/);
+    await chip.click();
+    await expect(page.getByRole('tab', { name: 'AI engine', selected: true })).toBeVisible();
+    await expect(page.getByText(problem)).toBeVisible();
+  });
 });

@@ -526,6 +526,29 @@ describe('read confinement (BUG-06)', () => {
     }
   });
 
+  it('the setup status says when the installed Claude Code is not approved, so the health chip can warn that sessions are refused', async () => {
+    const bin = path.join(tmp('cc-unapproved-'), 'claude');
+    fs.writeFileSync(bin, `#!${process.execPath}\nconsole.log('2.1.290 (Claude Code)');\n`, { mode: 0o755 });
+    const other = await makeTestApp({ claudeBin: bin });
+    try {
+      const status = (await call(other, 'GET', '/api/system/status')).json();
+      expect(status.claude).toMatchObject({ version: '2.1.290 (Claude Code)', approved: false, problem: expect.stringMatching(/Claude Code 2\.1\.290 is not approved.*sessions are refused/i) });
+      // The rest of the app answers as usual.
+      expect((await call(other, 'GET', '/api/tracker')).statusCode).toBe(200);
+    } finally {
+      await other.close();
+    }
+    const unreadable = path.join(tmp('cc-unreadable-'), 'claude');
+    fs.writeFileSync(unreadable, `#!${process.execPath}\nconsole.log('Claude Code is updating...');\n`, { mode: 0o755 });
+    const updating = await makeTestApp({ claudeBin: unreadable });
+    try {
+      expect((await call(updating, 'GET', '/api/system/status')).json().claude).toMatchObject({ approved: false, problem: expect.stringMatching(/could not read the Claude Code version.*sessions are refused/) });
+    } finally {
+      await updating.close();
+    }
+    expect((await get('/api/system/status')).json().claude).toMatchObject({ approved: true, problem: null });
+  });
+
   it("the turn policy lets the session read its own oversized tool results and nothing else of Claude's; a fork's first turn gets none", async () => {
     const first = await settle((await post('/api/sessions', { mode: 'advisor', prompt: 'hello' })).json().id);
     const policyOf = (id: string) => JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', id, 'turns', '1', 'policy.json'), 'utf8')) as { readOnlyRoots: string[] };

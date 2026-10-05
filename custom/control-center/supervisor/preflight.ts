@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { approvedClaudeVersions, parseClaudeVersion, unapprovedMessage } from '../server/claude/cli-version.js';
+import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../server/claude/cli-version.js';
 
 export const NODE_FLOOR = '22.6.0';
 
@@ -114,14 +114,18 @@ function claudeFailure(bin: string, p: Probe, timeoutMs: number): string {
   return `Claude CLI not runnable at "${bin}" (${detail}, ${CLAUDE_ATTEMPTS} attempts). Install Claude Code or set CC_CLAUDE_BIN.`;
 }
 
-/** Null when claude runs and reports an approved version (sessions are confined only on a probed CLI), else the error. */
-async function probeClaude(input: PreflightInput): Promise<string | null> {
+/**
+ * What `claude --version` says about sessions: an error when claude does not run or its version cannot be read; a
+ * warning when it is not an approved version, since every turn refuses it anyway (assertApprovedClaude) and the
+ * tracker, pipeline and editors need no Claude.
+ */
+async function probeClaude(input: PreflightInput): Promise<{ error: string } | { warning: string } | null> {
   const timeoutMs = input.claudeTimeoutMs ?? CLAUDE_TIMEOUT_MS;
   let stdout: string;
   if (input.exec) {
     const out = await input.exec(input.claudeBin, ['--version']);
     const code = typeof out === 'number' ? out : out.code;
-    if (code !== 0) return claudeFailure(input.claudeBin, { code, timedOut: false, enoent: code === 127, stdout: '', stderr: '' }, timeoutMs);
+    if (code !== 0) return { error: claudeFailure(input.claudeBin, { code, timedOut: false, enoent: code === 127, stdout: '', stderr: '' }, timeoutMs) };
     stdout = typeof out === 'number' ? '' : out.stdout;
   } else {
     let last: Probe = { code: 1, timedOut: false, enoent: false, stdout: '', stderr: '' };
@@ -130,13 +134,13 @@ async function probeClaude(input: PreflightInput): Promise<string | null> {
       if (last.code === 0 && !last.timedOut) break;
       if (last.enoent) break;
     }
-    if (last.code !== 0 || last.timedOut) return claudeFailure(input.claudeBin, last, timeoutMs);
+    if (last.code !== 0 || last.timedOut) return { error: claudeFailure(input.claudeBin, last, timeoutMs) };
     stdout = last.stdout;
   }
   const version = parseClaudeVersion(stdout);
-  if (!version) return `could not read the Claude Code version from "${input.claudeBin}" (got ${JSON.stringify(stdout.trim().slice(0, 80))}); sessions run only on an approved version.`;
+  if (!version) return { error: `could not read the Claude Code version from "${input.claudeBin}" (got ${JSON.stringify(stdout.trim().slice(0, 80))}); sessions run only on an approved version.` };
   const approved = input.approvedVersions ?? approvedClaudeVersions(input.env.NODE_ENV ?? 'development');
-  return approved.includes(version) ? null : unapprovedMessage(version, approved);
+  return approved.includes(version) ? null : { warning: unapprovedWarning(version, approved) };
 }
 
 export const MANAGED_SETTINGS_DIR = '/Library/Application Support/ClaudeCode';
@@ -227,8 +231,9 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
   }
   const platform = input.platform ?? process.platform;
   if (platform !== 'darwin') errors.push(`The Control Center runs on macOS only (this is ${platform}): it reads the session token from the macOS Keychain and confines sessions with macOS paths.`);
-  const claudeError = await probeClaude(input);
-  if (claudeError) errors.push(claudeError);
+  const claude = await probeClaude(input);
+  if (claude && 'error' in claude) errors.push(claude.error);
+  if (claude && 'warning' in claude) warnings.push(claude.warning);
   // Tests point CC_CLAUDE_BIN at the fake and must not depend on this machine's Keychain.
   const skipKeychain = input.env.NODE_ENV === 'test' && input.env.CC_SKIP_KEYCHAIN !== '0';
   if (!skipKeychain) {

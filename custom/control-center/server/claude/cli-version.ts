@@ -28,6 +28,11 @@ export function unapprovedMessage(found: string, approved: string[]): string {
   return `Claude Code ${found} is not approved for Control Center sessions (approved: ${list}); run \`npm run probe:reads\` and add it${install ? `, or \`claude install ${install}\`` : ''}`;
 }
 
+/** Preflight and the setup status: an unapproved CLI refuses sessions (per turn), never the app itself. */
+export function unapprovedWarning(found: string, approved: string[]): string {
+  return `${unapprovedMessage(found, approved)}. Sessions are refused until then; the rest of the app works.`;
+}
+
 export type VersionRunner = (bin: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 const runVersion: VersionRunner = (bin) =>

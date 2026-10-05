@@ -2,10 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
 import type { ServerConfig } from '../config.js';
 import { childEnv } from '../system/child-env.js';
+import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../claude/cli-version.js';
 
 export interface SystemStatus {
   node: string;
-  claude: { bin: string; version: string | null; error: string | null };
+  /** `approved`: sessions may run on this version; `problem` says why not when claude runs but is not approved. */
+  claude: { bin: string; version: string | null; error: string | null; approved: boolean; problem: string | null };
   roots: { code: string; data: string };
   keychainTokenPresent: boolean;
   anthropicApiKeySet: boolean;
@@ -30,12 +32,17 @@ export async function readSystemStatus(cfg: ServerConfig, exec: Exec = execNoShe
     exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { timeoutMs: 5000 }),
     readCareerOpsVersion(cfg),
   ]);
+  const approvedList = approvedClaudeVersions(cfg.nodeEnv);
+  const parsed = claude.code === 0 ? parseClaudeVersion(claude.stdout) : null;
+  const approved = parsed !== null && approvedList.includes(parsed);
   return {
     node: process.version,
     claude: {
       bin: cfg.claudeBin,
       version: claude.code === 0 ? claude.stdout.trim() : null,
       error: claude.code === 0 ? null : claude.stderr.trim() || `exit ${claude.code}`,
+      approved,
+      problem: claude.code !== 0 || approved ? null : parsed ? unapprovedWarning(parsed, approvedList) : `could not read the Claude Code version from ${JSON.stringify(claude.stdout.trim().slice(0, 80))}; sessions are refused until it reports an approved version.`,
     },
     roots: { code: cfg.codeRoot, data: cfg.dataRoot },
     // Exit code only: the token value is discarded and never leaves this process.

@@ -33,6 +33,14 @@ describe('runPreflightCli', () => {
     expect(r.output).toContain('below the floor');
   });
 
+  it('an unapproved Claude Code version is a warning, not an error: exits 0 so the app starts and only sessions are refused', async () => {
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('2.1.290 (Claude Code)');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0' });
+    expect(r.code).toBe(0);
+    expect(r.output).toContain('warning: Claude Code 2.1.290 is not approved');
+    expect(r.output).not.toContain('error:');
+    expect(r.output).toContain('preflight ok');
+  });
+
   it('keeps warnings in the output but exits 0', async () => {
     const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test', ANTHROPIC_API_KEY: 'x' }, nodeVersion: 'v26.0.0' });
     expect(r.code).toBe(0);

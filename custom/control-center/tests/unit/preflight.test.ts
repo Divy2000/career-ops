@@ -180,13 +180,15 @@ describe('preflight read-confinement gates', () => {
     expect(r).toEqual({ ok: true, errors: [], warnings: [] });
   });
 
-  it('given claude --version returns 2.1.290, errors and names the approved list', async () => {
+  it('given claude --version returns 2.1.290, warns that sessions are refused and names the approved list, but the app still starts', async () => {
     const r = await preflight({ ...ok, exec: versionExec('2.1.290 (Claude Code)\n'), managedSettings: emptyManaged() });
-    expect(r.ok).toBe(false);
-    expect(r.errors).toHaveLength(1);
-    expect(r.errors[0]).toContain('Claude Code 2.1.290 is not approved');
-    expect(r.errors[0]).toContain('approved: 2.1.289');
-    expect(r.errors[0]).toContain('npm run probe:reads');
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('Claude Code 2.1.290 is not approved');
+    expect(r.warnings[0]).toContain('approved: 2.1.289');
+    expect(r.warnings[0]).toContain('npm run probe:reads');
+    expect(r.warnings[0]).toMatch(/sessions are refused until/i);
   });
 
   it('given a claude whose version cannot be read, errors instead of assuming it is approved', async () => {
