@@ -20,18 +20,24 @@ function urgencyTone(u: string): 'danger' | 'warn' | 'neutral' | 'info' {
   return 'neutral';
 }
 
-function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg: string) => void }) {
+export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg: string) => void }) {
   const [date, setDate] = useState(localDate());
   const [channel, setChannel] = useState('Email');
   const [contact, setContact] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // The route appends every request, so a second click while one is in flight would log the follow-up twice.
+  const [busy, setBusy] = useState(false);
   const submit = async () => {
+    setBusy(true);
+    setError(null);
     try {
       const r = await apiSend<{ num: number }>('POST', '/api/followups/log', { appNum: entry.num, date, channel, contact, notes });
       onDone(`Logged follow-up #${r.num} for ${entry.company}`);
     } catch (err) {
       setError(describeError(err));
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -59,7 +65,7 @@ function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg:
         </p>
       )}
       <div className="row gap">
-        <button type="button" onClick={() => void submit()}>
+        <button type="button" disabled={busy} onClick={() => void submit()}>
           Save follow-up
         </button>
         <button type="button" onClick={() => onDone('')}>
