@@ -839,6 +839,17 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(pipeline, 'node reconcile-pipeline.mjs --pipeline /etc/hosts --dry-run');
   });
 
+  it('h1b-sponsor check: a company name in any number of words and its switches; never a caller-chosen cache directory', () => {
+    const sponsor = { ...policyFor('sponsorship-check', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    for (const cmd of ['node plugins/h1b-sponsor/check.mjs Acme', 'node plugins/h1b-sponsor/check.mjs "Acme Robotics" --summary', 'node plugins/h1b-sponsor/check.mjs Acme Robotics Inc --json --refresh', 'node plugins/h1b-sponsor/check.mjs --search Acme.io'])
+      ok(sponsor, cmd);
+    ok(oferta, 'node plugins/h1b-sponsor/check.mjs "Acme Robotics" --summary');
+    // The audit trigger: --cache-dir makes the directory and writes <name>-<hash>.json cache files into it.
+    for (const cmd of ['node plugins/h1b-sponsor/check.mjs --cache-dir modes Acme', 'node plugins/h1b-sponsor/check.mjs Acme --cache-dir custom/control-center/server/claude', 'node plugins/h1b-sponsor/check.mjs --cache-dir data/immigration/companies Acme', 'node plugins/h1b-sponsor/check.mjs --cache-dir=modes Acme', 'node plugins/h1b-sponsor/check.mjs --json=1 Acme'])
+      no(sponsor, cmd);
+    no(oferta, 'node plugins/h1b-sponsor/check.mjs --cache-dir reports Acme');
+  });
+
   it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
     ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
     no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');

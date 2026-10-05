@@ -340,6 +340,7 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
  *   single dash, as the scripts do) and its role;
  * - eq: flags accepted as --flag=value and the value's role;
  * - positionals: the role of each positional, in order (no more are accepted);
+ *   rest: the role of every positional after those (a name in several words);
  * - indexed: the script reads positionals by raw argv index, so no flag may sit
  *   in any of those slots (with fewer paths given, a trailing flag would be read
  *   as the missing path); modes: a first token that switches to other roles;
@@ -359,6 +360,8 @@ const DIGEST_FLAGS = { '--from': 'value', '--to': 'value', '--dir': 'input' };
 const ANSWERS_FLAGS = { '--report': 'output', '--input': 'input', '--state': 'value', '--date': 'value' };
 const RECONCILE_FLAGS = { '--pipeline': 'output', '--state': 'input' };
 const WRITER_SCRIPTS = {
+  // Its --cache-dir makes that directory and writes cache files into it; sessions use the default cache.
+  'plugins/h1b-sponsor/check.mjs': { switches: ['--json', '--summary', '--refresh', '--search'], positionals: [], rest: 'value' },
   // Upserts the answers it is given into --report; --read and --read-draft only print a section of it.
   'application-answers.mjs': { switches: ['--read', '--read-draft', '--strict', '--help', '-h'], next: ANSWERS_FLAGS, positionals: [], readOnlyWith: ['--read', '--read-draft'] },
   'generate-pdf.mjs': {
@@ -565,7 +568,7 @@ function checkWriterScript(policy, script, spec, args, label) {
       if (!spec.switches?.includes(a)) return `${label}: ${script} does not accept ${a}; it would read the token as a path`;
       continue;
     }
-    const role = roles[positionals];
+    const role = roles[positionals] ?? spec.rest;
     positionals += 1;
     if (!role) return `${label}: ${script} takes at most ${roles.length} path argument${roles.length === 1 ? '' : 's'} (${a})`;
     given.push(a);
