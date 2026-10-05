@@ -723,6 +723,7 @@
   },
   "claude": {
     "version": "2.1.288 (Claude Code)",
+    "approvedVersions": [],
     "flags": [
       "--session-id",
       "--append-system-prompt",

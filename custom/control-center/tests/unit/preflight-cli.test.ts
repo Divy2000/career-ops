@@ -22,19 +22,19 @@ describe('runPreflightCli', () => {
   });
 
   it('exits 0 and says so when everything passes', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('2.0.0');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0' });
     expect(r.code).toBe(0);
     expect(r.output).toContain('preflight ok');
   });
 
   it('exits 1 below the Node floor', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('2.0.0');"), NODE_ENV: 'test' }, nodeVersion: 'v20.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v20.0.0' });
     expect(r.code).toBe(1);
     expect(r.output).toContain('below the floor');
   });
 
   it('keeps warnings in the output but exits 0', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('2.0.0');"), NODE_ENV: 'test', ANTHROPIC_API_KEY: 'x' }, nodeVersion: 'v26.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test', ANTHROPIC_API_KEY: 'x' }, nodeVersion: 'v26.0.0' });
     expect(r.code).toBe(0);
     expect(r.output).toContain('warning: ANTHROPIC_API_KEY');
     expect(r.output).toContain('preflight ok');
@@ -59,7 +59,7 @@ describe('npm run preflight entry point', () => {
   });
 
   it('really exits 0 with a runnable claude', () => {
-    const r = run({ CC_CLAUDE_BIN: fakeClaude("console.log('2.0.0');") });
+    const r = run({ CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');") });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('preflight ok');
   });
