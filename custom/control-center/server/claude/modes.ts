@@ -284,13 +284,60 @@ const BASENAME_CLASS: Record<string, PolicyClass> = {
 };
 
 /**
+ * Localized modes whose file name is translated, and the English mode each one is (their titles say so): the full
+ * evaluation of one posting and the live application assistant. A localized mode named like its English mode
+ * (de/pipeline, es/interview/plan) needs no entry.
+ */
+const TRANSLATED_MODES: Readonly<Record<string, string>> = {
+  'ar/fursah': 'oferta',
+  'de/angebot': 'oferta',
+  'fr/offre': 'oferta',
+  'hi/naukri': 'oferta',
+  'id/lowongan': 'oferta',
+  'it/annuncio': 'oferta',
+  'ja/kyujin': 'oferta',
+  'ko/gonggo': 'oferta',
+  'nl/vacature': 'oferta',
+  'tr/is-ilani': 'oferta',
+  'ar/takdeem': 'apply',
+  'de/bewerben': 'apply',
+  'es/aplicar': 'apply',
+  'fr/postuler': 'apply',
+  'hi/aavedan': 'apply',
+  'id/melamar': 'apply',
+  'it/candidarsi': 'apply',
+  'ja/oubo': 'apply',
+  'ko/jiwon': 'apply',
+  'nl/solliciteren': 'apply',
+  'pl/aplikuj': 'apply',
+  'pt/aplicar': 'apply',
+  'tr/basvuru': 'apply',
+};
+
+const LANGUAGE_DIR = /^[a-z]{2}(-[A-Z]{2})?\//;
+
+/**
+ * The English mode a localized one stands for: its translation, or the same id under a language directory
+ * (de/interview/debrief is interview/debrief). Any other id stands for itself.
+ */
+export function englishModeOf(id: string): string {
+  if (Object.hasOwn(TRANSLATED_MODES, id)) return TRANSLATED_MODES[id]!;
+  if (!LANGUAGE_DIR.test(id)) return id;
+  const rest = id.replace(LANGUAGE_DIR, '');
+  return MODES.some((m) => m.id === rest) ? rest : id;
+}
+
+/**
  * Policy class for a mode id (path under modes/ without .md). Localized modes
- * under language directories inherit by basename when the English mode exists;
- * anything unmapped is read-only, which is the safe default.
+ * inherit the class of the English mode they stand for (englishModeOf), and
+ * other localized ids by basename; anything unmapped is read-only, which is
+ * the safe default.
  */
 export function classForMode(id: string): PolicyClass {
   // Own keys only, here and below: `constructor` or `__proto__` would otherwise find Object's members.
   if (Object.hasOwn(VIRTUAL_MODES, id)) return VIRTUAL_MODES[id]!.policyClass;
+  const english = englishModeOf(id);
+  if (english !== id) return classForMode(english);
   if (id === 'pdf/hm-audit') return 'documents';
   if (id.startsWith('interview/') || id.endsWith('/interview-prep')) return 'interview';
   if (id.startsWith('regional/')) return 'evaluate';

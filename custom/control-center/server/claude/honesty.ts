@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isReservedReportFile, reportNumberOf, readReport } from '../domains/reports.js';
-import type { PolicyClass } from './modes.js';
+import { englishModeOf, type PolicyClass } from './modes.js';
 import type { SessionStatus } from './sessions.js';
 
 export interface NewReport {
@@ -46,9 +46,10 @@ export function ownReports(found: NewReport[], opts: { reportNum: number | null;
   return found.filter((r) => written.has(r.file));
 }
 
-/** Modes whose turn is an evaluation of one posting and must leave a report behind. */
+/** Modes whose turn is an evaluation of one posting and must leave a report behind, in every language. */
 export function isReportGated(modeId: string): boolean {
-  return modeId === 'oferta' || modeId === 'auto-pipeline' || modeId.startsWith('regional/') || modeId.endsWith('/oferta');
+  const id = englishModeOf(modeId);
+  return id === 'oferta' || id === 'auto-pipeline' || id.startsWith('regional/') || id.endsWith('/oferta');
 }
 
 /** Modes whose terminal output is an envelope rather than prose. */

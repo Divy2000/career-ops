@@ -55,6 +55,31 @@ describe('mode registry', () => {
     expect(getModePolicy('no-such-mode')).toBeNull();
   });
 
+  it('a localized mode runs under the class of the English mode it translates, nested interview modes and translated names included', () => {
+    // The translated evaluation (A-F/A-G) and live-application modes, as their titles say.
+    const translated: Record<string, string> = {
+      'ar/fursah': 'oferta', 'de/angebot': 'oferta', 'fr/offre': 'oferta', 'hi/naukri': 'oferta', 'id/lowongan': 'oferta', 'it/annuncio': 'oferta', 'ja/kyujin': 'oferta', 'ko/gonggo': 'oferta', 'nl/vacature': 'oferta', 'tr/is-ilani': 'oferta',
+      'ar/takdeem': 'apply', 'de/bewerben': 'apply', 'es/aplicar': 'apply', 'fr/postuler': 'apply', 'hi/aavedan': 'apply', 'id/melamar': 'apply', 'it/candidarsi': 'apply', 'ja/oubo': 'apply', 'ko/jiwon': 'apply', 'nl/solliciteren': 'apply', 'pl/aplikuj': 'apply', 'pt/aplicar': 'apply', 'tr/basvuru': 'apply',
+    };
+    for (const [id, en] of Object.entries(translated)) {
+      expect(MODES.some((m) => m.id === id), id).toBe(true);
+      expect(classForMode(id), id).toBe(classForMode(en));
+    }
+    for (const lang of ['de', 'es', 'fr', 'id', 'it', 'ja', 'ko', 'pt', 'ru', 'ua', 'zh']) for (const sub of ['debrief', 'plan', 'practice']) expect(classForMode(`${lang}/interview/${sub}`), `${lang}/interview/${sub}`).toBe('interview');
+    expect(getModePolicy('de/angebot')?.writeGlobs).toContain('reports/**');
+    expect(getModePolicy('fr/postuler')?.writeGlobs).toEqual(['output/**']);
+    // Every mode under a language folder is either the English mode under the same name or a translation listed above,
+    // so a new localized mode that is neither fails here instead of silently running read-only.
+    for (const m of MODES) {
+      const [lang, ...rest] = m.id.split('/');
+      if (rest.length === 0 || !/^[a-z]{2}(-[A-Z]{2})?$/.test(lang!)) continue;
+      const en = rest.join('/');
+      const counterpart = MODES.some((e) => e.id === en) ? en : translated[m.id];
+      expect(counterpart, `${m.id} has no English counterpart`).toBeDefined();
+      expect(classForMode(m.id), m.id).toBe(classForMode(counterpart!));
+    }
+  });
+
   it('a mode id named after an Object property is no mode, and its class is the read-only default', () => {
     for (const id of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
       expect(getModePolicy(id), id).toBeNull();

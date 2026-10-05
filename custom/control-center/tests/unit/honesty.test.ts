@@ -43,6 +43,15 @@ describe('evaluation honesty gate', () => {
     expect(decideTurnOutcome({ ...base, cancelled: true, exitCode: null }).status).toBe('cancelled');
   });
 
+  it('a localized evaluation is report-gated like oferta, whatever its file is called', () => {
+    for (const modeId of ['de/angebot', 'fr/offre', 'ja/kyujin', 'tr/is-ilani', 'es/oferta', 'regional/eu-swe']) {
+      expect(decideTurnOutcome({ ...base, modeId }), modeId).toMatchObject({ status: 'awaiting_user', reason: expect.stringMatching(/no new report/) });
+      expect(decideTurnOutcome({ ...base, modeId, newReports: [{ num: 8, file: '008-x.md', score: 4.1 }] }).status, modeId).toBe('done');
+    }
+    // A pipeline or a live application assistant is not one evaluation.
+    for (const modeId of ['de/pipeline', 'de/bewerben']) expect(decideTurnOutcome({ ...base, modeId }).status, modeId).toBe('done');
+  });
+
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply', envelopeCount: 1 }).status).toBe('done');
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply' }).status).toBe('awaiting_user');
