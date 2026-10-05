@@ -26,6 +26,18 @@ describe('writeDemoTutorials', () => {
     expect(second.parts[0]!.videoLight).toBeNull();
   });
 
+  it('writes a tour in three parts, each with its light video, subtitles and posters, that the listing accepts with its guide', () => {
+    writeDemoTutorials(dir);
+    const tour = listTutorials(dir).tutorials.find((t) => t.id === 'parts-tour')!;
+    expect(tour.warnings).toEqual([]);
+    expect(tour.parts.map((p) => [p.id, p.duration, p.videoLight?.file, p.subtitles?.format, p.posterLight?.file])).toEqual([
+      ['a', 30, 'a-light.mp4', 'srt', 'a-poster-light.jpg'],
+      ['b', 2, 'b-light.mp4', 'srt', 'b-poster-light.jpg'],
+      ['c', 2, 'c-light.mp4', 'srt', 'c-poster-light.jpg'],
+    ]);
+    expect(tour.guideDocs?.sections[0]?.subsections.map((u) => tour.chapters[u.chapter!]?.part)).toEqual(['a', 'c']);
+  });
+
   it('makes the light video a different file from the dark one', () => {
     writeDemoTutorials(dir);
     const root = path.join(dir, 'data', 'control-center', 'tutorials', 'demo-tour');

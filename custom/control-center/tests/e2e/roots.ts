@@ -322,7 +322,75 @@ export function writeDemoTutorials(dir: string, opts: { long?: boolean; padding?
   fs.writeFileSync(path.join(docs, 'status.dark.gif'), tinyGif([0, 1], 320, 180));
   fs.writeFileSync(path.join(docs, 'status.light.gif'), tinyGif([2, 3], 320, 180));
   fs.writeFileSync(path.join(docs, 'tutorial.json'), JSON.stringify({ id: 'docs-tour', title: 'Docs tour', video: 'docs.mp4', guide: 'guide.json', chapters: [{ title: 'Intro', start: 0 }, { title: 'Middle', start: 0.5 }] }));
+  writePartsTour(root, demo);
   const broken = path.join(root, 'broken-demo');
   fs.mkdirSync(broken, { recursive: true });
   fs.writeFileSync(path.join(broken, 'tutorial.json'), '{ "id": "broken-demo", ');
+}
+
+const partSrt = (text: string) => `1\n00:00:00,100 --> 00:00:00,900\n${text}\n`;
+
+/**
+ * A tutorial in three parts, each with a dark and a light recording, subtitles and posters. Part a is 30 seconds long so a resume
+ * point fits (more than 5 s in, more than 10 s before the end); parts b and c are the 2 second demo clips.
+ * Its guide points one subsection at a chapter in part a and one at a chapter in part c.
+ */
+function writePartsTour(root: string, demo: string): void {
+  const dir = path.join(root, 'parts-tour');
+  fs.mkdirSync(dir, { recursive: true });
+  const long = (source: string) => ['-f', 'lavfi', '-i', `${source}=size=320x180:rate=1:duration=30`, '-c:v', 'libx264', '-crf', '48', '-pix_fmt', 'yuv420p', '-g', '1', '-movflags', '+faststart'];
+  writeClip(path.join(dir, 'a.mp4'), long('testsrc'), 'part-30s.mp4');
+  writeClip(path.join(dir, 'a-light.mp4'), long('testsrc2'), 'part-30s-light.mp4');
+  for (const id of ['b', 'c']) {
+    fs.copyFileSync(path.join(demo, 'demo-tour.mp4'), path.join(dir, `${id}.mp4`));
+    fs.copyFileSync(path.join(demo, 'demo-tour-light.mp4'), path.join(dir, `${id}-light.mp4`));
+  }
+  for (const id of ['a', 'b', 'c']) {
+    fs.copyFileSync(path.join(demo, 'poster.jpg'), path.join(dir, `${id}-poster.jpg`));
+    fs.copyFileSync(path.join(demo, 'poster-light.jpg'), path.join(dir, `${id}-poster-light.jpg`));
+    fs.writeFileSync(path.join(dir, `${id}.srt`), partSrt(`Part ${id} begins.`));
+  }
+  const part = (id: string, title: string, short: string, duration: number, chapters: Array<{ title: string; start: number }>) => ({
+    id,
+    title,
+    short,
+    video: `${id}.mp4`,
+    videoLight: `${id}-light.mp4`,
+    subtitles: `${id}.srt`,
+    poster: `${id}-poster.jpg`,
+    posterLight: `${id}-poster-light.jpg`,
+    duration,
+    chapters,
+  });
+  fs.writeFileSync(
+    path.join(dir, 'guide.json'),
+    JSON.stringify({
+      version: 2,
+      sections: [
+        {
+          id: 'basics',
+          title: 'Basics',
+          summary: 'The first steps, across the parts.',
+          subsections: [
+            { id: 'launch', title: 'Launching the app', short: 'Launch', summary: 'Start it up.', chapter: 1, blocks: [{ type: 'text', text: 'Run the launcher.' }] },
+            { id: 'detail', title: 'Application detail', short: 'Detail', summary: 'One application, in full.', chapter: 5, blocks: [{ type: 'text', text: 'Open a row.' }] },
+          ],
+        },
+      ],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, 'tutorial.json'),
+    JSON.stringify({
+      id: 'parts-tour',
+      title: 'Parts tour',
+      description: 'A tour in three parts.',
+      guide: 'guide.json',
+      parts: [
+        part('a', 'Start here: safety and launch', 'Start here', 30, [{ title: 'Intro and safety', start: 0 }, { title: 'Launch and token', start: 12 }]),
+        part('b', 'Today and the inbox', 'Today & inbox', 2, [{ title: 'Today', start: 0 }, { title: 'Pipeline', start: 1 }]),
+        part('c', 'The tracker', 'Tracker', 2, [{ title: 'Tracker', start: 0 }, { title: 'Application detail', start: 1 }]),
+      ],
+    }),
+  );
 }

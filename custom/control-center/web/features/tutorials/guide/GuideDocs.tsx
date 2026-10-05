@@ -82,7 +82,7 @@ interface SubsectionProps {
   reviewed: boolean;
   chapters: Array<{ title: string; start: number }>;
   onToggle: () => void;
-  onWatch: (start: number) => void;
+  onWatch: (chapter: number) => void;
 }
 
 function Subsection({ section, sub, index, reviewed, chapters, onToggle, onWatch }: SubsectionProps) {
@@ -114,8 +114,8 @@ function Subsection({ section, sub, index, reviewed, chapters, onToggle, onWatch
             Open this page <ExternalLink size={14} aria-hidden="true" />
           </a>
         )}
-        {chapter !== undefined && (
-          <button type="button" className="guide-action" onClick={() => onWatch(chapter.start)}>
+        {chapter !== undefined && sub.chapter !== null && (
+          <button type="button" className="guide-action" onClick={() => onWatch(sub.chapter!)}>
             <Play size={14} aria-hidden="true" /> Watch in video
           </button>
         )}
@@ -136,7 +136,8 @@ interface Props {
   sub: string | undefined;
   searchFor: (loc: GuideLocation) => GuideSearchParams;
   onNavigate: (loc: GuideLocation, replace: boolean) => void;
-  onWatch: (start: number) => void;
+  /** Called with the subsection's chapter number, counted across every part of the tutorial. */
+  onWatch: (chapter: number) => void;
 }
 
 export function GuideDocs({ tutorialId, docs, chapters, section, sub, searchFor, onNavigate, onWatch }: Props) {

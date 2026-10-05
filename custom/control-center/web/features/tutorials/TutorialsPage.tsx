@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, getRouteApi, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Md } from '../../components/Md';
 import { DataState, Empty, Tabs } from '../../components/ui';
 import { apiGetText } from '../../lib/api';
 import { useTutorials } from '../../lib/queries';
 import { useTheme } from '../../lib/theme';
-import { chapterIndexAt, filterTranscript, formatTimestamp, keyAction, type KeyTarget } from '../../lib/tutorials';
+import { chapterIndexAt, chapterTarget, filterTranscript, formatTimestamp, keyAction, nextPart, resolvePart, type KeyTarget } from '../../lib/tutorials';
+import { createProgressTracker, readProgress, resumePoint, type PartProgress, type TutorialProgress } from '../../lib/tutorial-progress';
 import { GuideDocs } from './guide/GuideDocs';
 import type { GuideLocation, GuideSearchParams } from '../../lib/guide';
+import { PartList } from './PartList';
+import { UpNext } from './UpNext';
 import { useThemedVideo } from './useThemedVideo';
-import type { Tutorial, TutorialsRead } from '@shared/api';
+import type { Tutorial, TutorialPart, TutorialsRead } from '@shared/api';
 
 const route = getRouteApi('/tutorials');
 
@@ -131,16 +134,44 @@ function Transcript({ url }: { url: string }) {
   );
 }
 
-function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; startAt: number | null; onStartApplied: () => void }) {
+interface PlayerProps {
+  tutorial: Tutorial;
+  part: TutorialPart;
+  /** Where to start: a chapter the guide asked for, or 0 for the part that comes up next. Null: where the viewer left off, else the start. */
+  startAt: number | null;
+  /** Start playing once the part has loaded (moving on to the next part). A blocked play() leaves the poster up. */
+  autoplay: boolean;
+  onStartApplied: () => void;
+  progress: TutorialProgress;
+  /** Must be stable across renders: the progress tracker of a part keeps the first one. */
+  onProgress: (partId: string, progress: PartProgress) => void;
+  onOpenPart: (partId: string, opts?: { play: boolean }) => void;
+  partHref: (partId: string) => string;
+}
+
+function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, onProgress, onOpenPart, partHref }: PlayerProps) {
   const video = useRef<HTMLVideoElement>(null);
   const cover = useRef<HTMLCanvasElement>(null);
-  const part = tutorial.parts[0]!;
   const themed = useThemedVideo(video, cover, part, startAt);
   const [current, setCurrent] = useState(-1);
   const [captions, setCaptions] = useState(readCaptionsPref);
   const [osd, setOsd] = useState('');
+  const [ended, setEnded] = useState(false);
+  const [declined, setDeclined] = useState(false);
   const chapters = part.chapters;
   const hasCaptions = part.subtitles !== null;
+  const parts = tutorial.parts;
+  const index = parts.findIndex((p) => p.id === part.id);
+  const inParts = parts.length > 1;
+  const next = nextPart(parts, part.id);
+  const lengthOf = (v: HTMLVideoElement) => part.duration ?? v.duration;
+
+  const latest = useRef({ onStartApplied });
+  useEffect(() => {
+    latest.current = { onStartApplied };
+  });
+  // `onProgress` is stable (the page's state setter), so the tracker made once per part can keep it.
+  const [tracker] = useState(() => createProgressTracker(tutorial.id, part.id, { onSave: (p) => onProgress(part.id, p) }));
 
   useEffect(() => {
     const v = video.current;
@@ -178,14 +209,21 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
     setCurrent(chapterIndexAt(chapters, seconds));
   };
 
-  // Arriving from the Quick guide: start at that chapter once the video knows its length.
+  // Once, when the part has loaded: go where the page asked (the guide's chapter, or 0 for the next part), else where the viewer left
+  // off; then play when moving on. Only the arrival moves the playhead: later renders and chapter edits must not.
+  const arrived = useRef(false);
   useEffect(() => {
     const v = video.current;
-    if (!v || startAt === null) return;
+    if (!v || arrived.current) return;
     const go = () => {
-      v.currentTime = startAt;
-      setCurrent(chapterIndexAt(chapters, startAt));
-      onStartApplied();
+      arrived.current = true;
+      const at = startAt ?? resumePoint(readProgress(tutorial.id)[part.id], lengthOf(v));
+      if (at !== null) {
+        v.currentTime = at;
+        setCurrent(chapterIndexAt(chapters, at));
+      }
+      if (startAt !== null) latest.current.onStartApplied();
+      if (autoplay) void v.play()?.catch(() => undefined);
     };
     if (v.readyState >= 1) {
       go();
@@ -193,8 +231,16 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
     }
     v.addEventListener('loadedmetadata', go, { once: true });
     return () => v.removeEventListener('loadedmetadata', go);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the arrival seeks; later chapter edits must not move the playhead
-  }, [startAt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the arrival seeks
+  }, []);
+
+  // Leaving the part (another part, another tutorial or another page) keeps the place it was left at.
+  useEffect(() => {
+    const v = video.current;
+    return () => {
+      if (v && v.currentTime > 0) tracker.save(v.currentTime, part.duration ?? v.duration);
+    };
+  }, [tracker, part.duration]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -249,13 +295,62 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
     const v = video.current;
     if (v) setCurrent(chapterIndexAt(chapters, v.currentTime));
   };
+  // While a theme swap reloads the element its position reads 0 for a moment; that is not where the viewer is.
+  const onTime = () => {
+    const v = video.current;
+    if (!v) return;
+    update();
+    if (v.readyState >= 1) tracker.tick(v.currentTime, lengthOf(v));
+  };
+  const onEnded = () => {
+    const v = video.current;
+    if (!v) return;
+    tracker.save(lengthOf(v), lengthOf(v));
+    setEnded(true);
+    setDeclined(false);
+    // The prompt cannot show over a video in native full screen.
+    if (next && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  };
+
+  const chapterList =
+    chapters.length === 0 ? (
+      <Empty>This tutorial has no chapters.</Empty>
+    ) : (
+      <ol className={`tut__chapter-list ${inParts ? 'tut-part__chapters' : ''}`}>
+        {chapters.map((c, i) => (
+          <li key={`${c.start}-${c.title}`}>
+            <button type="button" className={`tut__chapter ${i === current ? 'tut__chapter--active' : ''}`} aria-current={i === current ? 'true' : undefined} onClick={() => seekTo(c.start)}>
+              <span className="mono tut__time">{formatTimestamp(c.start)}</span>
+              <span>{c.title}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    );
 
   return (
     <div className="stack">
       <div className="tut">
         <div className="stack">
           <div className="tut__stage">
-            <video ref={video} controls preload="metadata" src={themed.initialSrc} poster={themed.poster} aria-label={tutorial.title} onTimeUpdate={update} onSeeked={update} onLoadedMetadata={update}>
+            <video
+              ref={video}
+              controls
+              preload="metadata"
+              src={themed.initialSrc}
+              poster={themed.poster}
+              aria-label={inParts ? `${tutorial.title}, part ${index + 1}: ${part.title}` : tutorial.title}
+              onTimeUpdate={onTime}
+              onSeeked={update}
+              onLoadedMetadata={update}
+              onPlay={() => setEnded(false)}
+              onSeeking={() => setEnded(false)}
+              onPause={() => {
+                const v = video.current;
+                if (v && v.readyState >= 1 && !v.ended) tracker.save(v.currentTime, lengthOf(v));
+              }}
+              onEnded={onEnded}
+            >
               {part.subtitles && <track kind="subtitles" srcLang="en" label="English" src={part.subtitles.url} />}
             </video>
             <canvas ref={cover} className="tut__freeze" data-state="off" aria-hidden="true" />
@@ -264,10 +359,16 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
                 {osd}
               </p>
             )}
+            {ended && next && !declined && <UpNext next={next} number={index + 2} total={parts.length} onPlay={() => onOpenPart(next.id, { play: true })} onCancel={() => setDeclined(true)} />}
           </div>
           <div className="tut__meta">
+            {inParts && (
+              <p className="tut__eyebrow">
+                Part {index + 1} of {parts.length}
+              </p>
+            )}
             <div className="row gap" style={{ justifyContent: 'space-between' }}>
-              <h2 style={{ margin: 0 }}>{tutorial.title}</h2>
+              <h2 style={{ margin: 0 }}>{inParts ? part.title : tutorial.title}</h2>
               {hasCaptions && (
                 <button
                   type="button"
@@ -296,23 +397,14 @@ function Player({ tutorial, startAt, onStartApplied }: { tutorial: Tutorial; sta
             </p>
           </div>
         </div>
-        <aside className="card tut__chapters" aria-labelledby="tut-chapters-title">
-          <h2 id="tut-chapters-title">Chapters</h2>
-          {chapters.length === 0 ? (
-            <Empty>This tutorial has no chapters.</Empty>
-          ) : (
-            <ol className="tut__chapter-list">
-              {chapters.map((c, i) => (
-                <li key={`${c.start}-${c.title}`}>
-                  <button type="button" className={`tut__chapter ${i === current ? 'tut__chapter--active' : ''}`} aria-current={i === current ? 'true' : undefined} onClick={() => seekTo(c.start)}>
-                    <span className="mono tut__time">{formatTimestamp(c.start)}</span>
-                    <span>{c.title}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </aside>
+        {inParts ? (
+          <PartList parts={parts} activeId={part.id} progress={progress} hrefFor={partHref} onOpen={(id) => onOpenPart(id)} activeChapters={chapterList} />
+        ) : (
+          <aside className="card tut__chapters" aria-labelledby="tut-chapters-title">
+            <h2 id="tut-chapters-title">Chapters</h2>
+            {chapterList}
+          </aside>
+        )}
       </div>
       {tutorial.transcript && <Transcript url={tutorial.transcript.url} />}
     </div>
@@ -324,20 +416,50 @@ const VIEWS = [
   { id: 'guide', label: 'Quick guide' },
 ] as const;
 
+/** Where the page was asked to start a part: tied to the tutorial and the part it was asked for, and used once. */
+interface StartIntent {
+  id: string;
+  part: string;
+  at: number;
+  play: boolean;
+}
+
+/** The progress of every part of one tutorial, read when the tutorial changes and kept up to date as the player saves. */
+function useTutorialProgress(tutorialId: string | undefined) {
+  const [state, setState] = useState(() => ({ id: tutorialId, progress: tutorialId ? readProgress(tutorialId) : {} }));
+  let progress = state.progress;
+  if (state.id !== tutorialId) {
+    progress = tutorialId ? readProgress(tutorialId) : {};
+    setState({ id: tutorialId, progress });
+  }
+  const record = useCallback((partId: string, p: PartProgress) => setState((prev) => ({ ...prev, progress: { ...prev.progress, [partId]: p } })), []);
+  return { progress, record };
+}
+
 function Loaded({ data }: { data: TutorialsRead }) {
-  const { t, view, section, sub } = route.useSearch();
+  const { t, part, view, section, sub } = route.useSearch();
   const navigate = useNavigate({ from: '/tutorials' });
-  // The chapter time "Watch this part" asked for, tied to the tutorial it was asked on.
-  const [seek, setSeek] = useState<{ id: string; at: number } | null>(null);
+  const router = useRouter();
+  const [intent, setIntent] = useState<StartIntent | null>(null);
   const selected = data.tutorials.find((x) => x.id === t) ?? data.tutorials[0];
+  const active = selected ? resolvePart(selected.parts, part) : undefined;
   const guide = selected?.guideDocs ?? null;
-  const startAt = seek !== null && seek.id === selected?.id ? seek.at : null;
+  const pending = intent !== null && intent.id === selected?.id && intent.part === active?.id ? intent : null;
   const showGuide = guide !== null && view === 'guide';
-  // The URL carries the tutorial, the view and the section, so every state of the page is a shareable link.
-  const go = (to: { view?: 'guide'; section?: string; sub?: string }, replace = false) => void navigate({ search: { ...(t ? { t } : {}), ...to }, replace });
-  const searchFor = (loc: GuideLocation): GuideSearchParams => ({ ...(t ? { t } : {}), view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) });
+  const { progress, record } = useTutorialProgress(selected?.id);
+  const inParts = (selected?.parts.length ?? 0) > 1;
+  const tutorialParam = t ? { t } : {};
+  // The URL carries the tutorial, the part, the view and the section, so every state of the page is a shareable link.
+  const go = (to: { view?: 'guide'; section?: string; sub?: string }, replace = false) => void navigate({ search: { ...tutorialParam, ...(part ? { part } : {}), ...to }, replace });
+  const searchFor = (loc: GuideLocation): GuideSearchParams => ({ ...tutorialParam, view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) });
+  const partHref = (partId: string) => router.buildLocation({ to: '/tutorials', search: { ...tutorialParam, part: partId } }).href;
+  // A new history entry per part, so Back returns to the part before.
+  const openPart = (partId: string, opts: { play: boolean } = { play: false }) => {
+    setIntent(selected && opts.play ? { id: selected.id, part: partId, at: 0, play: true } : null);
+    void navigate({ search: { ...tutorialParam, part: partId } });
+  };
   const setView = (next: 'video' | 'guide') => {
-    setSeek(null);
+    setIntent(null);
     go(next === 'guide' ? { view: 'guide' } : {});
   };
   return (
@@ -366,7 +488,7 @@ function Loaded({ data }: { data: TutorialsRead }) {
                 <Thumb tutorial={x} />
                 <span className="tut-card__body">
                   <span className="tut-card__title">{x.title}</span>
-                  <span className="tut-card__desc">{x.description || `${x.chapters.length} chapters`}</span>
+                  <span className="tut-card__desc">{x.description || (x.parts.length > 1 ? `${x.parts.length} parts, ${x.chapters.length} chapters` : `${x.chapters.length} chapters`)}</span>
                 </span>
               </Link>
             ))}
@@ -387,13 +509,28 @@ function Loaded({ data }: { data: TutorialsRead }) {
               sub={sub}
               searchFor={searchFor}
               onNavigate={(loc, replace) => go({ view: 'guide', section: loc.sectionId, ...(loc.subId ? { sub: loc.subId } : {}) }, replace)}
-              onWatch={(start) => {
-                setSeek({ id: selected.id, at: start });
-                go({});
+              onWatch={(chapter) => {
+                const target = chapterTarget(selected.chapters, chapter);
+                if (!target) return;
+                setIntent({ id: selected.id, part: target.part, at: target.start, play: false });
+                void navigate({ search: { ...tutorialParam, ...(inParts ? { part: target.part } : {}) } });
               }}
             />
           )}
-          {selected && !showGuide && <Player key={selected.id} tutorial={selected} startAt={startAt} onStartApplied={() => setSeek(null)} />}
+          {selected && active && !showGuide && (
+            <Player
+              key={`${selected.id}/${active.id}`}
+              tutorial={selected}
+              part={active}
+              startAt={pending?.at ?? null}
+              autoplay={pending?.play ?? false}
+              onStartApplied={() => setIntent(null)}
+              progress={progress}
+              onProgress={record}
+              onOpenPart={openPart}
+              partHref={partHref}
+            />
+          )}
         </>
       )}
     </div>
