@@ -268,6 +268,19 @@ describe('documents for a row whose number differs from its report', () => {
     expect((await docsOf(5)).jds).toEqual(['jds/umbrella-corp-security-analyst.md']);
   });
 
+  it('matches the company as a whole word in a file name, so another company whose name contains it is not listed (SW-server-03)', async () => {
+    const files = ['output/cv-jane-umbrella-corp-2026-10-01.pdf', 'output/cv-jane-umbrella-corporate-travel.pdf', 'output/cv-jane-umbrella-corporate-travel.html', 'jds/umbrella-corporate-travel-sales.md'];
+    for (const f of files) write(f);
+    try {
+      const docs = await docsOf(5);
+      expect(docs.files.map((f: { path: string }) => f.path)).toContain('output/cv-jane-umbrella-corp-2026-10-01.pdf');
+      expect(docs.files.map((f: { path: string }) => f.path)).not.toContain('output/cv-jane-umbrella-corporate-travel.pdf');
+      expect(docs.jds).not.toContain('jds/umbrella-corporate-travel-sales.md');
+    } finally {
+      for (const f of files) fs.rmSync(path.join(d.cfg.dataRoot, f), { force: true });
+    }
+  });
+
   const rerender = (params: Record<string, unknown>) => d.app.inject({ method: 'POST', url: '/api/actions/docs.renderPdf', headers: d.authedWrite, payload: { params: { html: 'output/acme-robotics-cv.html', pdf: 'output/acme-robotics-cv.pdf', format: 'letter', ...params } } });
 
   it('refuses a re-render filed under a report the row is not linked to', async () => {
