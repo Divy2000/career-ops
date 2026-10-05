@@ -297,6 +297,8 @@ const partSchema = z.strictObject({
   id: idField,
   title: text(120),
   short: shortLabel.optional(),
+  // Trimmed first, so a blank one is too short rather than kept as spaces.
+  description: z.string().trim().min(1).max(300).optional(),
   video: plainName('video', ['.mp4']),
   videoLight: plainName('videoLight', ['.mp4']).optional(),
   subtitles: plainName('subtitles', ['.srt', '.vtt']).optional(),
@@ -357,7 +359,7 @@ function parsePartsManifest(value, folder) {
 
 /**
  * Validates a parsed tutorial.json that lives in folder `folder`. Either form comes back as parts (a single-video manifest is one part,
- * "main", named after the tutorial, with no declared duration), each with its chapters sorted by start, and `chapters` flattened across
+ * "main", named and described after the tutorial, with no declared duration), each with its chapters sorted by start, and `chapters` flattened across
  * the parts in order, each with its part id and its start counted from the start of that part.
  */
 export function parseManifest(value, folder) {
@@ -368,6 +370,6 @@ export function parseManifest(value, folder) {
   }
   if (parsed.data.id !== folder) return { ok: false, error: `id: must equal the folder name (${folder})` };
   const { video, videoLight, subtitles, poster, posterLight, chapters, ...rest } = parsed.data;
-  const main = defined({ id: 'main', title: rest.title, short: rest.title, video, videoLight, subtitles, poster, posterLight, duration: null, chapters: byStart(chapters) });
+  const main = defined({ id: 'main', title: rest.title, short: rest.title, description: rest.description || undefined, video, videoLight, subtitles, poster, posterLight, duration: null, chapters: byStart(chapters) });
   return { ok: true, manifest: { ...rest, parts: [main], chapters: flatten([main]) } };
 }

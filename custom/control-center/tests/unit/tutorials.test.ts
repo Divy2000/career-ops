@@ -71,7 +71,7 @@ describe('parseManifest', () => {
         title: 'Demo',
         description: 'A demo.',
         transcript: 'script.md',
-        parts: [{ id: 'main', title: 'Demo', short: 'Demo', video: 'demo.mp4', subtitles: 'demo.srt', poster: 'poster.jpg', duration: null, chapters: [{ title: 'A', start: 0 }, { title: 'B', start: 30 }] }],
+        parts: [{ id: 'main', title: 'Demo', short: 'Demo', description: 'A demo.', video: 'demo.mp4', subtitles: 'demo.srt', poster: 'poster.jpg', duration: null, chapters: [{ title: 'A', start: 0 }, { title: 'B', start: 30 }] }],
         chapters: [{ title: 'A', start: 0, part: 'main' }, { title: 'B', start: 30, part: 'main' }],
       },
     });
@@ -237,10 +237,33 @@ describe('parseManifest with parts', () => {
     ['a part title of 121 characters', { parts: [part('a', { title: 'x'.repeat(121) })] }, /parts\.0\.title/],
     ['a blank short label', { parts: [part('a', { short: '  ' })] }, /parts\.0\.short/],
     ['a short label of 25 characters', { parts: [part('a', { short: 'x'.repeat(25) })] }, /parts\.0\.short/],
+    ['an empty part description', { parts: [part('a', { description: '' })] }, /parts\.0\.description/],
+    ['a blank part description', { parts: [part('a', { description: '   ' })] }, /parts\.0\.description/],
+    ['a part description of 301 characters', { parts: [part('a', { description: 'x'.repeat(301) })] }, /parts\.0\.description/],
+    ['a part description that is not a string', { parts: [part('a', { description: 42 })] }, /parts\.0\.description/],
     ['a part video that climbs out', { parts: [part('a', { video: '../a.mp4' })] }, /parts\.0\.video/],
     ['a part poster that is a gif', { parts: [part('a', { poster: 'a.gif' })] }, /parts\.0\.poster/],
   ])('rejects %s', (_label, over, message) => {
     expect(error(over)).toMatch(message);
+  });
+
+  it('given a part with a description, when parsed, then it is kept trimmed, and a part without one has none', () => {
+    const m = parse({ parts: [part('a', { description: '  Where new roles land.  ' }), part('b')] });
+    if (!m.ok) throw new Error(m.error);
+    expect(m.manifest.parts[0]!.description).toBe('Where new roles land.');
+    expect('description' in m.manifest.parts[1]!).toBe(false);
+  });
+
+  it('accepts a part description of exactly 300 characters (after trimming)', () => {
+    const m = parse({ parts: [part('a', { description: ` ${'x'.repeat(300)} ` })] });
+    expect(m.ok && m.manifest.parts[0]!.description).toBe('x'.repeat(300));
+  });
+
+  it('given a single-video manifest, when parsed, then its one part takes the tutorial description, and none when the tutorial has none', () => {
+    const withText = parseManifest({ id: 'demo', title: 'Demo', description: 'A demo.', video: 'demo.mp4' }, 'demo');
+    expect(withText.ok && withText.manifest.parts[0]!.description).toBe('A demo.');
+    const without = parseManifest({ id: 'demo', title: 'Demo', video: 'demo.mp4' }, 'demo');
+    expect(without.ok && 'description' in without.manifest.parts[0]!).toBe(false);
   });
 
   it('given today\'s single-video manifest, when parsed, then it becomes one part "main" that keeps every media field', () => {
@@ -261,6 +284,7 @@ describe('parseManifest with parts', () => {
             id: 'main',
             title: 'Demo',
             short: 'Demo',
+            description: 'A demo.',
             video: 'demo.mp4',
             videoLight: 'demo-light.mp4',
             subtitles: 'demo.srt',
@@ -442,6 +466,7 @@ describe('listTutorials with parts', () => {
         id: 'a',
         title: 'Part a',
         short: 'First',
+        description: null,
         duration: 120,
         video: { file: 'a.mp4', url: url('a.mp4'), bytes: 'bytes of a.mp4'.length },
         videoLight: { file: 'a-light.mp4', url: url('a-light.mp4'), bytes: 'bytes of a-light.mp4'.length },
@@ -458,6 +483,19 @@ describe('listTutorials with parts', () => {
       { title: 'b one', start: 0, part: 'b' },
       { title: 'b two', start: 60, part: 'b' },
     ]);
+  });
+
+  it('given one part with a description, when listed, then that part carries it and the other has null', () => {
+    write({ ...manifest, parts: [part('a', { description: 'Where new roles land.' }), part('b')] });
+    const [tour] = listTutorials(root).tutorials;
+    expect(tour!.parts.map((p) => p.description)).toEqual(['Where new roles land.', null]);
+  });
+
+  it('given a single-video manifest with a description, when listed, then its one part carries the tutorial description', () => {
+    fs.mkdirSync(folder(), { recursive: true });
+    fs.writeFileSync(path.join(folder(), 'tutorial.json'), JSON.stringify({ id: 'tour', title: 'Tour', description: 'The whole tour.', video: 'a.mp4' }));
+    fs.writeFileSync(path.join(folder(), 'a.mp4'), 'x');
+    expect(listTutorials(root).tutorials[0]!.parts[0]!.description).toBe('The whole tour.');
   });
 
   it('given a part video is missing, when listed, then the folder is skipped with a warning naming the part', () => {
@@ -480,7 +518,7 @@ describe('listTutorials with parts', () => {
     fs.writeFileSync(path.join(folder(), 'tutorial.json'), JSON.stringify({ id: 'tour', title: 'Tour', video: 'a.mp4', chapters: [{ title: 'Intro', start: 0 }] }));
     fs.writeFileSync(path.join(folder(), 'a.mp4'), 'x');
     const [tour] = listTutorials(root).tutorials;
-    expect(tour!.parts).toEqual([{ id: 'main', title: 'Tour', short: 'Tour', duration: null, video: { file: 'a.mp4', url: url('a.mp4'), bytes: 1 }, videoLight: null, subtitles: null, poster: null, posterLight: null, chapters: [{ title: 'Intro', start: 0 }] }]);
+    expect(tour!.parts).toEqual([{ id: 'main', title: 'Tour', short: 'Tour', description: null, duration: null, video: { file: 'a.mp4', url: url('a.mp4'), bytes: 1 }, videoLight: null, subtitles: null, poster: null, posterLight: null, chapters: [{ title: 'Intro', start: 0 }] }]);
     expect(tour!.chapters).toEqual([{ title: 'Intro', start: 0, part: 'main' }]);
   });
 });

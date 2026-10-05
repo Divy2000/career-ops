@@ -10,6 +10,7 @@ import { chapterIndexAt, chapterTarget, filterTranscript, formatTimestamp, keyAc
 import { createProgressTracker, readProgress, resumePoint, type PartProgress, type TutorialProgress } from '../../lib/tutorial-progress';
 import { GuideDocs } from './guide/GuideDocs';
 import type { GuideLocation, GuideSearchParams } from '../../lib/guide';
+import { PartHeading } from './PartHeading';
 import { PartList } from './PartList';
 import { UpNext } from './UpNext';
 import { useThemedVideo } from './useThemedVideo';
@@ -78,7 +79,7 @@ function EmptyState({ directory }: { directory: string }) {
           <code className="mono">chapters</code> are <code className="mono">{'{ title, start }'}</code> with start in seconds.
         </li>
         <li>
-          A long recording can be split: use <code className="mono">parts</code> instead of <code className="mono">video</code>, each part with its own <code className="mono">id</code>, <code className="mono">title</code>, optional <code className="mono">short</code> label, <code className="mono">video</code>, optional light video, subtitles and posters, its <code className="mono">duration</code> in seconds and its <code className="mono">chapters</code>. The page then shows a playlist and offers the next part when one ends.
+          A long recording can be split: use <code className="mono">parts</code> instead of <code className="mono">video</code>, each part with its own <code className="mono">id</code>, <code className="mono">title</code>, optional <code className="mono">short</code> label and <code className="mono">description</code>, <code className="mono">video</code>, optional light video, subtitles and posters, its <code className="mono">duration</code> in seconds and its <code className="mono">chapters</code>. The page then shows a playlist and offers the next part when one ends.
         </li>
         <li>
           Optional: <code className="mono">guide</code> names a <code className="mono">guide.json</code> that adds a Quick guide tab: a documentation-style guide of sections and subsections with text, steps, tips, and images or clips in a dark and a light version. Sections and subsections can carry a <code className="mono">short</code> label for the contents.
@@ -380,27 +381,26 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
             {ended && next && !declined && <UpNext next={next} number={index + 2} total={parts.length} onPlay={() => onOpenPart(next.id, { play: true })} onCancel={() => setDeclined(true)} />}
           </div>
           <div className="tut__meta">
-            {inParts && (
-              <p className="tut__eyebrow">
-                Part {index + 1} of {parts.length}
-              </p>
-            )}
-            <div className="row gap" style={{ justifyContent: 'space-between' }}>
-              <h2 style={{ margin: 0 }}>{inParts ? part.title : tutorial.title}</h2>
-              {hasCaptions && (
-                <button
-                  type="button"
-                  aria-pressed={captions}
-                  onClick={() => {
-                    setCaptions(!captions);
-                    writeCaptionsPref(!captions);
-                  }}
-                >
-                  Captions: {captions ? 'on' : 'off'}
-                </button>
-              )}
-            </div>
-            {tutorial.description && <p className="muted" style={{ margin: 0 }}>{tutorial.description}</p>}
+            <PartHeading
+              tutorial={tutorial}
+              part={part}
+              number={index + 1}
+              total={parts.length}
+              action={
+                hasCaptions && (
+                  <button
+                    type="button"
+                    aria-pressed={captions}
+                    onClick={() => {
+                      setCaptions(!captions);
+                      writeCaptionsPref(!captions);
+                    }}
+                  >
+                    Captions: {captions ? 'on' : 'off'}
+                  </button>
+                )
+              }
+            />
             {themed.lightMissing && <p className="faint small tut__note" style={{ margin: 0 }}>No light version; showing the dark video</p>}
             {themed.warning && (
               <p className="small tut__note" role="status" style={{ margin: 0, color: 'var(--warning)' }}>

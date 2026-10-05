@@ -4,6 +4,8 @@ export interface TutorialPartManifest {
   title: string;
   /** The playlist label: the part's short label, or its title when it has none. */
   short: string;
+  /** 1 to 300 characters, trimmed; a single-video manifest's one part has the tutorial description (none when it is empty). */
+  description?: string;
   video: string;
   videoLight?: string;
   subtitles?: string;

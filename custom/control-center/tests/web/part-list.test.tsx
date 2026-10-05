@@ -11,6 +11,7 @@ const part = (id: string, title: string, short: string, duration: number): Tutor
   id,
   title,
   short,
+  description: null,
   duration,
   video: { file: `${id}.mp4`, url: `/m/${id}.mp4`, bytes: 1 },
   videoLight: null,

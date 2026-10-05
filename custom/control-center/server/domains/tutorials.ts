@@ -140,6 +140,8 @@ export interface TutorialPart {
   title: string;
   /** The playlist label: the part's short label, or its title. */
   short: string;
+  /** What this part covers, or null when it has no description (the page then shows the tutorial's). A single video's part has the tutorial's. */
+  description: string | null;
   /** The length the manifest declares, in seconds; null for the one part of a single-video tutorial. */
   duration: number | null;
   video: TutorialFile & { bytes: number };
@@ -303,6 +305,7 @@ function loadPart(dir: string, folder: string, p: TutorialPartManifest, warnings
       id: p.id,
       title: p.title,
       short: p.short,
+      description: p.description ?? null,
       duration: p.duration,
       video: { file: p.video, url: mediaUrl(folder, p.video), bytes: video.size },
       videoLight: optional('light video', p.videoLight),
