@@ -156,9 +156,11 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: false,
-    params: z.object({ dryRun: z.boolean().default(false), verify: z.boolean().default(false), backfillUrls: z.boolean().default(false) }),
-    build: (p, ctx) => node(ctx, 'mergeTracker', [...flag(p.dryRun, '--dry-run'), ...flag(p.verify, '--verify'), ...flag(p.backfillUrls, '--backfill-urls')]),
+    params: z.object({ dryRun: z.boolean().default(false), verify: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'mergeTracker', [...flag(p.dryRun, '--dry-run'), ...flag(p.verify, '--verify')]),
   }),
+  // merge-tracker.mjs --backfill-urls fills the URL column and exits before any merge or --verify, so it is its own action.
+  define({ id: 'tracker.backfillUrls', label: 'Backfill tracker URLs from reports', cost: 'free', resources: ['tracker'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'mergeTracker', ['--backfill-urls', ...flag(p.dryRun, '--dry-run')]) }),
   define({ id: 'tracker.reconcile', label: 'Reconcile pipeline with tracker', cost: 'free', resources: ['tracker', 'pipeline'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'reconcilePipeline', flag(p.dryRun, '--dry-run')) }),
   define({ id: 'tracker.syncCheck', label: 'Tracker sync check', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']) }),
   define({

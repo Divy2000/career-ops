@@ -85,6 +85,23 @@ describe('Reply watch digest (SW-server-02)', () => {
   });
 });
 
+describe('Merge tracker additions and Backfill tracker URLs (SW-server-06)', () => {
+  it('merge never passes --backfill-urls, which makes merge-tracker.mjs backfill and exit before merging', () => {
+    const merge = findAction('tracker.merge')!;
+    const ctx = { codeRoot: DEFAULT_CODE_ROOT, dataRoot: t.cfg.dataRoot, claudeBin: t.cfg.claudeBin, tmpInputs: [] };
+    expect(merge.build(merge.params.parse({ dryRun: false, verify: true, backfillUrls: true }), ctx).args.slice(1)).toEqual(['--verify']);
+  });
+
+  it('the URL backfill is its own action that runs the script\'s backfill', async () => {
+    const res = await post('tracker.backfillUrls', { dryRun: true });
+    expect(res.statusCode, res.body).toBe(202);
+    const { meta, text } = await finished(res.json().runId);
+    expect(meta.status, text).toBe('done');
+    expect(meta.cmd.args.slice(1)).toEqual(['--backfill-urls', '--dry-run']);
+    expect(text).toMatch(/Backfill URLs \(dry-run\)/);
+  });
+});
+
 describe('Seed follow-up cadence', () => {
   it('seeds one application by number, or backfills every one, and refuses neither or both', async () => {
     const one = await post('followups.seed', { appNum: 1, dryRun: true });

@@ -87,7 +87,7 @@ describe('follow-ups edits', () => {
 
 /** Every action id the spec's section 3.3 table lists. */
 export const SPEC_ACTION_IDS = [
-  'tracker.setStatus', 'tracker.delete', 'tracker.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.reconcile', 'tracker.syncCheck', 'tracker.hiredShare', 'tracker.hiredMark',
+  'tracker.setStatus', 'tracker.delete', 'tracker.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.backfillUrls', 'tracker.reconcile', 'tracker.syncCheck', 'tracker.hiredShare', 'tracker.hiredMark',
   // Batch evaluation (3.3 pipeline.batchRun) is the sessions fan-out now: batch-runner.sh's workers run outside any guard.
   'pipeline.prioritize', 'pipeline.rank', 'pipeline.shortlist', 'pipeline.reserveReportNums', 'pipeline.releaseReportNums',
   'scan.portals', 'scan.network', 'scan.full', 'scan.hn', 'scan.interamt', 'scan.funded', 'scan.reposts',
@@ -150,7 +150,8 @@ describe('action registry covers section 3.3', () => {
       for (const bad of [0, -3, 1.5, '12a', '', 1_000_000, '1000000']) expect(a.params.safeParse({ report: bad, ...extra }).success, `${id} ${JSON.stringify(bad)}`).toBe(false);
     }
     expect(findAction('pipeline.releaseReportNums')!.build({ range: '12-14' }, ctx).args.slice(1)).toEqual(['--release', '12-14']);
-    expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true, backfillUrls: false }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
+    expect(findAction('tracker.merge')!.build({ dryRun: true, verify: true }, ctx).args.slice(1)).toEqual(['--dry-run', '--verify']);
+    expect(findAction('tracker.backfillUrls')!.build({ dryRun: false }, ctx).args.slice(1)).toEqual(['--backfill-urls']);
     expect(findAction('immigration.h1b')!.build({ company: 'Acme', mode: 'json' }, ctx).args.slice(1)).toEqual(['Acme', '--json']);
     expect(findAction('followups.replyPaste')!.build({ subject: 's', from: 'f', body: 'b' }, ctx).args).toContain('--file');
     const render = findAction('docs.renderPdf')!.build({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'a4' }, ctx);
