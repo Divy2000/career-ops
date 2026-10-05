@@ -74,7 +74,9 @@ export default defineConfig({
   testDir: path.join(here, 'tests/e2e'),
   timeout: 60_000,
   fullyParallel: false,
+  // One data root for every spec: global-setup.ts refuses any other worker count.
   workers: 1,
+  globalSetup: path.join(here, 'tests/e2e/global-setup.ts'),
   retries: 0,
   reporter: [['list']],
   outputDir: path.join(here, 'test-results'),
