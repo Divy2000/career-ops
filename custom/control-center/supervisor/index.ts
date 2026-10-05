@@ -16,6 +16,7 @@ import { BlueGreen, type ChildHandle } from './bluegreen.js';
 import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
 import { watchCoreGraph } from './core-graph.js';
+import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { PAGE_THEME_CSS } from '../shared/page-theme.js';
 import { dataRootFromEnv } from '../shared/data-root.js';
@@ -196,6 +197,14 @@ ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 
 async function main(): Promise<void> {
   const dataRoot = await resolveDataRoot();
+  // Before anything starts: a second instance on this data root would reconcile the first one's runs and sessions.
+  const lock = acquireInstanceLock(dataRoot, { pid: process.pid, port: PORT });
+  if (!lock.ok) {
+    const who = lock.holder ? ` (pid ${lock.holder.pid}, port ${lock.holder.port})` : '';
+    console.error(`Another Control Center is already running on this data root${who}: ${dataRoot}. Stop it first${lock.holder ? `, or use the one at http://127.0.0.1:${lock.holder.port}/` : ''}.`);
+    process.exit(1);
+  }
+  process.on('exit', () => lock.release());
   const sessionsDir = path.join(dataRoot, 'data', 'control-center', 'sessions');
   const guardRoot = resolveGuardRoot({ env: process.env, codeRoot: CODE_ROOT, dataRoot, home: os.homedir(), platform: process.platform });
   const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN ?? 'claude');
@@ -223,9 +232,10 @@ async function main(): Promise<void> {
     CAREER_OPS_ROOT: dataRoot,
   };
 
-  const first = await spawnChild(childEnv);
+  // Every child starts passive (CC_DEFER_RECONCILE): the first reconciles runs and sessions only once the port is
+  // ours (a launch that cannot listen touches nothing), reload children when BlueGreen activates them.
+  const first = await spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' });
   await waitHealthy(first.port, 20_000);
-  // Reload children start passive (CC_DEFER_RECONCILE) and reconcile only when BlueGreen activates them.
   const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
 
   // Only the active child's exit stops the supervisor; drained children exit on purpose.
@@ -348,6 +358,8 @@ async function main(): Promise<void> {
   });
 
   proxy.listen(PORT, '127.0.0.1', () => {
+    // A reload that already swapped the first child out activates its replacement itself.
+    if (bg.active === first) first.activate();
     const url = `http://127.0.0.1:${PORT}/auth?t=${token}`;
     console.log(`Control Center ready: ${url}`);
     console.log(`Recovery page: http://127.0.0.1:${PORT}/__recovery`);
