@@ -55,6 +55,8 @@ export function monotonicIso(): string {
   return new Date(lastStamp).toISOString();
 }
 
+const RUN_ID = /^[\w-]+$/;
+
 export class RunStore {
   constructor(
     private dataRoot: string,
@@ -69,7 +71,7 @@ export class RunStore {
   }
 
   dirOf(id: string): string {
-    if (!/^[\w-]+$/.test(id)) throw new Error('bad run id');
+    if (!RUN_ID.test(id)) throw new Error('bad run id');
     return path.join(runsDir(this.dataRoot), id);
   }
 
@@ -104,15 +106,18 @@ export class RunStore {
     try {
       return JSON.parse(fs.readFileSync(path.join(this.dirOf(id), 'meta.json'), 'utf8')) as RunMeta;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return null;
       throw err;
     }
   }
 
   list(): RunMeta[] {
     const out: RunMeta[] = [];
-    for (const name of fs.readdirSync(runsDir(this.dataRoot))) {
-      const meta = this.read(name);
+    // Only run folders: Finder drops .DS_Store here, and anything else stray is not a run either.
+    for (const entry of fs.readdirSync(runsDir(this.dataRoot), { withFileTypes: true })) {
+      if (!entry.isDirectory() || !RUN_ID.test(entry.name)) continue;
+      const meta = this.read(entry.name);
       if (meta) out.push(meta);
     }
     return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));

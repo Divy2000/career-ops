@@ -93,6 +93,24 @@ describe('RunStore', () => {
     expect(() => store.dirOf('../x')).toThrow(/bad run id/);
   });
 
+  it('ignores stray entries in the runs folder: Finder\'s .DS_Store and a plain file with a run-like name (SW-server-01)', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root, 1);
+    fs.writeFileSync(path.join(runsDir(root), '.DS_Store'), 'finder');
+    fs.writeFileSync(path.join(runsDir(root), 'notes'), 'a file, not a run');
+    fs.mkdirSync(path.join(runsDir(root), 'empty-dir'));
+    const base = { actionId: 'a', label: 'a', cost: 'free' as const, resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+    const a = store.create(base);
+    store.write({ ...a, status: 'done' });
+    const b = store.create(base);
+    expect(store.list().map((r) => r.id)).toEqual([b.id, a.id]);
+    expect(store.read('notes')).toBeNull();
+    store.write({ ...b, status: 'done' });
+    expect(store.prune()).toBe(1);
+    expect(store.list().map((r) => r.id)).toEqual([b.id]);
+    expect(fs.readFileSync(path.join(runsDir(root), '.DS_Store'), 'utf8')).toBe('finder');
+  });
+
   it('reads raw lines incrementally and skips torn lines', () => {
     const root = tmpRoot();
     const store = new RunStore(root);

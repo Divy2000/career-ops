@@ -104,6 +104,24 @@ describe('action registry', () => {
     expect((await get('/api/runs/does-not-exist')).statusCode).toBe(404);
   });
 
+  it('a stray file in the runs folder (Finder\'s .DS_Store) neither stops the app starting nor breaks the runs list and async actions (SW-server-01)', async () => {
+    const dataRoot = copyFixtureRoot();
+    const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
+    fs.mkdirSync(runs, { recursive: true });
+    fs.writeFileSync(path.join(runs, '.DS_Store'), 'finder');
+    fs.writeFileSync(path.join(runs, 'notes'), 'a file, not a run');
+    const stray = await makeTestApp({ dataRoot });
+    try {
+      const list = await stray.app.inject({ method: 'GET', url: '/api/runs', headers: stray.authed });
+      expect(list.statusCode, list.body).toBe(200);
+      expect(list.json()).toEqual([]);
+      const res = await stray.app.inject({ method: 'POST', url: '/api/actions/pipeline.prioritize', headers: stray.authedWrite, payload: { params: {} } });
+      expect(res.statusCode, res.body).toBe(202);
+    } finally {
+      await stray.close();
+    }
+  });
+
   it('Audit plugins runs the community plugin audit to the end instead of exiting with the usage text (R8-04)', async () => {
     const res = await post('/api/actions/plugins.audit', { params: {} });
     expect(res.statusCode, res.body).toBe(202);
