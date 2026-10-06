@@ -482,6 +482,7 @@ jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leave
   for (let i = 0; i < 40 && (alive(claudePid) || alive(shimPid)); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(alive(shimPid), false, 'the node shim was killed with the wrapper');
   assert.equal(alive(claudePid), false, 'the claude the shim ran was killed too');
+  assert.equal(fs.existsSync(`${pids}.woke`), false, 'the claude was killed at the timeout, not left to run to its end');
 });
 
 jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan and its provider plugins, prioritize, rank-pipeline, shortlist) sees it (SW7-scripts-01)', () => {
