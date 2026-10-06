@@ -103,6 +103,45 @@ describe('applyYamlOps (yaml Document API)', () => {
     expect(applyYamlOps('followup_cadence: 3\n', [{ op: 'delete', path: ['followup_cadence', 'x', 'y'] }])).toBe('followup_cadence: 3\n');
   });
 
+  describe('a comment at an outer indent after a nested block that ends in its own comment stays at that indent', () => {
+    const comments = (raw: string) => raw.split('\n').filter((l) => l.trim().startsWith('#'));
+
+    it('keeps a commented-out top-level block at column 0, before the next key, so uncommenting it still makes a top-level key', () => {
+      const raw = 'location:\n  city: Austin\n  # onsite: yes\n\n# Optional cadence.\n# followup_cadence:\n#   applied_first_days: 7\n\nspend_tier: standard\n';
+      const out = applyYamlOps(raw, [{ op: 'set', path: ['location', 'city'], value: 'Boston' }]);
+      expect(out).toBe(raw.replace('Austin', 'Boston'));
+      const uncommented = out.replace('# followup_cadence:\n#   applied_first_days: 7', 'followup_cadence:\n  applied_first_days: 7');
+      expect(parseYamlDoc(uncommented).doc).toEqual({ location: { city: 'Boston' }, followup_cadence: { applied_first_days: 7 }, spend_tier: 'standard' });
+    });
+
+    it('keeps the comments that end the file at column 0', () => {
+      const raw = 'a: 1\nb:\n  c: 2\n  # inner\n\n# outer tail\n# d: 3\n';
+      expect(applyYamlOps(raw, [{ op: 'set', path: ['a'], value: 5 }])).toBe(raw.replace('a: 1', 'a: 5'));
+    });
+
+    it('keeps a comment after a list that ends in its own comment at the outer indent', () => {
+      const raw = 'roles:\n  - Staff\n  # - Principal\n\n# next section\ntier: standard\n';
+      expect(applyYamlOps(raw, [{ op: 'set', path: ['tier'], value: 'premium' }])).toBe(raw.replace('tier: standard', 'tier: premium'));
+    });
+
+    it('keeps a comment at an intermediate indent with the block it was written in', () => {
+      const raw = 'a:\n  b:\n    c: 1\n    # deep\n  # middle\n  d: 2\ne: 3\n';
+      expect(applyYamlOps(raw, [{ op: 'set', path: ['e'], value: 4 }])).toBe(raw.replace('e: 3', 'e: 4'));
+      const tail = 'a:\n  b:\n    c: 1\n    # deep\n  # middle\ne: 3\n';
+      expect(applyYamlOps(tail, [{ op: 'set', path: ['e'], value: 4 }])).toBe(tail.replace('e: 3', 'e: 4'));
+    });
+
+    it('keeps every comment line of config/profile.example.yml, indent included, through a field edit and a cadence write', () => {
+      const example = fs.readFileSync(path.resolve(import.meta.dirname, '../../../../config/profile.example.yml'), 'utf8');
+      const out = applyYamlOps(example, [
+        { op: 'set', path: ['candidate', 'full_name'], value: 'Jane Q. Smith' },
+        { op: 'set', path: ['followup_cadence', 'applied_first_days'], value: 9 },
+      ]);
+      expect(comments(out)).toEqual(comments(example));
+      expect(parseYamlDoc(out).doc).toMatchObject({ candidate: { full_name: 'Jane Q. Smith' }, language: { output: 'en' }, followup_cadence: { applied_first_days: 9 } });
+    });
+  });
+
   it('refuses malformed YAML and inserts into something that is not a list', () => {
     expect(() => applyYamlOps('a: [unclosed', [{ op: 'set', path: ['a'], value: 1 }])).toThrow(YamlOpsError);
     expect(() => applyYamlOps('a: 1\n', [{ op: 'insert', path: ['a'], value: 2 }])).toThrow(/not a list/);
