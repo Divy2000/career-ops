@@ -34,8 +34,9 @@ let runningMetaFetches: number;
 let failingReads: number;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
-async function until(cond: () => unknown, what: string) {
-  for (let i = 0; i < 100; i++) {
+/** Polls until `cond` holds, so a test waits for what it asserts instead of sleeping a fixed time. */
+async function until(cond: () => unknown, what: string, timeoutMs = 1000) {
+  for (let i = 0; i < timeoutMs / 10; i++) {
     if (cond()) return;
     await act(async () => new Promise((r) => setTimeout(r, 10)));
   }
@@ -163,7 +164,7 @@ describe('Dev Chat session in the URL', () => {
   it('given a stored session that no longer exists, when /dev opens, then it says so, forgets it and offers a new conversation without polling', async () => {
     sessionStorage.setItem('cc.devchat.session', 's-gone');
     await open('/dev');
-    await act(async () => new Promise((r) => setTimeout(r, 1500)));
+    await until(() => host.textContent?.includes('That conversation no longer exists'), 'the note', 3000);
     expect(router.state.location.search).toEqual({});
     expect(host.textContent).toContain('That conversation no longer exists');
     expect(sessionStorage.getItem('cc.devchat.session')).toBeNull();
@@ -177,7 +178,7 @@ describe('Dev Chat session in the URL', () => {
     Object.assign(SESSION_CHECK_RETRY, { baseMs: 1000, maxMs: 1000 });
     await open('/dev?session=s-r');
     await until(() => host.textContent?.includes('Could not check this conversation'), 'the failed-check message');
-    await act(async () => new Promise((r) => setTimeout(r, 2500)));
+    await until(() => changesFetched.filter((u) => u.endsWith('/s-r')).length >= 2, 'Changes polling', 4000);
     expect(runningMetaFetches).toBeGreaterThanOrEqual(3);
     expect(host.textContent).not.toContain('Could not check this conversation');
     expect(router.state.location.search).toEqual({ session: 's-r' });
@@ -189,19 +190,16 @@ describe('Dev Chat session in the URL', () => {
     // The page's check and the panel's read share the failing answers, so the check fails several times in a row.
     failingReads = 6;
     await open('/dev?session=s-r');
-    await act(async () => new Promise((r) => setTimeout(r, 500)));
-    expect(runningMetaFetches).toBeGreaterThan(6);
-    expect(host.textContent).not.toContain('Could not check this conversation');
+    await until(() => runningMetaFetches > 6 && !host.textContent?.includes('Could not check this conversation'), 'the check to recover', 2000);
     // The Changes panel polls every second once the session is confirmed.
-    await act(async () => new Promise((r) => setTimeout(r, 1200)));
-    expect(changesFetched.filter((u) => u.endsWith('/s-r')).length).toBeGreaterThanOrEqual(2);
+    await until(() => changesFetched.filter((u) => u.endsWith('/s-r')).length >= 2, 'Changes polling', 3000);
   });
 
   for (const [id, what] of [['s-apply', 'an apply session'], ['engine', 'the engine route']] as const) {
     it(`given ?session=${id} (${what}), then it is treated as no Dev Chat conversation and forgotten`, async () => {
       sessionStorage.setItem('cc.devchat.session', id);
       await open(`/dev?session=${id}`);
-      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      await until(() => host.textContent?.includes('That conversation no longer exists'), 'the note');
       expect(router.state.location.search).toEqual({});
       expect(host.textContent).toContain('That conversation no longer exists');
       expect(sessionStorage.getItem('cc.devchat.session')).toBeNull();
