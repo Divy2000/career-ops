@@ -490,3 +490,13 @@ jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan
   assert.equal(r.rankCalls.length, 1);
   assert.equal(r.rankCalls[0].token, true, 'the rank call reaches claude with the token, through the shim only');
 });
+
+test('the daily policy pass and the Control Center immigration-policy session may write exactly the same files (parity with modes.ts)', () => {
+  const runDaily = readFileSync(RUN_DAILY, 'utf8');
+  const outputs = JSON.parse(runDaily.match(/^const OUTPUTS = (\[[^\]]*\]);$/m)?.[1] ?? 'null');
+  assert.ok(Array.isArray(outputs) && outputs.length === 3, 'run-daily.sh defines OUTPUTS once');
+  const modes = readFileSync(path.join(ROOT, 'custom/control-center/server/claude/modes.ts'), 'utf8');
+  const cls = modes.slice(modes.indexOf("'immigration-policy': {"));
+  const globs = [...(cls.match(/writeGlobs: \[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual([...globs].sort(), outputs.map((f) => `data/immigration/${f}`).sort());
+});
