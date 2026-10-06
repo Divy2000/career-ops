@@ -46,6 +46,11 @@ test.describe('Sponsorship > Lookup', () => {
       await expect(page.getByText('Sponsorship check complete for Acme Robotics, Inc.')).toBeVisible({ timeout: 20_000 });
       await expect(page.getByRole('link', { name: 'Open session' })).toBeVisible();
       await expect(page.getByRole('link', { name: 'Sessions', exact: true }).last()).toHaveAttribute('href', '/sessions');
+      // Leaving the tab and looking the company up again shows the same check, not a fresh button (SW6-web-b-04).
+      const lookupUrl = page.url();
+      await page.getByRole('tab', { name: 'Overview' }).click();
+      await page.goto(lookupUrl);
+      await expect(page.getByText('Sponsorship check complete for Acme Robotics, Inc.')).toBeVisible();
       expect(fs.readFileSync(file, 'utf8')).toMatch(/^# Acme Robotics, Inc\. sponsorship check\n/);
       // The tracker row (Acme Robotics) still finds its check, now headed with the legal name. Depends on the server
       // matching company files by slug (fix/sweep-2-srv, SW2-server-01).

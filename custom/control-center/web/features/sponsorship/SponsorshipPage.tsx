@@ -3,13 +3,12 @@ import { SafeMarkdown } from '../../components/Md';
 import { useImmigration } from '../../lib/queries';
 import { DataState, Empty, Pill, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { Tabs } from '../../components/ui';
-import { useCallback, useState } from 'react';
 import { useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { SessionPanel } from '../../components/SessionPanel';
 import { summarizeWatcher } from '../../lib/watcherState';
 import { LookupTab } from './LookupTab';
-import { lastSession } from '../../lib/lastSession';
+import { useRememberedSession } from '../../lib/useRememberedSession';
 
 const route = getRouteApi('/sponsorship');
 
@@ -61,9 +60,6 @@ function WatcherState({ seen, pendingCount, pendingError }: { seen: unknown; pen
     </div>
   );
 }
-/** The last AI policy pass of this browser tab. */
-const policyPass = lastSession('cc.sponsorship.policyPass');
-
 export type SponsorshipTab = 'overview' | 'changes' | 'feed' | 'alerts' | 'companies' | 'lookup' | 'tiers';
 
 export function SponsorshipPage() {
@@ -75,32 +71,7 @@ export function SponsorshipPage() {
   const { run, message } = useRunAction();
   // The pass is a paid session that acks its queued items only when it ends done: coming back to the page re-attaches
   // the last one, and the button stays off while it is queued or running, so the same items are not sent twice.
-  const [pass, setPass] = useState<string | null>(policyPass.read);
-  const [starts, setStarts] = useState(0);
-  const [passStatus, setPassStatus] = useState<string | null>(null);
-  const [startFailed, setStartFailed] = useState(false);
-  const showPass = pass !== null || starts > 0;
-  const passBusy = showPass && !startFailed && (passStatus === null || passStatus === 'queued' || passStatus === 'running');
-  const onPassStatus = useCallback((s: string) => {
-    setPassStatus(s);
-    if (s === 'gone') {
-      policyPass.write(null);
-      setPass(null);
-    }
-  }, []);
-  const onPassId = useCallback((id: string) => {
-    policyPass.write(id);
-    setPass(id);
-  }, []);
-  // The panel shows why; the button comes back for another try.
-  const onPassStartFailed = useCallback(() => setStartFailed(true), []);
-  const startPass = () => {
-    policyPass.write(null);
-    setPass(null);
-    setPassStatus(null);
-    setStartFailed(false);
-    setStarts((n) => n + 1);
-  };
+  const pass = useRememberedSession('cc.sponsorship.policyPass');
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
@@ -109,22 +80,18 @@ export function SponsorshipPage() {
           <ActionButton meta={actions.data?.find((a) => a.id === 'immigration.watch')} onRun={() => void run('immigration.watch', {}, 'Feed check started; see Runs for its log')}>
             Check official feeds now
           </ActionButton>
-          <button type="button" onClick={startPass} disabled={passBusy}>
-            {passBusy ? 'Policy pass running' : 'Run AI policy pass'} <Pill tone="warn">Uses tokens</Pill>
+          <button type="button" onClick={pass.start} disabled={pass.busy}>
+            {pass.busy ? 'Policy pass running' : 'Run AI policy pass'} <Pill tone="warn">Uses tokens</Pill>
           </button>
         </div>
       </div>
       <Message message={message} />
-      {showPass && (
+      {pass.shown && (
         <SessionPanel
-          key={starts}
+          key={pass.panelKey}
+          {...pass.panel}
           mode="immigration-policy"
           title="AI policy pass"
-          sessionId={pass}
-          autoStart={starts > 0 && pass === null}
-          onSessionId={onPassId}
-          onStatus={onPassStatus}
-          onStartFailed={onPassStartFailed}
           // The server runs the pass on daily-prompt.md filled in with the queued items, and acknowledges them when it is done.
           initialPrompt="Run the daily immigration policy pass."
         />

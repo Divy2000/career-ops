@@ -10,6 +10,7 @@ import { SessionPanel } from '../../components/SessionPanel';
 import { Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
 import { MAX_COMPANY_QUERY_LENGTH, parseCompanyQuery } from '@shared/companyQuery';
 import type { H1bCheck, LookupResult, SearchResult } from '@shared/api';
+import { useRememberedSession } from '../../lib/useRememberedSession';
 
 const route = getRouteApi('/sponsorship');
 
@@ -74,8 +75,16 @@ function Totals({ check }: { check: H1bCheck }) {
   );
 }
 
-function SponsorCheckLauncher({ company }: { company: string }) {
-  const [launched, setLaunched] = useState(false);
+/**
+ * The storage key of a company's last check: one per company, so another company's check is never re-attached. Encoded,
+ * not slugged: a slug folds "AT&T" and "AT T" together, and every all-non-ASCII name into the same empty key.
+ */
+const checkKey = (company: string) => `cc.sponsorship.check:${encodeURIComponent(company.trim().toLowerCase())}`;
+
+export function SponsorCheckLauncher({ company }: { company: string }) {
+  // A paid session that writes the company file and alert rows: it survives leaving the tab, and the button stays off
+  // while it runs, so a second check of the same company cannot run beside it.
+  const check = useRememberedSession(checkKey(company));
   return (
     <div className="card stack">
       <div className="row gap" style={{ justifyContent: 'space-between' }}>
@@ -84,20 +93,21 @@ function SponsorCheckLauncher({ company }: { company: string }) {
           <p className="muted small" style={{ margin: 0 }}>Starts the sponsorship-check session for {company} and saves the result under data/immigration/companies/.</p>
         </div>
         <div className="row gap">
-          <button type="button" className="button--primary" disabled={launched} onClick={() => setLaunched(true)}>
-            Run sponsorship check <Pill tone="warn">Uses tokens</Pill>
+          <button type="button" className="button--primary" disabled={check.busy} onClick={check.start}>
+            {check.busy ? 'Sponsorship check running' : 'Run sponsorship check'} <Pill tone="warn">Uses tokens</Pill>
           </button>
           <Link to="/sessions" className="button-link">
             Sessions
           </Link>
         </div>
       </div>
-      {launched && (
+      {check.shown && (
         <SessionPanel
+          key={check.panelKey}
+          {...check.panel}
           mode="sponsorship-check"
           title="Sponsorship check"
           target={{ type: 'company', value: company }}
-          autoStart
           initialPrompt={`Check visa sponsorship for ${company} following the procedure in modes/_custom.md, then write the company file under data/immigration/companies/.`}
         />
       )}
