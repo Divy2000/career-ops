@@ -1,7 +1,9 @@
 // One supervisor per data root. Two instances on one root would both reconcile runs and sessions: the second
 // marks the first one's queued runs lost and tracks its running sessions a second time. The lock is a file in the
 // app's own state folder (no session may write there) naming its holder by PID and process start time, since PIDs
-// are reused and start times are not. Lives under supervisor/ so a broken server cannot break it.
+// are reused and start times are not. The start time is seconds since the epoch, read in a pinned environment: the
+// text ps prints depends on the caller's TZ and locale, so two supervisors started differently would disagree about
+// one live holder. Lives under supervisor/ so a broken server cannot break it.
 //
 // Every change is atomic: a lock appears whole (a finished temp file linked into place, which fails if one is
 // there), and one is removed only by renaming it away and then checking it is the lock that was meant (each lock
@@ -13,10 +15,16 @@ import { execFileSync } from 'node:child_process';
 
 export interface LockHolder {
   pid: number;
-  /** `ps -o lstart` of the holder when it took the lock; null when that could not be read. */
-  startedAt: string | null;
+  /**
+   * When the holder started, in seconds since the epoch; null when it could not be read, or the lock is in the earlier
+   * format (a ps string in the writer's TZ and locale, which cannot be compared): then the PID alone decides.
+   */
+  start: number | null;
   port: number;
 }
+
+/** A process's start in seconds since the epoch; 'unknown' when it runs but its start cannot be read; null when it does not run. */
+export type ProcessStart = number | 'unknown' | null;
 
 export type LockResult =
   | {
@@ -31,13 +39,28 @@ export type LockResult =
 /** A lock file that cannot be parsed is damaged; one younger than this may still be settling and is left alone. */
 export const UNREADABLE_LOCK_GRACE_MS = 5000;
 
-/** `ps -o lstart` of a live process, null when there is none. */
-export function processStartTime(pid: number): string | null {
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** `ps -o lstart` in the C locale: "Mon Oct  5 17:09:12 2026". */
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+
+/**
+ * When a process started, from `ps -o lstart` run with LC_ALL=C and TZ=UTC whatever this process's environment is.
+ * Only ps's own "no such process" (exit 1, nothing printed) reads as not running; any other failure, or output that
+ * does not parse, is 'unknown', which callers treat as running.
+ */
+export function processStartTime(pid: number): ProcessStart {
+  let out: string;
   try {
-    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim() || null;
-  } catch {
-    return null;
+    out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { PATH: process.env.PATH ?? '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } }).trim();
+  } catch (err) {
+    const e = err as { status?: number | null; signal?: string | null; stdout?: string };
+    return e.status === 1 && !e.signal && !String(e.stdout ?? '').trim() ? null : 'unknown';
   }
+  if (!out) return null;
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]!) : -1;
+  if (!m || month === -1) return 'unknown';
+  return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 
 export function instanceLockPath(dataRoot: string): string {
@@ -48,7 +71,8 @@ function parseHolder(text: string): LockHolder | null {
   try {
     const h = JSON.parse(text) as Partial<LockHolder>;
     if (!Number.isInteger(h.pid) || (h.pid as number) <= 0 || !Number.isInteger(h.port)) return null;
-    return { pid: h.pid as number, startedAt: typeof h.startedAt === 'string' ? h.startedAt : null, port: h.port as number };
+    const start = (h as { start?: unknown }).start;
+    return { pid: h.pid as number, start: typeof start === 'number' && Number.isFinite(start) ? start : null, port: h.port as number };
   } catch {
     return null;
   }
@@ -110,10 +134,11 @@ function removeIf(file: string, expected: string): void {
  * Takes the data root's lock for this process, or names the live instance that holds it. A lock whose holder is
  * gone (the PID is dead or now another process) is stale and replaced, but only that lock: see removeIf.
  */
-export function acquireInstanceLock(dataRoot: string, me: { pid: number; port: number }, startTimeOf: (pid: number) => string | null = processStartTime, now: () => number = Date.now): LockResult {
+export function acquireInstanceLock(dataRoot: string, me: { pid: number; port: number }, startTimeOf: (pid: number) => ProcessStart = processStartTime, now: () => number = Date.now): LockResult {
   const file = instanceLockPath(dataRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const text = JSON.stringify({ pid: me.pid, startedAt: startTimeOf(me.pid), port: me.port, nonce: crypto.randomUUID() } satisfies LockHolder & { nonce: string });
+  const own = startTimeOf(me.pid);
+  const text = JSON.stringify({ pid: me.pid, start: typeof own === 'number' ? own : null, port: me.port, nonce: crypto.randomUUID() } satisfies LockHolder & { nonce: string });
   for (let attempt = 0; attempt < 5; attempt++) {
     if (createWhole(file, text)) {
       return {
@@ -129,8 +154,9 @@ export function acquireInstanceLock(dataRoot: string, me: { pid: number; port: n
     if (seen === null) continue;
     const holder = parseHolder(seen);
     if (holder) {
-      const started = startTimeOf(holder.pid);
-      if (started !== null && (holder.startedAt === null || holder.startedAt === started)) return { ok: false, holder };
+      // Stale only when the PID does not run, or runs a process that started at another time than the holder.
+      const live = startTimeOf(holder.pid);
+      if (live !== null && (holder.start === null || live === 'unknown' || live === holder.start)) return { ok: false, holder };
     } else {
       let mtimeMs: number;
       try {
