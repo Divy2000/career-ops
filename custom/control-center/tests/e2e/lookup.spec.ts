@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
@@ -33,10 +35,27 @@ test.describe('Sponsorship > Lookup', () => {
     await expect(page.getByText('120 approvals in the latest DOL disclosure')).toBeVisible();
     await expect(page.getByText('No company alerts match this name.')).toBeVisible();
     await axeClean(page);
-    await page.getByRole('button', { name: /Run sponsorship check/ }).click();
-    await expect(page.getByText('Sponsorship check complete for Northwind Analytics')).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole('link', { name: 'Open session' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Sessions', exact: true }).last()).toHaveAttribute('href', '/sessions');
+    // The check runs for the DOL legal name the lookup resolved (SW2-tests-07); its scenario writes the company file the
+    // way the sponsorship template does, under that name's heading, so the original goes back afterwards.
+    const file = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'immigration', 'companies', 'acme-robotics.md');
+    const original = fs.readFileSync(file, 'utf8');
+    try {
+      const started = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions');
+      await page.getByRole('button', { name: /Run sponsorship check/ }).click();
+      expect((await started).postDataJSON()).toMatchObject({ mode: 'sponsorship-check', target: { type: 'company', value: 'Acme Robotics, Inc.' } });
+      await expect(page.getByText('Sponsorship check complete for Acme Robotics, Inc.')).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByRole('link', { name: 'Open session' })).toBeVisible();
+      await expect(page.getByRole('link', { name: 'Sessions', exact: true }).last()).toHaveAttribute('href', '/sessions');
+      expect(fs.readFileSync(file, 'utf8')).toMatch(/^# Acme Robotics, Inc\. sponsorship check\n/);
+      // The tracker row (Acme Robotics) still finds its check, now headed with the legal name. Depends on the server
+      // matching company files by slug (fix/sweep-2-srv, SW2-server-01).
+      await page.goto('/tracker/1');
+      await expect(page.getByText('sponsor: sponsoring').first()).toBeVisible();
+      const app = await (await page.request.get('/api/tracker/1')).json();
+      expect(app.sponsorship.companyFile).toMatchObject({ slug: 'acme-robotics', verdict: 'sponsoring', checkedAt: '2026-10-03' });
+    } finally {
+      fs.writeFileSync(file, original);
+    }
   });
 
   test('DOL stat cards group thousands with commas', async ({ page }) => {
