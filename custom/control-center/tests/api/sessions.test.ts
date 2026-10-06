@@ -562,7 +562,8 @@ describe('Claude sessions', () => {
     const h = await makeTestApp();
     try {
       expect((await call(h, 'PUT', '/api/settings/app', { claudeConcurrency: 4 })).statusCode).toBe(200);
-      const silent = scenarioFile({ events: [INIT, { __sleep: 1200 }, result('Evaluation complete.', 0.02)] });
+      // A runs until both of B's reports exist, however slow B is: the gate must see them land during A's turn.
+      const silent = scenarioFile({ events: [INIT, { __waitFor: { dir: path.join(h.cfg.dataRoot, 'reports'), pattern: '-synthetic-corp\\.md$', count: 2 } }, result('Evaluation complete.', 0.02)] });
       const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A2', reportNum: 50 })).json()]);
       const b = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B' })).json();
       const bReserved = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B2', reportNum: 51 })).json();
