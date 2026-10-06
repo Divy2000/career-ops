@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
-import { RunStore, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
+import { RunStore, runsDir, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
+import { createWhole, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS } from '../../supervisor/instance-lock.js';
 import { childEnv } from '../system/child-env.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
 
@@ -13,6 +15,27 @@ export const WRAPPER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url
 const TOKEN_VAR = 'CLAUDE_CODE_OAUTH_TOKEN';
 /** Names of env variables never written to a run's start request when they hold a value. */
 const SECRET_NAME = /TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i;
+
+/**
+ * Held (in the runs folder) while a process picks the runs it can start and moves them from queued to running, so
+ * two server processes (blue/green) never both count a slot or a resource as free and start a run each.
+ */
+const SCHEDULE_LOCK = '.schedule.lock';
+/** Written in a run's folder just before its wrapper is spawned: a process that dies after it may have started it. */
+const STARTING_FILE = 'starting';
+
+/** The process a claim or the schedule lock names: a bare PID in the earlier claim format; null when unreadable. */
+function parseHolder(text: string): { pid: number; start: number | null } | null {
+  const trimmed = text.trim();
+  if (/^[1-9]\d*$/.test(trimmed)) return { pid: Number(trimmed), start: null };
+  try {
+    const h = JSON.parse(trimmed) as { pid?: unknown; start?: unknown };
+    if (!Number.isInteger(h.pid) || (h.pid as number) <= 0) return null;
+    return { pid: h.pid as number, start: typeof h.start === 'number' && Number.isFinite(h.start) ? h.start : null };
+  } catch {
+    return null;
+  }
+}
 
 export interface StartRequest {
   actionId: string;
@@ -96,6 +119,10 @@ export class Runner {
   private envById = new Map<string, NodeJS.ProcessEnv>();
   /** Queued runs another process left, being rebuilt (their token read) before they join the queue. */
   private adopting = new Set<string>();
+  /** A later pump, while the queue waits on another process (its runs, its claim, or the schedule lock it holds). */
+  private retryTimer: NodeJS.Timeout | null = null;
+  /** This process as claims and the schedule lock name it, read once. */
+  private self: { pid: number; start: number | null } | null = null;
 
   private procStart: (pid: number) => ProcessStart;
 
@@ -141,19 +168,112 @@ export class Runner {
     return typeof start === 'number' ? start : null;
   }
 
+  private holderText(): string {
+    this.self ??= { pid: process.pid, start: this.recordStart(process.pid) };
+    return JSON.stringify({ ...this.self, nonce: crypto.randomUUID() });
+  }
+
   /**
-   * Exactly one process ever moves a queued run on: spawning it, cancelling it
-   * and marking it lost all take this O_EXCL claim first, so two server
-   * processes (blue/green) can never both start it.
+   * Whether the process a claim or the schedule lock names is gone for good: its PID does not run, or runs a process
+   * that started at another time. One that cannot be told apart (no start recorded, ps cannot answer) counts as live.
+   * Content that does not parse (a claim cut short by a crash) is gone once it is older than UNREADABLE_LOCK_GRACE_MS.
    */
-  private claim(id: string): boolean {
-    try {
-      fs.writeFileSync(path.join(this.store.dirOf(id), 'claim'), String(process.pid), { flag: 'wx' });
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
-      throw err;
+  private holderGone(file: string, text: string): boolean {
+    const holder = parseHolder(text);
+    if (!holder) {
+      try {
+        return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw err;
+      }
     }
+    if (holder.pid === process.pid) {
+      this.self ??= { pid: process.pid, start: this.recordStart(process.pid) };
+      return holder.start !== null && this.self.start !== null && holder.start !== this.self.start;
+    }
+    return this.identity(holder.pid, holder.start) === false;
+  }
+
+  /**
+   * The schedule lock, taken whole (or in place of one whose holder is gone); null while a live process holds it.
+   * Returns its release, which removes this lock and only this one.
+   */
+  private lockSchedule(): (() => void) | null {
+    const file = path.join(runsDir(this.dataRoot), SCHEDULE_LOCK);
+    const text = this.holderText();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (createWhole(file, text)) {
+        return () => {
+          if (readOrNull(file) === text) removeIf(file, text);
+        };
+      }
+      const seen = readOrNull(file);
+      if (seen === null) continue;
+      if (!this.holderGone(file, seen)) return null;
+      removeIf(file, seen);
+    }
+    return null;
+  }
+
+  /**
+   * Exactly one process ever moves a queued run on: spawning it, cancelling it and marking it lost all take this claim
+   * first (created whole, naming this process), so two server processes (blue/green) can never both start it.
+   * 'claimed': it was free. 'recovered': the process that held it is gone (it died between claiming the run and
+   * settling it); the claim is replaced under the schedule lock (`scheduling`: the caller holds it), so two processes
+   * never both replace it, and the caller settles what that process may have begun. 'held': a live process holds it,
+   * or the schedule lock it would be replaced under is busy.
+   */
+  private claim(id: string, scheduling = false): 'claimed' | 'recovered' | 'held' {
+    const file = path.join(this.store.dirOf(id), 'claim');
+    const text = this.holderText();
+    if (createWhole(file, text)) return 'claimed';
+    const seen = readOrNull(file);
+    if (seen === null || !this.holderGone(file, seen)) return 'held';
+    const unlock = scheduling ? null : this.lockSchedule();
+    if (!scheduling && !unlock) return 'held';
+    try {
+      removeIf(file, seen);
+      return createWhole(file, text) ? 'recovered' : 'held';
+    } finally {
+      unlock?.();
+    }
+  }
+
+  /**
+   * A queued run whose claim was taken over from a process that is gone, which may have begun starting it. Null when
+   * it never spawned a wrapper: start it as usual. Otherwise it is never started again: its wrapper's exit settles it,
+   * a wrapper that recorded itself is tracked as running, and one that recorded nothing yet is told to stop (it reads
+   * the cancel file before it spawns the command and again after) and the run ends lost.
+   */
+  private resumeInterruptedStart(meta: RunMeta): RunMeta | null {
+    if (!fs.existsSync(path.join(this.store.dirOf(meta.id), STARTING_FILE))) return null;
+    const wrapper = this.store.readWrapper(meta.id);
+    const exit = this.store.readExit(meta.id);
+    const begun: RunMeta = { ...meta, startedAt: meta.startedAt ?? new Date().toISOString(), wrapperPid: wrapper?.wrapperPid ?? null, childPid: wrapper?.childPid ?? null };
+    if (exit) {
+      this.finalize(begun, exit);
+      return this.store.read(meta.id) ?? begun;
+    }
+    if (wrapper) {
+      const running: RunMeta = { ...begun, status: 'running', wrapperStartedAt: this.recordStart(wrapper.wrapperPid), childStartedAt: wrapper.childPid ? this.recordStart(wrapper.childPid) : null };
+      this.store.write(running);
+      this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
+      this.track(running);
+      return running;
+    }
+    this.store.requestCancel(meta.id);
+    const lost: RunMeta = {
+      ...meta,
+      status: 'lost',
+      endedAt: new Date().toISOString(),
+      error: 'the server stopped while starting this run, before its wrapper recorded anything; the wrapper was told to stop and the run was not started again, so start it again',
+    };
+    this.store.write(lost);
+    this.envById.delete(meta.id);
+    this.dropInputs(lost);
+    this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+    return lost;
   }
 
   /** A run that ended (any way) no longer needs the input files the app wrote for it: those recorded, and any its arguments name. */
@@ -245,8 +365,11 @@ export class Runner {
 
   /** A queued run that will never start ends lost, unless another process claimed it first (it starts or settled there). */
   private loseQueued(meta: RunMeta, error: string): void {
-    if (!this.claim(meta.id)) return;
-    this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
+    const claim = this.claim(meta.id);
+    if (claim === 'held') return;
+    const current = this.store.read(meta.id) ?? meta;
+    if (current.status !== 'queued' || (claim === 'recovered' && this.resumeInterruptedStart(current))) return;
+    this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error });
     this.dropInputs(meta);
     this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
   }
@@ -291,34 +414,77 @@ export class Runner {
     this.pump();
   }
 
-  /** FIFO: a queued run starts when its resources are free and a Claude slot is free if it needs one. */
+  /**
+   * FIFO: a queued run starts when its resources are free and a Claude slot is free if it needs one. The count and the
+   * starts happen under the schedule lock, so another process never counts the same slot free meanwhile. While the
+   * queue waits on another process (the lock, a claim, or runs only that process tracks), it is pumped again later.
+   */
   private pump(): void {
     if (this.queue.length === 0) return;
-    const holders = this.holders();
-    const busy = new Set(holders.flatMap((m) => m.resources));
-    let claude = holders.filter((m) => m.claude).length;
-    for (const item of [...this.queue]) {
-      const { meta } = item;
-      if (meta.resources.some((r) => busy.has(r))) continue;
-      if (meta.claude && claude >= this.claudeSlots) continue;
-      this.queue = this.queue.filter((q) => q !== item);
-      if (!this.spawnRun(item.meta, item.env)) continue;
-      for (const r of meta.resources) busy.add(r);
-      if (meta.claude) claude++;
+    const unlock = this.lockSchedule();
+    if (!unlock) {
+      this.retryLater();
+      return;
     }
+    let waitsOnOthers = false;
+    try {
+      const holders = this.holders();
+      const foreign = holders.some((m) => !this.active.has(m.id));
+      const busy = new Set(holders.flatMap((m) => m.resources));
+      let claude = holders.filter((m) => m.claude).length;
+      for (const item of [...this.queue]) {
+        const { meta } = item;
+        if (meta.resources.some((r) => busy.has(r)) || (meta.claude && claude >= this.claudeSlots)) {
+          waitsOnOthers ||= foreign;
+          continue;
+        }
+        const outcome = this.spawnRun(item.meta, item.env);
+        if (outcome === 'held') {
+          waitsOnOthers = true;
+          continue;
+        }
+        this.queue = this.queue.filter((q) => q !== item);
+        if (outcome !== 'started') continue;
+        for (const r of meta.resources) busy.add(r);
+        if (meta.claude) claude++;
+      }
+    } finally {
+      unlock();
+    }
+    if (waitsOnOthers) this.retryLater();
   }
 
-  /** False when another process already claimed the run (it was cancelled, marked lost or started elsewhere). */
-  private spawnRun(queued: RunMeta, env: NodeJS.ProcessEnv): boolean {
-    if (!this.claim(queued.id)) {
+  private retryLater(): void {
+    if (this.retryTimer) return;
+    // Slower than tracking: each try reads every run's meta, and the wait can be as long as another process's run.
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.pump();
+    }, (this.opts.pollMs ?? 250) * 4);
+    this.retryTimer.unref();
+  }
+
+  /**
+   * 'started': it runs now (or was found running). 'held': a live process holds its claim and it is still queued, so
+   * it stays in the queue. 'gone': it was settled (here or elsewhere) and leaves the queue.
+   */
+  private spawnRun(queued: RunMeta, env: NodeJS.ProcessEnv): 'started' | 'held' | 'gone' {
+    const claim = this.claim(queued.id, true);
+    if (claim === 'held') {
+      if (this.store.read(queued.id)?.status === 'queued') return 'held';
       this.envById.delete(queued.id);
-      return false;
+      return 'gone';
     }
     const meta = this.store.read(queued.id) ?? queued;
-    if (meta.status !== 'queued') return false;
+    if (meta.status !== 'queued') return 'gone';
+    if (claim === 'recovered') {
+      const resumed = this.resumeInterruptedStart(meta);
+      if (resumed) return resumed.status === 'running' ? 'started' : 'gone';
+    }
     const runDir = this.store.dirOf(meta.id);
     let child: ReturnType<typeof spawn>;
     try {
+      fs.writeFileSync(path.join(runDir, STARTING_FILE), '');
       child = spawn(this.opts.nodePath ?? process.execPath, [WRAPPER_PATH, runDir, meta.cmd.cwd, meta.cmd.bin, ...meta.cmd.args], {
         detached: true,
         stdio: 'ignore',
@@ -328,7 +494,7 @@ export class Runner {
     } catch (err) {
       // Refused at once (an argument node will not pass on): the run is claimed, so nothing else would ever settle it.
       this.failToStart(meta, err);
-      return false;
+      return 'gone';
     }
     // ENOENT (the app's node was removed by an upgrade), EAGAIN or EMFILE arrive as an 'error' event: without a listener
     // that is an uncaught exception that takes the server child down.
@@ -345,7 +511,7 @@ export class Runner {
     this.store.write(running);
     this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
     this.track(running);
-    return true;
+    return 'started';
   }
 
   /** A run whose wrapper could not be started ends failed with the reason; its inputs go and its resources are free. */
@@ -413,7 +579,13 @@ export class Runner {
     let meta = this.store.read(id);
     if (!meta) return null;
     if (meta.status === 'queued') {
-      if (this.claim(id)) {
+      const claim = this.claim(id);
+      // Claimed elsewhere a moment ago, it is starting (or was settled): act on what is on disk now.
+      meta = this.store.read(id);
+      if (!meta) return null;
+      // Taken over from a process that died starting it: settle what it began, then cancel that like any other.
+      if (claim === 'recovered' && meta.status === 'queued') meta = this.resumeInterruptedStart(meta) ?? meta;
+      if (claim !== 'held' && meta.status === 'queued') {
         this.envById.delete(id);
         const cancelled: RunMeta = { ...meta, status: 'cancelled', endedAt: new Date().toISOString() };
         this.store.write(cancelled);
@@ -421,9 +593,6 @@ export class Runner {
         this.bus.publish('run.status', { runId: id, status: 'cancelled', actionId: cancelled.actionId });
         return cancelled;
       }
-      // Claimed elsewhere a moment ago: it is starting (or was settled); act on what is on disk now.
-      meta = this.store.read(id);
-      if (!meta) return null;
     }
     if (meta.status !== 'running') return meta;
     const childPid = meta.childPid ?? this.store.readWrapper(id)?.childPid ?? null;
@@ -504,6 +673,8 @@ export class Runner {
   }
 
   close(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     for (const { timer } of this.active.values()) clearInterval(timer);
     this.active.clear();
   }

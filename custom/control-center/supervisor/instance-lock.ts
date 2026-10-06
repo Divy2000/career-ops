@@ -94,7 +94,7 @@ function parseHolder(text: string): LockHolder | null {
   }
 }
 
-function readOrNull(file: string): string | null {
+export function readOrNull(file: string): string | null {
   try {
     return fs.readFileSync(file, 'utf8');
   } catch (err) {
@@ -106,7 +106,7 @@ function readOrNull(file: string): string | null {
 const aside = (file: string, why: string) => `${file}.${why}-${process.pid}-${crypto.randomUUID()}`;
 
 /** Creates `file` holding `text`, whole, or returns false when a lock is already there. */
-function createWhole(file: string, text: string): boolean {
+export function createWhole(file: string, text: string): boolean {
   const tmp = aside(file, 'new');
   fs.writeFileSync(tmp, text, { flag: 'wx' });
   try {
@@ -126,7 +126,7 @@ function createWhole(file: string, text: string): boolean {
  * mistake is linked back; if yet another lock took its place meanwhile, the displaced one stays out and its owner's
  * verify() fails before it starts any work.
  */
-function removeIf(file: string, expected: string): void {
+export function removeIf(file: string, expected: string): void {
   const moved = aside(file, 'old');
   try {
     fs.renameSync(file, moved);

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { RunStore, runsDir } from '../../server/runner/store.js';
 import { Runner, WRAPPER_PATH, pidAlive, processStartTime } from '../../server/runner/runner.js';
 import { childEnv } from '../../server/system/child-env.js';
@@ -664,5 +664,167 @@ describe('Runner', () => {
     expect(second.store.read(dead.id)?.status).toBe('done');
     expect(second.store.read(ghost.id)?.status).toBe('lost');
     await until(() => second.store.read(live.id)?.status === 'done', 15_000);
+  });
+});
+
+describe('two server processes on one data root (SW6-claude-01 review)', () => {
+  const RUNNER_PROCESS = path.join(PACKAGE_ROOT, 'tests', 'helpers', 'runner-process.ts');
+  const others: ChildProcess[] = [];
+  const strays: number[] = [];
+  afterEach(() => {
+    for (const c of others.splice(0)) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
+    for (const pid of strays.splice(0)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* gone */
+      }
+    }
+  });
+
+  /** Another server process with its own Runner on `root`: it starts `request` and holds after spawning the wrapper. */
+  function otherServer(root: string, request: ReturnType<typeof req>, nodePath?: string) {
+    const signals = tempDir('cc-runner-signals-');
+    const tmp = tempDir('cc-runner-tsx-');
+    const child = spawn(process.execPath, ['--import', 'tsx', RUNNER_PROCESS, root, signals, JSON.stringify(request), ...(nodePath ? [nodePath] : [])], {
+      cwd: PACKAGE_ROOT,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, TMPDIR: tmp, TEMP: tmp, TMP: tmp },
+    });
+    others.push(child);
+    let stderr = '';
+    child.stderr!.on('data', (d: Buffer) => (stderr += d.toString()));
+    const inWindow = path.join(signals, 'in-window');
+    return {
+      /** Waits until it has spawned the wrapper and not yet recorded the run as running; the wrapper's PID. */
+      holding: async () => {
+        await until(() => fs.existsSync(inWindow) || child.exitCode !== null, 30_000);
+        if (!fs.existsSync(inWindow)) throw new Error(`the other server exited: ${stderr}`);
+        return Number(fs.readFileSync(inWindow, 'utf8'));
+      },
+      go: () => fs.writeFileSync(path.join(signals, 'go'), ''),
+      /** A crash: SIGKILL, then wait until the process is gone. */
+      crash: async () => {
+        const gone = new Promise((r) => child.once('exit', r));
+        child.kill('SIGKILL');
+        await gone;
+      },
+    };
+  }
+
+  /** The PID of a process that ran and is gone. */
+  const deadPid = () => spawnSync(process.execPath, ['-e', '0']).pid!;
+  const lineOnes = (r: Runner, id: string) => r.store.readRaw(id).lines.filter((l) => l.line === 'line one').length;
+
+  it('a run another process has spawned but not yet recorded as running holds its Claude slot: nothing here starts past the cap, and this process\'s run starts once that one ends', async () => {
+    const root = tmpRoot();
+    const other = otherServer(root, req(['0', '800'], { actionId: 'test.other', claude: true }));
+    await other.holding();
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(here);
+    here.reconcile();
+    const mine = here.start(req(['0'], { claude: true }));
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    other.go();
+    const theirs = () => here.store.list().find((m) => m.actionId === 'test.other')!;
+    await until(() => theirs().status === 'done', 15_000);
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(mine.id)!.startedAt! >= theirs().endedAt!).toBe(true);
+    expect(lineOnes(here, theirs().id)).toBe(1);
+  });
+
+  it('a server killed after spawning a run\'s wrapper, before recording it running: the next process takes the run over as running and never starts it twice', async () => {
+    const root = tmpRoot();
+    const other = otherServer(root, req(['0', '300'], { actionId: 'test.other' }));
+    await other.holding();
+    const id = new RunStore(root).list().find((m) => m.actionId === 'test.other')!.id;
+    const wrapperJson = path.join(new RunStore(root).dirOf(id), 'wrapper.json');
+    await until(() => fs.existsSync(wrapperJson));
+    await other.crash();
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    here.reconcile();
+    await until(() => here.store.read(id)?.status === 'done', 15_000);
+    expect(here.store.read(id)!.wrapperPid).toBe((JSON.parse(fs.readFileSync(wrapperJson, 'utf8')) as { wrapperPid: number }).wrapperPid);
+    expect(lineOnes(here, id)).toBe(1);
+  });
+
+  it('a server killed after spawning a wrapper that recorded nothing yet: the run ends lost, its wrapper told to stop, and it is never started again', async () => {
+    const root = tmpRoot();
+    // A wrapper stand-in that never gets as far as recording anything.
+    const stall = path.join(tempDir('cc-runner-stall-'), 'stall.sh');
+    fs.writeFileSync(stall, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    const other = otherServer(root, req(['0'], { actionId: 'test.other' }), stall);
+    strays.push(await other.holding());
+    const id = new RunStore(root).list().find((m) => m.actionId === 'test.other')!.id;
+    await other.crash();
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    here.reconcile();
+    await until(() => here.store.read(id)?.status === 'lost', 15_000);
+    expect(here.store.read(id)!.error).toMatch(/stopped while starting/);
+    expect(fs.existsSync(path.join(here.store.dirOf(id), 'cancel'))).toBe(true);
+    await wait(300);
+    expect(fs.existsSync(path.join(here.store.dirOf(id), 'raw.ndjson'))).toBe(false);
+  });
+
+  for (const [format, write] of [
+    ['its PID and start time', (file: string, pid: number) => fs.writeFileSync(file, JSON.stringify({ pid, start: 1_700_000_000 }))],
+    ['a bare PID (the earlier format)', (file: string, pid: number) => fs.writeFileSync(file, String(pid))],
+    ['nothing (a claim cut short), long enough ago', (file: string) => {
+      fs.writeFileSync(file, '');
+      const past = new Date(Date.now() - 60_000);
+      fs.utimesSync(file, past, past);
+    }],
+  ] as const) {
+    it(`a run claimed by a server that died before it spawned anything (the claim holds ${format}) starts once in the next process instead of staying queued`, async () => {
+      const root = tmpRoot();
+      const first = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(first);
+      const holder = first.start(req(['0', '600'], { resources: ['tracker'] }));
+      const waiting = first.start(req(['0'], { resources: ['tracker'] }));
+      const second = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(second);
+      second.reconcile();
+      await until(() => second.queuedIds().includes(waiting.id));
+      // The first server drains, and a server claims the run and dies before it spawns its wrapper.
+      first.close();
+      write(path.join(second.store.dirOf(waiting.id), 'claim'), deadPid());
+      await until(() => second.store.read(holder.id)?.status === 'done', 15_000);
+      await until(() => second.store.read(waiting.id)?.status === 'done', 15_000);
+      expect(lineOnes(second, waiting.id)).toBe(1);
+    });
+  }
+
+  it('cancelling a queued run whose claim a dead server left cancels it, rather than leaving it queued', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: '/' }, params: {} });
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'claim'), JSON.stringify({ pid: deadPid(), start: 1_700_000_000 }));
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    expect(runner.cancel(run.id)?.status).toBe('cancelled');
+    expect(runner.store.read(run.id)?.status).toBe('cancelled');
+  });
+
+  it('a run claimed by a live process is never taken from it; once that process is gone without starting it, this one starts it', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const holder = runner.start(req(['0', '400'], { resources: ['tracker'] }));
+    const waiting = runner.start(req(['0'], { resources: ['tracker'] }));
+    const claimer = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(claimer);
+    fs.writeFileSync(path.join(runner.store.dirOf(waiting.id), 'claim'), JSON.stringify({ pid: claimer.pid, start: processStartTime(claimer.pid!) }));
+    await until(() => runner.store.read(holder.id)?.status === 'done', 15_000);
+    // The holder's end pumped the queue in the same step; the live claimer keeps the run.
+    runner.reschedule();
+    expect(runner.store.read(waiting.id)?.status).toBe('queued');
+    expect(runner.queuedIds()).toEqual([waiting.id]);
+    const gone = new Promise((r) => claimer.once('exit', r));
+    claimer.kill('SIGKILL');
+    await gone;
+    await until(() => runner.store.read(waiting.id)?.status === 'done', 15_000);
+    expect(lineOnes(runner, waiting.id)).toBe(1);
   });
 });
