@@ -73,6 +73,7 @@ const a = run([
   '--strict-mcp-config',
   '--max-turns', '8',
   '--model', 'haiku',
+  '--effort', 'medium',
 ]);
 
 const types = (evs) => [...new Set(evs.map((e) => (e.type === 'stream_event' ? `stream_event:${e.event?.type}` : e.type)))];
@@ -82,7 +83,7 @@ const toolUses = a.events.filter((e) => e.type === 'assistant').flatMap((e) => (
 const toolResults = a.events.filter((e) => e.type === 'user').flatMap((e) => (e.message?.content ?? []).filter((c) => c.type === 'tool_result'));
 const hookLines = fs.existsSync(hookLog) ? fs.readFileSync(hookLog, 'utf8').trim().split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) : [];
 
-const b = run(['-p', 'Reply with the single word: resumed', '--resume', sessionId, '--output-format', 'stream-json', '--verbose', '--model', 'haiku']);
+const b = run(['-p', 'Reply with the single word: resumed', '--resume', sessionId, '--output-format', 'stream-json', '--verbose', '--model', 'haiku', '--effort', 'medium']);
 const bInit = b.events.find((e) => e.type === 'system' && e.subtype === 'init');
 const bResult = b.events.find((e) => e.type === 'result');
 

@@ -780,6 +780,7 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   const flag = (name) => argv[argv.indexOf(name) + 1];
   assert.equal(flag('--permission-mode'), 'dontAsk');
   assert.equal(flag('--max-turns'), '40');
+  assert.equal(flag('--effort'), 'medium');
   assert.equal(flag('--output-format'), 'text');
   assert.ok(argv.includes('--add-dir') && argv.includes(draft));
   const start = argv.indexOf('--allowedTools') + 1;

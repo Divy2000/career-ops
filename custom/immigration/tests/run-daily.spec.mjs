@@ -119,6 +119,7 @@ jobTest('the policy pass runs claude --restricted with an exact tool list, no MC
   for (const flag of ['--restricted', '--strict-mcp-config']) assert.ok(argv.includes(flag), `${flag} missing from ${argv.join(' ')}`);
   assert.equal(flagValue(argv, '--tools'), 'Read,Edit,Write,WebFetch,WebSearch');
   assert.equal(flagValue(argv, '--permission-mode'), 'dontAsk');
+  assert.equal(flagValue(argv, '--effort'), 'medium', '--restricted loads no user settings, so the effort must be explicit');
   assert.deepEqual(flagValue(argv, '--disallowedTools').split(','), ['Bash', 'Agent', 'Task', 'NotebookEdit', 'PowerShell']);
   assert.equal(argv.includes('--allowedTools'), false, 'the rules live in the settings file, not in argv');
   assert.equal(argv.includes('--add-dir'), false);

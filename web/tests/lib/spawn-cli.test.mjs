@@ -8,6 +8,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnHeadlessCli } from "../../src/lib/spawn-cli.mjs";
 import { CAPS } from "../../src/lib/worker-capabilities.mjs";
+import { scopeFrom } from "../../src/lib/claude-invocation.mjs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Fencing is required at every call site (#2507). These cases are about stdin,
 // not permissions, so they name a runtime with no verified fencing mechanism:
@@ -111,4 +115,41 @@ test("spawnHeadlessCli refuses to spawn without a fencing declaration", () => {
   assert.throws(() => spawnHeadlessCli(...spawnArgs, {}), /without \{cliId, capabilities\}/);
   assert.throws(() => spawnHeadlessCli(...spawnArgs, { cliId: "gemini" }), /without \{cliId, capabilities\}/);
   assert.throws(() => spawnHeadlessCli(...spawnArgs, { capabilities: CAPS.localReadOnly }), /without \{cliId, capabilities\}/);
+});
+
+// A stand-in binary that prints each argument it was given on its own line.
+async function spawnedArgv(args, fencing) {
+  const dir = mkdtempSync(join(tmpdir(), "spawn-cli-argv-"));
+  try {
+    const bin = join(dir, "fake-cli");
+    writeFileSync(bin, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
+    chmodSync(bin, 0o755);
+    const child = spawnHeadlessCli(bin, args, { cwd: dir, env: process.env }, fencing);
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    const code = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    assert.equal(code, 0);
+    return stdout.split("\n").slice(0, -1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("spawnHeadlessCli runs claude at an explicit --effort medium, never the user's default", { skip: process.platform === "win32" }, async () => {
+  // Given a fenced, read-only claude argv that names no effort
+  const args = ["-p", "hi", "--strict-mcp-config", "--disallowedTools", scopeFrom("").disallowed];
+  // When it is spawned through the shared spawner
+  const argv = await spawnedArgv(args, { cliId: "claude", capabilities: CAPS.localReadOnly });
+  // Then the CLI receives the caller's argv plus exactly one --effort medium
+  assert.deepEqual(argv, [...args, "--effort", "medium"]);
+});
+
+test("spawnHeadlessCli hands --effort to no CLI but claude", { skip: process.platform === "win32" }, async () => {
+  // Given another runtime's argv, --effort being a Claude Code flag
+  const argv = await spawnedArgv(["-p", "hi"], PASSTHROUGH);
+  // Then it is spawned exactly as written
+  assert.deepEqual(argv, ["-p", "hi"]);
 });

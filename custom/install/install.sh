@@ -814,7 +814,7 @@ else
         say "  Running a restricted headless Claude (reads your documents, writes drafts only to $draft). This uses your Claude subscription."
         # The token lives only in the child's environment; it is never echoed, logged or placed on a command line.
         if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w)" ANTHROPIC_API_KEY="" \
-          "$CLAUDE_BIN" -p "$hprompt" --permission-mode dontAsk --add-dir "$draft" ${extra_dirs[@]+"${extra_dirs[@]}"} \
+          "$CLAUDE_BIN" -p "$hprompt" --effort medium --permission-mode dontAsk --add-dir "$draft" ${extra_dirs[@]+"${extra_dirs[@]}"} \
           --allowedTools Read Glob Grep "Edit(/$draft/**)" --max-turns 40 --output-format text); then
           say "  Drafts written:"
           for f in "$draft"/*; do

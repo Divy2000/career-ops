@@ -35,6 +35,12 @@ describe('claude shim: argv rewriting', () => {
     expect(confinedArgv(['--print', 'x', '--output-format', 'text', '--max-turns=3'])).toEqual({ argv: ['--print', 'x', '--output-format', 'text', '--max-turns=3', ...CONFINED] });
   });
 
+  it("keeps the effort rank-pipeline.mjs pins on its claude call, in either spelling", () => {
+    expect(confinedArgv(['-p', 'x', '--effort', 'medium', '--model', 'sonnet'])).toEqual({ argv: ['-p', 'x', '--effort', 'medium', '--model', 'sonnet', ...CONFINED] });
+    expect(confinedArgv(['-p', 'x', '--effort=medium'])).toEqual({ argv: ['-p', 'x', '--effort=medium', ...CONFINED] });
+    expect(confinedArgv(['-p', 'x', '--effort'])).toEqual({ reason: expect.stringMatching(/--effort needs a value/) });
+  });
+
   it('strips --dangerously-skip-permissions', () => {
     expect(confinedArgv(['-p', 'x', '--dangerously-skip-permissions', '--model', 'sonnet'])).toEqual({ argv: ['-p', 'x', '--model', 'sonnet', ...CONFINED] });
   });

@@ -189,7 +189,7 @@ function runClaude(name, opts) {
   const disallowed = opts.disallowed ?? ['PowerShell', 'Agent', 'Task'];
   if (disallowed.length) argv.push('--disallowedTools', disallowed.join(','));
   if (opts.allowedTools?.length) argv.push('--allowedTools', ...opts.allowedTools);
-  argv.push('--settings', prep.settingsFile, '--strict-mcp-config', '--model', MODEL, '--max-turns', String(opts.maxTurns ?? 14));
+  argv.push('--settings', prep.settingsFile, '--strict-mcp-config', '--model', MODEL, '--effort', 'medium', '--max-turns', String(opts.maxTurns ?? 14));
   const env = {
     ...BASE_ENV,
     CLAUDE_CODE_OAUTH_TOKEN: TOKEN,

@@ -120,6 +120,7 @@ process.stdout.write(t);
 # Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
 CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
   --model "$MODEL" \
+  --effort medium \
   --permission-mode dontAsk \
   --add-dir "$STATE_DIR" \
   --allowedTools "Read" "Glob" "Grep" "Edit" "Write" \

@@ -56,7 +56,7 @@ const REASON_MAX = 140;
 // that reference, it does not invent commands. Hermes stays out: rank prompts
 // contain untrusted posting text and Hermes has no verified child-permission boundary.
 export const CLI_CANDIDATES = [
-  { bin: 'claude', args: p => ['-p', p] },
+  { bin: 'claude', args: p => ['-p', p, '--effort', 'medium'] },
   { bin: 'opencode', args: p => ['run', p] },
   { bin: 'codex', args: p => ['exec', p] },
   { bin: 'copilot', args: p => ['-p', p] },

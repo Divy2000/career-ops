@@ -14,22 +14,22 @@ license: MIT
 
 # career-ops -- Router
 
-career-ops is a multi-CLI job-search command center. The routing below is shared across supported agent CLIs even when the invocation surface differs.
+career-ops is a job-search command center that runs on several agent CLIs. This router picks a mode, loads its context, and runs it; the routing is the same on every CLI, whatever the entrypoint looks like.
 
 ## Project Root Resolution
 
-Before reading any repo-relative path, derive `PROJECT_ROOT` from this loaded `SKILL.md`: start at the skill file's directory and walk upward until the nearest directory containing both `AGENTS.md` and `modes/`. Resolve every path in this router (`modes/`, `config/`, `data/`, scripts, templates, and output paths) against `PROJECT_ROOT`, never against the process's current working directory. This is required even when the checkout itself is nested (for example `Development\\career-ops`) or the command starts from a subdirectory. If those two sentinels cannot be found, stop and locate the career-ops checkout before reading or writing files.
+Derive `PROJECT_ROOT` from this loaded `SKILL.md` before reading any repo-relative path: start at the skill file's directory and walk upward to the nearest directory that contains both `AGENTS.md` and `modes/`. Resolve every path in this router (`modes/`, `config/`, `data/`, scripts, templates, and output paths) against `PROJECT_ROOT`, never against the process's current working directory. This holds when the checkout is nested (for example `Development\\career-ops`) and when the command starts from a subdirectory. If no directory has both markers, locate the career-ops checkout before reading or writing any file.
 
 ## Invocation Notes
 
 - CLIs with slash-command registration can expose this router as `/career-ops`.
-- In Cursor, this skill lives at `.cursor/skills/career-ops/` and is auto-discovered; ask for a mode by name, or paste a JD/URL to trigger auto-pipeline.
-- In Pi, this skill is auto-discovered from `.agents/skills/career-ops/` and exposed as `/skill:career-ops`; `AGENTS.md` loads from the repo root as project context, so there is no wrapper file. Headless Pi workers use `pi -p "prompt"`. Project skill discovery follows Pi's per-folder trust decision: `/trust` applies to future Pi processes, so restart `pi` before invoking `/skill:career-ops` (`-a` trusts a single run and needs no restart).
-- Interactive Codex sessions use `codex` in the repo root. Slash commands are not guaranteed in Codex, so ask Codex to run the same mode by name if `/career-ops` is unavailable.
+- Cursor auto-discovers this skill at `.cursor/skills/career-ops/`; ask for a mode by name, or paste a JD/URL to trigger auto-pipeline.
+- Pi auto-discovers it at `.agents/skills/career-ops/` and exposes it as `/skill:career-ops`; `AGENTS.md` loads from the repo root as project context, so there is no wrapper file. Headless Pi workers use `pi -p "prompt"`. Project skill discovery follows Pi's per-folder trust decision: `/trust` applies to future Pi processes, so restart `pi` before invoking `/skill:career-ops` (`-a` trusts a single run and needs no restart).
+- Interactive Codex sessions run `codex` in the repo root. Slash commands are not guaranteed in Codex, so if `/career-ops` is unavailable, ask Codex to run the same mode by name.
 - Headless Codex workers use `codex exec "prompt"`.
-- The routing semantics below stay the same regardless of whether the entrypoint is a slash command or a natural-language prompt.
+- Routing is identical whether the entrypoint is a slash command or a natural-language prompt.
 
-Codex prompt examples that map to the same router semantics:
+Codex prompts that map to the same routing:
 
 ```text
 Evaluate this JD with career-ops auto-pipeline: https://company.com/jobs/123
@@ -41,7 +41,7 @@ Run the career-ops tracker mode and summarize the current statuses.
 
 ## Mode Routing
 
-Determine the mode from `$mode`:
+Pick the mode from `$mode`:
 
 | Input | Mode |
 |-------|------|
@@ -85,33 +85,37 @@ Determine the mode from `$mode`:
 | `interview-redflag` | `interview-redflag` |
 | `update` | `update` |
 | `cover` | `cover` |
+| `triage` | `triage` |
+| `ats` | `ats` |
+| `calibrate` | `calibrate` |
+| `intake` | `intake` |
 
-**Auto-pipeline detection:** If `$mode` is not a known sub-command AND contains JD text (keywords: "responsibilities", "requirements", "qualifications", "about the role", "we're looking for", company name + role) or a URL to a JD, execute `auto-pipeline`.
-
-If `$mode` is not a sub-command AND doesn't look like a JD, show discovery.
+When `$mode` is not a known sub-command, run `auto-pipeline` if it contains JD text (cues: "responsibilities", "requirements", "qualifications", "about the role", "we're looking for", a company name plus a role) or a URL to a JD. Otherwise show discovery.
 
 ---
 
 ## Output Language Directive
 
-Before executing any mode, read `config/profile.yml` if it exists and resolve:
+Before running any mode, read `config/profile.yml` if it exists and resolve:
 
-- `language.output` → ISO language code for human-facing output. Default: `en`.
-- `language.modes_dir` → optional market-mode directory. This controls market vocabulary and local evaluation rules only. It may be a single string (one declared market, the historical default) or a list of declared candidate markets for a candidate genuinely running parallel campaigns in more than one market at once (#3793), e.g. `modes_dir: [modes/de, modes/zh]`. When a list is given, the FIRST entry is primary and supplies the evaluation-mode file (Block A-F rules can only run from one market's file at a time); EVERY declared market's `_shared.md` is loaded into context. `modes` itself is a valid declared candidate for markets without a localized directory; when first it supplies `modes/oferta.md`, and its baseline `modes/_shared.md` is loaded once. Per posting, judge which declared market actually applies from the JD's own MARKET signals (hiring-entity jurisdiction, currency, benefits/legal vocabulary) — never from the JD's language alone. If genuinely ambiguous, an interactive session asks and stops before persistence; an unattended worker uses the primary market and records that fallback in the report header or Block G.
+- `language.output`: ISO language code for human-facing output. Default `en`.
+- `language.modes_dir`: optional market-mode directory. It controls market vocabulary and local evaluation rules only, and takes one of two shapes:
+  - A single string: one declared market (the historical default).
+  - A list of declared candidate markets, for a candidate genuinely running parallel campaigns in several markets at once (#3793), e.g. `modes_dir: [modes/de, modes/zh]`. The first entry is primary and supplies the evaluation-mode file, since Block A-F rules run from one market's file at a time; every declared market's `_shared.md` is loaded into context. `modes` is a valid entry for a market with no localized directory; when first, it supplies `modes/oferta.md`, and its baseline `modes/_shared.md` is loaded once.
 
-Inject this directive after loading the mode instructions and before producing any user-visible content:
+  For each posting, decide which declared market applies from the JD's market signals (hiring-entity jurisdiction, currency, benefits/legal vocabulary), not from the JD's language. If it is genuinely ambiguous, an interactive session asks and waits before writing a report or tracker entry; an unattended worker uses the primary market and records that fallback in the report header or Block G.
+
+After loading the mode instructions and before producing any user-visible content, inject this directive:
 
 > Write all human-facing output in `{language.output}` regardless of the language of these instructions or of the job description. This includes reports, tracker notes, PDFs, cover letters, outreach, interview prep, form answers, and summaries. If `language.modes_dir` supplies market-specific vocabulary (one market, or several declared at once), keep the market logic but explain terms in `{language.output}` when needed.
 
-`language.output` is authoritative for prose. `modes_dir` is market context; it must not force the prose language.
+`language.output` decides the prose language. `modes_dir` only adds market context and never sets the prose language.
 
 ---
 
 ## Discovery Mode (no arguments)
 
-If your CLI supports `/career-ops`, show this menu. In Codex, surface the same options in plain text and map the requested mode the same way.
-
-Concrete equivalents for Codex prompt-driven sessions:
+On CLIs that support `/career-ops`, show the menu below. In Codex, present the same options in plain text and map the chosen one the same way:
 
 ```text
 /career-ops {JD}           ↔ "Evaluate this JD with career-ops auto-pipeline: {JD or URL}"
@@ -122,7 +126,7 @@ Concrete equivalents for Codex prompt-driven sessions:
 /career-ops tracker        ↔ "Run the career-ops tracker mode and summarize the current statuses."
 ```
 
-Show this menu:
+Menu:
 
 ```
 career-ops -- Command Center
@@ -130,6 +134,7 @@ career-ops -- Command Center
 Available commands:
   /career-ops {JD}      → AUTO-PIPELINE: evaluate + report + PDF + tracker (paste text or URL)
   /career-ops pipeline  → Process pending URLs from inbox (data/pipeline.md)
+  /career-ops triage    → Fast first-pass go/no-go score before a full evaluation
   /career-ops oferta    → Evaluation only A-F (no auto PDF)
   /career-ops ofertas   → Compare and rank multiple offers
   /career-ops contacto  → LinkedIn power move: find contacts + draft message
@@ -142,12 +147,14 @@ Available commands:
   /career-ops interview/practice → Practice interview, one question at a time with feedback
   /career-ops interview/debrief → Post-interview debrief: close gaps, predict next round
   /career-ops pdf       → PDF only, ATS-optimized CV
+  /career-ops ats       → Check a generated CV for ATS parseability (score + issues)
   /career-ops text      → Tailored markdown CV (mirrors cv.md, no PDF)
   /career-ops latex     → Export CV as LaTeX/Overleaf .tex
   /career-ops latex-tex → Tailor your own resume.tex in place (opt-in; cv.md stays default)
   /career-ops cover     → Cover letter: standalone JD paste or /career-ops cover {slug}
   /career-ops email     → Formal application email draft (draft-only; never sends, submits, or clicks)
   /career-ops add       → Add a project/paper/role to your CV (fetch + preview + confirm)
+  /career-ops intake    → Build or enrich your profile from documents/ (proposes, writes only on confirm)
   /career-ops expand    → Auto-discover and add missing competencies from profile links
   /career-ops training  → Evaluate course/cert against North Star
   /career-ops project   → Evaluate portfolio project idea
@@ -158,6 +165,7 @@ Available commands:
   /career-ops discover  → Resolve a company list to scannable ATS boards + append to portals.yml (zero-token)
   /career-ops batch     → Batch processing with parallel workers
   /career-ops patterns  → Analyze rejection patterns and improve targeting
+  /career-ops calibrate → Check whether evaluation scores predict your real outcomes (advisory)
   /career-ops offer-prep → Read a received offer/contract with the candidate: clause walk + lawyer questions (not legal advice)
   /career-ops titles    → Suggest adjacent job titles from your CV to broaden the search
   /career-ops upskill   → Aggregate skill-gap analysis from your evaluated reports
@@ -173,15 +181,21 @@ Or paste a JD directly to run the full pipeline.
 
 ## Context Loading by Mode
 
-After determining the mode, load the necessary files before executing:
+Once the mode is known, load its files before running it.
 
-If `modes/_custom.md` exists, read it after `modes/_profile.md` and before the selected mode file. It contains user house rules and procedural preferences. It may override workflow/style defaults, but it never adds factual claims about the candidate.
+`modes/_custom.md`, when it exists, holds the user's house rules and procedural preferences. Read it after `modes/_profile.md` and before the selected mode file. It may override workflow and style defaults but never adds factual claims about the candidate.
 
-Resolve `language.modes_dir` before applying the path shorthand below. With no setting, use `modes`. With a scalar directory, preserve the existing behavior: use that directory's `_shared.md` and localized mode file when it provides one. With a list, load every declared directory's `_shared.md` exactly once (including the baseline `modes/_shared.md` when `modes` appears), but use only the FIRST entry's evaluation-mode file for Blocks A-F; later entries contribute context, never a competing evaluation file. User-layer `_profile.md` and `_custom.md` remain under `modes/`.
+Resolve `language.modes_dir` before applying the path shorthand below:
+
+- Not set: use `modes`.
+- A single directory: use that directory's `_shared.md`, and its localized mode file where it provides one.
+- A list: load every declared directory's `_shared.md` exactly once (including the baseline `modes/_shared.md` when `modes` is listed), and take the Blocks A-F evaluation-mode file only from the first entry; later entries add context, never a competing evaluation file.
+
+User-layer `_profile.md` and `_custom.md` always stay under `modes/`.
 
 ### Modes that require `_shared.md` + their mode file
 
-Read the resolved shared context (default `modes/_shared.md`) + `modes/_profile.md` (if exists) + `modes/_custom.md` (if exists) + the resolved selected mode file (default `modes/{mode}.md`). For an A-F evaluation, that selected file is the primary directory's evaluation mode; do not also load an evaluation file from a secondary directory.
+Read the resolved shared context (default `modes/_shared.md`) + `modes/_profile.md` (if exists) + `modes/_custom.md` (if exists) + the resolved selected mode file (default `modes/{mode}.md`). For an A-F evaluation the selected file is the primary directory's evaluation mode; do not also load an evaluation file from a secondary directory.
 
 Applies to: `auto-pipeline`, `oferta`, `ofertas`, `pdf`, `text`, `contacto`, `apply`, `pipeline`, `scan`, `batch`
 
@@ -191,9 +205,15 @@ Read `modes/_profile.md` (if exists) + `modes/_custom.md` (if exists) + `modes/{
 
 Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `master-profile`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`
 
+### Self-contained modes
+
+Read only `modes/{mode}.md`; each of these names its own context, and `triage` deliberately skips the full profile to stay cheap.
+
+Applies to: `triage`, `ats`, `calibrate`, `intake`
+
 ### Modes delegated to subagent
 
-For `scan`, `apply` (with Playwright), and `pipeline` (3+ URLs): launch as a worker/subagent with the resolved shared context + `_profile.md` (if exists) + `_custom.md` (if exists) + the resolved selected mode file injected into the worker prompt. If your CLI exposes an `Agent(...)` primitive, the call looks like this:
+Run `scan`, `apply` (with Playwright), and `pipeline` (3+ URLs) in a worker/subagent, injecting the resolved shared context + `_profile.md` (if exists) + `_custom.md` (if exists) + the resolved selected mode file into the worker prompt. On a CLI with an `Agent(...)` primitive, the call looks like this:
 
 ```python
 Agent(

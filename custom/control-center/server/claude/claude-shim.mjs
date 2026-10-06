@@ -16,7 +16,7 @@ import { isMainModule } from '../../../../lib/is-main-module.mjs';
 export const CLAUDE_SHIM_PATH = fileURLToPath(import.meta.url);
 
 /** Flags a wrapped call may keep, and whether each takes a value. */
-const KEEP = { '-p': false, '--print': false, '--model': true, '--output-format': true, '--max-turns': true, '--verbose': false };
+const KEEP = { '-p': false, '--print': false, '--model': true, '--effort': true, '--output-format': true, '--max-turns': true, '--verbose': false };
 /** Dropped outright: the confinement below decides permissions. */
 const DROP = new Set(['--dangerously-skip-permissions']);
 const NO_TOOLS = 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell';
@@ -37,7 +37,7 @@ export function confinedArgv(argv) {
     }
     const eq = a.indexOf('=');
     const name = eq === -1 ? a : a.slice(0, eq);
-    if (!Object.hasOwn(KEEP, name)) return { reason: `claude-shim: ${name} is not allowed in a confined call (only -p, --print, --model, --output-format, --max-turns and --verbose are)` };
+    if (!Object.hasOwn(KEEP, name)) return { reason: `claude-shim: ${name} is not allowed in a confined call (only -p, --print, --model, --effort, --output-format, --max-turns and --verbose are)` };
     kept.push(a);
     if (KEEP[name] && eq === -1) {
       if (argv[i + 1] === undefined) return { reason: `claude-shim: ${name} needs a value` };

@@ -40,6 +40,18 @@ test('the headless sync Claude gets the OAuth token but runs with subprocess env
   assert.match(env, /^ANTHROPIC_API_KEY=$/m);
 });
 
+test('the headless sync Claude runs at an explicit medium effort, not whatever the user settings default to', () => {
+  const dir = tempDir('sync-claude-effort-');
+  const bin = path.join(dir, 'bin');
+  const seen = path.join(dir, 'argv.txt');
+  stub(bin, 'claude', `printf '%s\\n' "$@" > "${seen}"`);
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const argv = readFileSync(seen, 'utf8').split('\n');
+  assert.equal(argv[argv.indexOf('--effort') + 1], 'medium', argv.join(' '));
+});
+
 // npm stub: logs each call's arguments; `npm ... test` prints what vitest prints, or fails when told to.
 function npmWorld({ testExit = 0, testOutput = ' Test Files  3 passed (3)\n      Tests  42 passed (42)' } = {}) {
   const dir = tempDir('sync-cc-');
