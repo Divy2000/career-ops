@@ -8,6 +8,25 @@ export type ActionOutcome = { runId: string } | { result: unknown; stderr?: stri
 
 export const useActions = () => useQuery({ queryKey: ['actions'], queryFn: () => apiGet<ActionMeta[]>('/api/actions'), staleTime: 60_000 });
 
+/**
+ * Whether an action's schema (GET /api/actions describes it as JSON schema) takes `value` for string param `name`:
+ * its pattern and maxLength. A schema that does not say, or is not loaded yet, takes it; the server still checks.
+ */
+export function paramAccepts(meta: ActionMeta | undefined, name: string, value: string): boolean {
+  const prop = (meta?.params.properties as Record<string, { pattern?: string; maxLength?: number }> | undefined)?.[name];
+  if (!prop) return true;
+  if (prop.maxLength !== undefined && value.length > prop.maxLength) return false;
+  if (prop.pattern === undefined) return true;
+  let re: RegExp;
+  try {
+    re = new RegExp(prop.pattern, 'u');
+  } catch {
+    // A pattern this browser cannot compile decides nothing here; the server's own check still runs.
+    return true;
+  }
+  return re.test(value);
+}
+
 export function describeError(err: unknown): string {
   const e = err as ApiError;
   const body = e?.body as { error?: string; stderr?: string } | null | undefined;

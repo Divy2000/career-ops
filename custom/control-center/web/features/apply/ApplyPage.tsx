@@ -4,7 +4,7 @@ import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
 import { useEngine, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
-import { describeError, useRunAction } from '../../lib/actions';
+import { describeError, paramAccepts, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
@@ -69,7 +69,9 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
   const pdf = pickedPdf ?? docs.data?.suggestedPdf ?? '';
   const cover = pickedCover ?? docs.data?.suggestedCover ?? '';
   const [summary, setSummary] = useState<string | null>(null);
-  const blockers = prefillBlockers({ url, pdf, pdfCount: docs.data?.pdfs.length ?? 0, company });
+  const prefillMeta = useActions().data?.find((a) => a.id === 'docs.prepareApplication');
+  const refused = Object.entries({ pdf, cover }).filter(([key, file]) => file && !paramAccepts(prefillMeta, key, file)).map(([, file]) => file);
+  const blockers = prefillBlockers({ url, pdf, pdfCount: docs.data?.pdfs.length ?? 0, company, refused });
   const playwright = engine.data?.playwrightAvailable ?? false;
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind === 'answers') setFields((payload as { fields: AnswerField[] }).fields);

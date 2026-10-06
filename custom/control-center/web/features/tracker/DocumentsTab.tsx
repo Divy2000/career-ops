@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../../lib/api';
-import { useActions, useRunAction } from '../../lib/actions';
+import { paramAccepts, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { DocumentsRead } from '@shared/api';
@@ -34,35 +34,40 @@ export function DocumentsTab({ n }: { n: number }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {q.data.files.map((f) => (
-                      <tr key={f.path}>
-                        <td>
-                          <Pill tone={f.kind === 'cover' ? 'info' : 'accent'}>{f.kind}</Pill>
-                        </td>
-                        <td className="mono">
-                          <a href={`/api/files/serve?path=${encodeURIComponent(f.path)}`} target="_blank" rel="noreferrer noopener">
-                            {f.path}
-                          </a>
-                          {f.source === 'output' && <span className="faint small"> (matched by company)</span>}
-                        </td>
-                        <td className="mono muted">{f.date ?? ''}</td>
-                        <td>
-                          <div className="row gap">
-                            {f.html && (
-                              <a className="button-link" href={`/api/files/serve?path=${encodeURIComponent(f.html)}`} target="_blank" rel="noreferrer noopener">
-                                Open HTML
-                              </a>
-                            )}
-                            {f.html && f.rerenderBlock && <span className="faint small">{f.rerenderBlock}</span>}
-                            {f.html && !f.rerenderBlock && (
-                              <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
-                                Re-render from HTML
-                              </ActionButton>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {q.data.files.map((f) => {
+                      // A file dropped into output/ by hand can have a name the re-render action's schema refuses ("Acme Resume.html").
+                      const nameAccepted = Boolean(f.html) && paramAccepts(render, 'html', f.html!) && paramAccepts(render, 'pdf', f.path);
+                      return (
+                        <tr key={f.path}>
+                          <td>
+                            <Pill tone={f.kind === 'cover' ? 'info' : 'accent'}>{f.kind}</Pill>
+                          </td>
+                          <td className="mono">
+                            <a href={`/api/files/serve?path=${encodeURIComponent(f.path)}`} target="_blank" rel="noreferrer noopener">
+                              {f.path}
+                            </a>
+                            {f.source === 'output' && <span className="faint small"> (matched by company)</span>}
+                          </td>
+                          <td className="mono muted">{f.date ?? ''}</td>
+                          <td>
+                            <div className="row gap">
+                              {f.html && (
+                                <a className="button-link" href={`/api/files/serve?path=${encodeURIComponent(f.html)}`} target="_blank" rel="noreferrer noopener">
+                                  Open HTML
+                                </a>
+                              )}
+                              {f.html && f.rerenderBlock && <span className="faint small">{f.rerenderBlock}</span>}
+                              {f.html && !f.rerenderBlock && !nameAccepted && <span className="faint small">Re-render needs a file name with only letters, digits and . _ -. Rename {f.html} and its PDF in output/.</span>}
+                              {f.html && !f.rerenderBlock && nameAccepted && (
+                                <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
+                                  Re-render from HTML
+                                </ActionButton>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </TableScroll>
