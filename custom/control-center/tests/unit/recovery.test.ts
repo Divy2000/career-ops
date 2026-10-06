@@ -151,6 +151,24 @@ describe('Dev Chat change sets', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\nline three\n');
   });
 
+  it('refuses (409) a turn with no recorded policy, through revertFile and /__recovery alike, and writes nothing (SW5-tests-05)', () => {
+    const { sessionDir: guardSession, t2, file, meta, ctx } = fakeSession();
+    // Turn 2 would otherwise revert notes.md cleanly (200); without its policy its write scope is unknown.
+    fs.rmSync(path.join(t2, 'policy.json'));
+    const r = refusal(() => revertFile(t2, file, ctx));
+    expect(r.status).toBe(409);
+    expect(r.message).toMatch(/turn 2 has no recorded policy/);
+    expect(refusal(() => revertTurn(guardSession, meta, 2, ctx))).toMatchObject({ status: 409, message: expect.stringMatching(/no recorded policy/) });
+    const guardRoot = fs.realpathSync(tempDir('cc-recovery-root-'));
+    const sessionsDir = fs.realpathSync(tempDir('cc-recovery-sessions-'));
+    fs.mkdirSync(path.join(guardRoot, 'sessions'));
+    fs.renameSync(guardSession, path.join(guardRoot, 'sessions', 's1'));
+    fs.mkdirSync(path.join(sessionsDir, 's1'));
+    fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
+    for (const abs of [file, undefined]) expect(recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn: 2, abs })).toMatchObject({ status: 409, text: expect.stringMatching(/no recorded policy/) });
+    expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\nline three\n');
+  });
+
   it('post-turn hashes are the ones the hook took at each write (the last write wins), never the disk at finalize time', () => {
     const { root, sessionDir, rec, ctx } = fakeSession();
     const t3 = path.join(sessionDir, 'turns', '3');
