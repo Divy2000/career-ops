@@ -42,4 +42,17 @@ describe('built client', () => {
     expect(route.statusCode).toBe(200);
     expect(route.body).toContain('index-new222.js');
   });
+
+  it('lets the styles libraries inject at runtime (sonner toasts, dialog scroll lock) and the bundle\'s inlined fonts load, and nothing else (SW6-server-02)', async () => {
+    const dist = path.join(tempDir('cc-dist-'), 'dist');
+    writeBuild(dist, 'csp333');
+    t = await makeTestApp({ client: 'dist', distDir: dist });
+    const csp = (await t.app.inject({ method: 'GET', url: '/', headers: t.authed })).headers['content-security-policy'] as string;
+    const directives = Object.fromEntries(csp.split(';').map((d) => d.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
+    expect(directives['style-src']).toEqual(["'self'", "'unsafe-inline'"]);
+    expect(directives['font-src']).toEqual(["'self'", 'data:']);
+    // Scripts stay at the default: no inline script, nothing from elsewhere.
+    expect(directives['script-src']).toBeUndefined();
+    expect(directives['default-src']).toEqual(["'self'"]);
+  });
 });
