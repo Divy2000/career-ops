@@ -794,6 +794,12 @@ else
   elif [ "$KEYCHAIN_OK" = 0 ]; then
     say "  The Keychain item is missing, so the job would fail every morning; not installing it yet."
     pending "Store the Keychain token, then install the daily job: $DAILY_CMD"
+  elif [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ]; then
+    # The Control Center's Runs & Schedule owns the time and the on/off state once the job exists: a re-run of this
+    # installer (the pending actions ask for one) must not put it back to 08:00 or enable a job the user turned off.
+    jobs=daily
+    if [ "$WITH_UPSTREAM_SYNC" = 1 ]; then jobs=all; fi
+    say "  The daily job is already installed; its schedule and on/off state stay as set in the Control Center. To reinstall it at 08:00: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
   else
     jobs=daily
     if [ "$WITH_UPSTREAM_SYNC" = 1 ]; then jobs=all; fi
