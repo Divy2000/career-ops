@@ -19,14 +19,20 @@ const mkTmp = (prefix) => {
   return d;
 };
 
-function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null, relativeClaude = false } = {}) {
+function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null, relativeClaude = false, realPlutil = false, nodeAt = 'bin', nodeShim = false } = {}) {
   const T = mkTmp('ci-launchd-');
   const bin = path.join(T, 'bin');
   fs.mkdirSync(bin);
-  for (const t of ['launchctl', 'plutil']) fs.symlinkSync(path.join(STUBS, t), path.join(bin, t));
-  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  fs.symlinkSync(path.join(STUBS, 'launchctl'), path.join(bin, 'launchctl'));
+  // The real plutil only lints (read-only); the stub records the call and passes, or fails with STUB_PLUTIL_FAIL.
+  fs.symlinkSync(realPlutil ? '/usr/bin/plutil' : path.join(STUBS, 'plutil'), path.join(bin, 'plutil'));
+  // The node on the test PATH: a link to this node in `nodeAt` (bin unless a test puts it where a version manager
+  // would), or with `nodeShim` a script that runs it, like an asdf or mise shim.
+  fs.mkdirSync(path.join(T, nodeAt), { recursive: true });
+  if (nodeShim) fs.writeFileSync(path.join(T, nodeAt, 'node'), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+  else fs.symlinkSync(process.execPath, path.join(T, nodeAt, 'node'));
   const home = path.join(T, homeName);
-  fs.mkdirSync(home);
+  fs.mkdirSync(home, { recursive: true });
   if (localClaude !== null) {
     fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
     fs.writeFileSync(path.join(home, '.local', 'bin', 'claude'), `#!/bin/sh\necho '${localClaude} (Claude Code)'\n`, { mode: 0o755 });
@@ -57,7 +63,7 @@ function run(args, { env = {}, marker = null, existing = [], homeName = 'home', 
   fs.writeFileSync(stubLog, '');
   const r = spawnSync('bash', [path.join(root, 'custom', 'launchd', 'install.sh'), ...args], {
     cwd: T,
-    env: { PATH: `${relativeClaude ? 'node_modules/.bin::' : ''}${bin}:/usr/bin:/bin`, HOME: home, STUB_LOG: stubLog, ...env },
+    env: { PATH: `${relativeClaude ? 'node_modules/.bin::' : ''}${nodeAt === 'bin' ? '' : `${path.join(T, nodeAt)}:`}${bin}:/usr/bin:/bin`, HOME: home, STUB_LOG: stubLog, ...Object.fromEntries(Object.entries(env).map(([k, v]) => [k, v.replace('$T', T)])) },
     encoding: 'utf8',
     timeout: 30000,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -100,14 +106,17 @@ const DAILY = 'com.career-ops.immigration-watch';
 const SYNC = 'com.career-ops.upstream-sync';
 const plistText = (r, label) => fs.readFileSync(path.join(r.home, 'Library', 'LaunchAgents', `${label}.plist`), 'utf8');
 
-const ENV_KEY = (dir) => `<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${dir}</string></dict>`;
+// The node pin: by default the test PATH's bin/node, the link as found (see the node tests below).
+const NODE_KEY = (r, node = path.join(r.T, 'bin', 'node')) => `<key>CC_NODE_BIN</key><string>${node}</string>`;
+const ENV_KEY = (r, dir) => `<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${dir}</string>${NODE_KEY(r)}</dict>`;
+const ONLY_NODE = (r) => `<key>EnvironmentVariables</key><dict>${NODE_KEY(r)}</dict>`;
 
 test('CAREER_OPS_ROOT from the environment is written into the plist and used for the launchd logs', () => {
   const data = mkTmp('ci-launchd-data-');
   const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: data } });
   assert.equal(r.status, 0, r.stderr);
   const xml = plistText(r, DAILY);
-  assert.ok(xml.includes(ENV_KEY(data)), xml);
+  assert.ok(xml.includes(ENV_KEY(r, data)), xml);
   assert.ok(xml.includes(`<key>StandardOutPath</key><string>${data}/data/immigration/logs/launchd.out.log</string>`), xml);
   assert.ok(xml.includes(`<key>StandardErrorPath</key><string>${data}/data/immigration/logs/launchd.err.log</string>`), xml);
   assert.ok(fs.statSync(path.join(data, 'data', 'immigration', 'logs')).isDirectory());
@@ -117,15 +126,18 @@ test('CAREER_OPS_ROOT from the environment is written into the plist and used fo
 test('CAREER_OPS_DATA_DIR from the environment is written too, and CAREER_OPS_ROOT wins when both are set', () => {
   const a = mkTmp('ci-launchd-data-');
   const b = mkTmp('ci-launchd-data-');
-  assert.ok(plistText(run(['--jobs', 'daily'], { env: { CAREER_OPS_DATA_DIR: a } }), DAILY).includes(ENV_KEY(a)));
-  assert.ok(plistText(run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: a, CAREER_OPS_DATA_DIR: b } }), DAILY).includes(ENV_KEY(a)));
+  const onlyDir = run(['--jobs', 'daily'], { env: { CAREER_OPS_DATA_DIR: a } });
+  assert.ok(plistText(onlyDir, DAILY).includes(ENV_KEY(onlyDir, a)));
+  const both = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: a, CAREER_OPS_DATA_DIR: b } });
+  assert.ok(plistText(both, DAILY).includes(ENV_KEY(both, a)));
 });
 
-test('a blank environment variable is not an override: no EnvironmentVariables entry and the checkout is the data root', () => {
+test('a blank environment variable is not an override: no CAREER_OPS_ROOT entry (only the node pin) and the checkout is the data root', () => {
   const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: '   ', CAREER_OPS_DATA_DIR: '\t' } });
   assert.equal(r.status, 0, r.stderr);
   const xml = plistText(r, DAILY);
-  assert.doesNotMatch(xml, /EnvironmentVariables|CAREER_OPS_ROOT/);
+  assert.ok(xml.includes(ONLY_NODE(r)), xml);
+  assert.doesNotMatch(xml, /CAREER_OPS_ROOT/);
   assert.ok(xml.includes(`${r.root}/data/immigration/logs/launchd.out.log`), xml);
 });
 
@@ -133,14 +145,18 @@ test('a marker is resolved at run time: the plist carries no CAREER_OPS_ROOT, bu
   const r = run(['--jobs', 'daily'], { marker: '$T/markerdata' });
   assert.equal(r.status, 0, r.stderr);
   const xml = plistText(r, DAILY);
-  assert.doesNotMatch(xml, /EnvironmentVariables|CAREER_OPS_ROOT/);
+  assert.ok(xml.includes(ONLY_NODE(r)), xml);
+  assert.doesNotMatch(xml, /CAREER_OPS_ROOT/);
   assert.ok(xml.includes(`<string>${r.T}/markerdata/data/immigration/logs/launchd.out.log</string>`), xml);
   assert.ok(fs.statSync(path.join(r.T, 'markerdata', 'data', 'immigration', 'logs')).isDirectory());
 });
 
 test('with neither, no CAREER_OPS_ROOT is written and the logs live in the checkout', () => {
   const r = run(['--jobs', 'all']);
-  for (const label of [DAILY, SYNC]) assert.doesNotMatch(plistText(r, label), /EnvironmentVariables|CAREER_OPS_ROOT/);
+  for (const label of [DAILY, SYNC]) {
+    assert.ok(plistText(r, label).includes(ONLY_NODE(r)), plistText(r, label));
+    assert.doesNotMatch(plistText(r, label), /CAREER_OPS_ROOT/);
+  }
   assert.ok(plistText(r, SYNC).includes(`${r.root}/data/upstream-sync/launchd.out.log`));
 });
 
@@ -194,7 +210,7 @@ test('the daily plist pins the approved claude found on PATH (CC_CLAUDE_BIN), an
   const r = run(['--jobs', 'all'], { claude: '2.1.289' });
   assert.equal(r.status, 0, r.stderr);
   const bin = path.join(r.T, 'bin', 'claude');
-  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict>${CLAUDE_KEY(bin)}</dict>`), plistText(r, DAILY));
+  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict>${CLAUDE_KEY(bin)}${NODE_KEY(r)}</dict>`), plistText(r, DAILY));
   assert.doesNotMatch(plistText(r, SYNC), /CC_CLAUDE_BIN/);
   assert.match(r.stdout, new RegExp(`daily job uses claude ${bin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(Claude Code 2\\.1\\.289\\)`));
 });
@@ -205,7 +221,7 @@ test('CC_CLAUDE_BIN from the environment wins and is written next to CAREER_OPS_
   fs.writeFileSync(other, "#!/bin/sh\necho '2.1.289 (Claude Code)'\n", { mode: 0o755 });
   const r = run(['--jobs', 'daily'], { claude: '2.1.289', env: { CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: other } });
   assert.equal(r.status, 0, r.stderr);
-  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${data}</string>${CLAUDE_KEY(other)}</dict>`), plistText(r, DAILY));
+  assert.ok(plistText(r, DAILY).includes(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${data}</string>${CLAUDE_KEY(other)}${NODE_KEY(r)}</dict>`), plistText(r, DAILY));
 });
 
 test('a relative CC_CLAUDE_BIN is a usage error that installs nothing', () => {
@@ -250,4 +266,103 @@ test('a claude only behind relative PATH entries falls back to ~/.local/bin/clau
   assert.equal(none.status, 0, none.stderr);
   assert.doesNotMatch(plistText(none, DAILY), /CC_CLAUDE_BIN/);
   assert.match(none.stderr, /warning: no claude found .*CC_CLAUDE_BIN=/);
+});
+
+// ---- the node the jobs run on ----
+
+test('both plists pin the node on PATH as found (CC_NODE_BIN), not the versioned folder its link points into', () => {
+  const r = run(['--jobs', 'all']);
+  assert.equal(r.status, 0, r.stderr);
+  const link = path.join(r.T, 'bin', 'node');
+  assert.notEqual(fs.realpathSync(link), link, 'the test node is a link');
+  for (const label of [DAILY, SYNC]) assert.ok(plistText(r, label).includes(NODE_KEY(r)), plistText(r, label));
+  assert.ok(r.stdout.includes(`jobs use node ${link} (${process.version})`), r.stdout);
+});
+
+const REAL_NODE = fs.realpathSync(process.execPath);
+// Where each install puts the node a shell finds first, and what the plist must pin: the PATH entry as written when it
+// resolves to the node that runs, else that node's real binary (an fnm per-shell link goes away with its shell; a
+// shim runs node as another process, so it never resolves to it).
+const NODE_LAYOUTS = [
+  { name: 'Homebrew (/opt/homebrew/bin/node, a link into the Cellar that brew upgrade replaces)', nodeAt: 'opt/homebrew/bin', pin: 'as found' },
+  { name: 'nvm (~/.nvm/versions/node/<version>/bin/node)', nodeAt: 'home/.nvm/versions/node/v22.6.0/bin', pin: 'as found' },
+  { name: 'volta (~/.volta/bin/node, a shim)', nodeAt: 'home/.volta/bin', shim: true, pin: 'real' },
+  { name: 'fnm (a per-shell link under fnm_multishells)', nodeAt: 'home/.local/state/fnm_multishells/4242_1759700000000/bin', pin: 'real' },
+];
+
+for (const { name, nodeAt, shim = false, pin } of NODE_LAYOUTS) {
+  test(`node from ${name} is pinned ${pin === 'real' ? 'by its real binary' : 'as found on PATH'}`, () => {
+    const r = run(['--jobs', 'daily'], { nodeAt, nodeShim: shim });
+    assert.equal(r.status, 0, r.stderr);
+    const expected = pin === 'real' ? REAL_NODE : path.join(r.T, nodeAt, 'node');
+    assert.ok(plistText(r, DAILY).includes(NODE_KEY(r, expected)), plistText(r, DAILY));
+  });
+}
+
+const PINNED_NODE = path.resolve(HERE, '..', '..', 'launchd', 'pinned-node.sh');
+
+/** Sources pinned-node.sh the way the jobs do, after a launchd-like PATH, and reports which node the job would run. */
+function pinnedNode(env) {
+  const r = spawnSync('bash', ['-c', `export PATH=/usr/bin:/bin\nsource "${PINNED_NODE}"\nprintf '%s\\n%s' "$PATH" "$(command -v node || true)"`], { env, encoding: 'utf8' });
+  const [pathLine, node] = r.stdout.split('\n');
+  return { status: r.status, stderr: r.stderr, path: pathLine, node };
+}
+
+test('a job that sources pinned-node.sh runs the pinned node first, ahead of everything on its PATH', () => {
+  const dir = mkTmp('ci-launchd-node-');
+  fs.writeFileSync(path.join(dir, 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  const r = pinnedNode({ CC_NODE_BIN: path.join(dir, 'node') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.path, `${dir}:/usr/bin:/bin`);
+  assert.equal(r.node, path.join(dir, 'node'));
+  assert.equal(r.stderr, '');
+});
+
+test('with no pin, pinned-node.sh leaves PATH alone', () => {
+  const r = pinnedNode({});
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.path, '/usr/bin:/bin');
+  assert.equal(r.stderr, '');
+});
+
+test('a pinned node that is gone (its version was uninstalled) leaves PATH alone and warns how to pin again', () => {
+  const r = pinnedNode({ CC_NODE_BIN: path.join(mkTmp('ci-launchd-node-'), 'node') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.path, '/usr/bin:/bin');
+  assert.match(r.stderr, /warning: CC_NODE_BIN .*node is not an executable.*custom\/launchd\/install\.sh/);
+});
+
+// ---- the plist on disk ----
+
+const HAS_PLUTIL = fs.existsSync('/usr/bin/plutil');
+
+test('&, < and > in a path are escaped: the plist passes the real plutil -lint and reads back the exact path', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const data = path.join(mkTmp('ci-launchd-data-'), 'R&D <jobs> data');
+  fs.mkdirSync(data);
+  const r = run(['--jobs', 'all'], { env: { CAREER_OPS_ROOT: data }, realPlutil: true });
+  assert.equal(r.status, 0, r.stderr);
+  for (const label of [DAILY, SYNC]) {
+    const file = path.join(r.home, 'Library', 'LaunchAgents', `${label}.plist`);
+    assert.ok(plistText(r, label).includes('R&amp;D &lt;jobs&gt; data'), plistText(r, label));
+    const read = (key) => spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', file], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(read('EnvironmentVariables.CAREER_OPS_ROOT'), data);
+    assert.equal(read('StandardOutPath'), `${data}/${label === DAILY ? 'data/immigration/logs' : 'data/upstream-sync'}/launchd.out.log`);
+  }
+});
+
+test('a plist that fails plutil -lint never replaces the installed one or reaches launchctl, and leaves no file behind', () => {
+  const r = run(['--jobs', 'daily'], { existing: [DAILY], env: { STUB_PLUTIL_FAIL: '1' } });
+  assert.notEqual(r.status, 0);
+  assert.equal(plistText(r, DAILY), 'PRE-EXISTING');
+  assert.deepEqual(r.plists, [`${DAILY}.plist`]);
+  assert.match(r.stderr, /plist for com\.career-ops\.immigration-watch failed plutil -lint/);
+  assert.doesNotMatch(r.log, /^launchctl /m);
+});
+
+test('a plist that passes lint replaces the installed one', () => {
+  const r = run(['--jobs', 'daily'], { existing: [DAILY] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(plistText(r, DAILY), /^<\?xml /);
+  assert.deepEqual(r.plists, [`${DAILY}.plist`]);
+  assert.equal(fs.statSync(path.join(r.home, 'Library', 'LaunchAgents', `${DAILY}.plist`)).mode & 0o777, 0o644, 'readable like any LaunchAgents plist, not mktemp\'s 0600');
 });

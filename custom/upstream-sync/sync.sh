@@ -22,6 +22,8 @@ LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$LIVE/custom/upstream-sync/lib.sh"
 WT="$HOME/.career-ops-sync"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# shellcheck source=custom/launchd/pinned-node.sh
+source "$LIVE/custom/launchd/pinned-node.sh"
 # Logs and reports follow career-ops' data-root contract (CAREER_OPS_ROOT /
 # .career-ops-data), the same root the control center reads them from.
 DATA="$(cd "$LIVE" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
@@ -42,7 +44,6 @@ mkdir -p "$STATE_DIR"
 LOG="$STATE_DIR/$TODAY.log"
 exec >>"$LOG" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"career-ops upstream sync\"" >/dev/null 2>&1 || true
@@ -52,19 +53,6 @@ fail() {
   echo "!!! $1"
   notify "$1 (log: data/upstream-sync/$TODAY.log)"
   exit 1
-}
-
-# Upstream suite failures, one stable line per failing test, written to $1.
-# A run that never prints its final "Results:" summary crashed; that is
-# recorded as a failure line of its own so it can never read as "no failures".
-suite_failures() {
-  local out="$1.raw"
-  node test-all.mjs --quick > "$out" 2>&1
-  local code=$?
-  {
-    grep -E '^\s*❌' "$out" | sed -E 's/^[[:space:]]+//'
-    grep -q 'Results:' "$out" || echo "SUITE CRASHED (exit $code, no Results summary; see $out)"
-  } | sort -u > "$1"
 }
 
 cd "$LIVE" || fail "live checkout missing"
@@ -109,6 +97,9 @@ if ! git merge --no-ff --no-edit -m "chore(sync): merge upstream main $TODAY" up
     *) fail "keep-fork-readme.sh failed" ;;
   esac
 fi
+# What the merge itself produced: only what Claude changes after this, outside the conflicts, can hold the PR.
+# Kept in this shell's memory: Claude can write to STATE_DIR and the worktree, so a file there could be rewritten.
+MERGE_SNAPSHOT="$(merge_snapshot)" || fail "cannot record the merge result before Claude runs"
 
 echo "--- headless Claude ($MODEL)"
 PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
@@ -131,19 +122,18 @@ CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_AP
   --output-format text
 echo "--- verifying"
 
-[ -z "$(git diff --name-only --diff-filter=U)" ] || fail "unmerged paths remain after Claude"
-git merge-base --is-ancestor upstream/main HEAD || fail "upstream/main is not merged into $BRANCH"
-[ -z "$(git status --porcelain --untracked-files=no)" ] || fail "uncommitted changes left in the sync worktree"
+GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
 
 CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then
   echo "NOTE: files outside custom/ differ from upstream/main (expected only for conflict resolutions):"
   echo "$CHANGED_UPSTREAM"
 fi
+CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail "cannot compare HEAD with the merge result"
+UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"
 
 CUSTOM_OK=1
-node --test custom/*/tests/*.spec.mjs > "$STATE_DIR/$TODAY.custom-tests.txt" 2>&1 || CUSTOM_OK=0
-grep -qE "^ℹ pass [1-9]" "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0   # zero tests ran is not a pass
+custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0
 echo "custom tests: $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL)"
 
 CC_OK=1
@@ -151,7 +141,7 @@ control_center_checks "$STATE_DIR/$TODAY.control-center-tests.txt" || CC_OK=0
 echo "control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
 
 suite_failures "$STATE_DIR/$TODAY.after-failures.txt"
-NEW_FAILURES="$(comm -13 "$STATE_DIR/$TODAY.baseline-failures.txt" "$STATE_DIR/$TODAY.after-failures.txt")"
+NEW_FAILURES="$(new_failures "$STATE_DIR/$TODAY.baseline-failures.txt" "$STATE_DIR/$TODAY.after-failures.txt")"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
 
 git push -q --force-with-lease origin "$BRANCH" || fail "git push failed"
@@ -164,6 +154,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo "- control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
+  echo "- Upstream files this run edited after the merge outside conflict resolution (blocks auto-merge): ${UNEXPECTED_UPSTREAM:-none}"
   if [ $KEPT_README = 1 ]; then
     echo "- .github/README.md conflicted with upstream: the fork's version was kept. Upstream's copy: data/upstream-sync/$TODAY.upstream-github-readme.md (not auto-merged; compare, then merge by hand)."
   fi
@@ -180,7 +171,8 @@ else
 fi
 echo "PR: $PR_URL"
 
-if [ $CUSTOM_OK = 1 ] && [ $CC_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MERGE = 1 ] && [ $KEPT_README = 0 ]; then
+BLOCKERS="$(merge_blockers)"
+if [ -z "$BLOCKERS" ]; then
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
@@ -198,7 +190,7 @@ if [ $CUSTOM_OK = 1 ] && [ $CC_OK = 1 ] && [ -z "$NEW_FAILURES" ] && [ $AUTO_MER
   fi
   git worktree remove --force "$WT" >/dev/null 2>&1
 else
-  gh pr comment "$PR_URL" --body "Not auto-merged: custom tests $([ $CUSTOM_OK = 1 ] && echo pass || echo FAIL); control-center tests and typecheck $([ $CC_OK = 1 ] && echo pass || echo FAIL); new suite failures: ${NEW_FAILURES:-none}; fork README kept over an upstream .github/README.md: $([ $KEPT_README = 1 ] && echo yes || echo no)." >/dev/null || true
+  gh pr comment "$PR_URL" --body "Not auto-merged: $BLOCKERS." >/dev/null || true
   notify "Upstream sync PR needs review: $PR_URL"
 fi
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') done"

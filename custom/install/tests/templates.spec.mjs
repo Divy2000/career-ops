@@ -43,3 +43,13 @@ test('the _custom.md template says where the projects block comes from', () => {
 test('the shipped house-rule templates use no em or en dash', () => {
   for (const f of fs.readdirSync(TEMPLATES)) assert.ok(!/[\u2013\u2014]/.test(read(path.join(TEMPLATES, f))), f);
 });
+
+test('the house rule updates the way the README does: the README installs a detached tag checkout, so it switches to main before pulling', () => {
+  const readme = read(path.join(ROOT, '.github', 'README.md'));
+  const updating = readme.slice(readme.indexOf('## Updating'));
+  const pull = updating.match(/^(git switch main && git pull --ff-only)$/m)?.[1];
+  assert.ok(pull, 'the README Updating section names the switch-then-pull command');
+  const rule = read(path.join(TEMPLATES, '_custom.md')).split('\n').find((l) => l.includes('update-system.mjs apply'));
+  assert.ok(rule.includes(`\`${pull}\``), rule);
+  assert.equal(/`git pull --ff-only`/.test(rule), false, 'no bare pull, which fails on a detached HEAD');
+});

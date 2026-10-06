@@ -71,16 +71,33 @@ else
   echo "warning: no claude found on PATH or in ~/.local/bin; the daily job looks it up on launchd's PATH at run time. To pin one: CC_CLAUDE_BIN=/path/to/claude $(shell_quote "$0")" >&2
 fi
 
+# The node both jobs run on, pinned as CC_NODE_BIN (custom/launchd/pinned-node.sh puts it first on the job's PATH):
+# launchd's PATH never reaches a node from nvm, fnm, volta or asdf. The pin is the node on this shell's PATH as written
+# (/opt/homebrew/bin/node, an nvm version folder), which outlives an upgrade where the versioned folder it links into
+# does not. It is the real binary only when that entry is an fnm per-shell link (fnm_multishells, gone with its shell),
+# or does not resolve to the node that runs (a shim, a relative entry). The Control Center writes the same pin.
+NODE_BIN="$(node -e '
+const fs = require("node:fs");
+const found = process.argv[1] || "";
+const keep = found.startsWith("/") && !found.includes("fnm_multishells") && fs.realpathSync(found) === fs.realpathSync(process.execPath);
+process.stdout.write(keep ? found : process.execPath);
+' "$(command -v node)")"
+echo "jobs use node $NODE_BIN ($("$NODE_BIN" --version))"
+
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd="" envxml="" vars="" xdata xroot
+  local wd="" envxml vars="" xdata xroot tmp
   xdata="$(xml_escape "$DATA")"
   xroot="$(xml_escape "$ROOT")"
   if [ "$ENV_ROOT" = 1 ]; then vars="<key>CAREER_OPS_ROOT</key><string>$xdata</string>"; fi
   if [ "$label" = com.career-ops.immigration-watch ] && [ -n "$CLAUDE_BIN" ]; then vars="$vars<key>CC_CLAUDE_BIN</key><string>$(xml_escape "$CLAUDE_BIN")</string>"; fi
-  if [ -n "$vars" ]; then envxml="<key>EnvironmentVariables</key><dict>$vars</dict>"; fi
+  vars="$vars<key>CC_NODE_BIN</key><string>$(xml_escape "$NODE_BIN")</string>"
+  envxml="<key>EnvironmentVariables</key><dict>$vars</dict>"
   [ -n "$weekday" ] && wd="<key>Weekday</key><integer>$weekday</integer>"
-  cat > "$AGENTS/$label.plist" <<PLIST
+  # Written and linted beside the installed plist, then moved over it: a plist that fails the lint never replaces a
+  # working one. The temp name does not end in .plist, so launchd never loads it at login.
+  tmp="$(mktemp "$AGENTS/.$label.XXXXXX")"
+  cat > "$tmp" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -97,7 +114,13 @@ write_plist() { # label script hour minute weekday(or empty) logdir
 </dict>
 </plist>
 PLIST
-  plutil -lint "$AGENTS/$label.plist" >/dev/null
+  if ! plutil -lint "$tmp" >/dev/null; then
+    rm -f "$tmp"
+    echo "error: the plist for $label failed plutil -lint; the installed job was left as it was" >&2
+    exit 1
+  fi
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$AGENTS/$label.plist"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   # Disabling the job in the Control Center is persistent and bootstrap refuses a disabled label: reinstalling re-enables it.
   launchctl enable "gui/$(id -u)/$label"

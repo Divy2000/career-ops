@@ -10,6 +10,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# shellcheck source=custom/launchd/pinned-node.sh
+source "$ROOT/custom/launchd/pinned-node.sh"
 # User data follows career-ops' data-root contract (CAREER_OPS_ROOT / .career-ops-data).
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 IMM="$DATA/data/immigration"

@@ -126,7 +126,7 @@ test('Linux without --core-only exits 1 and lists what needs macOS', () => {
 test('Linux with --core-only installs the core and never touches Keychain, launchd or the Control Center', () => {
   const { w, D, args } = fresh({ keychain: true });
   const r = w.run(['--dir', D, '--non-interactive', '--core-only', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_UNAME: 'Linux' } });
-  assert.notEqual(r.status, 1, r.out);
+  assert.equal(r.status, 0, r.out);
   assert.ok(w.calls('git').some((l) => l.startsWith('git clone')));
   assert.equal(w.calls('security').length, 0);
   assert.equal(w.calls('launchctl').length, 0);
@@ -200,7 +200,7 @@ test('--dry-run on an existing checkout also changes nothing', () => {
 test('a fresh install clones the fork, adds the upstream remote and installs deps with npm install --no-package-lock', () => {
   const { w, D, args } = fresh();
   const r = w.run(args());
-  assert.notEqual(r.status, 1, r.out);
+  assert.equal(r.status, 3, r.out);
   assert.ok(w.log().includes(`git clone ${FORK_URL} ${D}`), w.log().join('\n'));
   assert.ok(w.log().includes(`git -C ${D} remote add upstream https://github.com/career-ops-hq/career-ops.git`));
   assert.ok(w.log().includes(`npm install --no-package-lock (cwd=${D})`));
@@ -650,7 +650,7 @@ test('on a terminal the plan is confirmed first; n aborts with exit 1 and nothin
 test('--yes skips the plan question', () => {
   const { w, D } = fresh({ keychain: true });
   const r = w.run(['--dir', D, '--yes', ...QUIET], { tty: 'n\nn\nn\n' });
-  assert.notEqual(r.status, 1, r.out);
+  assert.equal(r.status, 0, r.out);
   assert.ok(w.calls('git').some((l) => l.startsWith('git clone')));
 });
 
@@ -844,7 +844,7 @@ test('--resume and --docs are resolved against the caller\'s working directory',
   w.write('cwd/resume.md', '# Me\n');
   w.write('cwd/proj.md', '# P\n');
   const r = w.run(args('--resume', 'resume.md', '--docs', 'proj.md'));
-  assert.notEqual(r.status, 2, r.out);
+  assert.equal(r.status, 3, r.out);
   assert.equal(read(D, 'cv.md'), '# Me\n');
   assert.equal(read(D, 'documents', 'projects', 'proj.md'), '# P\n');
 });
@@ -857,7 +857,7 @@ test('a script that lives inside a checkout uses that checkout: no clone, and th
   fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
   const r = w.run(['--non-interactive', ...QUIET], { script: path.join(inside, 'custom', 'install', 'install.sh') });
   assert.match(r.out, /no custom\/\*\/tests specs in this checkout; skipping the self-tests/);
-  assert.notEqual(r.status, 1, r.out);
+  assert.equal(r.status, 0, r.out);
   assert.equal(w.log().filter((l) => l.startsWith('git clone')).length, 0);
   assert.ok(r.out.includes(`checkout:  ${inside}`), r.out);
   assert.ok(w.log().includes(`npm install --no-package-lock (cwd=${inside})`) || w.log().includes(`npm ci (cwd=${inside})`));
@@ -956,7 +956,7 @@ test('blank CAREER_OPS_ROOT and CAREER_OPS_DATA_DIR are not overrides: --data-ro
   const { w, D, args } = fresh();
   const data = path.join(w.T, 'mydata');
   const r = w.run(args('--data-root', data), { env: { CAREER_OPS_ROOT: '   ', CAREER_OPS_DATA_DIR: ' ' } });
-  assert.notEqual(r.status, 1, r.out);
+  assert.equal(r.status, 3, r.out);
   assert.equal(installLogs(data).length, 1);
   assert.equal(read(D, '.career-ops-data').trim(), data);
 });
@@ -981,7 +981,7 @@ test('a marker that spells the same --data-root differently (trailing slash, rel
     const marker = `${spell(w, d)}\n`;
     w.makeCheckout(D, { files: { '.career-ops-data': marker } });
     const r = w.run(args('--data-root', d));
-    assert.notEqual(r.status, 1, `${marker}: ${r.out}`);
+    assert.equal(r.status, 3, `${marker}: ${r.out}`);
     assert.equal(read(D, '.career-ops-data'), marker);
     assert.equal(read(d, 'modes', '_custom.md'), seededCustom());
   }

@@ -213,10 +213,12 @@ test('deps_fingerprint falls back to package.json when the root has no tracked l
 
 // ---- sync.sh end to end, as far as it can go without Keychain, Claude or network ----
 
-function runSync(world, { home }) {
+function runSync(world, { home, inherited = {} }) {
   const syncDir = path.join(world.live, 'custom/upstream-sync');
   mkdirSync(syncDir, { recursive: true });
   for (const f of ['sync.sh', 'keep-fork-readme.sh', 'lib.sh', 'sync-prompt.md']) copyFileSync(path.join(SYNC_DIR, f), path.join(syncDir, f));
+  mkdirSync(path.join(world.live, 'custom/launchd'), { recursive: true });
+  copyFileSync(path.join(REPO_ROOT, 'custom/launchd/pinned-node.sh'), path.join(world.live, 'custom/launchd/pinned-node.sh'));
   copyFileSync(path.join(REPO_ROOT, 'path-resolver.mjs'), path.join(world.live, 'path-resolver.mjs'));
   const bin = path.join(world.base, 'bin');
   // The Keychain is never touched: a stub that finds no item stops the run right after the fetch checks.
@@ -224,9 +226,12 @@ function runSync(world, { home }) {
     stub(dir, 'security', 'exit 44');
     stub(dir, 'osascript', 'exit 0');
   }
+  // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
+  // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
+  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, ...env } = { ...GIT_ENV, ...inherited };
   const res = spawnSync('bash', [path.join(syncDir, 'sync.sh'), '--no-merge'], {
     cwd: world.live,
-    env: { ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...env, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` },
     encoding: 'utf8',
     timeout: 60_000,
   });
@@ -279,4 +284,222 @@ test('sync.sh uses the shared helpers: no bare "git fetch upstream main", no unc
   assert.match(sync, /install_root_deps ignore-scripts/);
   assert.match(sync, /deps_fingerprint/);
   assert.match(sync, /\^\[0-9\]\+\$/, 'BEHIND is checked to be numeric');
+});
+
+test('Given the shell exports a data root (as the launchd plist does), sync.sh under test still logs to the test checkout and never into that root', () => {
+  const w = makeWorld({ upstreamAhead: false });
+  const home = path.join(w.base, 'home');
+  const decoy = path.join(w.base, 'real-data-root');
+  mkdirSync(home);
+  mkdirSync(decoy);
+  try {
+    const res = runSync(w, { home, inherited: { CAREER_OPS_ROOT: decoy, CAREER_OPS_DATA_DIR: decoy, CAREER_OPS_TRACKER: path.join(decoy, 'applications.md') } });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.log, /nothing to do/);
+    assert.deepEqual(readdirSync(decoy), []);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
+  const w = makeWorld({ upstreamAhead: false });
+  const home = path.join(w.base, 'home');
+  const pinned = path.join(w.base, 'pinned');
+  const calls = path.join(w.base, 'pinned-node.log');
+  mkdirSync(home);
+  stub(pinned, 'node', `echo "$*" >> "${calls}"\nexec "${process.execPath}" "$@"`);
+  try {
+    const res = runSync(w, { home, inherited: { CC_NODE_BIN: path.join(pinned, 'node') } });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.log, /nothing to do/);
+    assert.match(existsSync(calls) ? readFileSync(calls, 'utf8') : '', /path-resolver\.mjs/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+// ---- the gates that stop the sync before anything is pushed ----
+
+/** A sync worktree on `sync/x` from main, with upstream/main one commit ahead; `merged` merges it in. */
+function verifyWorld({ merged = true, conflict = false } = {}) {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-verify-'));
+  const repo = path.join(base, 'repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q', '-b', 'main');
+  commitFile(repo, 'shared.txt', 'base\n', 'base');
+  git(repo, 'checkout', '-q', '-b', 'up');
+  commitFile(repo, 'shared.txt', 'upstream\n', 'upstream');
+  git(repo, 'update-ref', 'refs/remotes/upstream/main', 'up');
+  git(repo, 'checkout', '-q', '-b', 'sync/x', 'main');
+  if (conflict) {
+    commitFile(repo, 'shared.txt', 'fork\n', 'fork');
+    spawnSync('git', ['merge', '-q', 'upstream/main'], { cwd: repo, env: GIT_ENV });
+  } else if (merged) git(repo, 'merge', '-q', '--no-ff', '--no-edit', 'upstream/main');
+  return { base, repo, verify: () => bashLib(repo, 'verify_merge sync/x') };
+}
+
+test('verify_merge passes a finished merge of upstream/main, untracked files and all', () => {
+  const w = verifyWorld();
+  try {
+    writeFileSync(path.join(w.repo, 'untracked.log'), 'x\n');
+    const res = w.verify();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(res.stdout, '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('verify_merge stops on unmerged paths', () => {
+  const w = verifyWorld({ conflict: true });
+  try {
+    const res = w.verify();
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), 'unmerged paths remain after Claude');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('verify_merge stops when upstream/main is not merged into the branch', () => {
+  const w = verifyWorld({ merged: false });
+  try {
+    const res = w.verify();
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), 'upstream/main is not merged into sync/x');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('verify_merge stops on uncommitted changes to tracked files', () => {
+  const w = verifyWorld();
+  try {
+    writeFileSync(path.join(w.repo, 'shared.txt'), 'edited after the merge\n');
+    const res = w.verify();
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), 'uncommitted changes left in the sync worktree');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('sync.sh stops the run through verify_merge before it pushes', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")" || fail "$GATE"');
+  assert.ok(gate > sync.indexOf('echo "--- verifying"') && gate < sync.indexOf('git push'), `verify_merge at ${gate}`);
+});
+
+// ---- which upstream edits hold the PR: only this run's, outside the conflicts ----
+
+/**
+ * A fork whose main already carries an edit to the upstream file scan.mjs, kept by an earlier sync, and an upstream
+ * one commit ahead. `conflict` makes upstream edit scan.mjs too. The sync branch merges upstream; `claude(repo)` then
+ * stands in for the headless pass. Returns what sync.sh's own lines decide is an unexpected upstream edit.
+ */
+function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => snap, failing = false } = {}) {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-held-'));
+  const repo = path.join(base, 'repo');
+  const state = path.join(base, 'state');
+  mkdirSync(repo);
+  mkdirSync(state);
+  try {
+    git(repo, 'init', '-q', '-b', 'main');
+    commitFile(repo, 'scan.mjs', 'upstream scan\n', 'upstream base');
+    commitFile(repo, 'other.mjs', 'upstream other\n', 'upstream other');
+    git(repo, 'checkout', '-q', '-b', 'up');
+    if (conflict) commitFile(repo, 'scan.mjs', 'upstream scan v2\n', 'upstream edits scan');
+    else commitFile(repo, 'new.mjs', 'upstream new\n', 'upstream adds a file');
+    git(repo, 'update-ref', 'refs/remotes/upstream/main', 'up');
+    git(repo, 'checkout', '-q', 'main');
+    commitFile(repo, 'scan.mjs', 'fork scan\n', 'an earlier sync kept a fork edit');
+    git(repo, 'checkout', '-q', '-b', 'sync/x');
+    const merged = spawnSync('git', ['merge', '-q', '--no-ff', '--no-edit', 'upstream/main'], { cwd: repo, env: GIT_ENV, encoding: 'utf8' });
+    assert.equal(merged.status === 0, !conflict, merged.stderr);
+    const lines = readFileSync(SYNC, 'utf8').split('\n');
+    const snapshot = lines.find((l) => l.startsWith('MERGE_SNAPSHOT="$(merge_snapshot)"'));
+    assert.ok(snapshot, 'sync.sh takes no MERGE_SNAPSHOT before Claude');
+    const from = lines.findIndex((l) => l.startsWith('CHANGED_UPSTREAM="$(git diff'));
+    const to = lines.findIndex((l) => l.startsWith('UNEXPECTED_UPSTREAM='));
+    assert.ok(from > -1 && to > from, 'the CHANGED_UPSTREAM .. UNEXPECTED_UPSTREAM block was not found');
+    const vars = `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="$(git diff --name-only --diff-filter=U)"\nfail() { echo "!!! $1"; exit 1; }\n`;
+    const before = bashLib(repo, `${vars}${snapshot}\nprintf '%s\\0%s' "$CONFLICTS" "$MERGE_SNAPSHOT"`);
+    assert.equal(before.status, 0, before.stdout + before.stderr);
+    const [conflicts, taken] = before.stdout.split('\0');
+    // Nothing on disk for the sync Claude (Write and Edit, --add-dir STATE_DIR) to rewrite or delete.
+    assert.deepEqual(readdirSync(state), []);
+    claude(repo);
+    // The snapshot crosses into the second shell the way it stays in sync.sh's memory: as a variable.
+    const after = bashLib(repo, `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="${conflicts}"\nfail() { echo "!!! $1" >&2; exit 1; }\n{\n${lines.slice(from, to + 1).join('\n')}\n} >/dev/null\nprintf '%s' "$UNEXPECTED_UPSTREAM"`, { MERGE_SNAPSHOT: tamper(taken) });
+    if (!failing) assert.equal(after.status, 0, after.stderr);
+    return { conflicts, status: after.status, unexpected: after.stdout, stderr: after.stderr, differs: git(repo, 'diff', '--name-only', 'upstream/main', 'HEAD').trim() };
+  } finally { rmSync(base, { recursive: true, force: true }); }
+}
+
+test('a fork edit to an upstream file kept by an earlier sync does not hold a clean merge', () => {
+  const r = heldUpstream();
+  assert.equal(r.differs, 'scan.mjs', 'the earlier fork edit still differs from upstream');
+  assert.equal(r.unexpected, '');
+});
+
+test('an edit after the merge to an upstream file that did not conflict holds the PR', () => {
+  const r = heldUpstream({ claude: (repo) => commitFile(repo, 'other.mjs', 'patched by the pass\n', 'fix(custom): sneaky') });
+  assert.equal(r.unexpected, 'other.mjs');
+});
+
+test('an upstream file the pass adds or deletes after the merge holds the PR too', () => {
+  const r = heldUpstream({
+    claude: (repo) => {
+      git(repo, 'rm', '-q', 'new.mjs');
+      commitFile(repo, 'added.mjs', 'x\n', 'add and delete');
+    },
+  });
+  assert.equal(r.unexpected, 'added.mjs\nnew.mjs');
+});
+
+test('edits under custom/ and to the fork README never hold the PR', () => {
+  const r = heldUpstream({
+    claude: (repo) => {
+      commitFile(repo, 'custom/a.mjs', 'fix\n', 'fix(custom): follow upstream');
+      commitFile(repo, '.github/README.md', 'fork\n', 'docs');
+    },
+  });
+  assert.equal(r.unexpected, '');
+});
+
+test('resolving a conflict is allowed, but an upstream file slipped into the merge commit beside it holds the PR', () => {
+  const resolve = (extra) => (repo) => {
+    writeFileSync(path.join(repo, 'scan.mjs'), 'resolved\n');
+    if (extra) writeFileSync(path.join(repo, 'other.mjs'), 'slipped in\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '--no-edit');
+  };
+  const clean = heldUpstream({ conflict: true, claude: resolve(false) });
+  assert.equal(clean.conflicts, 'scan.mjs');
+  assert.equal(clean.unexpected, '');
+  assert.equal(heldUpstream({ conflict: true, claude: resolve(true) }).unexpected, 'other.mjs');
+});
+
+test('sync.sh records the merge result in memory after the README step and before Claude runs, and fails the run when it cannot', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const snap = sync.indexOf('MERGE_SNAPSHOT="$(merge_snapshot)" || fail ');
+  assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('claude -p'), `merge_snapshot at ${snap}`);
+  assert.equal(/merge-snapshot|merge_snapshot >/.test(sync), false, 'the snapshot is never written to a file');
+});
+
+test('a missing merge snapshot fails the run: it never reads as "nothing changed" and auto-merges', () => {
+  const r = heldUpstream({ tamper: () => '', failing: true });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^!!! /m);
+  assert.equal(r.unexpected, '');
+});
+
+test('a snapshot that no longer matches the merge holds the PR for every path it disagrees on', () => {
+  const r = heldUpstream({ tamper: (snap) => snap.replace(/^other\.mjs\t(\S+) \S+$/m, 'other.mjs\t$1 0000000000000000000000000000000000000000') });
+  assert.equal(r.unexpected, 'other.mjs');
+});
+
+test('merge_snapshot and changed_since_snapshot fail, not print nothing, when they cannot do their job', () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-snap-'));
+  try {
+    assert.notEqual(bashLib(base, 'merge_snapshot').status, 0, 'outside a git repository');
+    git(base, 'init', '-q', '-b', 'main');
+    assert.notEqual(bashLib(base, 'merge_snapshot').status, 0, 'an index with nothing in it');
+    commitFile(base, 'a.txt', 'a\n', 'a');
+    assert.notEqual(bashLib(base, 'changed_since_snapshot ""').status, 0, 'an empty snapshot');
+    const snap = bashLib(base, 'merge_snapshot');
+    assert.equal(snap.status, 0, snap.stderr);
+    const same = bashLib(base, 'changed_since_snapshot "$S"', { S: snap.stdout });
+    assert.equal(same.status, 0, same.stderr);
+    assert.equal(same.stdout, '');
+  } finally { rmSync(base, { recursive: true, force: true }); }
 });

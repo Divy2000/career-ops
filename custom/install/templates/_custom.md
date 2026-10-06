@@ -40,5 +40,5 @@ To rebuild the shortlist by hand: `node custom/pipeline/shortlist.mjs`. To rank 
 
 ## Off-Limits
 
-- This checkout is a clone of the Divy2000/career-ops fork. Never run `node update-system.mjs apply` or offer it when the session-start update check reports a new version: update with `git pull --ff-only` (or re-run `custom/install/install.sh`). Put new code under `custom/`, never in upstream files.
+- This checkout is a clone of the Divy2000/career-ops fork. Never run `node update-system.mjs apply` or offer it when the session-start update check reports a new version: update with `git switch main && git pull --ff-only`, then re-run `custom/install/install.sh` with the flags in the README's Updating section. Put new code under `custom/`, never in upstream files.
 - Never auto-fill or submit an application without showing me first.
