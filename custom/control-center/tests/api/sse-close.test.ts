@@ -16,26 +16,36 @@ async function exited(t: TestApp, runId: string, timeoutMs = 20_000): Promise<vo
 }
 
 describe('closing the server (a blue/green reload drains the old child)', () => {
-  /** Opens `url` as a real HTTP event stream, closes the app, and says whether close() returned and the stream ended. */
-  async function closeWithStreamOpen(t: TestApp, url: string): Promise<{ closed: boolean; stream: string }> {
+  /**
+   * Opens `url` as a real HTTP event stream, closes the app once the stream has answered, and says what the stream
+   * answered, whether close() returned and whether the stream ended.
+   */
+  async function closeWithStreamOpen(t: TestApp, url: string): Promise<{ status: number; closed: boolean; stream: string }> {
     let closed = false;
     let client: http.ClientRequest | undefined;
     try {
       await t.app.listen({ host: '127.0.0.1', port: 0 });
       const { port } = t.app.server.address() as AddressInfo;
-      const ended = new Promise<string>((resolve, reject) => {
-        const req = (client = http.get({ host: '127.0.0.1', port, path: url, headers: t.authed }, (res) => {
-          expect(res.statusCode).toBe(200);
-          res.resume();
-          res.on('end', () => resolve('ended'));
-          res.on('error', reject);
-        }));
-        req.on('error', reject);
+      let ended!: Promise<string>;
+      // Resolved by the response itself: the stream is open once its headers are back, with no fixed wait.
+      const opened = new Promise<number>((resolveOpened, reject) => {
+        ended = new Promise<string>((resolveEnded, rejectEnded) => {
+          const req = (client = http.get({ host: '127.0.0.1', port, path: url, headers: t.authed }, (res) => {
+            resolveOpened(res.statusCode ?? 0);
+            res.resume();
+            res.on('end', () => resolveEnded('ended'));
+            res.on('error', rejectEnded);
+          }));
+          req.on('error', (err) => {
+            reject(err);
+            rejectEnded(err);
+          });
+        });
       });
       ended.catch(() => undefined);
-      await wait(200);
+      const status = await opened;
       await Promise.race([t.close().then(() => (closed = true)), wait(3000)]);
-      return { closed, stream: await Promise.race([ended, wait(1000).then(() => 'still open')]) };
+      return { status, closed, stream: await Promise.race([ended, wait(1000).then(() => 'still open')]) };
     } finally {
       // A hung close is released by the client leaving, so a failure here reports instead of timing out.
       client?.destroy();
@@ -49,7 +59,7 @@ describe('closing the server (a blue/green reload drains the old child)', () => 
     expect(created.statusCode, created.body).toBe(202);
     const { id, turns } = created.json() as { id: string; turns: Array<{ runId: string }> };
     try {
-      expect(await closeWithStreamOpen(t, `/api/sessions/${id}/events`)).toEqual({ closed: true, stream: 'ended' });
+      expect(await closeWithStreamOpen(t, `/api/sessions/${id}/events`)).toEqual({ status: 200, closed: true, stream: 'ended' });
     } finally {
       await exited(t, turns[0]!.runId);
     }
@@ -59,7 +69,7 @@ describe('closing the server (a blue/green reload drains the old child)', () => 
     const t = await makeTestApp();
     const run = t.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
     try {
-      expect(await closeWithStreamOpen(t, `/api/runs/${run.id}/events`)).toEqual({ closed: true, stream: 'ended' });
+      expect(await closeWithStreamOpen(t, `/api/runs/${run.id}/events`)).toEqual({ status: 200, closed: true, stream: 'ended' });
     } finally {
       t.runner.cancel(run.id);
       await exited(t, run.id);
