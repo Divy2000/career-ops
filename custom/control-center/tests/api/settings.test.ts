@@ -222,8 +222,16 @@ describe('launchd schedule through the injectable executor (never the real launc
       `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl print-disabled gui/${uid}`,
     ]);
-    expect(res.json()).toMatchObject({ label: 'com.career-ops.upstream-sync', plist: 'ok', loaded: true, disabled: false, hour: 4, minute: 30, weekday: 0, programArgumentsOk: true, lastExit: 0 });
+    // A job launchd just loaded has never run: print says "not running", runs 0 and "(never exited)" (print-idle.txt).
+    expect(res.json()).toMatchObject({ label: 'com.career-ops.upstream-sync', plist: 'ok', loaded: true, disabled: false, hour: 4, minute: 30, weekday: 0, programArgumentsOk: true, state: 'not running', lastExit: null, runs: 0 });
     expect(typeof res.json().nextFire).toBe('string');
+  });
+  it('after the job fires, the schedule reads the run count and exit the way launchctl print reports them (SW2-tests-10)', async () => {
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    fake.fire('com.career-ops.upstream-sync', 0);
+    fake.fire('com.career-ops.upstream-sync', 1);
+    const job = (await get('/api/schedule')).json().jobs[1];
+    expect(job).toMatchObject({ loaded: true, state: 'not running', runs: 2, lastExit: 1 });
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
     // The weekly job installed and loaded, as the test above leaves it, so this test holds alone too.

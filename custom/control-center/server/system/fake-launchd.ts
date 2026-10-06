@@ -23,14 +23,39 @@ export function plistToJson(xml: string): Record<string, unknown> {
   return { Label: label, ProgramArguments: programArguments, StartCalendarInterval: sci };
 }
 
-export function fakeLaunchdExec(fallback: Exec = execNoShell): { exec: Exec; calls: LaunchdCall[]; loaded: Set<string>; disabled: Set<string>; login: (agentsDir: string) => void } {
+/**
+ * What `launchctl print` shows for a loaded job, in the real shape (tests/fixtures/launchctl): a job that never fired
+ * reads "not running", runs 0 and "(never exited)"; after it fires, its run count and last exit code.
+ */
+function printJob(label: string, history: { runs: number; lastExit: number } | undefined): string {
+  const runs = history?.runs ?? 0;
+  const exit = history ? String(history.lastExit) : '(never exited)';
+  return `gui/501/${label} = {\n\tactive count = 0\n\ttype = LaunchAgent\n\tstate = not running\n\n\truns = ${runs}\n\tlast exit code = ${exit}\n}\n`;
+}
+
+export function fakeLaunchdExec(fallback: Exec = execNoShell): {
+  exec: Exec;
+  calls: LaunchdCall[];
+  loaded: Set<string>;
+  disabled: Set<string>;
+  login: (agentsDir: string) => void;
+  /** launchd firing a loaded job once, which exits with `code`. */
+  fire: (label: string, code: number) => void;
+} {
   const calls: LaunchdCall[] = [];
   const loaded = new Set<string>();
+  // Per label, as launchd keeps it while the job stays loaded: a bootout or a fresh bootstrap starts it over.
+  const history = new Map<string, { runs: number; lastExit: number }>();
+  const fire = (label: string, code: number) => {
+    if (!loaded.has(label)) throw new Error(`fake launchd: ${label} is not loaded`);
+    history.set(label, { runs: (history.get(label)?.runs ?? 0) + 1, lastExit: code });
+  };
   // launchctl disable/enable state: it outlives bootout and is what launchd consults at login.
   const disabled = new Set<string>();
   /** What launchd does at login: load every plist in the agents dir whose label is not disabled. */
   const login = (agentsDir: string) => {
     loaded.clear();
+    history.clear();
     for (const name of fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : []) {
       const label = path.basename(name, '.plist');
       if (name.endsWith('.plist') && !disabled.has(label)) loaded.add(label);
@@ -53,16 +78,18 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): { exec: Exec; cal
     const sub = args[0];
     if (sub === 'print') {
       const label = (args[1] ?? '').split('/').pop() ?? '';
-      return loaded.has(label) ? { code: 0, stdout: `gui/501/${label} = {\n\tstate = waiting\n\tlast exit code = 0\n}\n`, stderr: '' } : { code: 113, stdout: '', stderr: 'Could not find service in domain for port' };
+      return loaded.has(label) ? { code: 0, stdout: printJob(label, history.get(label)), stderr: '' } : { code: 113, stdout: '', stderr: 'Could not find service in domain for port' };
     }
     if (sub === 'bootout') {
       const label = (args[1] ?? '').split('/').pop() ?? '';
+      history.delete(label);
       return loaded.delete(label) ? { code: 0, stdout: '', stderr: '' } : { code: 113, stdout: '', stderr: 'Boot-out failed: 113: Could not find specified service' };
     }
     if (sub === 'bootstrap') {
       const label = path.basename(args[2] ?? '', '.plist');
       if (disabled.has(label)) return { code: 119, stdout: '', stderr: 'Bootstrap failed: 119: Service is disabled' };
       loaded.add(label);
+      history.delete(label);
       return { code: 0, stdout: '', stderr: '' };
     }
     if (sub === 'disable' || sub === 'enable') {
@@ -76,7 +103,7 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): { exec: Exec; cal
     }
     return { code: 2, stdout: '', stderr: `fake launchctl: unsupported subcommand ${sub}` };
   };
-  return { exec, calls, loaded, disabled, login };
+  return { exec, calls, loaded, disabled, login, fire };
 }
 
 /** Test builds only: swap the real launchctl/plutil for the fake when asked. */
