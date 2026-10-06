@@ -11,6 +11,7 @@ import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
 import { tempDir } from '../helpers/tmp.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { StreamParser } from '../../server/claude/stream-parse.js';
+import { NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -694,7 +695,13 @@ describe('Claude sessions', () => {
     expect((await get(`/api/sessions/${id}`)).statusCode).toBe(404);
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'ok' });
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'deduped' });
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_profile.md'), 'utf8')).toContain('- Prefers remote roles');
+    // The fixture profile already holds a notes block: the fact joins it, beside the note there, and no second block is added.
+    const profile = fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_profile.md'), 'utf8');
+    expect(profile.split(NOTES_START)).toHaveLength(2);
+    expect(profile.split('## Notes from the web assistant')).toHaveLength(2);
+    const block = profile.slice(profile.indexOf(NOTES_START), profile.indexOf(NOTES_END));
+    expect(block).toContain('\n- Prefers hybrid roles in Texas.\n');
+    expect(block).toContain('\n- Prefers remote roles\n');
   });
 
   it('refuses to remember a fact before onboarding created modes/_profile.md, and creates nothing that would hide the missing profile', async () => {
