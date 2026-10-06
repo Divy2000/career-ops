@@ -353,6 +353,29 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('when the server child died after it started, the startup URL (/auth?t=) signs the browser in, so the 503 page\'s recovery link opens /__recovery (SW4-claude-02)', async () => {
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageWhoseActivateThrows(), reload: true });
+    try {
+      await until(() => /reconcil is not a function/.test(s.output()) || s.proc.exitCode !== null, 'the child to die in activate()');
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      expect(s.output()).toContain(`Recovery page: http://127.0.0.1:${port}/__recovery?t=supervisor-instance-test-token`);
+      // The link printed (and opened) at startup, followed by a browser with no cookie yet.
+      const landing = await request(port, 'GET', '/auth?t=supervisor-instance-test-token');
+      expect(landing.status).toBe(503);
+      expect(landing.body).toContain('href="/__recovery"');
+      const cookie = landing.setCookie.split(';')[0]!;
+      expect(cookie).toMatch(/^cc_session=./);
+      expect(landing.setCookie).toMatch(/HttpOnly; SameSite=Strict; Path=\//);
+      expect((await request(port, 'GET', '/__recovery', { cookie })).status).toBe(200);
+      // A wrong token signs nobody in.
+      expect((await request(port, 'GET', '/auth?t=wrong')).setCookie).toBe('');
+      expect((await request(port, 'GET', '/')).setCookie).toBe('');
+    } finally {
+      await stop(s);
+    }
+  });
+
   it('with CC_NO_RELOAD set, a server child that dies after its health check still stops the supervisor, as before (SW3-claude-01)', async () => {
     const s = startSupervisor(await freePort(), copyFixtureRoot(), { packageRoot: packageWhoseActivateThrows() });
     try {
