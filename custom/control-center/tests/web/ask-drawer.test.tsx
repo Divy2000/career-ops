@@ -76,6 +76,21 @@ describe('Ask drawer: proposed actions', () => {
     expect([...item.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Run', 'Dismiss']);
   });
 
+  it('the drawer runs exactly the actions the advisor is told about (SW7-web-a-01)', async () => {
+    const { ASK_ACTIONS } = await import('@web/components/AskDrawer');
+    const { ASK_ACTION_SPECS } = await import('@shared/ask-actions');
+    expect(Object.keys(ASK_ACTIONS).sort()).toEqual(ASK_ACTION_SPECS.map((a) => a.name).sort());
+  });
+
+  it('navigate without a path fails instead of opening Today (SW7-web-a-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'navigate', params: { path: '/tracker/12' } }, 1));
+    await act(async () => host.querySelector<HTMLButtonElement>('li.proposal button')!.click());
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('navigate needs "to"');
+    expect(navigations).toEqual([]);
+  });
+
   it('Filter the pipeline opens the Inbox filtered by the proposed query (SW-web-a-07)', async () => {
     await act(async () => emitEnvelope!('act', { action: 'filterPipeline', params: { q: 'Stripe' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;

@@ -8,6 +8,7 @@ import { apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
 import { startSession, startTailoredCvSession } from '../lib/sessions';
 import { afterFocusSettles } from '../lib/focus';
+import { ASK_ACTION_SPECS, type AskActionName } from '@shared/ask-actions';
 
 export interface Proposal {
   id: number;
@@ -17,22 +18,26 @@ export interface Proposal {
   note: string | null;
 }
 
-/** Advisor action allowlist (alpha parity). `confirm` gates everything that writes. */
-export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) => string; confirm: boolean; writes: boolean }> = {
-  navigate: { label: (p) => `Open ${String(p.to ?? '/')}`, confirm: false, writes: false },
-  filterPipeline: { label: (p) => `Filter the pipeline by "${String(p.q ?? p.query ?? '')}"`, confirm: false, writes: false },
-  evaluate: { label: (p) => `Evaluate ${String(p.url ?? '')} (uses tokens)`, confirm: true, writes: true },
-  evaluateCompany: { label: (p) => `Evaluate every posting at ${String(p.company ?? '')} (uses tokens)`, confirm: true, writes: true },
-  explore: { label: () => 'Open Discover (network scan)', confirm: false, writes: false },
-  research: { label: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`, confirm: true, writes: false },
-  generatePdf: { label: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`, confirm: true, writes: true },
-  setStatus: { label: (p) => `Set row #${String(p.row ?? '')} to ${String(p.state ?? '')}`, confirm: true, writes: true },
-  apply: { label: (p) => `Open Apply for row #${String(p.row ?? p.n ?? '')}`, confirm: false, writes: false },
-  setApplyField: { label: (p) => `Set the apply field ${String(p.id ?? '')}`, confirm: false, writes: false },
-  remember: { label: (p) => `Remember: ${String(p.fact ?? '')}`, confirm: true, writes: true },
-  setProfile: { label: () => 'Change profile.yml', confirm: true, writes: true },
-  setPortals: { label: () => 'Change portals.yml', confirm: true, writes: true },
+const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
+  navigate: (p) => `Open ${String(p.to ?? '(no path)')}`,
+  filterPipeline: (p) => `Filter the pipeline by "${String(p.q ?? p.query ?? '')}"`,
+  evaluate: (p) => `Evaluate ${String(p.url ?? '')} (uses tokens)`,
+  evaluateCompany: (p) => `Evaluate every posting at ${String(p.company ?? '')} (uses tokens)`,
+  explore: () => 'Open Discover (network scan)',
+  research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
+  generatePdf: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`,
+  setStatus: (p) => `Set row #${String(p.row ?? '')} to ${String(p.state ?? '')}`,
+  apply: (p) => `Open Apply for row #${String(p.row ?? p.n ?? '')}`,
+  setApplyField: (p) => `Set the apply field ${String(p.id ?? '')}`,
+  remember: (p) => `Remember: ${String(p.fact ?? '')}`,
+  setProfile: () => 'Change profile.yml',
+  setPortals: () => 'Change portals.yml',
 };
+
+/** Advisor action allowlist (alpha parity), built from the list the advisor's contract is written from. `confirm` gates everything that writes. */
+export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) => string; confirm: boolean; writes: boolean }> = Object.fromEntries(
+  ASK_ACTION_SPECS.map((a) => [a.name, { label: LABELS[a.name], confirm: a.confirm, writes: a.writes }]),
+);
 
 /** Own keys only: an advisor-named action like `toString` must not reach Object.prototype. */
 function askAction(name: string): (typeof ASK_ACTIONS)[string] | null {
@@ -81,9 +86,12 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     }
     try {
       switch (p.action) {
-        case 'navigate':
-          await router.navigate({ to: String(p.params.to ?? '/') as '/' });
+        case 'navigate': {
+          const to = typeof p.params.to === 'string' ? p.params.to.trim() : '';
+          if (!to.startsWith('/')) throw new Error('navigate needs "to", an app path such as /tracker/12');
+          await router.navigate({ to: to as '/' });
           break;
+        }
         case 'filterPipeline': {
           const q = String(p.params.q ?? p.params.query ?? '').trim();
           await router.navigate({ to: '/pipeline', search: { tab: 'inbox', ...(q ? { q } : {}) } });

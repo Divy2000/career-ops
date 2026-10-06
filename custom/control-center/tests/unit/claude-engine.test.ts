@@ -10,6 +10,7 @@ import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../se
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
+import { ASK_ACTION_SPECS } from '../../shared/ask-actions.js';
 import { foldsCase } from '../helpers/case.js';
 import { tempDir } from '../helpers/tmp.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
@@ -98,6 +99,19 @@ describe('invocation builder', () => {
     expect(text).toContain('Playwright');
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'es' })).toContain('Playwright is unavailable');
+  });
+  it('the advisor contract names every action the Ask drawer runs, with its params, from the list the drawer reads (SW7-web-a-01)', () => {
+    const contract = buildPreamble({ policy: getModePolicy('advisor')!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('9. '))!;
+    for (const spec of ASK_ACTION_SPECS.filter((a) => a.runs)) {
+      expect(contract, spec.name).toContain(`${spec.name}(${spec.params.map((p) => (p.required ? p.name : `${p.name}?`)).join(', ')})`);
+    }
+    // The names and keys the drawer's run switch reads, spelled out.
+    expect(contract).toContain('navigate(to)');
+    expect(contract).toContain('setStatus(row, state, note?)');
+    expect(contract).toContain('filterPipeline(q)');
+    expect(contract).toContain('remember(fact)');
+    // What the drawer cannot run is not offered.
+    expect(contract).not.toContain('setProfile');
   });
   it('a localized apply mode gets the apply envelope contract: answers first, nothing filled until confirmed', () => {
     const contract = (id: string) => buildPreamble({ policy: getModePolicy(id)!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('9. '))!;
