@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from './api';
 import type { SessionEvent, SessionMeta, StoredEvent } from '@shared/api';
@@ -126,19 +126,64 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
   return { ...base, transcript: reduceEvent(base.transcript, action.event) };
 }
 
-/** Replays stored events, then follows the live SSE stream for one session. */
+// Who to tell when a session starts another turn: its stream closed when the last turn ended (SW3-web-a-01).
+const turnListeners = new Map<string, Set<() => void>>();
+
+/** A new turn of `id` is running: a closed stream for it reopens. Called by sendTurn and by the live event bus. */
+export function sessionTurnStarted(id: string): void {
+  for (const fn of turnListeners.get(id) ?? []) fn();
+}
+
+function onSessionTurn(id: string, fn: () => void): () => void {
+  const set = turnListeners.get(id) ?? new Set();
+  set.add(fn);
+  turnListeners.set(id, set);
+  return () => {
+    set.delete(fn);
+    if (set.size === 0) turnListeners.delete(id);
+  };
+}
+
+/**
+ * Replays stored events, then follows the live SSE stream for one session. The stream closes once the session is over
+ * and every stored event has arrived: each open stream holds one of the browser's 6 HTTP/1.1 connections to the app, so
+ * finished sessions left open froze every fetch. A new turn reopens it; the replayed history is skipped by its seq.
+ */
 export function useSessionStream(id: string | null): { transcript: Transcript; meta: SessionMeta | null } {
   const [state, dispatch] = useReducer(streamReducer, { id: null, transcript: EMPTY_TRANSCRIPT, meta: null });
   const qc = useQueryClient();
+  const [opening, setOpening] = useState(0);
+  const seen = useRef<{ id: string | null; seq: number; open: boolean }>({ id: null, seq: 0, open: false });
   useEffect(() => {
     if (!id) return;
+    return onSessionTurn(id, () => {
+      if (!seen.current.open) setOpening((n) => n + 1);
+    });
+  }, [id]);
+  useEffect(() => {
+    if (!id) return;
+    if (seen.current.id !== id) seen.current = { id, seq: 0, open: false };
     let closed = false;
     const es = new EventSource(`/api/sessions/${id}/events`);
-    const loadMeta = () => void apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`).then((r) => !closed && dispatch({ type: 'meta', id, meta: r.meta }));
+    seen.current.open = true;
+    const close = () => {
+      closed = true;
+      es.close();
+      if (seen.current.id === id) seen.current.open = false;
+    };
+    const loadMeta = () =>
+      void apiGet<{ meta: SessionMeta; events?: StoredEvent[] }>(`/api/sessions/${id}`).then((r) => {
+        if (closed) return;
+        dispatch({ type: 'meta', id, meta: r.meta });
+        const last = Math.max(0, ...(r.events ?? []).map((e) => e.seq));
+        if (isTerminal(r.meta.status) && seen.current.seq >= last) close();
+      });
     const onEvent = (raw: Event) => {
       // The EventSource "error" event (connection drop) shares a name with our error event and carries no data.
       if (!(raw instanceof MessageEvent) || typeof raw.data !== 'string') return;
       const stored = JSON.parse(raw.data) as StoredEvent;
+      if (stored.seq <= seen.current.seq) return;
+      seen.current.seq = stored.seq;
       dispatch({ type: 'event', id, event: stored.event });
       if (stored.event.type === 'status' && isTerminal(stored.event.status)) {
         loadMeta();
@@ -148,11 +193,8 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     for (const type of EVENT_TYPES) es.addEventListener(type, onEvent);
     es.onerror = () => undefined;
     loadMeta();
-    return () => {
-      closed = true;
-      es.close();
-    };
-  }, [id, qc]);
+    return close;
+  }, [id, qc, opening]);
   return state.id === id ? { transcript: state.transcript, meta: state.meta } : { transcript: EMPTY_TRANSCRIPT, meta: null };
 }
 
@@ -177,9 +219,11 @@ export function startEvaluateSession(url: string): Promise<SessionMeta> {
 export function startTailoredCvSession(n: string): Promise<SessionMeta> {
   return startSession({ mode: 'pdf', target: { type: 'app', value: n }, prompt: `Generate the tailored CV PDF for tracker row #${n}.` });
 }
-export function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
+export async function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
+  const meta = await apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
+  sessionTurnStarted(id);
+  return meta;
 }
 export function forkSession(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
