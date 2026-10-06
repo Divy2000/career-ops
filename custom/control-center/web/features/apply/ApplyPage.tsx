@@ -264,20 +264,33 @@ function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
             )}
           </div>
         </div>
-        <SessionPanel
-          key={remembered.panelKey}
-          sessionId={sessionId}
-          mode="apply"
-          title="Apply session"
-          target={target}
-          initialPrompt={url ? `Read the application form at ${url}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.${chosen}` : ''}
-          startLabel="Draft answers"
-          onEnvelope={onEnvelope}
-          onStatus={onStatus}
-          onSessionId={remembered.panel.onSessionId}
-          onStartFailed={remembered.panel.onStartFailed}
-          replyLabel="Send"
-        />
+        {remembered.waiting ? (
+          // Left mid-start: the draft is still being created, and a second Draft answers would start a second paid session.
+          <div className="card session" role="status">
+            <h2 style={{ margin: 0 }}>
+              Apply session <Pill tone="warn">Uses tokens</Pill>
+            </h2>
+            <p className="muted" style={{ margin: 'var(--space-2) 0 0' }}>
+              Starting the apply session. It shows here once it is created.
+            </p>
+          </div>
+        ) : (
+          <SessionPanel
+            key={remembered.panelKey}
+            sessionId={sessionId}
+            mode="apply"
+            title="Apply session"
+            target={target}
+            initialPrompt={url ? `Read the application form at ${url}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.${chosen}` : ''}
+            startLabel="Draft answers"
+            onEnvelope={onEnvelope}
+            onStatus={onStatus}
+            onSessionId={remembered.panel.onSessionId}
+            onStartFailed={remembered.panel.onStartFailed}
+            onStarting={remembered.panel.onStarting}
+            replyLabel="Send"
+          />
+        )}
       </div>
     </>
   );

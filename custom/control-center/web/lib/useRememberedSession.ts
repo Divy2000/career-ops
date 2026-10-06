@@ -28,6 +28,8 @@ export function useRememberedSession(key: string) {
   const [id, setId] = useState<string | null>(store.read);
   const [startingElsewhere, setStartingElsewhere] = useState(store.starting);
   const [starts, setStarts] = useState(0);
+  // A start sent by this mount's own panel (its start form), as opposed to one another mount sent.
+  const [startedHere, setStartedHere] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [startFailed, setStartFailed] = useState(false);
   useEffect(() => {
@@ -40,7 +42,7 @@ export function useRememberedSession(key: string) {
     return subscribe(key, sync);
   }, [key, store]);
   // Another mount's start still in flight: no panel to show yet, but the button stays off until it reports.
-  const waiting = startingElsewhere && starts === 0 && id === null;
+  const waiting = startingElsewhere && starts === 0 && !startedHere && id === null;
   const shown = id !== null || starts > 0;
   const busy = waiting || (shown && !startFailed && (status === null || status === 'queued' || status === 'running'));
   const onStatus = useCallback(
@@ -69,6 +71,13 @@ export function useRememberedSession(key: string) {
     setStartFailed(true);
     changed(key);
   }, [key, store]);
+  // The panel started a session from its own form: marked like start(), so a page mounted meanwhile waits for it.
+  const onStarting = useCallback(() => {
+    store.setStarting(true);
+    setStartedHere(true);
+    setStartFailed(false);
+    changed(key);
+  }, [key, store]);
   const start = () => {
     store.write(null);
     store.setStarting(true);
@@ -78,5 +87,5 @@ export function useRememberedSession(key: string) {
     setStarts((n) => n + 1);
   };
   // panelKey remounts the panel for each new start, so it does not keep the session it showed before.
-  return { shown, busy, start, panelKey: starts, panel: { sessionId: id, autoStart: starts > 0 && id === null, onSessionId, onStatus, onStartFailed } };
+  return { shown, busy, waiting, start, panelKey: starts, panel: { sessionId: id, autoStart: starts > 0 && id === null, onSessionId, onStatus, onStartFailed, onStarting } };
 }

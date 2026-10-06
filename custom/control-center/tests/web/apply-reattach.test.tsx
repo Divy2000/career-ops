@@ -12,12 +12,13 @@ import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type PanelProps = { mode: string; sessionId?: string | null; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void };
+type PanelProps = { mode: string; sessionId?: string | null; startLabel?: string; onStarting?: () => void; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void; onStartFailed?: () => void };
 let panels: PanelProps[];
 vi.mock('@web/components/SessionPanel', () => ({
+  // Like the real panel: with no session it shows its start form, whose button sends POST /api/sessions (onStarting).
   SessionPanel: (props: PanelProps) => {
     panels.push(props);
-    return null;
+    return props.sessionId ? null : createElement('button', { type: 'button', onClick: () => props.onStarting?.() }, props.startLabel ?? 'Start session');
   },
 }));
 
@@ -38,9 +39,11 @@ async function openApply(n: string | null = '12') {
   router = createRouter({ routeTree: rootRoute.addChildren([apply, elsewhere]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
   root = createRoot(host);
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(RouterProvider, { router }))));
-  await until(() => applyPanel(), 'the apply session panel');
+  // The panel, or while another mount's start is still in flight, the note that stands in for it.
+  await until(() => applyPanel() ?? (host.textContent?.includes('Starting the apply session') || undefined), 'the apply session panel');
 }
 const applyPanel = () => panels.filter((p) => p.mode === 'apply').pop();
+const draftButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Draft answers');
 const fillButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Fill real form');
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 
@@ -99,6 +102,35 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     sessionStorage.setItem('cc.apply.7', 's-apply-7');
     await openApply();
     expect(applyPanel()!.sessionId ?? null).toBeNull();
+  });
+
+  it('leaving while the draft is still starting and coming back offers no second draft, and attaches the session once it is created', async () => {
+    await openApply();
+    await act(async () => draftButton()!.click());
+    const starting = applyPanel()!;
+
+    // The user leaves before POST /api/sessions answers; the start goes on and reports the id afterwards.
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    expect(draftButton()).toBeUndefined();
+    expect(host.textContent).toContain('Starting the apply session');
+
+    await act(async () => starting.onSessionId!('s-apply-12'));
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-12' });
+  });
+
+  it('a draft whose start fails after leaving gives Draft answers back', async () => {
+    await openApply();
+    await act(async () => draftButton()!.click());
+    const starting = applyPanel()!;
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    expect(draftButton()).toBeUndefined();
+
+    await act(async () => starting.onStartFailed!());
+    await until(() => draftButton(), 'the Draft answers button');
   });
 
   it('a remembered session the server no longer has is let go', async () => {
