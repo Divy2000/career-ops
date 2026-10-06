@@ -179,14 +179,41 @@ describe('launchd schedule helpers', () => {
     expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { pinDataRoot: false, nodeBin: '/R&D <n>/node' })).toContain('<key>EnvironmentVariables</key><dict><key>CC_NODE_BIN</key><string>/R&amp;D &lt;n&gt;/node</string></dict>');
     expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { nodeBin: 'node' })).not.toContain('CC_NODE_BIN');
   });
-  it('pins the real path of the node the app runs on, never a per-shell link to it (an fnm multishell link, say)', () => {
-    const dir = tempDir('cc-node-pin-');
-    const link = path.join(dir, 'fnm_multishells', '1234', 'bin', 'node');
-    fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(process.execPath, link);
-    expect(pinnedNodeBin(link)).toBe(fs.realpathSync(process.execPath));
-    // A path that cannot be resolved is kept as given.
-    expect(pinnedNodeBin(path.join(dir, 'gone', 'node'))).toBe(path.join(dir, 'gone', 'node'));
+  describe('pinnedNodeBin: the node CC_NODE_BIN names', () => {
+    // process.execPath is the real binary (/opt/homebrew/Cellar/node/<version>/bin/node), which a Homebrew upgrade
+    // removes; the stable name is the link on PATH that leads to it.
+    function onPath(dirs: Record<string, string | null>): { pathEnv: string; dir: (k: string) => string } {
+      const root = tempDir('cc-node-pin-');
+      const dir = (k: string) => path.join(root, k);
+      for (const [k, target] of Object.entries(dirs)) {
+        fs.mkdirSync(dir(k), { recursive: true });
+        if (target) fs.symlinkSync(target, path.join(dir(k), 'node'));
+      }
+      return { pathEnv: Object.keys(dirs).map(dir).join(path.delimiter), dir };
+    }
+    const real = fs.realpathSync(process.execPath);
+
+    it('keeps a package manager\'s stable link on PATH (Homebrew\'s /opt/homebrew/bin/node) as given, so an upgrade cannot stale the pin', () => {
+      const { pathEnv, dir } = onPath({ 'homebrew/bin': process.execPath });
+      expect(pinnedNodeBin(real, pathEnv)).toBe(path.join(dir('homebrew/bin'), 'node'));
+    });
+
+    it('resolves a per-shell link (fnm\'s multishell folders, gone after logout) to the real binary', () => {
+      const { pathEnv } = onPath({ 'fnm_multishells/1234_5678/bin': process.execPath });
+      expect(pinnedNodeBin(real, pathEnv)).toBe(real);
+    });
+
+    it('skips a node on PATH that is another binary, and takes the first one that leads to this node', () => {
+      const other = tempDir('cc-node-other-');
+      fs.writeFileSync(path.join(other, 'node'), '#!/bin/sh\n', { mode: 0o755 });
+      const { pathEnv, dir } = onPath({ older: path.join(other, 'node'), 'homebrew/bin': process.execPath, later: process.execPath });
+      expect(pinnedNodeBin(real, pathEnv)).toBe(path.join(dir('homebrew/bin'), 'node'));
+    });
+
+    it('falls back to the binary itself when no node on PATH leads to it, and skips relative PATH entries', () => {
+      expect(pinnedNodeBin(real, `node_modules/.bin${path.delimiter}`)).toBe(real);
+      expect(pinnedNodeBin(real, onPath({ empty: null }).pathEnv)).toBe(real);
+    });
   });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';

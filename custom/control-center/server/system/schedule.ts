@@ -53,16 +53,32 @@ export interface ScheduleInput {
   enabled: boolean;
 }
 
+// A per-shell link: fnm makes one folder per shell under fnm_multishells and removes it when that shell exits.
+const PER_SHELL_LINK = /[\\/]fnm_multishells[\\/]/;
+
 /**
- * The node the jobs are pinned to (CC_NODE_BIN, as custom/launchd/install.sh writes it): the real path of the one the
- * app runs on, so a per-shell link (fnm's multishell folders) that is gone after logout is never pinned.
+ * The node the jobs are pinned to (CC_NODE_BIN, which custom/launchd/pinned-node.sh puts first on the job's PATH).
+ * process.execPath is the real binary (/opt/homebrew/Cellar/node/<version>/bin/node), which a Homebrew upgrade
+ * removes, so the pin is the first node on PATH that leads to it, kept as given (/opt/homebrew/bin/node), unless that
+ * is a per-shell link gone after logout (fnm's multishell folders): then, and when no node on PATH leads to it, the
+ * real binary.
  */
-export function pinnedNodeBin(execPath: string = process.execPath): string {
-  try {
-    return fs.realpathSync(execPath);
-  } catch {
-    return execPath;
+export function pinnedNodeBin(execPath: string = process.execPath, pathEnv: string = process.env.PATH ?? ''): string {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return null;
+    }
+  };
+  const self = real(execPath) ?? execPath;
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) continue;
+    const candidate = path.join(dir, 'node');
+    if (real(candidate) !== self) continue;
+    return PER_SHELL_LINK.test(candidate) ? self : candidate;
   }
+  return self;
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
