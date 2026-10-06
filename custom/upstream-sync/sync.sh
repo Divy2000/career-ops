@@ -117,7 +117,8 @@ for (const k of ["CONFLICTS", "BASELINE", "TODAY", "BEHIND", "REPORT"]) t = t.re
 process.stdout.write(t);
 ' "$LIVE/custom/upstream-sync/sync-prompt.md")"
 # Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
-CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
+# Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
+CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
   --model "$MODEL" \
   --permission-mode dontAsk \
   --add-dir "$STATE_DIR" \
@@ -126,7 +127,10 @@ CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_AP
     "Bash(git add:*)" "Bash(git commit:*)" "Bash(git checkout --ours:*)" "Bash(git checkout --theirs:*)" \
     "Bash(git merge --continue:*)" "Bash(node:*)" "Bash(npm ci:*)" "Bash(npm install:*)" \
   --max-turns 150 \
-  --output-format text
+  --output-format text | tee -a "$LOG")"
+CLAUDE_RC=$?
+# A run that did not finish, gave no verdict or asked for a human holds the PR (merge_blockers).
+CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"

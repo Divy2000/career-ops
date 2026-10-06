@@ -241,10 +241,27 @@ new_failures() {
   comm -13 <(printf '%s\n' "$1" | sed '/^$/d') "$2"
 }
 
+# sync_verdict <claude-exit> <claude-output>: why the sync Claude's own run
+# holds the PR, or nothing. The prompt asks it to end with `SYNC: ok` or
+# `SYNC: needs-human <reason>`; the last such line counts. A non-zero exit, no
+# verdict line, or an unknown one holds the PR too.
+sync_verdict() {
+  local verdict
+  if [ "$1" != 0 ]; then printf 'the sync Claude exited %s' "$1"; return 0; fi
+  verdict="$(printf '%s\n' "$2" | grep -E '^SYNC: ' | tail -n 1 | sed -E 's/[[:space:]]+$//')"
+  case "$verdict" in
+    'SYNC: ok') ;;
+    'SYNC: needs-human '?*) printf 'the sync Claude asked for a human: %s' "${verdict#SYNC: needs-human }" ;;
+    '') printf 'the sync Claude gave no SYNC verdict' ;;
+    *) printf 'the sync Claude gave an unknown verdict: %s' "$verdict" ;;
+  esac
+}
+
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons
 # joined by "; ", or nothing when it may auto-merge. Reads CUSTOM_OK, CC_OK,
-# AUTO_MERGE and KEPT_README (an unset flag blocks), and NEW_FAILURES and
-# UNEXPECTED_UPSTREAM (one entry per line).
+# AUTO_MERGE and KEPT_README (an unset flag blocks), NEW_FAILURES and
+# UNEXPECTED_UPSTREAM (one entry per line), and CLAUDE_HOLD (sync_verdict's
+# reason; unset blocks, since the verdict was never read).
 merge_blockers() {
   local why=() out="" w
   [ "${CUSTOM_OK:-0}" = 1 ] || why+=("custom tests FAIL")
@@ -253,6 +270,7 @@ merge_blockers() {
   [ "${AUTO_MERGE:-0}" = 1 ] || why+=("run with --no-merge")
   [ "${KEPT_README:-1}" = 0 ] || why+=("fork README kept over an upstream .github/README.md (compare by hand)")
   [ -z "${UNEXPECTED_UPSTREAM:-}" ] || why+=("upstream files edited outside conflict resolution: ${UNEXPECTED_UPSTREAM//$'\n'/, }")
+  if [ -z "${CLAUDE_HOLD+set}" ]; then why+=("the sync Claude verdict was never read"); elif [ -n "$CLAUDE_HOLD" ]; then why+=("$CLAUDE_HOLD"); fi
   for w in ${why[@]+"${why[@]}"}; do out="${out:+$out; }$w"; done
   printf '%s' "$out"
 }
