@@ -169,6 +169,17 @@ describe('Image to PDF', () => {
   });
 });
 
+describe('Archive posting', () => {
+  it('takes a report number, never the row number "n" means elsewhere, and refuses one with no report file (SW4-libs-03)', async () => {
+    const action = findAction('docs.archivePosting')!;
+    expect(action.params.safeParse({ n: 1, url: 'https://jobs.example.com/1' }).success).toBe(false);
+    expect(action.params.safeParse({ report: 1, url: 'https://jobs.example.com/1' }).success).toBe(true);
+    const missing = await post('docs.archivePosting', { report: 99, url: 'https://jobs.example.com/1' });
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(missing.body).toMatch(/no file for report 99 under reports\//);
+  });
+});
+
 describe('Recently funded companies', () => {
   it('offers exactly the sorts company-funded.mjs accepts', () => {
     const source = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'company-funded.mjs'), 'utf8');

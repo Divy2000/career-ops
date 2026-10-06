@@ -257,7 +257,7 @@ function sampleParams(id: string): Record<string, unknown> {
     'immigration.h1b': { company: 'Acme', mode: 'summary' },
     'docs.renderPdf': { row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'letter' },
     'docs.coverPdf': { payloadPath: 'output/p.json' },
-    'docs.archivePosting': { n: 1, url: 'https://x.example/1' },
+    'docs.archivePosting': { report: 1, url: 'https://x.example/1' },
     'docs.liveness': { urls: ['https://x.example/1'] },
     'docs.fetchJd': { url: 'https://x.example/1' },
     'docs.prepareApplication': { url: 'https://x.example/1', pdf: 'output/a.pdf' },

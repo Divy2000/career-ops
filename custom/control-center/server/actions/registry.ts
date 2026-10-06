@@ -357,7 +357,19 @@ export const ACTIONS: ActionDef[] = [
     exitMap: { 1: 422 },
   }),
   define({ id: 'docs.coverPdf', label: 'Render cover letter PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ payloadPath: relOutput }), build: (p, ctx) => node(ctx, 'generateCoverLetter', ['--payload', path.join(ctx.dataRoot, p.payloadPath)]) }),
-  define({ id: 'docs.archivePosting', label: 'Archive posting', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ n: positive, url: httpUrl }), build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.n)]) }),
+  define({
+    id: 'docs.archivePosting',
+    label: 'Archive posting',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    // archive-posting.mjs files the capture as jds/NNN-... under --report, which jd-capture.mjs and outcome.mjs read by
+    // report number: the field is the report, named so (a row number would file it under another application).
+    params: z.object({ report: positive, url: httpUrl }),
+    check: (p, ctx) => (listReportFiles(ctx.dataRoot).has(p.report) ? null : `There is no file for report ${p.report} under reports/.`),
+    build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.report)]),
+  }),
   define({ id: 'docs.liveness', label: 'Check posting liveness', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ urls: z.array(httpUrl).min(1).max(200) }), build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]) }),
   define({ id: 'docs.fetchJd', label: 'Fetch job description', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'fetchJd', [p.url]) }),
   define({
