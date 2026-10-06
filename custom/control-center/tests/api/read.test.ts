@@ -66,6 +66,17 @@ describe('read endpoints', () => {
     }
   });
 
+  it('GET /api/tracker/:n finds the company alert by its slug when the alert names the DOL legal name (SW2-tests-07 review)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.appendFileSync(path.join(own.cfg.dataRoot, 'data', 'immigration', 'company-alerts.tsv'), '2026-10-04\tAcme Robotics, Inc.\tacme-robotics\tpaused\tAcme pauses H-1B for new hires\thttps://news.example/acme\n');
+      const body = (await own.app.inject({ method: 'GET', url: '/api/tracker/1', headers: own.authed })).json();
+      expect(body.sponsorship.alert).toMatchObject({ slug: 'acme-robotics', company: 'Acme Robotics, Inc.', status: 'paused' });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n finds the company check by its file slug when the check is headed with the DOL legal name (SW2-tests-07)', async () => {
     const own = await makeTestApp();
     try {

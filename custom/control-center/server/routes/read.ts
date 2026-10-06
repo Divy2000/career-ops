@@ -99,7 +99,8 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const { companySlug } = await importCore<{ companySlug: (name: string) => string }>(cfg.codeRoot, 'custom/immigration/lib.mjs');
     const slug = key === '' ? '' : companySlug(row.company);
     const companyFile = (slug ? overview.companies.find((c) => c.slug === slug) : undefined) ?? overview.companies.find((c) => sameCompany(c.name)) ?? null;
-    const alert = overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;
+    // An alert's slug column is the same companySlug; a session may write the legal name in its company column.
+    const alert = (slug ? overview.alerts.latest.find((a) => a.slug === slug) : undefined) ?? overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;
     return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert, error: overview.alertsError } };
   });
 
