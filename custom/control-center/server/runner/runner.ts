@@ -415,9 +415,19 @@ export class Runner {
    */
   private holders(): RunMeta[] {
     const runs = new Map<string, RunMeta>();
-    for (const m of this.store.list()) if (m.status === 'running') runs.set(m.id, m);
+    for (const m of this.store.list()) if (m.status === 'running' && !this.endedUntracked(m)) runs.set(m.id, m);
     for (const { meta } of this.active.values()) runs.set(meta.id, meta);
     return [...runs.values()];
+  }
+
+  /**
+   * A run recorded running that this process does not track, whose processes have ended: its wrapper recorded its
+   * exit, or is gone. The process that started it may have died before settling it, so its status alone would hold
+   * its slot and resources for good.
+   */
+  private endedUntracked(meta: RunMeta): boolean {
+    if (this.active.has(meta.id)) return false;
+    return this.store.readExit(meta.id) !== null || this.identity(meta.wrapperPid, meta.wrapperStartedAt) === false;
   }
 
   /** Starts what the queue can start now: after a settings change raised the Claude slot cap, say. */

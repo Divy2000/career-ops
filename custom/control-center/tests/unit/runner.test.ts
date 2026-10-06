@@ -832,6 +832,26 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(runner.store.read(run.id)?.status).toBe('cancelled');
   });
 
+  for (const [how, end] of [
+    ['its wrapper recorded its exit', (store: RunStore, id: string) => fs.writeFileSync(path.join(store.dirOf(id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }))],
+    ['its wrapper is gone without an exit record', () => {}],
+  ] as const) {
+    it(`a run another process started after this one reconciled, left running on disk when that process died (${how}), no longer holds its resource here`, async () => {
+      const root = tmpRoot();
+      const here = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(here);
+      here.reconcile();
+      // Started and recorded running by a server that then died before it saw the run end: nothing here tracks it.
+      const store = new RunStore(root);
+      const orphan = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: ['tracker'], claude: true, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: '/' }, params: {} });
+      const wrapperPid = deadPid();
+      store.write({ ...orphan, status: 'running', startedAt: new Date().toISOString(), wrapperPid, wrapperStartedAt: 1_700_000_000 });
+      end(store, orphan.id);
+      const mine = here.start(req(['0'], { resources: ['tracker'], claude: true }));
+      await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    });
+  }
+
   it('a bare-PID claim whose PID now belongs to a process that started after the claim was written counts as gone: the run starts instead of staying queued', async () => {
     const root = tmpRoot();
     const runner = new Runner(root, new EventBus(), { pollMs: 50 });
