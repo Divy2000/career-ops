@@ -20,6 +20,7 @@ import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
+import { serverChildCommand } from './child-command.js';
 import { escapeHtml, renderDownPage } from './down-page.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -53,8 +54,8 @@ interface Child extends ChildHandle {
 
 function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
   return new Promise((resolve, reject) => {
-    const tsx = path.join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx');
-    const proc = spawn(tsx, [path.join(PACKAGE_ROOT, 'server', 'index.ts')], {
+    const command = serverChildCommand(PACKAGE_ROOT);
+    const proc = spawn(command.bin, command.args, {
       cwd: CODE_ROOT,
       env,
       stdio: ['ignore', 'inherit', 'pipe', 'ipc'],

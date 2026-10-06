@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { copyFixtureRoot, FAKE_CLAUDE, PACKAGE_ROOT } from '../helpers/app.js';
 import { RunStore, type RunMeta } from '../../server/runner/store.js';
+import { serverChildCommand } from '../../supervisor/child-command.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const TSX = path.join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx');
@@ -91,6 +92,118 @@ function queuedRun(dataRoot: string): RunMeta {
   return new RunStore(dataRoot).create({ actionId: 'test.queued', label: 'queued run', cost: 'free', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: dataRoot }, params: {} });
 }
 const statusOf = (dataRoot: string, id: string) => new RunStore(dataRoot).read(id)?.status;
+
+/** Every live process below `root`, from one ps snapshot. */
+function descendants(root: number): Array<{ pid: number; ppid: number }> {
+  const all = execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
+    .trim()
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .map(([pid, ppid]) => ({ pid: pid!, ppid: ppid! }));
+  const out: Array<{ pid: number; ppid: number }> = [];
+  const parents = new Set([root]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const p of all) {
+      if (parents.has(p.ppid) && !parents.has(p.pid)) {
+        parents.add(p.pid);
+        out.push(p);
+        grew = true;
+      }
+    }
+  }
+  return out;
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** A failing run must not leave its server children behind: stop the ones this test started that are still this package's. */
+async function reap(pids: number[]): Promise<void> {
+  const ours = (pid: number) => {
+    try {
+      return execFileSync('/bin/ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes(path.join(PACKAGE_ROOT, 'server', 'index.ts'));
+    } catch {
+      return false;
+    }
+  };
+  const left = pids.filter((pid) => alive(pid) && ours(pid));
+  for (const pid of left) process.kill(pid, 'SIGTERM');
+  const deadline = Date.now() + 5000;
+  while (left.some(alive) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  for (const pid of left.filter(alive)) process.kill(pid, 'SIGKILL');
+}
+
+describe('a server child never outlives its supervisor', () => {
+  it('killed with SIGKILL, the supervisor leaves no server child running: it stops on its own within 15 s', async () => {
+    const s = startSupervisor(await freePort(), copyFixtureRoot());
+    let children: number[] = [];
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      const tree = descendants(s.proc.pid!);
+      // s.proc is the supervisor's tsx launcher; the supervisor itself is its child, and the server child sits below that.
+      const supervisor = tree.find((p) => p.ppid === s.proc.pid)!.pid;
+      children = tree.filter((p) => p.pid !== supervisor).map((p) => p.pid);
+      expect(children.length, JSON.stringify(tree)).toBeGreaterThan(0);
+      process.kill(supervisor, 'SIGKILL');
+      await until(() => !children.some(alive), 'every server child to exit after its supervisor was killed', 15_000);
+    } finally {
+      await reap(children);
+      await stop(s);
+    }
+  });
+
+  it('a server child whose supervisor is gone before it got to listen stops cleanly and leaves nothing running', async () => {
+    const root = copyFixtureRoot();
+    const command = serverChildCommand(PACKAGE_ROOT);
+    const child = spawn(command.bin, command.args, {
+      cwd: path.resolve(PACKAGE_ROOT, '..', '..'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        CC_CODE_ROOT: path.resolve(PACKAGE_ROOT, '..', '..'),
+        CC_DATA_ROOT: root,
+        CAREER_OPS_ROOT: root,
+        CC_GUARD_DIR: tempDir('cc-orphan-guard-'),
+        CC_PUBLIC_PORT: String(await freePort()),
+        CC_TOKEN: 'orphan-test-token',
+        CC_SESSION_SECRET: 'orphan-test-secret',
+        CC_CLIENT: 'none',
+        CC_CLAUDE_BIN: FAKE_CLAUDE,
+        CC_FAKE_TOKEN: 'orphan-fake-token',
+        CC_FAKE_LAUNCHD: '1',
+        CC_LAUNCH_AGENTS_DIR: path.join(root, '.launch-agents'),
+        CC_CLAUDE_PROJECTS_DIR: path.join(root, '.claude-projects'),
+        CC_FAKE_DAILY: 'idle',
+        CC_DEFER_RECONCILE: '1',
+        TMPDIR: tempDir('cc-orphan-tmp-'),
+      },
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let out = '';
+    child.stdout!.on('data', (d: Buffer) => (out += d.toString()));
+    child.stderr!.on('data', (d: Buffer) => (out += d.toString()));
+    const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));
+    let tree: number[] = [];
+    try {
+      // The supervisor goes away at once, before the child has even loaded its code: its IPC channel closes.
+      child.disconnect();
+      await new Promise((r) => setTimeout(r, 300));
+      tree = [child.pid!, ...descendants(child.pid!).map((p) => p.pid)];
+      await until(() => child.exitCode !== null || child.signalCode !== null, 'the server child to stop after its supervisor left', 30_000);
+      expect(await exited, out).toBe(0);
+      await until(() => !tree.some(alive), 'every process of the server child to exit', 5000);
+    } finally {
+      await reap(tree);
+    }
+  });
+});
 
 describe('one Control Center per data root (SW-claude-02)', () => {
   it('a second launch on the same data root refuses to start and leaves the running instance\'s queued runs alone', async () => {
