@@ -197,7 +197,7 @@ step "prioritize pipeline" node custom/pipeline/prioritize.mjs
 # rank-pipeline.mjs catches a failed call and exits 0, so the shim also writes each refusal to a file
 # (CC_SHIM_REFUSALS) and any refusal fails the step.
 rank_top() {
-  local shim_dir rc now refused
+  local shim_dir rc now refused failed
   if [ "$CLAUDE_GATE_RC" -eq 3 ]; then
     echo "rank skipped: $CLAUDE_GATE"
     return 0
@@ -216,17 +216,43 @@ import fs from "node:fs";
 import path from "node:path";
 const { shellQuote } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
 const shim = path.resolve("custom/control-center/server/claude/claude-shim.mjs");
-fs.writeFileSync(path.join(process.env.DIR, "claude"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@"\n`, { mode: 0o755 });
+// Not exec: each call that exits non-zero (the shim refusing it, or the real claude failing: a usage limit, no
+// network) is recorded, since rank-pipeline.mjs catches every failed call and still exits 0. Its own timeout kills this
+// wrapper with SIGTERM: the trap then kills the shim and the claude it runs (their own process group, set -m), records
+// the failure and exits 143, so nothing is orphaned and the timed-out call still fails the step.
+const failures = shellQuote(path.join(process.env.DIR, "failures"));
+fs.writeFileSync(path.join(process.env.DIR, "claude"), [
+  "#!/bin/bash",
+  "set -m",
+  `${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
+  "child=$!",
+  `on_term() { kill -TERM -- "-$child" 2>/dev/null; wait "$child" 2>/dev/null; echo 143 >> ${failures}; exit 143; }`,
+  "trap on_term TERM INT",
+  "wait \"$child\"",
+  "rc=$?",
+  `[ "$rc" -eq 0 ] || echo "$rc" >> ${failures}`,
+  "exit \"$rc\"",
+  "",
+].join("\n"), { mode: 0o755 });
 '; then
     rm -rf "$shim_dir"
     return 1
   fi
   rc=0
   PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" CC_CLAUDE_EXPECT="$CLAUDE_GATE" CC_SHIM_REFUSALS="$shim_dir/refusals" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
+  refused=0
   if [ -s "$shim_dir/refusals" ]; then
     refused="$(grep -c '' "$shim_dir/refusals")"
     echo "claude-shim refused $refused rank call(s); the rank step fails"
     rc=1
+  fi
+  # Calls that failed for another reason than a shim refusal (a refused call exits non-zero too).
+  if [ -s "$shim_dir/failures" ]; then
+    failed=$(( $(grep -c '' "$shim_dir/failures") - refused ))
+    if [ "$failed" -gt 0 ]; then
+      echo "$failed rank call(s) failed (claude exited $(sort -un "$shim_dir/failures" | paste -sd ',' -)); the rank step fails"
+      rc=1
+    fi
   fi
   rm -rf "$shim_dir"
   return "$rc"

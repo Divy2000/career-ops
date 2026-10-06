@@ -30,7 +30,7 @@ test('the headless sync Claude gets the OAuth token but runs with subprocess env
   const bin = path.join(dir, 'bin');
   const seen = path.join(dir, 'env.txt');
   stub(bin, 'claude', `env > "${seen}"`);
-  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p\n${block('CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const env = readFileSync(seen, 'utf8');
@@ -109,7 +109,7 @@ test('sync.sh runs the control-center checks after the custom tests and before p
   assert.ok(custom > -1 && cc > custom && push > cc, `order was custom=${custom} cc=${cc} push=${push}`);
 });
 
-const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '' };
+const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
 // Each gate that must hold the PR for a human, alone, and the reason the PR comment gives for it.
 const BLOCKING = [
   [{ CUSTOM_OK: '0' }, 'custom tests FAIL'],
@@ -118,6 +118,8 @@ const BLOCKING = [
   [{ AUTO_MERGE: '0' }, 'run with --no-merge'],
   [{ KEPT_README: '1' }, 'fork README kept over an upstream .github/README.md (compare by hand)'],
   [{ UNEXPECTED_UPSTREAM: 'scan.mjs\nmodes/oferta.md' }, 'upstream files edited outside conflict resolution: scan.mjs, modes/oferta.md'],
+  [{ CLAUDE_HOLD: 'the sync Claude asked for a human: check X' }, 'the sync Claude asked for a human: check X'],
+  [{ PROTECTED_EDITS: 'custom/a/tests/x.spec.mjs\ncustom/upstream-sync/lib.sh' }, 'fork tests, gates or guard files edited by the sync (review by hand): custom/a/tests/x.spec.mjs, custom/upstream-sync/lib.sh'],
 ];
 
 function mergeBlockers(vars) {
@@ -136,7 +138,7 @@ test('merge_blockers names each gate that holds the PR, alone or together', () =
 });
 
 test('merge_blockers holds the PR when a gate was never decided', () => {
-  assert.equal(mergeBlockers({}).split('; ').length, 4, 'the four pass/fail flags block when unset; empty failure lists do not');
+  assert.equal(mergeBlockers({}).split('; ').length, 5, 'the four pass/fail flags and an unread Claude verdict block when unset; empty failure lists do not');
 });
 
 test('sync.sh auto-merges exactly when merge_blockers finds nothing', () => {
@@ -262,4 +264,68 @@ test('the sync prompt carries the baseline failures and conflicts verbatim, even
   assert.ok(r.stdout.includes(baseline), r.stdout.slice(0, 3000));
   assert.ok(r.stdout.includes('a $& b'));
   assert.equal(r.stdout.includes('{{'), false, 'every placeholder is filled');
+});
+
+// ---- the sync Claude's own verdict (SW4-scripts-01) ----
+
+/** Runs sync.sh's own lines from the claude call through CLAUDE_HOLD with a claude stub that prints `out` and exits `exit`. */
+function claudeVerdict(out, exit = 0) {
+  const dir = tempDir('sync-verdict-');
+  const bin = path.join(dir, 'bin');
+  stub(bin, 'claude', `printf '%s\\n' "${out.replace(/"/g, '\\"')}"\nexit ${exit}`);
+  // sync.sh runs under `set -uo pipefail`, which makes the claude | tee pipeline report claude's exit.
+  assert.match(readFileSync(SYNC, 'utf8'), /^set -uo pipefail$/m);
+  const script = `set -uo pipefail\nsource "${LIB}"\nTOKEN=t MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /^CLAUDE_HOLD=/)}\nprintf '%s' "$CLAUDE_HOLD"`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  return { hold: r.stdout, log: readFileSync(path.join(dir, 'log'), 'utf8') };
+}
+
+test('a SYNC: ok verdict holds nothing, and Claude\'s reply still reaches the day log', () => {
+  const r = claudeVerdict('Merged cleanly.\nSYNC: ok');
+  assert.equal(r.hold, '');
+  assert.match(r.log, /Merged cleanly\.\nSYNC: ok/);
+});
+
+test('a SYNC: needs-human verdict holds the PR with Claude\'s reason', () => {
+  assert.equal(claudeVerdict('Resolved scan.mjs by taking upstream.\nSYNC: needs-human dropped the fork edit to scan.mjs; check the shortlist').hold, 'the sync Claude asked for a human: dropped the fork edit to scan.mjs; check the shortlist');
+});
+
+test('the last verdict line counts, so a quoted one earlier in the reply cannot clear a hold', () => {
+  assert.equal(claudeVerdict('The prompt says to end with SYNC: ok\nSYNC: ok\nSYNC: needs-human tests flaky').hold, 'the sync Claude asked for a human: tests flaky');
+});
+
+test('no verdict, an unknown one, or a failed claude run holds the PR', () => {
+  assert.equal(claudeVerdict('ran out of turns').hold, 'the sync Claude gave no SYNC verdict');
+  assert.equal(claudeVerdict('SYNC: probably fine').hold, 'the sync Claude gave an unknown verdict: SYNC: probably fine');
+  assert.equal(claudeVerdict('SYNC: ok', 1).hold, 'the sync Claude exited 1');
+});
+
+test('sync.sh reads the verdict before it pushes or decides', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const hold = sync.indexOf('CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"');
+  assert.ok(hold > sync.indexOf('claude -p') && hold < sync.indexOf('git push') && hold < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `verdict at ${hold}`);
+});
+
+// ---- which custom/ paths the sync Claude may change without a human (SW4-scripts-02) ----
+
+const isProtected = (p) => spawnSync('bash', ['-c', `source "${LIB}"\nprotected_paths "$P"`], { env: { PATH: '/usr/bin:/bin', P: p }, encoding: 'utf8' }).stdout.trim();
+
+test('protected_paths keeps every path Dev Chat may not write under custom/, and nothing else', () => {
+  const modes = readFileSync(path.join(HERE, '../../control-center/server/claude/modes.ts'), 'utf8');
+  const list = modes.slice(modes.indexOf('export const DEVCHAT_DENIED_WRITES'), modes.indexOf('];', modes.indexOf('export const DEVCHAT_DENIED_WRITES')));
+  const globs = [...list.matchAll(/'(custom\/[^']+)'/g)].map((m) => m[1]);
+  assert.ok(globs.length > 15, `read ${globs.length} globs from modes.ts`);
+  for (const glob of globs) {
+    const sample = glob.replaceAll('**/', 'a/b/').replaceAll('**', 'a/b').replaceAll('*', 'x');
+    assert.equal(isProtected(sample), sample, `${glob} (sample ${sample}) is protected`);
+  }
+  for (const free of ['custom/a.mjs', 'custom/pipeline/shortlist.mjs', 'custom/control-center/server/routes/read.ts', 'custom/control-center/web/App.tsx', 'scan.mjs']) assert.equal(isProtected(free), '', free);
+});
+
+test('sync.sh holds on protected edits found in the same snapshot comparison', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const changed = sync.indexOf('CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")"');
+  const guarded = sync.indexOf('PROTECTED_EDITS="$(protected_paths "$CHANGED_SINCE_MERGE")"');
+  assert.ok(changed > -1 && guarded > changed && guarded < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `protected at ${guarded}`);
 });

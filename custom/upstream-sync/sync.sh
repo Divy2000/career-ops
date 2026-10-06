@@ -117,7 +117,8 @@ for (const k of ["CONFLICTS", "BASELINE", "TODAY", "BEHIND", "REPORT"]) t = t.re
 process.stdout.write(t);
 ' "$LIVE/custom/upstream-sync/sync-prompt.md")"
 # Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
-CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
+# Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
+CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
   --model "$MODEL" \
   --permission-mode dontAsk \
   --add-dir "$STATE_DIR" \
@@ -126,7 +127,10 @@ CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_AP
     "Bash(git add:*)" "Bash(git commit:*)" "Bash(git checkout --ours:*)" "Bash(git checkout --theirs:*)" \
     "Bash(git merge --continue:*)" "Bash(node:*)" "Bash(npm ci:*)" "Bash(npm install:*)" \
   --max-turns 150 \
-  --output-format text
+  --output-format text | tee -a "$LOG")"
+CLAUDE_RC=$?
+# A run that did not finish, gave no verdict or asked for a human holds the PR (merge_blockers).
+CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
@@ -141,6 +145,7 @@ if [ -n "$CHANGED_UPSTREAM" ]; then
 fi
 CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail "cannot compare HEAD with the merge result"
 UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"
+PROTECTED_EDITS="$(protected_paths "$CHANGED_SINCE_MERGE")"
 
 CUSTOM_OK=1
 custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0
@@ -165,6 +170,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
   echo "- Upstream files this run edited after the merge outside conflict resolution (blocks auto-merge): ${UNEXPECTED_UPSTREAM:-none}"
+  echo "- Fork tests, gates, guard or README files this run edited (blocks auto-merge; check no test was weakened): ${PROTECTED_EDITS:-none}"
   if [ $KEPT_README = 1 ]; then
     echo "- .github/README.md conflicted with upstream: the fork's version was kept. Upstream's copy: data/upstream-sync/$TODAY.upstream-github-readme.md (not auto-merged; compare, then merge by hand)."
   fi

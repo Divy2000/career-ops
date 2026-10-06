@@ -405,7 +405,8 @@ function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => 
     const snapshot = lines.find((l) => l.startsWith('MERGE_SNAPSHOT="$(merge_snapshot)"'));
     assert.ok(snapshot, 'sync.sh takes no MERGE_SNAPSHOT before Claude');
     const from = lines.findIndex((l) => l.startsWith('CHANGED_UPSTREAM="$(git diff'));
-    const to = lines.findIndex((l) => l.startsWith('UNEXPECTED_UPSTREAM='));
+    const protectedAt = lines.findIndex((l) => l.startsWith('PROTECTED_EDITS='));
+    const to = protectedAt > -1 ? protectedAt : lines.findIndex((l) => l.startsWith('UNEXPECTED_UPSTREAM='));
     assert.ok(from > -1 && to > from, 'the CHANGED_UPSTREAM .. UNEXPECTED_UPSTREAM block was not found');
     const vars = `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="$(git diff --name-only --diff-filter=U)"\nfail() { echo "!!! $1"; exit 1; }\n`;
     const before = bashLib(repo, `${vars}${snapshot}\nprintf '%s\\0%s' "$CONFLICTS" "$MERGE_SNAPSHOT"`);
@@ -415,9 +416,10 @@ function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => 
     assert.deepEqual(readdirSync(state), []);
     claude(repo);
     // The snapshot crosses into the second shell the way it stays in sync.sh's memory: as a variable.
-    const after = bashLib(repo, `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="${conflicts}"\nfail() { echo "!!! $1" >&2; exit 1; }\n{\n${lines.slice(from, to + 1).join('\n')}\n} >/dev/null\nprintf '%s' "$UNEXPECTED_UPSTREAM"`, { MERGE_SNAPSHOT: tamper(taken) });
+    const after = bashLib(repo, `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="${conflicts}"\nfail() { echo "!!! $1" >&2; exit 1; }\n{\n${lines.slice(from, to + 1).join('\n')}\n} >/dev/null\nprintf '%s\\0%s' "$UNEXPECTED_UPSTREAM" "\${PROTECTED_EDITS-}"`, { MERGE_SNAPSHOT: tamper(taken) });
     if (!failing) assert.equal(after.status, 0, after.stderr);
-    return { conflicts, status: after.status, unexpected: after.stdout, stderr: after.stderr, differs: git(repo, 'diff', '--name-only', 'upstream/main', 'HEAD').trim() };
+    const [unexpected, guarded = ''] = after.stdout.split('\0');
+    return { conflicts, status: after.status, unexpected, protectedEdits: guarded, stderr: after.stderr, differs: git(repo, 'diff', '--name-only', 'upstream/main', 'HEAD').trim() };
   } finally { rmSync(base, { recursive: true, force: true }); }
 }
 
@@ -442,14 +444,17 @@ test('an upstream file the pass adds or deletes after the merge holds the PR too
   assert.equal(r.unexpected, 'added.mjs\nnew.mjs');
 });
 
-test('edits under custom/ and to the fork README never hold the PR', () => {
-  const r = heldUpstream({
-    claude: (repo) => {
-      commitFile(repo, 'custom/a.mjs', 'fix\n', 'fix(custom): follow upstream');
-      commitFile(repo, '.github/README.md', 'fork\n', 'docs');
-    },
-  });
+test('a fix to fork code under custom/ that no gate or guard covers holds nothing', () => {
+  const r = heldUpstream({ claude: (repo) => commitFile(repo, 'custom/a.mjs', 'fix\n', 'fix(custom): follow upstream') });
   assert.equal(r.unexpected, '');
+  assert.equal(r.protectedEdits, '');
+});
+
+test('edits after the merge to fork specs, the sync\'s own gates, the guard or the fork README hold the PR and are named (SW4-scripts-02)', () => {
+  const edits = ['custom/a/tests/x.spec.mjs', 'custom/control-center/tests/unit/contract.test.ts', 'custom/control-center/server/claude/guard-policy.mjs', 'custom/upstream-sync/lib.sh', 'custom/test-support/tmp.mjs', 'custom/launchd/install.sh', 'custom/immigration/run-daily.sh', '.github/README.md'];
+  const r = heldUpstream({ claude: (repo) => { for (const f of edits) commitFile(repo, f, 'weakened\n', `fix(custom): ${f}`); } });
+  assert.equal(r.unexpected, '', 'none of them is an upstream file');
+  assert.equal(r.protectedEdits, [...edits].sort().join('\n'));
 });
 
 test('resolving a conflict is allowed, but an upstream file slipped into the merge commit beside it holds the PR', () => {

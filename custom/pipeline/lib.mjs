@@ -20,6 +20,8 @@ const TIER_DELTA = {
   // "unknown", which is DOL having no record of the company.
   'lookup unavailable': 0,
   'lookup failed': 0,
+  // A URL-only row, or a feed company that is only a legal suffix ("Inc."): there is nothing to look up.
+  'no company name': 0,
 };
 const EXCLUDING_ALERTS = new Set(['paused', 'stopped', 'restricted']);
 
