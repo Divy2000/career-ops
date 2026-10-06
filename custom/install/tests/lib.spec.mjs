@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
@@ -234,4 +235,22 @@ test('validateProjectsInput applies the --docs byte checks to a projects .md or 
   assert.match(validateProjectsInput(big).error, /over the 2 MiB limit/);
   fs.rmSync(big);
   assert.match(validateProjectsInput(path.join(d, 'missing.md')).error, /does not exist/);
+});
+
+test('summarizeUnifiedDiff counts a removed "---" rule and an added "++x" line; only the two file headers are skipped (SW8-scripts-02)', () => {
+  const diff = ['--- cv.md', '+++ resume.md', '@@ -1,4 +1,3 @@', ' # Me', '----', '+++x', ' Experience', '-- old dash item', ''].join('\n');
+  const s = summarizeUnifiedDiff(diff);
+  assert.equal(s.removed, 2);
+  assert.equal(s.added, 1);
+});
+
+test('summarizeUnifiedDiff counts the real diff -u output for a removed CV rule', () => {
+  const dir = tempDir('diff-');
+  {
+    fs.writeFileSync(path.join(dir, 'a.md'), '# Me\n---\nExperience\n');
+    fs.writeFileSync(path.join(dir, 'b.md'), '# Me\nExperience\n');
+    const out = spawnSync('diff', ['-u', 'a.md', 'b.md'], { cwd: dir, encoding: 'utf8' }).stdout;
+    const s = summarizeUnifiedDiff(out);
+    assert.deepEqual([s.added, s.removed], [0, 1], out);
+  }
 });
