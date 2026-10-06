@@ -114,7 +114,8 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByText('asked about timeline')).toBeVisible();
     await expect(page.getByText('Next pinned to')).toBeVisible();
     await page.goto('/tracker/4');
-    await expect(page.getByText('Discard reasons: comp below floor, staffing agency')).toBeVisible();
+    // The report holds codes (salary_too_low), shown as words (SW4-tests-16).
+    await expect(page.getByText('Discard reasons: salary too low, staffing agency')).toBeVisible();
     await page.goto('/tracker/5');
     await expect(page.getByText('This row has no report linked.')).toBeVisible();
   });

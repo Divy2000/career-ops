@@ -4,6 +4,7 @@ import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import type { TrackerRow } from '@shared/api';
 import { HiredDialog } from './HiredDialog';
+import { reasonLabel } from '../../lib/format';
 
 export const STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
 export const DISCARD_REASONS = ['comp below floor', 'no visa sponsorship', 'location mismatch', 'level mismatch', 'staffing agency', 'posting closed', 'culture concerns'];
@@ -45,16 +46,19 @@ export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: {
   const [reason, setReason] = useState('');
   const [otherText, setOtherText] = useState('');
   const predicted = row.summary?.discardReasons ?? [];
-  const reasons = [...new Set([...predicted, ...DISCARD_REASONS])];
+  // Reports carry the writer's codes (salary_too_low): shown as words, recorded as the code the TUI also writes, so
+  // analyze-patterns counts each reason under one key. A listed reason the report already predicts is offered once.
+  const reasons = new Map<string, string>();
+  for (const value of [...predicted, ...DISCARD_REASONS]) if (!reasons.has(reasonLabel(value))) reasons.set(reasonLabel(value), value);
   const chosenReason = reason === '__other' ? otherText.trim() : reason;
   return (
     <div className="card" role="dialog" aria-label="Discard reason picker">
       <p className="muted">Why {state === 'SKIP' ? 'skip' : 'discard'} this one?</p>
       <select aria-label="Discard reason" value={reason} onChange={(e) => setReason(e.target.value)}>
         <option value="">Pick a reason</option>
-        {reasons.map((r) => (
-          <option key={r} value={r}>
-            {r}
+        {[...reasons].map(([label, value]) => (
+          <option key={value} value={value}>
+            {label}
           </option>
         ))}
         <option value="__other">Other</option>

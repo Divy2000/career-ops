@@ -87,7 +87,8 @@ describe('reports', () => {
 
   it('reads discard reasons and the cover letter PDF path', () => {
     const skip = readReport(root, 4);
-    expect(skip.kind === 'ok' && skip.report.discardReasons).toEqual(['comp below floor', 'staffing agency']);
+    // The report writer emits codes (batch-prompt.md: salary_too_low, ...); the parser keeps them as written.
+    expect(skip.kind === 'ok' && skip.report.discardReasons).toEqual(['salary_too_low', 'staffing_agency']);
     const cover = readReport(root, 3);
     expect(cover.kind === 'ok' && cover.report.coverPdf).toBe('output/globex-payments-cover.pdf');
   });
