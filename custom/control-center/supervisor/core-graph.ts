@@ -33,6 +33,19 @@ export function coreImportGraph(codeRoot: string, entries: readonly string[]): s
   return [...seen].map((r) => r.split(path.sep).join('/')).sort();
 }
 
+/** The package trees a server child runs from; the supervisor reloads it when a file in them changes. */
+export const SERVER_TREES = ['server', 'shared'] as const;
+
+/**
+ * Whether a server child loads a code-root-relative path: a file in the package's server/ or shared/ tree, or in the
+ * core import graph as it is now.
+ */
+export function serverLoads(codeRoot: string, packageRoot: string, entries: readonly string[]): (rel: string) => boolean {
+  const pkg = path.relative(fs.realpathSync(codeRoot), fs.realpathSync(packageRoot)).split(path.sep).join('/');
+  const core = new Set(coreImportGraph(codeRoot, entries));
+  return (rel) => core.has(rel) || SERVER_TREES.some((tree) => rel.startsWith(`${pkg}/${tree}/`));
+}
+
 export interface CoreGraphWatcher {
   /** Recompute the graph (after a reload, it may import new files) and watch what it now holds. */
   refresh(): Promise<void>;

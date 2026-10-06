@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -265,7 +266,11 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     fs.writeFileSync(path.join(root, 'data', 'control-center', 'sessions', id, 'meta.json'), JSON.stringify({ id, mode: 'devchat', status: 'done', createdAt: '2026-10-05T00:00:00.000Z', turns: [{ n: 1 }] }));
     fs.mkdirSync(path.join(guardRoot, 'sessions', id, 'turns', '1'), { recursive: true });
     fs.writeFileSync(path.join(guardRoot, 'sessions', id, 'turns', '1', 'turn.json'), JSON.stringify({ filesOffset: 0 }));
-    fs.writeFileSync(path.join(guardRoot, 'sessions', id, 'files.ndjson'), `${JSON.stringify({ path: 'custom/control-center/server/app.ts', abs: '/nowhere/server/app.ts', root: 'code', tool: 'Write', ts: 't' })}\n`);
+    // The turn's edit of a server file is still on disk: the file holds the bytes the turn left (only read here, never written).
+    const edited = path.join(PACKAGE_ROOT, 'server', 'index.ts');
+    const left = crypto.createHash('sha256').update(fs.readFileSync(edited)).digest('hex');
+    fs.writeFileSync(path.join(guardRoot, 'sessions', id, 'turns', '1', 'after.json'), JSON.stringify({ files: { [edited]: left } }));
+    fs.writeFileSync(path.join(guardRoot, 'sessions', id, 'files.ndjson'), `${JSON.stringify({ path: 'custom/control-center/server/index.ts', abs: edited, root: 'code', tool: 'Edit', ts: 't', sha256: left })}\n`);
     const held = await heldPort();
     const port = await freePort();
     const s = startSupervisor(port, root, { reload: true, guardRoot, env: { CC_CHILD_PORT: String(held.port) } });

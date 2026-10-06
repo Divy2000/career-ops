@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { changesByTurn, devChatChangesRecorded, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
+import { changesByTurn, devChatChangeInEffect, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
 import { renderDownPage } from '../../supervisor/down-page.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
@@ -330,16 +330,66 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
     if (files.length) fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), files.map((f) => `${JSON.stringify({ path: f, abs: `/nowhere/${f}`, root: 'code', tool: 'Write', ts: 't' })}\n`).join(''));
     return { sessionsDir, guardRoot };
   }
+  const serverTree = (rel: string) => rel.startsWith('custom/control-center/server/');
   const failed = { state: 'failed' as const, at: 't', error: 'server child exited before listening (code 1, signal null)\nError: listen EADDRINUSE <127.0.0.1>', stderrTail: 'Error: listen EADDRINUSE <127.0.0.1>' };
 
+  /** A finished Dev Chat turn that edited `rels` in a scratch code root, recorded the way the guard hook and finalize record it. */
+  function finishedTurn(rels: string[], opts: { finalized?: boolean } = {}) {
+    const root = fs.realpathSync(tempDir('cc-down-root-'));
+    const sessionsDir = tempDir('cc-down-sessions-');
+    const guardRoot = tempDir('cc-down-guard-');
+    const id = 's20261005000001-abcdef';
+    const meta = { id, mode: 'devchat', status: 'done', createdAt: '2026-10-05T00:00:00.000Z', turns: [{ n: 1 }] };
+    fs.mkdirSync(path.join(sessionsDir, id));
+    fs.writeFileSync(path.join(sessionsDir, id, 'meta.json'), JSON.stringify(meta));
+    const sessionDir = path.join(guardRoot, 'sessions', id);
+    const turnDir = path.join(sessionDir, 'turns', '1');
+    fs.mkdirSync(path.join(turnDir, 'before'), { recursive: true });
+    fs.writeFileSync(path.join(turnDir, 'turn.json'), JSON.stringify({ filesOffset: 0 }));
+    fs.writeFileSync(path.join(turnDir, 'policy.json'), JSON.stringify({ codeRoot: root, dataRoot: root, sessionDir, allow: ['**'], deny: [], bash: [], playwright: false }));
+    const after: Record<string, string> = {};
+    const lines: string[] = [];
+    for (const rel of rels) {
+      const abs = path.join(root, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, 'before\n');
+      fs.copyFileSync(abs, snapshotKey(turnDir, abs));
+      fs.writeFileSync(abs, 'after the turn\n');
+      after[abs] = sha('after the turn\n');
+      lines.push(JSON.stringify({ path: rel, abs, root: 'code', tool: 'Edit', ts: 't', sha256: after[abs] }));
+    }
+    fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), lines.map((l) => `${l}\n`).join(''));
+    if (opts.finalized !== false) fs.writeFileSync(path.join(turnDir, 'after.json'), JSON.stringify({ files: after }));
+    return { root, sessionsDir, guardRoot, sessionDir, meta };
+  }
+
   it('counts a change only when a Dev Chat turn recorded one', () => {
-    expect(devChatChangesRecorded(path.join(tempDir('cc-down-none-'), 'missing'), tempDir('cc-down-guard-'))).toBe(false);
+    expect(devChatChangeInEffect(path.join(tempDir('cc-down-none-'), 'missing'), tempDir('cc-down-guard-'), serverTree)).toBe(false);
     const none = recorded('devchat', []);
-    expect(devChatChangesRecorded(none.sessionsDir, none.guardRoot)).toBe(false);
-    const evaluation = recorded('oferta', ['reports/001-acme.md']);
-    expect(devChatChangesRecorded(evaluation.sessionsDir, evaluation.guardRoot)).toBe(false);
-    const devchat = recorded('devchat', ['custom/control-center/server/app.ts']);
-    expect(devChatChangesRecorded(devchat.sessionsDir, devchat.guardRoot)).toBe(true);
+    expect(devChatChangeInEffect(none.sessionsDir, none.guardRoot, serverTree)).toBe(false);
+    const evaluation = recorded('oferta', ['custom/control-center/server/app.ts']);
+    expect(devChatChangeInEffect(evaluation.sessionsDir, evaluation.guardRoot, serverTree)).toBe(false);
+    const t = finishedTurn(['custom/control-center/server/app.ts']);
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree)).toBe(true);
+  });
+
+  it('a reverted turn is no longer blamed: the page falls back to the neutral wording (SW2-claude-05 review)', () => {
+    const t = finishedTurn(['custom/control-center/server/app.ts', 'cv.md']);
+    revertTurn(t.sessionDir, t.meta, 1, { codeRoot: t.root, dataRoot: t.root });
+    expect(fs.readFileSync(path.join(t.root, 'custom/control-center/server/app.ts'), 'utf8')).toBe('before\n');
+    const changed = devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree);
+    expect(changed).toBe(false);
+    expect(renderDownPage(failed, { devChatChanged: changed })).not.toMatch(/Dev Chat/);
+  });
+
+  it('a turn that changed only files the server never loads (cv.md, web/) is not blamed (SW2-claude-05 review)', () => {
+    const t = finishedTurn(['cv.md', 'custom/control-center/web/src/main.tsx']);
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree)).toBe(false);
+  });
+
+  it('a turn that never finished (no post-turn record) cannot be ruled out, so it is still blamed', () => {
+    const t = finishedTurn(['custom/control-center/server/app.ts'], { finalized: false });
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree)).toBe(true);
   });
 
   it('without a Dev Chat change, a signed-in viewer sees the startup error (escaped, once) and no blame on a change', () => {

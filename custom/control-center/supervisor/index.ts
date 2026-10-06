@@ -13,9 +13,9 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
 import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates } from './preflight.js';
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
-import { devChatChangesRecorded, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
+import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
-import { watchCoreGraph } from './core-graph.js';
+import { SERVER_TREES, serverLoads, watchCoreGraph } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
@@ -28,6 +28,7 @@ const PORT = Number(process.env.CC_PORT ?? 4317);
 const BUILT = process.argv.includes('--built') || process.env.CC_SERVE_BUILT === '1';
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
 const SESSION_COOKIE = 'cc_session';
+const CORE_ENTRIES = CONTRACT.exports.map((e) => e.module);
 
 async function resolveDataRoot(): Promise<string> {
   if (process.env.CC_DATA_ROOT) return path.resolve(process.env.CC_DATA_ROOT);
@@ -350,7 +351,8 @@ async function main(): Promise<void> {
       const active = bg.active;
       if (!active) {
         const signedIn = hostOk(req) && authed(req, new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`));
-        const html = renderDownPage(bg.status, signedIn ? { devChatChanged: devChatChangesRecorded(sessionsDir, guardRoot) } : null);
+        const devChatChanged = signedIn && devChatChangeInEffect(sessionsDir, guardRoot, serverLoads(CODE_ROOT, PACKAGE_ROOT, CORE_ENTRIES));
+        const html = renderDownPage(bg.status, signedIn ? { devChatChanged } : null);
         res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(html);
         return;
       }
@@ -418,7 +420,7 @@ async function main(): Promise<void> {
   // graph of the core modules the server loads (custom/projects/lib.mjs and what it imports from the upstream root, edited
   // by Dev Chat or fast-forwarded by the weekly sync): only a new process loads that whole graph anew (core-graph.ts).
   if (!process.env.CC_NO_RELOAD) {
-    const watcher = chokidar.watch([path.join(PACKAGE_ROOT, 'server'), path.join(PACKAGE_ROOT, 'shared')], { ignoreInitial: true });
+    const watcher = chokidar.watch(SERVER_TREES.map((tree) => path.join(PACKAGE_ROOT, tree)), { ignoreInitial: true });
     let debounce: NodeJS.Timeout | null = null;
     const changed = (file: string) => {
       if (debounce) clearTimeout(debounce);
@@ -428,7 +430,7 @@ async function main(): Promise<void> {
       }, 500);
     };
     watcher.on('all', (_event, file) => changed(file));
-    const core = await watchCoreGraph(CODE_ROOT, CONTRACT.exports.map((e) => e.module), changed);
+    const core = await watchCoreGraph(CODE_ROOT, CORE_ENTRIES, changed);
     // The new code may import files the old one did not.
     bg.onStatus((st) => {
       if (st.state === 'ok') void core.refresh();

@@ -368,9 +368,34 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
   }
 }
 
-/** Whether any Dev Chat turn recorded a changed file: only then can a server that will not start be blamed on one. */
-export function devChatChangesRecorded(sessionsDir: string, guardRoot: string): boolean {
-  return listDevSessions(sessionsDir).some((meta) => changesByTurn(guardSessionDir(guardRoot, meta.id), meta).some((t) => t.records.length > 0));
+/**
+ * Whether a Dev Chat turn's change to a file the server loads is still on disk: only then can a server that will not
+ * start be blamed on one. Still on disk means the file holds the bytes the turn left (its after.json hash, the check a
+ * revert makes), so a reverted or since-rewritten change does not count. A turn with no readable post-turn record for
+ * the file (it never finished), or a file that cannot be read, cannot rule the change out, so it counts.
+ */
+export function devChatChangeInEffect(sessionsDir: string, guardRoot: string, serverLoads: (rel: string) => boolean): boolean {
+  return listDevSessions(sessionsDir).some((meta) => {
+    const sessionDir = guardSessionDir(guardRoot, meta.id);
+    return changesByTurn(sessionDir, meta).some((t) => {
+      const loaded = t.records.filter((r) => r.root === 'code' && serverLoads(r.path));
+      if (!loaded.length) return false;
+      let after: Record<string, string | null> | undefined;
+      try {
+        after = readJson<{ files?: Record<string, string | null> }>(path.join(sessionDir, 'turns', String(t.n), 'after.json'))?.files;
+      } catch {
+        return true;
+      }
+      return loaded.some((r) => {
+        if (!after || !(r.abs in after)) return true;
+        try {
+          return fileHash(r.abs) === after[r.abs];
+        } catch {
+          return true;
+        }
+      });
+    });
+  });
 }
 
 /** Dev Chat sessions on disk, newest first, for the recovery page. */
