@@ -54,6 +54,13 @@ function Probe() {
 const streams = () => FakeEventSource.all.filter((s) => s.url === '/api/sessions/s1/events');
 const live = () => streams().filter((s) => !s.closed);
 const bus = () => FakeEventSource.all.find((s) => s.url === '/api/events')!;
+/** Opens the page again, so its first meta request sees the session as the test has just set it up. */
+async function remount() {
+  await act(async () => root.unmount());
+  FakeEventSource.all = [];
+  root = createRoot(host);
+  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Probe))));
+}
 async function replay(s: FakeEventSource, events: Stored[]) {
   for (const e of events) await act(async () => s.emit(e.event.type, e));
 }
@@ -152,6 +159,33 @@ describe('session event stream', () => {
     await replay(live()[0]!, TURN_2.slice(1));
     await until(() => live().length === 0, 'the second turn to end the stream');
     expect(latest.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
+  });
+
+  it('a session that failed before its turn could start (only an error event) closes (SW3-web-a-01 review 2)', async () => {
+    status = 'error';
+    stored = [ev(1, { type: 'error', message: 'Keychain item not found' })];
+    await remount();
+    await replay(streams()[0]!, stored);
+    await until(() => live().length === 0, 'the failed stream to close');
+    expect(latest.error).toBe('Keychain item not found');
+  });
+
+  it('a session the server marked failed after a restart, whose last event is running, closes (SW3-web-a-01 review 2)', async () => {
+    status = 'error';
+    stored = [TURN_1[0]!];
+    await remount();
+    await replay(streams()[0]!, stored);
+    await until(() => live().length === 0, 'the reconciled stream to close');
+  });
+
+  it('the same, when the meta answer arrives before the stream has replayed the running event', async () => {
+    status = 'error';
+    stored = [TURN_1[0]!];
+    await remount();
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(live()).toHaveLength(1);
+    await replay(streams()[0]!, stored);
+    await until(() => live().length === 0, 'the reconciled stream to close');
   });
 });
 

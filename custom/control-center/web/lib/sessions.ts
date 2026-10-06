@@ -155,8 +155,9 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
   const [state, dispatch] = useReducer(streamReducer, { id: null, transcript: EMPTY_TRANSCRIPT, meta: null });
   const qc = useQueryClient();
   const [opening, setOpening] = useState(0);
-  // seq and status are the last ones this stream delivered: a meta answer may be older than either.
-  const seen = useRef<{ id: string | null; seq: number; status: string | null; open: boolean }>({ id: null, seq: 0, status: null, open: false });
+  // What this stream delivered (its last seq, and the seq of the last turn start), and the last event a finished-session
+  // meta answer counted that the stream had not delivered yet: reaching it asks for the meta again.
+  const seen = useRef<{ id: string | null; seq: number; lastRunning: number; closeAt: number | null; open: boolean }>({ id: null, seq: 0, lastRunning: 0, closeAt: null, open: false });
   useEffect(() => {
     if (!id) return;
     return onSessionTurn(id, () => {
@@ -165,7 +166,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
   }, [id]);
   useEffect(() => {
     if (!id) return;
-    if (seen.current.id !== id) seen.current = { id, seq: 0, status: null, open: false };
+    if (seen.current.id !== id) seen.current = { id, seq: 0, lastRunning: 0, closeAt: null, open: false };
     let closed = false;
     const es = new EventSource(`/api/sessions/${id}/events`);
     seen.current.open = true;
@@ -174,15 +175,19 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       es.close();
       if (seen.current.id === id) seen.current.open = false;
     };
+    // A session can end without a finished status event (an error before the turn spawned, or a restart that marked a
+    // running turn failed), so the meta decides, and only once the stream has every event it counted. A turn start
+    // (running) after those events is a new turn the meta did not know about: the stream stays open for it.
     const loadMeta = () =>
       void apiGet<{ meta: SessionMeta; events?: StoredEvent[] }>(`/api/sessions/${id}`).then((r) => {
         if (closed) return;
         dispatch({ type: 'meta', id, meta: r.meta });
+        const c = seen.current;
         const last = Math.max(0, ...(r.events ?? []).map((e) => e.seq));
-        // The stream's own latest status decides: a meta asked for before the next turn's running arrived still says
-        // the old turn is over. With no status delivered yet, the stream is done only if the session has no events.
-        const streamDone = seen.current.status === null ? last === 0 : isTerminal(seen.current.status);
-        if (streamDone && isTerminal(r.meta.status) && seen.current.seq >= last) close();
+        c.closeAt = null;
+        if (!isTerminal(r.meta.status) || c.lastRunning > last) return;
+        if (c.seq >= last) close();
+        else c.closeAt = last;
       });
     const onEvent = (raw: Event) => {
       // The EventSource "error" event (connection drop) shares a name with our error event and carries no data.
@@ -190,12 +195,15 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       const stored = JSON.parse(raw.data) as StoredEvent;
       if (stored.seq <= seen.current.seq) return;
       seen.current.seq = stored.seq;
-      if (stored.event.type === 'status') seen.current.status = stored.event.status;
+      if (stored.event.type === 'status' && stored.event.status === 'running') seen.current.lastRunning = stored.seq;
       dispatch({ type: 'event', id, event: stored.event });
-      if (stored.event.type === 'status' && isTerminal(stored.event.status)) {
+      const ended = (stored.event.type === 'status' && isTerminal(stored.event.status)) || stored.event.type === 'error';
+      const caughtUp = seen.current.closeAt !== null && seen.current.seq >= seen.current.closeAt;
+      if (ended || caughtUp) {
+        seen.current.closeAt = null;
         loadMeta();
-        void qc.invalidateQueries({ queryKey: ['sessions'] });
       }
+      if (ended) void qc.invalidateQueries({ queryKey: ['sessions'] });
     };
     for (const type of EVENT_TYPES) es.addEventListener(type, onEvent);
     es.onerror = () => undefined;
