@@ -8,16 +8,24 @@ import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 export const NOTES_START = '<!-- co-web-notes:start -->';
 export const NOTES_END = '<!-- co-web-notes:end -->';
 
+/**
+ * True when one whole line of `text` (a bullet's text, or a plain line) is the fact. Only a whole line: a fact inside a
+ * longer one may say the opposite ("open to relocation" in "Not open to relocation").
+ */
+function holdsLine(text: string, fact: string): boolean {
+  return text.split(/\r?\n/).some((l) => l.trim().replace(/^[-*]\s+/, '').replace(/\s+/g, ' ') === fact);
+}
+
 export function applyRememberedFact(md: string, fact: string): { text: string; result: 'ok' | 'deduped' } {
   const f = fact.trim().replace(/\s+/g, ' ').slice(0, 300);
   if (!f) return { text: md, result: 'deduped' };
   const i = md.indexOf(NOTES_START);
   const j = md.indexOf(NOTES_END);
   if (i !== -1 && j !== -1 && j > i) {
-    if (md.slice(i, j).includes(f)) return { text: md, result: 'deduped' };
+    if (holdsLine(md.slice(i, j), f)) return { text: md, result: 'deduped' };
     return { text: md.slice(0, j) + `- ${f}\n` + md.slice(j), result: 'ok' };
   }
-  if (md.includes(f)) return { text: md, result: 'deduped' };
+  if (holdsLine(md, f)) return { text: md, result: 'deduped' };
   const section = `\n\n## Notes from the web assistant\n${NOTES_START}\n- ${f}\n${NOTES_END}\n`;
   const base = md.trim() ? md.replace(/\n*$/, '\n') : '# Profile customization\n';
   return { text: base + section, result: 'ok' };

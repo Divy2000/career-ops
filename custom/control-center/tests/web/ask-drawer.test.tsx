@@ -137,6 +137,27 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
   });
 });
 
+describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25)', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ result: 'deduped' }), { status: 200, headers: { 'content-type': 'application/json' } })),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('says it was already remembered instead of done', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'remember', params: { fact: 'Prefers remote roles' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    const run = () => [...document.body.querySelectorAll('button')].find((b) => ['Run', 'Review and run'].includes(b.textContent?.trim() ?? ''))!;
+    await act(async () => run().click());
+    const confirmButton = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Do it');
+    if (confirmButton) await act(async () => confirmButton.click());
+    expect(item.dataset.proposalState).toBe('done');
+    expect(item.textContent).toContain('Already remembered');
+  });
+});
+
 describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () => {
   let starts: number;
   beforeEach(() => {
