@@ -92,9 +92,9 @@ export function DiscoverPage() {
   );
 }
 
-function ScriptTab({ id, intro, params }: { id: string; intro: string; params: Record<string, unknown> }) {
+export function ScriptTab({ id, intro, params }: { id: string; intro: string; params: Record<string, unknown> }) {
   const actions = useActions();
-  const { run, message } = useRunAction();
+  const { run, busy, message } = useRunAction();
   const [runId, setRunId] = useState<string | null>(null);
   return (
     <div className="card stack">
@@ -102,6 +102,7 @@ function ScriptTab({ id, intro, params }: { id: string; intro: string; params: R
       <div className="row gap">
         <ActionButton
           meta={actions.data?.find((a) => a.id === id)}
+          disabled={busy !== null}
           params={params}
           onRun={(p) =>
             void run(id, p).then((out) => {
@@ -165,7 +166,7 @@ function RunLog({ lines, status }: { lines: RawLine[]; status: string | null }) 
 export function NetworkScan() {
   const actions = useActions();
   const qc = useQueryClient();
-  const { run, message, setMessage } = useRunAction();
+  const { run, busy, message, setMessage } = useRunAction();
   const [roles, setRoles] = useState('backend, platform');
   const [exclude, setExclude] = useState('intern');
   const [locations, setLocations] = useState('Remote');
@@ -248,7 +249,7 @@ export function NetworkScan() {
           ))}
         </fieldset>
         <div className="row gap">
-          <button type="submit" disabled={ats.length === 0 || actions.isPending}>
+          <button type="submit" disabled={ats.length === 0 || actions.isPending || busy !== null}>
             Run network scan <Pill tone="info">Network</Pill>
           </button>
           <span className="faint">Dry run: nothing is written until you add results.</span>

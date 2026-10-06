@@ -98,7 +98,7 @@ function Inbox() {
   const q = usePipeline();
   const qc = useQueryClient();
   const actions = useActions();
-  const { run, message, setMessage } = useRunAction();
+  const { run, busy, message, setMessage } = useRunAction();
   const [skipError, setSkipError] = useState<string | null>(null);
   const skip = async (url: string, done: boolean) => {
     setSkipError(null);
@@ -127,9 +127,9 @@ function Inbox() {
     <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
       <div className="toolbar" aria-label="Inbox actions">
         <AddUrls onDone={(n) => { setMessage({ tone: 'ok', text: `Added ${n} URL${n === 1 ? '' : 's'} to the pipeline` }); void qc.invalidateQueries({ queryKey: ['pipeline'] }); }} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} disabled={busy !== null} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} disabled={busy !== null} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} disabled={busy !== null} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
           Rank (50)
         </ActionButton>
       </div>
