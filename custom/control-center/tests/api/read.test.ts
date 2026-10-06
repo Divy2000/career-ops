@@ -404,6 +404,27 @@ describe('events', () => {
       await watcher.close();
     }
   });
+  it('the watcher reports a tracker edit for a data root inside a folder named control-center, and still ignores data/control-center/ (SW2-server-05)', async () => {
+    const root = path.join(tempDir('cc-watch-'), 'control-center', 'career-data');
+    fs.mkdirSync(path.join(root, 'data', 'control-center', 'runs'), { recursive: true });
+    const published: Array<{ type: string; payload: { domain: string; paths: string[] } }> = [];
+    const watcher = startWatcher(root, { publish: (type: string, payload: { domain: string; paths: string[] }) => void published.push({ type, payload }) } as unknown as EventBus, 20);
+    try {
+      await new Promise<void>((resolve) => watcher.on('ready', () => resolve()));
+      // FSEvents can miss a write made right after 'ready', so the edit is repeated until one is seen.
+      const deadline = Date.now() + 10_000;
+      for (let i = 0; published.length === 0 && Date.now() < deadline; i++) {
+        if (i % 10 === 0) {
+          fs.writeFileSync(path.join(root, 'data', 'control-center', 'runs', 'meta.json'), `{"i":${i}}`);
+          fs.writeFileSync(path.join(root, 'data', 'applications.md'), `# Applications ${i}\n`);
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(published).toEqual([{ type: 'data.changed', payload: { domain: 'tracker', paths: [path.join('data', 'applications.md')] } }]);
+    } finally {
+      await watcher.close();
+    }
+  });
   it('the SSE endpoint requires the cookie', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/api/events', headers: { host: '127.0.0.1:4317' } });
     expect(res.statusCode).toBe(401);
