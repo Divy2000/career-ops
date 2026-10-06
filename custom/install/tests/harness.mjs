@@ -22,12 +22,13 @@ const DEFAULT_TOOLS = ['git', 'node', 'npm', 'security', 'uname', 'launchctl', '
 // the world PATH, so a "missing npm" spec means the same on Linux, where npm, git or gh live in /usr/bin, as on macOS.
 const PROBED = new Set(['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']);
 let systemBin = null;
-/** One folder per test process of links to every system command except the probed ones, in PATH order. */
-function systemBinDir() {
-  if (systemBin) return systemBin;
-  systemBin = path.join(fs.realpathSync(tempDir('ci-sysbin-')), 'bin');
-  fs.mkdirSync(systemBin);
-  for (const dir of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) {
+
+/** Links every command in `dirs` (earlier folders win) into `into`, except the probed tools. */
+export function linkSystemCommands(dirs, into) {
+  // Names already linked, not fs.existsSync: that follows the link, so a dangling one seen again (a command in both
+  // /usr/bin and /bin on merged-/usr systems) would be linked twice and throw EEXIST.
+  const linked = new Set();
+  for (const dir of dirs) {
     let names;
     try {
       names = fs.readdirSync(dir);
@@ -35,11 +36,20 @@ function systemBinDir() {
       continue;
     }
     for (const name of names) {
-      const link = path.join(systemBin, name);
-      if (PROBED.has(name) || fs.existsSync(link)) continue;
+      const link = path.join(into, name);
+      if (PROBED.has(name) || linked.has(name)) continue;
+      linked.add(name);
       fs.symlinkSync(path.join(dir, name), link);
     }
   }
+}
+
+/** One folder per test process of links to every system command except the probed ones, in PATH order. */
+function systemBinDir() {
+  if (systemBin) return systemBin;
+  systemBin = path.join(fs.realpathSync(tempDir('ci-sysbin-')), 'bin');
+  fs.mkdirSync(systemBin);
+  linkSystemCommands(['/usr/bin', '/bin', '/usr/sbin', '/sbin'], systemBin);
   return systemBin;
 }
 

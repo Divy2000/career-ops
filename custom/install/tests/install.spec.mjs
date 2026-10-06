@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL } from './harness.mjs';
+import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
 const QUIET = ['--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'];
@@ -1232,5 +1232,25 @@ test('the test world finds no system copy of a tool the installer probes for, so
   for (const tool of ['bash', 'sed', 'awk', 'mktemp', 'python3']) {
     const r = spawnSync('bash', ['-c', `command -v ${tool}`], { env: w.env(), encoding: 'utf8' });
     assert.notEqual(r.stdout.trim(), '', `${tool} is still there for the installer`);
+  }
+});
+
+test('the system command links survive a dangling symlink listed in two folders (merged /usr), keeping the first (review of SW3-tests-06)', () => {
+  const T = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'ci-sysbin-test-')));
+  try {
+    const usrBin = path.join(T, 'usr-bin');
+    const bin = path.join(T, 'bin');
+    const into = path.join(T, 'into');
+    for (const d of [usrBin, bin, into]) fs.mkdirSync(d);
+    fs.symlinkSync(path.join(T, 'gone'), path.join(usrBin, 'dangling'));
+    fs.symlinkSync(path.join(T, 'gone'), path.join(bin, 'dangling'));
+    fs.writeFileSync(path.join(usrBin, 'sed'), '');
+    fs.writeFileSync(path.join(bin, 'sed'), '');
+    fs.writeFileSync(path.join(bin, 'npm'), '');
+    linkSystemCommands([usrBin, bin], into);
+    assert.deepEqual(fs.readdirSync(into).sort(), ['dangling', 'sed']);
+    assert.equal(fs.readlinkSync(path.join(into, 'sed')), path.join(usrBin, 'sed'));
+  } finally {
+    fs.rmSync(T, { recursive: true, force: true });
   }
 });
