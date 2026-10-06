@@ -73,7 +73,9 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const bus = new EventBus();
   // The runner reads this object live, so a settings save changes the slot cap without a restart.
   const initial = readSettings(cfg.dataRoot).settings;
-  const runnerOpts = { claudeSlots: initial.claudeConcurrency, retention: initial.retention };
+  const readToken = deps.readToken ?? keychainTokenReader(exec);
+  // readToken: a session run another server left queued (a blue/green reload) starts here with the token read anew.
+  const runnerOpts = { claudeSlots: initial.claudeConcurrency, retention: initial.retention, readToken };
   const runner = new Runner(cfg.dataRoot, bus, runnerOpts);
   const applySettings = (s: AppSettings) => {
     runnerOpts.claudeSlots = s.claudeConcurrency;
@@ -90,7 +92,6 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const daily = new DailyJobWatch(maybeFakeDailyProbe(cfg, dailyPidfileProbe(cfg.dataRoot, exec)), bus, deps.dailyPollMs);
   daily.start();
   closers.push(async () => daily.stop());
-  const readToken = deps.readToken ?? keychainTokenReader(exec);
   await app.register(systemRoutes, { cfg, readToken, exec });
   await app.register(readRoutes, { cfg, bus, exec, daily });
   const sessions = new SessionManager(cfg, runner, bus, { readToken, exec, pollMs: deps.sessionPollMs, home: deps.homeDir });

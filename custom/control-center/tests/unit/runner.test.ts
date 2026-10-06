@@ -493,22 +493,88 @@ describe('Runner', () => {
     }
   });
 
-  it('reconcile marks a run that was still queued lost, and that run can never be spawned afterwards', async () => {
+  // Requirement change (SW6-claude-01): a run still queued when another process reconciles used to be marked lost; a
+  // blue/green reload does that on every server edit, so the new process queues it again and it runs, exactly once.
+  it('a run still queued when another process reconciles is queued there too and runs exactly once, whichever process claims it', async () => {
     const root = tmpRoot();
     const first = new Runner(root, new EventBus(), { pollMs: 50 });
     runners.push(first);
     const holder = first.start(req(['0', '800'], { resources: ['tracker'] }));
     const waiting = first.start(req(['0'], { resources: ['tracker'] }));
     expect(first.queuedIds()).toEqual([waiting.id]);
-    // A second process (the restarted server) reconciles while the first still holds the run in memory.
+    // A second process (the new server) reconciles while the first still holds the run in memory.
     const second = new Runner(root, new EventBus(), { pollMs: 50 });
     runners.push(second);
     second.reconcile();
-    expect(second.store.read(waiting.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/queued when the server restarted/) });
-    await until(() => first.store.read(holder.id)?.status === 'done');
+    await until(() => second.queuedIds().includes(waiting.id));
+    expect(second.store.read(waiting.id)?.status).toBe('queued');
+    await until(() => second.store.read(waiting.id)?.status === 'done', 15_000);
+    // It waited for the resource the holder had, and one wrapper ran it: its output is there once.
+    expect(second.store.read(holder.id)?.status).toBe('done');
+    expect(second.store.read(waiting.id)!.startedAt! >= second.store.read(holder.id)!.endedAt!).toBe(true);
+    expect(second.store.readRaw(waiting.id).lines.filter((l) => l.line === 'line one')).toHaveLength(1);
     await wait(400);
-    expect(first.store.read(waiting.id)).toMatchObject({ status: 'lost', wrapperPid: null });
     expect(first.queuedIds()).toEqual([]);
+    expect(second.queuedIds()).toEqual([]);
+  });
+
+  it('a run queued in a process that drained starts in the next one with its environment rebuilt and a fresh token, never one written down (SW6-claude-01)', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50, readToken: async () => 'old-token' });
+    runners.push(first);
+    const holder = first.start(req(['0', '600'], { resources: ['tracker'] }));
+    const show = "console.log([process.env.CC_FLAVOR, process.env.CLAUDE_CODE_OAUTH_TOKEN, process.env.ANTHROPIC_API_KEY === '' ? 'key-empty' : 'key-other'].join(' '))";
+    const waiting = first.start({ ...req([]), resources: ['tracker'], cmd: { bin: process.execPath, args: ['-e', show], cwd: PACKAGE_ROOT }, env: { CC_FLAVOR: 'vanilla', CLAUDE_CODE_OAUTH_TOKEN: 'old-token', ANTHROPIC_API_KEY: '' } });
+    const record = fs.readFileSync(path.join(first.store.dirOf(waiting.id), 'request.json'), 'utf8');
+    expect(record).not.toContain('old-token');
+    expect(JSON.parse(record)).toEqual({ env: { CC_FLAVOR: 'vanilla', ANTHROPIC_API_KEY: '' }, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
+    // The drain: the first process stops tracking and its in-memory queue is gone.
+    first.close();
+    const second = new Runner(root, new EventBus(), { pollMs: 50, readToken: async () => 'fresh-token' });
+    runners.push(second);
+    second.reconcile();
+    await until(() => second.store.read(waiting.id)?.status === 'done', 15_000);
+    expect(second.store.read(holder.id)?.status).toBe('done');
+    // The wrapper redacts the token it was given from the stored lines: the fresh one, so that is what is hidden.
+    expect(second.store.readRaw(waiting.id).lines.map((l) => l.line)).toEqual(['vanilla [redacted] key-empty']);
+  });
+
+  it('a queued run it cannot rebuild ends lost as before: one from an earlier version (no request record), a secret it has no way to supply, a token it cannot read (SW6-claude-01)', async () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const old = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: '/' }, params: {} });
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const holder = first.start(req(['0', '30000'], { resources: ['r'] }));
+    const otherSecret = first.start({ ...req(['0']), resources: ['r'], env: { GITHUB_TOKEN: 'ghp' } });
+    const token = first.start({ ...req(['0']), resources: ['r'], env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok' } });
+    first.close();
+    const second = new Runner(root, new EventBus(), { pollMs: 50, readToken: async () => { throw new Error('Keychain item not found'); } });
+    runners.push(second);
+    second.reconcile();
+    await until(() => [old, otherSecret, token].every((r) => second.store.read(r.id)?.status === 'lost'));
+    expect(second.store.read(old.id)?.error).toMatch(/queued when the server restarted; it never started/);
+    expect(second.store.read(otherSecret.id)?.error).toMatch(/GITHUB_TOKEN/);
+    expect(second.store.read(token.id)?.error).toMatch(/Keychain item not found/);
+    second.cancel(holder.id);
+    await until(() => second.store.read(holder.id)?.status === 'cancelled');
+  });
+
+  it('a process counts the Claude slots and resources other processes\' runs hold on disk, so a passive new server never runs past the cap (SW6-claude-01)', async () => {
+    const root = tmpRoot();
+    const old = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(old);
+    const busy = old.start(req(['0', '1500'], { claude: true }));
+    await until(() => old.store.read(busy.id)?.status === 'running');
+    const passive = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(passive);
+    const next = passive.start(req(['0'], { claude: true }));
+    await wait(400);
+    expect(passive.store.read(next.id)?.status).toBe('queued');
+    // The old process's run ends; the next start or settle in this one pumps the queue.
+    await until(() => old.store.read(busy.id)?.status === 'done', 10_000);
+    passive.reschedule();
+    await until(() => passive.store.read(next.id)?.status === 'done', 10_000);
   });
 
   it('cancel works for a queued run this process never had in its queue', () => {

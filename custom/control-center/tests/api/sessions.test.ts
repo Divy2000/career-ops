@@ -444,34 +444,55 @@ describe('Claude sessions', () => {
     }
   });
 
-  it('a turn still queued when the server restarts ends with a clear error instead of hanging', async () => {
+  // Requirement change (SW6-claude-01): a queued turn used to end "queued when the server restarted"; a blue/green reload
+  // (the old server drains, the new one takes over) does exactly that on every server edit, so it now waits in the new one.
+  it('a turn still queued when the server is replaced waits in the new server and starts once a slot frees, with its environment rebuilt (SW6-claude-01)', async () => {
     const dataRoot = copyFixtureRoot();
     const guardRoot = tempDir('cc-test-guard-');
+    const saved = process.env.FAKE_CLAUDE_REPORT_ENV;
+    process.env.FAKE_CLAUDE_REPORT_ENV = '1';
     const a = await makeTestApp({ dataRoot, guardRoot });
     const req = (app: TestApp, method: 'GET' | 'POST' | 'PUT', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload });
     try {
       expect((await req(a, 'PUT', '/api/settings/app', { claudeConcurrency: 1 })).statusCode).toBe(200);
       const slowId: string = (await req(a, 'POST', '/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json().id;
       const queued = (await req(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json();
+      const runId: string = queued.turns[0].runId;
       expect(queued.status).toBe('running');
-      expect(a.runner.queuedIds()).toEqual([queued.turns[0].runId]);
+      expect(a.runner.queuedIds()).toEqual([runId]);
+      // The old server drains (its in-memory queue goes with it); the new one takes over.
       await a.close();
       const b = await makeTestApp({ dataRoot, guardRoot });
       try {
-        const deadline = Date.now() + 15_000;
+        await until(() => b.runner.queuedIds().includes(runId), 10_000);
+        await wait(300);
+        expect((await req(b, 'GET', `/api/runs/${runId}`)).json().meta.status).toBe('queued');
+        expect((await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta.status).toBe('running');
+        // The slot frees: the waiting turn starts in the new server and finishes.
+        expect((await req(b, 'POST', `/api/sessions/${slowId}/cancel`, {})).statusCode).toBe(200);
+        const deadline = Date.now() + 30_000;
         let meta = (await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta;
         while (meta.status === 'running' && Date.now() < deadline) {
           await wait(100);
           meta = (await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta;
         }
-        expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/queued when the server restarted/) });
-        expect((await req(b, 'GET', `/api/runs/${queued.turns[0].runId}`)).json().meta.status).toBe('lost');
-        expect((await req(b, 'POST', `/api/sessions/${slowId}/cancel`, {})).statusCode).toBe(200);
+        expect(meta.status, JSON.stringify(meta)).toBe('done');
+        expect((await req(b, 'GET', `/api/runs/${runId}`)).json().meta.status).toBe('done');
+        const events = b.sessions.store.readEvents(queued.id).map((e) => e.event);
+        const env = events.find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-env: '));
+        expect(String(env?.type === 'stderr' ? env.text : '').replace('fake-claude-env: ', '').split(',')).toEqual(['CC_MODE', 'CC_POLICY_FILE', 'CC_POLICY_SHA256', 'CC_SESSION_DIR', 'CC_TURN_DIR']);
+        expect(events.find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-token: '))).toMatchObject({ text: 'fake-claude-token: self=present children=absent' });
+        // The token itself was never written down: only the variable's name is recorded with the queued run.
+        const record = fs.readFileSync(path.join(dataRoot, 'data', 'control-center', 'runs', runId, 'request.json'), 'utf8');
+        expect(record).not.toContain(FAKE_TOKEN);
+        expect(JSON.parse(record)).toMatchObject({ secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
       } finally {
         await b.close();
       }
     } finally {
       await a.close().catch(() => undefined);
+      if (saved === undefined) delete process.env.FAKE_CLAUDE_REPORT_ENV;
+      else process.env.FAKE_CLAUDE_REPORT_ENV = saved;
     }
   });
 
