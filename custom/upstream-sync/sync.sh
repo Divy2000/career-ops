@@ -77,12 +77,18 @@ rm -rf "$WT"
 git worktree prune
 git worktree add -q -B "$BRANCH" "$WT" origin/main || fail "git worktree add failed"
 cd "$WT" || fail "worktree missing"
+# The base the merge is compared with, fixed now: a fetch from any checkout while Claude runs moves origin/main.
+BASE_REV="$(git rev-parse HEAD)" || fail "cannot read the sync worktree's base commit"
 install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"
+# The tree the baseline runs on, kept in memory: after Claude the same tree is reinstalled unless the merge changed it.
+BASE_DEPS_TREE="$(root_deps_tree)" || fail "cannot read the baseline's installed dependency tree"
 
 echo "--- baseline suite on origin/main"
 suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"
-grep -q '^SUITE CRASHED' "$STATE_DIR/$TODAY.baseline-failures.txt" && fail "upstream suite crashed on origin/main before the merge; cannot compare"
-echo "baseline failures: $(wc -l < "$STATE_DIR/$TODAY.baseline-failures.txt" | tr -d ' ')"
+# Read once, before Claude runs, and compared from memory: Claude can write to STATE_DIR, so the file could be rewritten.
+BASELINE_FAILURES="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" || fail "cannot read the baseline upstream-suite failures"
+printf '%s\n' "$BASELINE_FAILURES" | grep -q '^SUITE CRASHED' && fail "upstream suite crashed on origin/main before the merge; cannot compare"
+echo "baseline failures: $(printf '%s' "$BASELINE_FAILURES" | grep -c . || true)"
 
 echo "--- merging upstream/main"
 CONFLICTS=""
@@ -102,7 +108,7 @@ fi
 MERGE_SNAPSHOT="$(merge_snapshot)" || fail "cannot record the merge result before Claude runs"
 
 echo "--- headless Claude ($MODEL)"
-PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
+PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$BASELINE_FAILURES" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
 const fs = require("fs");
 let t = fs.readFileSync(process.argv[1], "utf8");
 // A replacer function: a string replacement would expand $& and the like inside test output.
@@ -123,6 +129,8 @@ CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_AP
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
+clean_sync_worktree "$WT" || fail "cannot clean untracked and ignored files from the sync worktree"
+refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
 
 CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then
@@ -141,7 +149,7 @@ control_center_checks "$STATE_DIR/$TODAY.control-center-tests.txt" || CC_OK=0
 echo "control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
 
 suite_failures "$STATE_DIR/$TODAY.after-failures.txt"
-NEW_FAILURES="$(new_failures "$STATE_DIR/$TODAY.baseline-failures.txt" "$STATE_DIR/$TODAY.after-failures.txt")"
+NEW_FAILURES="$(new_failures "$BASELINE_FAILURES" "$STATE_DIR/$TODAY.after-failures.txt")" || fail "cannot compare the upstream suite with its baseline"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
 
 git push -q --force-with-lease origin "$BRANCH" || fail "git push failed"

@@ -44,14 +44,92 @@ install_root_deps() {
 }
 
 # deps_fingerprint <rev>: what decides whether the root dependencies changed
-# between two revisions: the tracked lockfile's blob, else package.json's.
+# between two revisions: the tracked lockfile's blob, else a hash of only the
+# package.json fields that decide how dependencies resolve (peerDependenciesMeta
+# included: it makes a peer optional), as JSON with sorted keys. Upstream's
+# release bot bumps "version" every release and PRs edit
+# scripts or engines; none of that changes what npm installs. Fails when
+# package.json is missing or not JSON.
 deps_fingerprint() {
-  git rev-parse --verify --quiet "$1:package-lock.json" 2>/dev/null || git rev-parse --verify "$1:package.json"
+  local pkg fields
+  if git rev-parse --verify --quiet "$1:package-lock.json" 2>/dev/null; then return 0; fi
+  pkg="$(git show "$1:package.json")" || return 1
+  fields="$(printf '%s' "$pkg" | node -e '
+let text = "";
+process.stdin.on("data", (d) => (text += d)).on("end", () => {
+  const pkg = JSON.parse(text);
+  const sorted = (v) => (Array.isArray(v) ? v.map(sorted) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])])) : v);
+  const keys = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta", "overrides", "bundleDependencies", "bundledDependencies", "workspaces"];
+  process.stdout.write(JSON.stringify(keys.map((k) => [k, sorted(pkg[k] ?? null)])));
+});
+')" || return 1
+  printf '%s' "$fields" | git hash-object --stdin
+}
+
+# root_deps_tree: the root dependency tree npm installed, as npm recorded it
+# in node_modules/.package-lock.json. sync.sh keeps it in memory from the
+# baseline install, before Claude runs. Fails when there is none.
+root_deps_tree() {
+  if [ ! -s node_modules/.package-lock.json ]; then echo "root_deps_tree: no node_modules/.package-lock.json" >&2; return 1; fi
+  cat node_modules/.package-lock.json
+}
+
+# clean_sync_worktree <worktree>: delete every untracked and ignored file in
+# the sync worktree (git clean -ffdx), so nothing Claude left there (a project
+# .npmrc, a stray spec the custom-tests glob would pick up, a patched
+# node_modules) steers the reinstall or the tests. Nothing in the worktree
+# needs keeping: the logs, reports and state live in STATE_DIR outside it, the
+# baseline dependency tree and merge snapshot are in sync.sh's memory, and both
+# node_modules are installed again right after. Refuses unless the current
+# directory is the top of <worktree>, so it never runs in the live checkout.
+clean_sync_worktree() {
+  local top want
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  want="$(cd "$1" 2>/dev/null && pwd -P)" || { echo "clean_sync_worktree: no worktree at $1" >&2; return 1; }
+  if [ "$(cd "$top" && pwd -P)" != "$want" ]; then
+    echo "clean_sync_worktree: $top is not the sync worktree $1; nothing cleaned" >&2
+    return 1
+  fi
+  git clean -ffdxq
+}
+
+# refresh_root_deps <base-rev> <base-tree>: after Claude, delete the root
+# node_modules and install again (no lifecycle scripts). Claude may run npm and
+# write inside the gitignored node_modules, so the post-merge tests only run on
+# a tree installed after it exited. When the merge left the root dependencies
+# as at <base-rev>, the tree installed is exactly <base-tree> (root_deps_tree
+# from the baseline install), through a temporary lockfile and npm ci: upstream
+# tracks no root lockfile, and a fresh resolve could pick newer versions than
+# the baseline ran with and blame that drift on the merge. Only a merge that
+# changed them resolves fresh. A tracked lockfile is always installed with
+# npm ci. Fails when any step fails, or when the tree is needed and empty.
+refresh_root_deps() {
+  local before after rc=0
+  rm -rf node_modules || return 1
+  if git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
+    echo "reinstalling the root dependencies from the tracked lockfile"
+    npm ci --ignore-scripts --silent
+    return
+  fi
+  before="$(deps_fingerprint "$1")" || return 1
+  after="$(deps_fingerprint HEAD)" || return 1
+  if [ "$before" != "$after" ]; then
+    echo "root dependencies changed in the merge; resolving them fresh"
+    install_root_deps ignore-scripts
+    return
+  fi
+  if [ -z "${2:-}" ]; then echo "refresh_root_deps: no baseline dependency tree to reinstall" >&2; return 1; fi
+  echo "root dependencies unchanged by the merge; reinstalling the baseline's exact tree"
+  printf '%s\n' "$2" > package-lock.json || return 1
+  npm ci --ignore-scripts --silent || rc=$?
+  rm -f package-lock.json
+  return "$rc"
 }
 
 # control_center_checks <log>: install custom/control-center from its tracked
-# lockfile (no lifecycle scripts), then run its vitest suite (which holds the
-# contract test against upstream's CLIs) and its typecheck, all output to <log>.
+# lockfile with npm ci, which deletes any node_modules Claude left (no
+# lifecycle scripts), then run its vitest suite (which holds the contract test
+# against upstream's CLIs) and its typecheck, all output to <log>.
 # Fails at the first failing step, and when no test ran at all.
 control_center_checks() {
   local log="$1"
@@ -135,10 +213,14 @@ suite_failures() {
   } | sort -u > "$1"
 }
 
-# new_failures <baseline> <after>: the lines of <after> that are not in
-# <baseline>, both as suite_failures wrote them (sorted).
+# new_failures <baseline-text> <after-file>: the lines of <after-file> that are
+# not in <baseline-text>, both as suite_failures wrote them (sorted). The
+# baseline is text that sync.sh read before Claude ran, never a file Claude
+# could rewrite. Fails closed: an unreadable <after-file> is an error, not
+# "no new failures".
 new_failures() {
-  comm -13 "$1" "$2"
+  if [ ! -r "$2" ]; then echo "new_failures: cannot read $2" >&2; return 1; fi
+  comm -13 <(printf '%s\n' "$1" | sed '/^$/d') "$2"
 }
 
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons
