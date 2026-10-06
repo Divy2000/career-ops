@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { caseFlippedHome } from '../../test-support/case-home.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(HERE, '..', '..', 'launchd', 'install.sh');
@@ -553,18 +554,24 @@ test('a data root that is the home directory, or contains it, is refused before 
   }
 });
 
-test('the launchd refusal names what that script reads, not install.sh\'s --data-root, and catches a home spelled in another case (review of SW3-tests-01)', () => {
-  const home = fs.realpathSync(fs.mkdtempSync('/private/tmp/ci-case-home-'));
+test('the launchd refusal names what that script reads, not install.sh\'s --data-root (review of SW3-tests-01)', () => {
+  const home = path.join(mkTmp('ci-launchd-home-'), 'home');
+  fs.mkdirSync(home);
+  const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: home, HOME: home } });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /CAREER_OPS_ROOT or the checkout's \.career-ops-data marker/);
+  assert.doesNotMatch(r.stderr, /--data-root/);
+});
+
+test('launchd/install.sh refuses the home directory spelled in another case (review of SW3-tests-01)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
   try {
-    const i = home.search(/[a-z]/i);
-    const flipped = home.slice(0, i) + (home[i] === home[i].toLowerCase() ? home[i].toUpperCase() : home[i].toLowerCase()) + home.slice(i + 1);
-    const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: fs.existsSync(flipped) ? flipped : home, HOME: home } });
+    const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: h.flipped, HOME: h.home } });
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stderr, /error: the data root .* is your home directory or contains it/);
-    assert.match(r.stderr, /CAREER_OPS_ROOT or the checkout's \.career-ops-data marker/);
-    assert.doesNotMatch(r.stderr, /--data-root/);
-    assert.equal(fs.existsSync(path.join(home, 'Library')), false);
+    assert.equal(fs.existsSync(path.join(h.home, 'Library')), false);
   } finally {
-    fs.rmSync(home, { recursive: true, force: true });
+    h.cleanup();
   }
 });

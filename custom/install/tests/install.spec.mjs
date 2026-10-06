@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { caseFlippedHome } from '../../test-support/case-home.mjs';
 import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
@@ -1255,23 +1256,15 @@ test('the system command links survive a dangling symlink listed in two folders 
   }
 });
 
-/** A home folder on a case-insensitive volume (the boot volume's /private/tmp), and its path with one letter's case flipped. */
-function caseFlippedHome() {
-  const home = fs.realpathSync(fs.mkdtempSync('/private/tmp/ci-case-home-'));
-  const i = home.search(/[a-z]/i);
-  const flipped = home.slice(0, i) + (home[i] === home[i].toLowerCase() ? home[i].toUpperCase() : home[i].toLowerCase()) + home.slice(i + 1);
-  return { home, flipped, insensitive: fs.existsSync(flipped) };
-}
-
-test('a data root that is the home directory spelled in another case is refused too, as the confinement resolves it (review of SW3-tests-01)', () => {
-  const { home, flipped, insensitive } = caseFlippedHome();
+test('a data root that is the home directory spelled in another case is refused too, as the confinement resolves it (review of SW3-tests-01)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
   try {
-    if (!insensitive) return;
     const { w, D } = fresh({ keychain: true });
-    const r = w.run(['--dir', D, '--non-interactive', '--dry-run', ...QUIET, '--data-root', flipped], { env: { HOME: home } });
+    const r = w.run(['--dir', D, '--non-interactive', '--dry-run', ...QUIET, '--data-root', h.flipped], { env: { HOME: h.home } });
     assert.equal(r.status, 1, r.out);
     assert.match(r.out, /error: the data root .* is your home directory or contains it/);
   } finally {
-    fs.rmSync(home, { recursive: true, force: true });
+    h.cleanup();
   }
 });
