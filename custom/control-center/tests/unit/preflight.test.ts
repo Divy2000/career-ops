@@ -116,6 +116,19 @@ describe('preflight claude probe', () => {
     expect(r.errors[0]).toContain('self-update failed: EACCES');
   });
 
+  it('asks claude --version with the autoupdater off, so starting the app can never update the CLI past the approved version (SW2-tests-05)', async () => {
+    const marker = path.join(tempDir('cc-preflight-env-'), 'env');
+    const bin = fakeClaude(`require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.env.DISABLE_AUTOUPDATER)); console.log('0.0.0-fake');`);
+    const saved = process.env.DISABLE_AUTOUPDATER;
+    delete process.env.DISABLE_AUTOUPDATER;
+    try {
+      expect((await preflight({ ...base, claudeBin: bin, claudeTimeoutMs: 5000 })).ok).toBe(true);
+    } finally {
+      if (saved !== undefined) process.env.DISABLE_AUTOUPDATER = saved;
+    }
+    expect(fs.readFileSync(marker, 'utf8')).toBe('1');
+  });
+
   it('says the binary was not found for ENOENT', async () => {
     const r = await preflight({ ...base, claudeBin: path.join(os.tmpdir(), 'cc-no-such-claude'), claudeTimeoutMs: 1000 });
     expect(r.ok).toBe(false);

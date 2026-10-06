@@ -45,7 +45,8 @@ export const KEYCHAIN_HELP =
 
 function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { shell: false, timeout: timeoutMs }, (err, stdout, stderr) => {
+    // Autoupdater off, as for every other version check: asking must never update the CLI past the approved version.
+    execFile(cmd, args, { shell: false, timeout: timeoutMs, env: { ...process.env, DISABLE_AUTOUPDATER: '1' } }, (err, stdout, stderr) => {
       if (!err) return resolve({ code: 0, timedOut: false, enoent: false, stdout: String(stdout ?? ''), stderr: '' });
       const e = err as NodeJS.ErrnoException & { code?: number | string; killed?: boolean };
       resolve({
