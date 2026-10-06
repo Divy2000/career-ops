@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
-import { locate, matches, resolveReal, writeScopeReason } from '../server/claude/guard-policy.mjs';
+import { locate, matches, resolveReal } from '../server/claude/guard-policy.mjs';
 
 export interface ChangeRecord {
   path: string;
@@ -281,9 +281,9 @@ function planRevert(turnDir: string, abs: string, ctx: RevertContext): RevertPla
   if (!found || !path.isAbsolute(abs)) throw new RevertRefused(403, `${abs} is outside the code and data roots; refusing to revert it`);
   const policy = readJson<{ allow?: string[]; deny?: string[] }>(path.join(turnDir, 'policy.json'));
   if (!policy || !Array.isArray(policy.allow) || !Array.isArray(policy.deny)) throw new RevertRefused(409, `turn ${n} has no recorded policy, so ${found.rel} cannot be checked against its write scope`);
-  // The roots are the caller's own, never the ones the policy file names.
-  const scoped = { allow: policy.allow, deny: policy.deny, codeRoot: ctx.codeRoot, dataRoot: ctx.dataRoot };
-  if (writeScopeReason(scoped, found, 'revert') || matches(found.rel, policy.deny)) throw new RevertRefused(403, `${found.rel} is outside turn ${n}'s write scope; refusing to revert it`);
+  // The turn's recorded scope in either root: a revert only puts back the turn's own snapshot, so a turn recorded before
+  // the guard split the roots (which may have written a user file into the code checkout) can still be undone.
+  if (!matches(found.rel, policy.allow) || matches(found.rel, policy.deny)) throw new RevertRefused(403, `${found.rel} is outside turn ${n}'s write scope; refusing to revert it`);
   const key = snapshotKey(turnDir, abs);
   const hadSnapshot = fs.existsSync(key);
   const wasAbsent = !hadSnapshot && fs.existsSync(`${key}.absent`);

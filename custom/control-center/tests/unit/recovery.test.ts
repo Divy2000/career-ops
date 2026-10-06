@@ -215,6 +215,38 @@ describe('diffs stay bounded, so /__recovery and the Changes panel never freeze 
   });
 });
 
+describe('reverts check the turn\'s own recorded scope, in either root (SW2-claude-02 review)', () => {
+  it('a turn recorded before the split, which wrote a user file into the code checkout, can still be reverted', () => {
+    const code = fs.realpathSync(tempDir('cc-revert-split-code-'));
+    const data = fs.realpathSync(tempDir('cc-revert-split-data-'));
+    const sessionDir = fs.realpathSync(tempDir('cc-revert-split-guard-'));
+    const turnDir = path.join(sessionDir, 'turns', '1');
+    fs.mkdirSync(path.join(turnDir, 'before'), { recursive: true });
+    // Dev Chat's recorded scope; under the old bug its data/** write landed in the code root.
+    fs.writeFileSync(path.join(turnDir, 'policy.json'), JSON.stringify({ codeRoot: code, dataRoot: data, allow: ['data/**', 'custom/**'], deny: ['data/blacklist.md'] }));
+    const created = path.join(code, 'data', 'notes', 'x.md');
+    const edited = path.join(code, 'custom', 'notes.md');
+    fs.mkdirSync(path.dirname(created), { recursive: true });
+    fs.mkdirSync(path.dirname(edited), { recursive: true });
+    fs.writeFileSync(edited, 'before\n');
+    fs.copyFileSync(edited, snapshotKey(turnDir, edited));
+    fs.writeFileSync(`${snapshotKey(turnDir, created)}.absent`, '');
+    fs.writeFileSync(created, 'misplaced\n');
+    fs.writeFileSync(edited, 'after\n');
+    fs.writeFileSync(path.join(turnDir, 'after.json'), JSON.stringify({ files: { [created]: sha('misplaced\n'), [edited]: sha('after\n') } }));
+    const ctx = { codeRoot: code, dataRoot: data };
+    expect(revertFile(turnDir, created, ctx)).toBe('deleted');
+    expect(fs.existsSync(created)).toBe(false);
+    expect(revertFile(turnDir, edited, ctx)).toBe('restored');
+    expect(fs.readFileSync(edited, 'utf8')).toBe('before\n');
+    // Outside the recorded scope stays refused.
+    const other = path.join(code, 'modes', '_custom.md');
+    fs.mkdirSync(path.dirname(other), { recursive: true });
+    fs.writeFileSync(`${snapshotKey(turnDir, other)}.absent`, '');
+    expect(refusal(() => revertFile(turnDir, other, ctx)).status).toBe(403);
+  });
+});
+
 describe('change sets the disk no longer matches', () => {
   it('lists a recorded file that became a directory as unreadable, with no revert, and still diffs the other files', () => {
     const { sessionDir, created, meta, file } = fakeSession();
