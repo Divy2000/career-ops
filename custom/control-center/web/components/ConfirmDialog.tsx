@@ -39,10 +39,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
               </Dialog.Description>
             )}
             <div className="row gap dialog__actions">
-              <button type="button" onClick={() => settle(false)}>
+              {/* A destructive or paid confirm starts on Cancel, so the Enter that opened it (held, or pressed twice) cannot confirm it. */}
+              <button type="button" onClick={() => settle(false)} autoFocus={Boolean(opts?.danger)}>
                 {opts?.cancelLabel ?? 'Cancel'}
               </button>
-              <button type="button" className={opts?.danger ? 'button--danger' : 'button--primary'} onClick={() => settle(true)} autoFocus>
+              <button type="button" className={opts?.danger ? 'button--danger' : 'button--primary'} onClick={() => settle(true)} autoFocus={!opts?.danger}>
                 {opts?.confirmLabel ?? 'Confirm'}
               </button>
             </div>
