@@ -49,6 +49,13 @@ describe('auth and request hardening', () => {
     });
   }
 
+  it('only /auth itself skips the session check: a cookie-less /authx, /auth/x or /authorize gets 401 (SW3-tests-22)', async () => {
+    for (const url of ['/authx', '/auth/x', '/authorize?t=1', '/auth.html']) {
+      const res = await t.app.inject({ method: 'GET', url, headers: { host: TEST_HOST } });
+      expect(res.statusCode, url).toBe(401);
+    }
+  });
+
   it('a wrong token on /auth gets 403 and no cookie', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/auth?t=nope', headers: { host: TEST_HOST } });
     expect(res.statusCode).toBe(403);
