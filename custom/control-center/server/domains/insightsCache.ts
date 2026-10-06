@@ -79,6 +79,19 @@ function dirKey(dir: string): string {
 }
 
 /** `trackerPath` is the tracker the scripts resolve (CAREER_OPS_TRACKER may put it outside the data root); its status log sits beside it. */
+/**
+ * company-history.mjs reads its tracker, follow-ups, scan history and portals from its own folder (the code checkout),
+ * not the data root: only its profile follows CAREER_OPS_ROOT. These are the overrides it honours, pointed at the data
+ * root's files. `trackerPath` is path-resolver.mjs rawTrackerPath(dataRoot), which already puts CAREER_OPS_TRACKER
+ * first; a CAREER_OPS_PORTALS in the environment is left to win, as in every other script.
+ */
+export function companyHistoryInputs(dataRoot: string, trackerPath: string, env: NodeJS.ProcessEnv = process.env): { args: string[]; env: Record<string, string> } {
+  return {
+    args: ['--followups', path.join(dataRoot, 'data', 'follow-ups.md'), '--scan-history', path.join(dataRoot, 'data', 'scan-history.tsv')],
+    env: { CAREER_OPS_TRACKER: trackerPath, ...(env.CAREER_OPS_PORTALS?.trim() ? {} : { CAREER_OPS_PORTALS: path.join(dataRoot, 'portals.yml') }) },
+  };
+}
+
 export function inputsKey(dataRoot: string, trackerPath?: string): string {
   const tracker = trackerPath ? [`tracker=${trackerPath}:${mtimeOf(trackerPath)}`, `tracker-log:${mtimeOf(path.join(path.dirname(trackerPath), 'status-log.tsv'))}`] : [];
   return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`), ...tracker].join('|');
@@ -88,7 +101,7 @@ const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'dat
 
 export async function readInsight(cfg: ServerConfig, exec: Exec, script: InsightScript, opts: { recompute?: boolean; now?: () => number } = {}): Promise<InsightRead> {
   const def = INSIGHT_SCRIPTS[script]!;
-  const { resolveTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+  const { resolveTrackerPath, rawTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string; rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
   const now = opts.now ?? Date.now;
   // The scripts count days from today (rejection latency, weekly digest, funnel velocity), so a new local day is a new input.
   const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}|day:${localDate(new Date(now()))}`;
@@ -101,7 +114,8 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
       /* no usable cache */
     }
   }
-  const r = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, def.cli)], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1' } });
+  const extra = script === 'companyHistory' ? companyHistoryInputs(cfg.dataRoot, rawTrackerPath(cfg.dataRoot)) : { args: [], env: {} };
+  const r = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, def.cli), ...extra.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...extra.env } });
   let json: unknown;
   try {
     json = JSON.parse(r.stdout);

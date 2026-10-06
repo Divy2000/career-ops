@@ -7,6 +7,7 @@ import { execNoShell, type Exec } from './system.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { pinnedNodeBin } from '../system/schedule.js';
+import { importCore } from '../core/adapter.js';
 
 const SYNC_TIMEOUT_MS = 30_000;
 
@@ -30,7 +31,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       return reply.code(428).send({ error: `${action.label} needs confirmation: ${action.confirm}`, confirm: action.confirm });
     }
     const daily = opts.daily;
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined };
+    const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined };
     const problem = await action.check?.(parsed.data, ctx);
     if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });
     const cmd = action.build(parsed.data, ctx);

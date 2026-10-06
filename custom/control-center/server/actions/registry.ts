@@ -9,6 +9,7 @@ import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { listReportFiles } from '../domains/reports.js';
+import { companyHistoryInputs } from '../domains/insightsCache.js';
 import { containedTarget, OutsideRootsError } from '../lib/atomic-write.js';
 import { RunStore } from '../runner/store.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
@@ -25,6 +26,8 @@ export interface ActionContext {
   claudeBin?: string;
   /** The node the scheduled jobs are pinned to (pinnedNodeBin); the daily job gets it when it is absolute, as the plist does. */
   nodeBin?: string;
+  /** The data root's tracker as path-resolver.mjs rawTrackerPath resolves it (CAREER_OPS_TRACKER first). */
+  trackerPath?: string;
   /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
   tmpInputs: string[];
   /** The community plugins folder (default <codeRoot>/plugins.local). */
@@ -449,7 +452,19 @@ export const ACTIONS: ActionDef[] = [
       ['insights.contacts', 'Contacts summary', 'contacts'],
     ] as Array<[string, string, CliId]>
   ).map(([id, label, cli]) => define({ id, label, cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, cli, ['--summary']) })),
-  define({ id: 'insights.companyHistory', label: 'Company history', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company')]) }),
+  define({
+    id: 'insights.companyHistory',
+    label: 'Company history',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ company: company.optional() }),
+    build: (p, ctx) => {
+      const inputs = companyHistoryInputs(ctx.dataRoot, ctx.trackerPath ?? path.join(ctx.dataRoot, 'data', 'applications.md'));
+      return node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company'), ...inputs.args], inputs.env);
+    },
+  }),
   define({
     id: 'insights.keywordMatch',
     label: 'Keyword match',
