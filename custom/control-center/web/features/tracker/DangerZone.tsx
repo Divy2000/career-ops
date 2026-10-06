@@ -20,8 +20,12 @@ export function DangerZone({ n }: { n: number }) {
       const text = `${typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2)}\n${r.stderr ?? ''}`.trim();
       if (dryRun) setPreview(text || 'Dry run produced no output.');
       else {
-        await qc.invalidateQueries({ queryKey: ['tracker'] });
+        // The row is gone: its own queries would refetch into a 404 and hold the page on their retries. Drop them,
+        // leave, then refresh the tracker lists.
+        qc.removeQueries({ queryKey: ['tracker', 'row', String(n)] });
+        qc.removeQueries({ queryKey: ['tracker', 'documents', n] });
         await navigate({ to: '/tracker' });
+        await qc.invalidateQueries({ queryKey: ['tracker'] });
       }
     } catch (err) {
       setError(describeError(err));
