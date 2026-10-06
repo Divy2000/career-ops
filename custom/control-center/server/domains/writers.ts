@@ -143,7 +143,8 @@ try {
   }, { timeoutMs: req.timeoutMs, retryMs: 50 });
   process.stdout.write(JSON.stringify(out));
 } catch (e) {
-  const busy = e && (e.code === 'LOCK_TIMEOUT' || /lock/i.test(String(e.message)));
+  // Only followup-seed.mjs's own lock timeout is "busy"; any other failure (a path that merely contains "lock") is real.
+  const busy = Boolean(e && e.code === 'LOCK_TIMEOUT');
   process.stdout.write(JSON.stringify({ ok: false, error: busy ? 'busy' : String(e && e.message) }));
   process.exit(busy ? 75 : 1);
 }
@@ -152,7 +153,16 @@ try {
     const target = containedTarget(file, dataRootOnly(dataRoot));
     const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { path: file, target, edit, timeoutMs: 5000 }, timeoutMs: 30_000 });
     if (r.code === 75) throw new FollowupsBusyError('follow-ups file is busy, try again in a moment');
-    if (r.code !== 0 && !r.stdout.trim()) throw new Error(`follow-ups writer exited ${r.code}: ${r.stderr.trim().slice(-600)}`);
+    // A refused edit (no such row, bad date) is ok:false with exit 0; any other exit is a failure the client cannot fix.
+    if (r.code !== 0) {
+      let reason = r.stderr.trim().slice(-600);
+      try {
+        reason = (JSON.parse(r.stdout) as { error?: string }).error ?? reason;
+      } catch {
+        /* no JSON on stdout: keep stderr */
+      }
+      throw new Error(`follow-ups writer exited ${r.code}: ${reason}`);
+    }
     return childJson<FollowupEditResult>(r);
   });
 }

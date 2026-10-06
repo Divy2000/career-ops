@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 import type { Exec } from '../../server/routes/system.js';
 import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
 import { dailyPidfile } from '../../server/system/daily.js';
@@ -178,6 +179,46 @@ describe('pipeline adds while another writer holds the pipeline lock (SW2-tests-
     const after = await post('/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/busy/1', company: 'Busy Co', title: 'Engineer' }] });
     expect(after.statusCode, after.body).toBe(200);
     expect(after.json()).toEqual({ added: 1, skipped: 0 });
+  });
+});
+
+describe('follow-up edits that cannot write (SW2-tests-23)', () => {
+  it('while another writer holds the follow-ups lock, answers 409 busy with retry-after and writes nothing', async () => {
+    const { withFollowupsLock } = (await import(pathToFileURL(path.join(t.cfg.codeRoot, 'followup-seed.mjs')).href)) as { withFollowupsLock: <T>(p: string, fn: () => Promise<T>) => Promise<T> };
+    const file = path.join(t.cfg.dataRoot, 'data', 'follow-ups.md');
+    const before = fs.readFileSync(file, 'utf8');
+    let release!: () => void;
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const holder = withFollowupsLock(file, () => new Promise<void>((r) => ((release = r), held())));
+    await holding;
+    try {
+      const res = await post('/api/followups/override', { appNum: 1, date: '2026-10-20' });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.headers['retry-after']).toBe('1');
+      expect(res.json().error).toMatch(/follow-ups file is busy/);
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      release();
+      await holder;
+    }
+  }, 30_000);
+
+  it('a write error whose message happens to contain "lock" (a data root under a folder named clock) is a 500 with the real error, not "busy"', async () => {
+    const dataRoot = path.join(tempDir('cc-clock-'), 'root');
+    fs.cpSync(path.join(t.cfg.dataRoot), dataRoot, { recursive: true });
+    const own = await makeTestApp({ dataRoot });
+    const file = path.join(dataRoot, 'data', 'follow-ups.md');
+    fs.chmodSync(file, 0o000);
+    try {
+      const res = await own.app.inject({ method: 'POST', url: '/api/followups/override', headers: own.authedWrite, payload: { appNum: 1, date: '2026-10-20' } });
+      expect(res.statusCode, res.body).toBe(500);
+      expect(res.body).toMatch(/EACCES/);
+      expect(res.body).not.toMatch(/busy/);
+    } finally {
+      fs.chmodSync(file, 0o644);
+      await own.close();
+    }
   });
 });
 
