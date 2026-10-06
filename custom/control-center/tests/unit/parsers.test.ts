@@ -72,6 +72,13 @@ describe('reports', () => {
     expect(after.sections[0]!.content).toBe('Posted: today\n\n## About us\nWe build.');
   });
 
+  it('keeps a JD heading that only starts like a report section inside the archived JD, while a template heading with its own note still ends it (SW5-tests-12 review)', () => {
+    const { sections } = splitSections('## Job Description (archived verbatim)\nPosted: today\n\n## Risk Summary and Mitigations\nOwn the risk register.\n\n## Step 0 of onboarding\nShadow.\n\n## Liveness gate (URL inputs)\nLive.\n\n## Risk Summary\nNone.');
+    expect(sections.map((s) => s.heading)).toEqual(['Job Description (archived verbatim)', 'Liveness gate (URL inputs)', 'Risk Summary']);
+    expect(sections[0]!.content).toContain('## Risk Summary and Mitigations\nOwn the risk register.');
+    expect(sections[0]!.content).toContain('## Step 0 of onboarding');
+  });
+
   it('keeps a report\'s **URL:** only when it is a real http(s) URL, cleaned the way merge-tracker.mjs cleans it (SW2-server-06)', () => {
     const url = (value: string) => parseReport(`# Evaluation: Acme - Eng\n\n**URL:** ${value}\n**Score:** 4/5\n`, '010-acme.md', 10).url;
     // N/A is legitimate for recruiter-sourced roles (merge-tracker.mjs resolveReportUrl).
