@@ -121,7 +121,7 @@ export interface SessionPanelProps {
   startLabel?: string;
   replyLabel?: string;
   blacklistAllowed?: boolean;
-  /** Called once the server accepted a start or a turn sent with this panel's props (blacklistAllowed included). */
+  /** Called once the server accepted a start, a turn or a fork sent with this panel's props (blacklistAllowed included). */
   onSent?: () => void;
 }
 
@@ -178,7 +178,8 @@ export function SessionPanel(props: SessionPanelProps) {
     setError(null);
     try {
       if (fork) {
-        const m = await forkSession(sessionId, text);
+        const m = await forkSession(sessionId, text, props.blacklistAllowed);
+        props.onSent?.();
         seen.current = 0;
         setSessionId(m.id);
         props.onSessionId?.(m.id);

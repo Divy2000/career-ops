@@ -183,7 +183,7 @@ function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () => void
   const [error, setError] = useState<string | null>(null);
   const start = async () => {
     try {
-      const meta = await startSession({ mode, target: targetFor(target), prompt });
+      const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
       toast.success(`Started ${mode} session`);
       onClose();
       await navigate({ to: '/sessions/$id', params: { id: meta.id } });

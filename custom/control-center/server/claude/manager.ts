@@ -182,12 +182,12 @@ export class SessionManager {
     }
   }
 
-  async fork(id: string, prompt: string): Promise<SessionMeta> {
+  async fork(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const src = this.must(id);
     assertCurrentPolicy(src);
     const policy = this.turnPolicy(src.mode);
     const forked = this.store.fork(id);
-    return this.runTurn(forked, policy, prompt, { resume: true, fork: true });
+    return this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */

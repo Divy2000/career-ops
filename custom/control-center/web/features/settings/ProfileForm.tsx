@@ -22,7 +22,8 @@ export const PROFILE_SECTIONS: SectionDef[] = [
   { key: 'target_roles', help: 'North Star roles and the archetypes the evaluation scores against.', empty: { primary: [], archetypes: [] } },
   { key: 'narrative', help: 'Headline, exit story, superpowers and proof points.', empty: { headline: '', exit_story: '', superpowers: [], proof_points: [] } },
   { key: 'compensation', help: 'Target range, currency, walk-away number and flexibility.', empty: { target_range: '', currency: 'USD', minimum: '', location_flexibility: '' } },
-  { key: 'location', help: 'Where you are, where you are authorized to work and whether you need sponsorship.', empty: { country: '', city: '', timezone: '', visa_status: '', authorized_in: [], needs_sponsorship: false } },
+  // needs_sponsorship starts true: false tells evaluations a "we do not sponsor" JD is fine, and an omitted key reads as false upstream.
+  { key: 'location', help: 'Where you are, where you are authorized to work and whether you need sponsorship (needs_sponsorship starts ticked; untick it if you do not).', empty: { country: '', city: '', timezone: '', visa_status: '', authorized_in: [], needs_sponsorship: true } },
   { key: 'disability', help: 'Optional quota-eligibility flag (never disclosed automatically).', empty: { br_pcd_quota_eligible: false } },
   { key: 'language', help: 'Output language and market modes directory.', empty: { output: 'en' } },
   { key: 'spend_tier', help: 'economy, standard or premium.', empty: 'standard' },

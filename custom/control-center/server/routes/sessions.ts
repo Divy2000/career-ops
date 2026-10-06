@@ -16,6 +16,28 @@ const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function namesTarget(prompt: string, type: string, v: string): boolean {
+  // A row is named only as "#3", never inside "#30": a bare "3" in the prompt can be anything.
+  if (type === 'app') return new RegExp(`#${escapeRegExp(v)}(?!\\d)`).test(prompt);
+  // A company as a whole word in any case ("Meta" is not named by "Metadata"); lookarounds, not \b, so "Stripe, Inc." works.
+  if (type === 'company') return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(v)}(?![\\p{L}\\p{N}_])`, 'iu').test(prompt);
+  return prompt.includes(v);
+}
+
+/**
+ * Claude only gets the prompt and the preamble, never the session's target, so a target the prompt does not already
+ * name is added to the first message. A text target (a document path) is the mode's own input and is left alone.
+ */
+export function promptWithTarget(prompt: string, target: { type: string; value: string | null }): string {
+  const v = target.value?.trim();
+  if (!v || target.type === 'none' || target.type === 'text') return prompt;
+  if (namesTarget(prompt, target.type, v)) return prompt;
+  const what = target.type === 'app' ? `tracker row #${v}` : target.type === 'company' ? `company ${v}` : v;
+  return `${prompt}\n\nTarget: ${what}`;
+}
+
 export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; bus: EventBus }): Promise<void> {
   const { manager } = opts;
   // Unlocking data/blacklist.md for a turn is the same explicit gate as PUT /api/blacklist: Dev Chat only, and the header on that request.
@@ -37,7 +59,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
-    let userPrompt = parsed.data.prompt;
+    let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);
     // projects-ingest runs no command: the app extracts its documents/ source (as intake does) and the text rides in the first message.
     if (parsed.data.mode === 'projects-ingest') {
       const doc = parsed.data.target.type === 'text' && parsed.data.target.value ? await extractSourceText(opts.cfg.codeRoot, opts.cfg.dataRoot, parsed.data.target.value) : { ok: false as const, error: 'projects-ingest needs the documents/ path of the source as its target' };
@@ -107,9 +129,16 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/fork', async (req, reply) => {
-    const parsed = z.object({ prompt }).safeParse(req.body ?? {});
+    const parsed = z.object({ prompt, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return mutate(reply, async () => reply.code(202).send(await manager.fork(req.params.id, parsed.data.prompt)));
+    // A fork's first turn is a turn like any other: the same explicit unlock gate as POST /turns.
+    if (parsed.data.blacklistAllowed) {
+      const meta = manager.read(req.params.id);
+      if (!meta) return reply.code(404).send({ error: 'no such session' });
+      const refused = unlockRefused(meta.mode, req.headers);
+      if (refused) return reply.code(403).send({ error: refused });
+    }
+    return mutate(reply, async () => reply.code(202).send(await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
   });
 
   await withEmptyJsonBody(app, (scope) => {

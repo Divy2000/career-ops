@@ -716,6 +716,12 @@
       ]
     },
     {
+      "module": "funnel-stages.mjs",
+      "names": [
+        "recoverFunnelStages"
+      ]
+    },
+    {
       "module": "contacts.mjs",
       "names": [
         "parseContacts",
