@@ -908,6 +908,26 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(lineOnes(runner, waiting.id)).toBe(1);
   });
 
+  it('a queued run a live process holds the claim of and has begun starting holds its Claude slot here even outside the schedule lock: nothing here starts past the cap until that process is gone', async () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const theirs = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: true, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: '/' }, params: {} });
+    const claimer = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(claimer);
+    fs.writeFileSync(path.join(store.dirOf(theirs.id), 'claim'), JSON.stringify({ pid: claimer.pid, start: processStartTime(claimer.pid!) }));
+    fs.writeFileSync(path.join(store.dirOf(theirs.id), 'starting'), '');
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(here);
+    const mine = here.start(req(['0'], { claude: true }));
+    await wait(500);
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    const gone = new Promise((r) => claimer.once('exit', r));
+    claimer.kill('SIGKILL');
+    await gone;
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(theirs.id)?.status).toBe('lost');
+  });
+
   it('a run claimed by a live process is never taken from it; once that process is gone without starting it, this one starts it', async () => {
     const root = tmpRoot();
     const runner = new Runner(root, new EventBus(), { pollMs: 50 });

@@ -449,8 +449,9 @@ export class Runner {
     }
     let waitsOnOthers = false;
     try {
-      this.resumeAbandonedStarts();
-      const holders = this.holders();
+      // Settled first, so a run taken over as running is counted below.
+      const starting = this.resumeAbandonedStarts();
+      const holders = [...this.holders(), ...starting];
       const foreign = holders.some((m) => !this.active.has(m.id));
       const busy = new Set(holders.flatMap((m) => m.resources));
       let claude = holders.filter((m) => m.claude).length;
@@ -477,17 +478,23 @@ export class Runner {
   }
 
   /**
-   * Runs still queued on disk whose wrapper a process that is gone may have spawned: their wrapper may hold a slot and
-   * resources although nothing counts it, and this queue may not hold them yet (their token still being read), so they
-   * are settled here, under the schedule lock, before the count.
+   * Runs still queued on disk whose wrapper a process may have spawned: their wrapper may hold a slot and resources
+   * although nothing counts it, and this queue may not hold them yet (their token still being read). Those whose
+   * claimant is gone are settled here, under the schedule lock, before the count. Returns those a live process still
+   * holds (it is starting them), which count as holders until it records them or is gone.
    */
-  private resumeAbandonedStarts(): void {
+  private resumeAbandonedStarts(): RunMeta[] {
+    const starting: RunMeta[] = [];
     for (const meta of this.store.list()) {
       if (meta.status !== 'queued' || !fs.existsSync(path.join(this.store.dirOf(meta.id), STARTING_FILE))) continue;
-      if (this.claim(meta.id, true) === 'held') continue;
+      if (this.claim(meta.id, true) === 'held') {
+        starting.push(meta);
+        continue;
+      }
       const current = this.store.read(meta.id);
       if (current?.status === 'queued') this.resumeInterruptedStart(current);
     }
+    return starting;
   }
 
   private retryLater(): void {
