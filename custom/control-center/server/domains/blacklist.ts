@@ -62,6 +62,7 @@ company label) or \`domain\` (match the posting URL hostname as a suffix, for ex
 
 const splitCells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
 const TABLE_LINE = /^\s*\|/;
+const SEPARATOR = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*(?::?-+:?\s*)?$/;
 
 /**
  * A `|` line read as scan.mjs parseBlacklist reads every one: Company, Since, Scope, Reason by position. Null for what
@@ -89,19 +90,53 @@ const POSITIONS: Array<{ label: string; fits: (h: string) => boolean }> = [
 ];
 const MANAGED = new Set(['company', 'since', 'scope', 'reason']);
 
-/** Text around the table without its `|` lines, and the rows the scanner reads from them. Untouched when it has none. */
+/**
+ * Text around the table without its `|` lines, and the rows the scanner reads from them. Untouched when it has none.
+ * Only the blank lines a removed run of `|` lines leaves behind go (the ones after it, or all of them at the end);
+ * every other line, blank or not, is kept as it is.
+ */
 function outsideTable(lines: string[], read: (line: string) => BlacklistRow | null): { text: string; rows: BlacklistRow[] } {
   if (!lines.some((l) => TABLE_LINE.test(l))) return { text: lines.join('\n'), rows: [] };
   const rows = lines.filter((l) => TABLE_LINE.test(l)).map(read).filter((r): r is BlacklistRow => r !== null);
-  // The removed lines leave their blank neighbours behind: at most one blank line in a row, and none at the end.
-  const text = lines.filter((l) => !TABLE_LINE.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '\n');
-  return { text, rows };
+  const blank = (l: string) => l.trim() === '';
+  const kept: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (!TABLE_LINE.test(lines[i]!)) {
+      kept.push(lines[i++]!);
+      continue;
+    }
+    while (i < lines.length && TABLE_LINE.test(lines[i]!)) i++;
+    if (lines.slice(i).every(blank)) {
+      while (kept.length && blank(kept.at(-1)!)) kept.pop();
+      if (kept.length) kept.push('');
+      break;
+    }
+    if (!kept.length || blank(kept.at(-1)!)) while (i < lines.length && blank(lines[i]!)) i++;
+  }
+  return { text: kept.join('\n'), rows };
+}
+
+/** Records a row's cells a save has no column for: past the table's last column, or a scope that is neither company nor domain. */
+function noteLost(cells: string[], company: string, width: number, keepThird: boolean, unkept: string[]): void {
+  const lost = cells.filter((c, i) => c !== '' && (i >= width || (i === 2 && !keepThird && !['company', 'domain'].includes(c.toLowerCase()))));
+  if (lost.length) unkept.push(`${company} (${lost.join(', ')})`);
 }
 
 export function parseBlacklist(md: string): BlacklistParsed {
   const lines = md.split(/\r?\n/);
-  const headerIdx = lines.findIndex((l) => /^\s*\|/.test(l) && /company/i.test(l));
-  if (headerIdx === -1) return { rows: [], preamble: md.trim() ? md : null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] };
+  // The table's header: a `|` line naming a Company column, with the markdown separator row under it.
+  const headerIdx = lines.findIndex((l, i) => TABLE_LINE.test(l) && /company/i.test(l) && SEPARATOR.test(lines[i + 1] ?? ''));
+  if (headerIdx === -1) {
+    // No table, but the scanner still blocks every `|` line: they are listed, and a save moves them into a new table.
+    const unkept: string[] = [];
+    const loose = outsideTable(lines, (l) => {
+      const row = scannerRow(l);
+      if (row) noteLost(splitCells(l), row.company, 4, false, unkept);
+      return row;
+    });
+    return { rows: loose.rows, preamble: loose.text.trim() ? loose.text : null, postamble: '', extraColumns: [], columnWarning: null, unkept };
+  }
   const headerCells = splitCells(lines[headerIdx]!);
   const header = headerCells.map((h) => h.toLowerCase());
   const misplaced = POSITIONS.some((p, i) => i < header.length && !p.fits(header[i]!));
@@ -119,8 +154,7 @@ export function parseBlacklist(md: string): BlacklistParsed {
     const cells = splitCells(line);
     const row = scannerRow(line, [...(keepThird ? [cells[2] ?? ''] : []), ...headerCells.slice(4).map((_, i) => cells[4 + i] ?? '')]);
     if (!row || isHeader) return row;
-    const lost = cells.filter((c, i) => c !== '' && (i >= Math.max(4, headerCells.length) || (i === 2 && !keepThird && !['company', 'domain'].includes(c.toLowerCase()))));
-    if (lost.length) unkept.push(`${row.company} (${lost.join(', ')})`);
+    noteLost(cells, row.company, Math.max(4, headerCells.length), keepThird, unkept);
     return row;
   };
   // A markdown table ends at its first line that is not a row (a blank line included).

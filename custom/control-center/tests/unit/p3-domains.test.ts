@@ -208,6 +208,24 @@ Some intro text about the file.
     expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble)).toBe(`# Blacklist\n\nIntro.\n\n${table}| Other | Table | company |  |\n| a | b | company |  |\n\n## Notes\n\nKeep this paragraph.\n`);
   });
 
+  it('lists the | rows of a file with no Company header as scan.mjs blocks them, and a save moves them into the table once (SW8 review 3, review)', () => {
+    const md = '# Blacklist\n\nIntro.\n\n| Acme | 2026-01-01 | company | no |\n';
+    const parsed = parseBlacklist(md);
+    expect(parsed.rows).toEqual([{ company: 'Acme', since: '2026-01-01', scope: 'company', reason: 'no' }]);
+    const saved = renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, parsed.extraColumns);
+    expect(saved).toBe('# Blacklist\n\nIntro.\n\n| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme | 2026-01-01 | company | no |\n');
+    expect(parsed.unkept).toEqual([]);
+    // A header with no separator row under it is no table: a cell past Reason has no column to go to.
+    expect(parseBlacklist('| Company | Since | Scope | Reason | Ticket |\n| Acme | 2026-01-01 | company | no | T-1 |\n').unkept).toEqual(['Acme (T-1)']);
+  });
+
+  it('keeps the spacing of the text around the table where no row was taken out of it (SW8 review 3, review)', () => {
+    const table = '| Company | Since | Scope | Reason |\n|---|---|---|---|\n| A | 2026-01-01 | company | x |\n';
+    const parsed = parseBlacklist(`# Blacklist\n\nIntro.\n\n${table}\n## Notes\n\n\nKeep this spacing.\n\n| B | 2026-01-02 | company | y |\n\nMore.\n`);
+    expect(parsed.rows.map((r) => r.company)).toEqual(['A', 'B']);
+    expect(parsed.postamble).toBe('\n## Notes\n\n\nKeep this spacing.\n\nMore.\n');
+  });
+
   it('carries columns it does not manage through every row, in order, and leaves them empty on new rows', () => {
     const md = '# Blacklist\n\n| Company | Reason | Added | Contact | Ticket |\n|---|---|---|---|---|\n| Old Corp | reposts | 2025-09-01 | jane@old.example | T-1 |\n| Short Row | spam | 2025-10-01 |\n';
     const parsed = parseBlacklist(md);
