@@ -25,23 +25,29 @@ export interface AnswerField {
   needsConfirmation: boolean;
 }
 
+// The fill turn leaves checkbox and radio groups to the candidate (modes/apply.md: on Lever a scripted click on one
+// raises hCaptcha), so the app never sets them: they are listed as steps to do on the form, and the fill turn skips them.
+const MANUAL_TYPES = new Set(['checkbox', 'radio']);
+// A single checkbox (consent) or a group whose options were not listed counts too: the fill turn skips it all the same.
+const isManualField = (f: AnswerField): boolean => MANUAL_TYPES.has(f.type);
+
 export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onChange: (fields: AnswerField[]) => void }) {
   const set = (id: string, value: string) => onChange(fields.map((f) => (f.id === id ? { ...f, value } : f)));
   return (
     <div className="stack" aria-label="Drafted answers">
       {fields.map((f) =>
-        // A checkbox group takes several answers, and the fill turn leaves checkboxes to the candidate (modes/apply.md):
-        // one select would suggest a single answer the app sets. It is listed as a step to do on the form instead.
-        f.type === 'checkbox' && f.options && f.options.length > 0 ? (
+        isManualField(f) ? (
           <div key={f.id} className="stack" style={{ gap: 4 }} data-manual-field={f.id}>
             <span>
               {f.label} {f.required && <span className="faint">(required)</span>} <Pill tone="warn">Set this on the form yourself</Pill>
             </span>
-            <ul className="small" style={{ margin: 0 }}>
-              {f.options.map((o) => (
-                <li key={o}>{o}</li>
-              ))}
-            </ul>
+            {f.options && f.options.length > 0 && (
+              <ul className="small" style={{ margin: 0 }}>
+                {f.options.map((o) => (
+                  <li key={o}>{o}</li>
+                ))}
+              </ul>
+            )}
             {f.value && <span className="muted small">Drafted: {f.value}</span>}
           </div>
         ) : (
@@ -49,7 +55,7 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
               <span>
                 {f.label} {f.required && <span className="faint">(required)</span>} {f.needsConfirmation && <Pill tone="warn">needs your confirmation</Pill>}
               </span>
-              {/* Any fixed set of choices is a select, whatever the form called its control (radio, checkbox, combobox): a typed value could match none of them. */}
+              {/* Any other fixed set of choices is a select, whatever the form called its control (combobox, dropdown): a typed value could match none of them. */}
               {f.options && f.options.length > 0 ? (
                 <select value={f.value} onChange={(e) => set(f.id, e.target.value)}>
                   {/* Without an option for the held value the browser shows the first option, while the held value is what Fill sends. */}
@@ -156,13 +162,15 @@ function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
   const [filling, setFilling] = useState(false);
   const fill = async () => {
     if (!sessionId || !fields) return;
-    const confirmed = fields.map(({ id, label, value }) => ({ id, label, value }));
+    const confirmed = fields.filter((f) => !isManualField(f)).map(({ id, label, value }) => ({ id, label, value }));
+    const manual = fields.filter(isManualField).map((f) => JSON.stringify(f.label));
+    const leave = manual.length > 0 ? ` Leave these to the user, who sets them on the form: ${manual.join(', ')}.` : '';
     setFillNote(null);
     setFilling(true);
     const seqAtClick = statusSeq.current;
     try {
       const attach = pdf ? `attach the CV PDF ${pdf}${cover ? ` and use the cover letter text in ${cover}` : ''}` : 'attach the tailored CV';
-      const meta = await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, ${attach}, stop before Submit and report what you filled:\n${JSON.stringify({ fields: confirmed })}`);
+      const meta = await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, ${attach}, stop before Submit and report what you filled.${leave}\nThe values to fill:\n${JSON.stringify({ fields: confirmed })}`);
       // The turn is running from here on, but its running event over the stream may come later and the button would
       // wake up. A status the stream already delivered since the click is newer than this answer, so it stays.
       if (statusSeq.current === seqAtClick) setStatus(meta.status);
