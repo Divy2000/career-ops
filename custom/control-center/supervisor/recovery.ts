@@ -103,6 +103,46 @@ export function changesByTurn(sessionDir: string, meta: MetaLike): Array<{ n: nu
   });
 }
 
+/** Larger sides are summarized: a line diff of them could hold the supervisor's single loop (and the API) for minutes. */
+export const MAX_DIFF_BYTES = 1024 * 1024;
+/** Bounds on one Myers diff (jsdiff gives up and returns undefined past either); the summary is shown instead. */
+const DIFF_LIMITS = { maxEditLength: 5000, timeout: 500 } as const;
+
+function lineList(text: string): string[] {
+  const out = text.split('\n');
+  if (out.at(-1) === '') out.pop();
+  return out;
+}
+
+/** Added and removed lines as multisets: linear time, the same totals a patch shows when lines are not reordered. */
+function lineCounts(before: string, after: string): { additions: number; deletions: number } {
+  const left = new Map<string, number>();
+  for (const line of lineList(before)) left.set(line, (left.get(line) ?? 0) + 1);
+  let additions = 0;
+  for (const line of lineList(after)) {
+    const n = left.get(line) ?? 0;
+    if (n > 0) left.set(line, n - 1);
+    else additions++;
+  }
+  let deletions = 0;
+  for (const n of left.values()) deletions += n;
+  return { additions, deletions };
+}
+
+const utf8 = new TextDecoder('utf-8', { fatal: true });
+
+/** The text of a side, or null when it is binary (a NUL byte, or not UTF-8). */
+function textOf(bytes: Buffer): string | null {
+  if (bytes.includes(0)) return null;
+  try {
+    return utf8.decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+const sizeOf = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1024 / 1024).toFixed(1)} MiB`);
+
 function countLines(patch: string): { additions: number; deletions: number } {
   let additions = 0;
   let deletions = 0;
@@ -113,24 +153,40 @@ function countLines(patch: string): { additions: number; deletions: number } {
   return { additions, deletions };
 }
 
-/** `after` is the file as the turn left it: the next turn's snapshot when one exists, else the file on disk now. */
-export function diffFile(turnDir: string, rec: ChangeRecord, after?: { exists: boolean; text: string }): FileDiff {
+/**
+ * `after` is the file as the turn left it: the next turn's snapshot when one exists, else the file on disk now.
+ * Binary sides, sides over MAX_DIFF_BYTES and edits past DIFF_LIMITS get a summary in place of the patch.
+ */
+export function diffFile(turnDir: string, rec: ChangeRecord, after?: { exists: boolean; bytes: Buffer }): FileDiff {
   const key = snapshotKey(turnDir, rec.abs);
   const hadSnapshot = fs.existsSync(key);
   const wasAbsent = fs.existsSync(`${key}.absent`);
   const exists = after ? after.exists : fs.existsSync(rec.abs);
-  const current = after ? after.text : exists ? fs.readFileSync(rec.abs, 'utf8') : '';
+  const current = after ? after.bytes : exists ? fs.readFileSync(rec.abs) : Buffer.alloc(0);
   if (!hadSnapshot && !wasAbsent) return { ...rec, status: 'no-snapshot', additions: 0, deletions: 0, patch: '', canRevert: false };
-  const before = hadSnapshot ? fs.readFileSync(key, 'utf8') : '';
-  const status: FileDiff['status'] = wasAbsent ? (exists ? 'added' : 'unchanged') : !exists ? 'deleted' : before === current ? 'unchanged' : 'modified';
-  const patch = status === 'unchanged' ? '' : createTwoFilesPatch(wasAbsent ? '/dev/null' : `a/${rec.path}`, exists ? `b/${rec.path}` : '/dev/null', before, current, '', '', { context: 3 });
-  return { ...rec, status, ...countLines(patch), patch, canRevert: status !== 'unchanged' };
+  const before = hadSnapshot ? fs.readFileSync(key) : Buffer.alloc(0);
+  const status: FileDiff['status'] = wasAbsent ? (exists ? 'added' : 'unchanged') : !exists ? 'deleted' : before.equals(current) ? 'unchanged' : 'modified';
+  if (status === 'unchanged') return { ...rec, status, additions: 0, deletions: 0, patch: '', canRevert: false };
+  const summary = (why: string, counts = { additions: 0, deletions: 0 }): FileDiff => ({
+    ...rec,
+    status,
+    ...counts,
+    patch: `${why}: no line diff is shown (before ${wasAbsent ? 'absent' : sizeOf(before.length)}, after ${exists ? sizeOf(current.length) : 'absent'}). Reverting still restores the exact bytes.`,
+    canRevert: true,
+  });
+  const beforeText = textOf(before);
+  const afterText = textOf(current);
+  if (beforeText === null || afterText === null) return summary('Binary file');
+  if (before.length > MAX_DIFF_BYTES || current.length > MAX_DIFF_BYTES) return summary(`File larger than ${sizeOf(MAX_DIFF_BYTES)}`, lineCounts(beforeText, afterText));
+  const patch = createTwoFilesPatch(wasAbsent ? '/dev/null' : `a/${rec.path}`, exists ? `b/${rec.path}` : '/dev/null', beforeText, afterText, '', '', { context: 3, ...DIFF_LIMITS });
+  if (patch === undefined) return summary('Too many changes to diff quickly', lineCounts(beforeText, afterText));
+  return { ...rec, status, ...countLines(patch), patch, canRevert: true };
 }
 
-function snapshotState(turnDir: string, abs: string): { exists: boolean; text: string } | null {
+function snapshotState(turnDir: string, abs: string): { exists: boolean; bytes: Buffer } | null {
   const key = snapshotKey(turnDir, abs);
-  if (fs.existsSync(key)) return { exists: true, text: fs.readFileSync(key, 'utf8') };
-  if (fs.existsSync(`${key}.absent`)) return { exists: false, text: '' };
+  if (fs.existsSync(key)) return { exists: true, bytes: fs.readFileSync(key) };
+  if (fs.existsSync(`${key}.absent`)) return { exists: false, bytes: Buffer.alloc(0) };
   return null;
 }
 
@@ -140,7 +196,7 @@ export function listChanges(sessionDir: string, meta: MetaLike): TurnChanges[] {
     n,
     files: records.map((r) => {
       try {
-        let after: { exists: boolean; text: string } | undefined;
+        let after: { exists: boolean; bytes: Buffer } | undefined;
         for (const later of grouped.slice(i + 1)) {
           const snap = snapshotState(path.join(sessionDir, 'turns', String(later.n)), r.abs);
           if (snap) {

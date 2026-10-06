@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isReservedReportFile, reportNumberOf, readReport } from '../domains/reports.js';
-import type { PolicyClass } from './modes.js';
+import { englishModeOf, type PolicyClass } from './modes.js';
 import type { SessionStatus } from './sessions.js';
 
 export interface NewReport {
@@ -46,13 +46,18 @@ export function ownReports(found: NewReport[], opts: { reportNum: number | null;
   return found.filter((r) => written.has(r.file));
 }
 
-/** Modes whose turn is an evaluation of one posting and must leave a report behind. */
+/** Modes whose turn is an evaluation of one posting and must leave a report behind, in every language. */
 export function isReportGated(modeId: string): boolean {
-  return modeId === 'oferta' || modeId === 'auto-pipeline' || modeId.startsWith('regional/') || modeId.endsWith('/oferta');
+  const id = englishModeOf(modeId);
+  return id === 'oferta' || id === 'auto-pipeline' || id.startsWith('regional/') || id.endsWith('/oferta');
 }
 
-/** Modes whose terminal output is an envelope rather than prose. */
-export const ENVELOPE_MODES = new Set(['apply', 'ai-search', 'cv-ingest', 'projects-ingest', 'advisor']);
+/**
+ * Modes whose contract demands a terminal envelope (invocation.ts ENVELOPE_CONTRACT). Advisor proposes an action
+ * only when one fits and ai-search emits one line per posting it found, so both may end in prose and follow the
+ * question rule like any other mode.
+ */
+export const ENVELOPE_MODES = new Set(['apply', 'cv-ingest', 'projects-ingest']);
 
 export function endsWithQuestion(text: string): boolean {
   const lines = text
@@ -87,7 +92,7 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
     if (!i.finalText.trim()) return { status: 'awaiting_user', reason: 'a report appeared but the turn produced no output' };
     return { status: 'done', reason: `report ${i.newReports.map((r) => r.file).join(', ')} created` };
   }
-  if (ENVELOPE_MODES.has(i.modeId)) {
+  if (ENVELOPE_MODES.has(englishModeOf(i.modeId))) {
     return i.envelopeCount > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
   }
   if (endsWithQuestion(i.finalText)) return { status: 'awaiting_user', reason: 'the turn ended with a question' };

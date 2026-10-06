@@ -13,28 +13,31 @@ function fakeClaude(body: string): string {
   return bin;
 }
 
+/** The host these checks assume, never this machine's: macOS and no managed settings (Linux or an MDM profile would fail them). */
+const host = () => ({ platform: 'darwin' as const, managedSettings: { dir: tempDir('cc-managed-'), plists: [] } });
+
 describe('runPreflightCli', () => {
   it('exits 1 and prints the error when CC_CLAUDE_BIN does not exist', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: '/nonexistent/claude', NODE_ENV: 'test' }, nodeVersion: 'v26.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: '/nonexistent/claude', NODE_ENV: 'test' }, nodeVersion: 'v26.0.0', ...host() });
     expect(r.code).toBe(1);
     expect(r.output).toContain('error: Claude CLI not runnable at "/nonexistent/claude"');
     expect(r.output).toContain('not found (ENOENT)');
   });
 
   it('exits 0 and says so when everything passes', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0', ...host() });
     expect(r.code).toBe(0);
     expect(r.output).toContain('preflight ok');
   });
 
   it('exits 1 below the Node floor', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v20.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v20.0.0', ...host() });
     expect(r.code).toBe(1);
     expect(r.output).toContain('below the floor');
   });
 
   it('an unapproved Claude Code version is a warning, not an error: exits 0 so the app starts and only sessions are refused', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('2.1.290 (Claude Code)');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('2.1.290 (Claude Code)');"), NODE_ENV: 'test' }, nodeVersion: 'v26.0.0', ...host() });
     expect(r.code).toBe(0);
     expect(r.output).toContain('warning: Claude Code 2.1.290 is not approved');
     expect(r.output).not.toContain('error:');
@@ -42,7 +45,7 @@ describe('runPreflightCli', () => {
   });
 
   it('keeps warnings in the output but exits 0', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test', ANTHROPIC_API_KEY: 'x' }, nodeVersion: 'v26.0.0' });
+    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test', ANTHROPIC_API_KEY: 'x' }, nodeVersion: 'v26.0.0', ...host() });
     expect(r.code).toBe(0);
     expect(r.output).toContain('warning: ANTHROPIC_API_KEY');
     expect(r.output).toContain('preflight ok');

@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALWAYS_DENIED_WRITES, READ_DENY, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, READ_DENY, englishModeOf, type ModePolicy } from './modes.js';
 import { buildReadDenyRules, guardHookCommand, guardHooks, spellings, writeGuardPolicy } from './confinement.mjs';
 
 // Shared with the daily job's policy pass (custom/immigration/run-daily.sh).
@@ -104,6 +104,15 @@ export function toolResultsDirs(projectsDir: string, codeRoot: string, claudeSes
 }
 
 /**
+ * The transcript the CLI keeps for a conversation, under both spellings of the code root: <projects>/<the cwd with
+ * every non-alphanumeric character as '-'>/<session id>.jsonl. The CLI (2.1.289) refuses --session-id for an id
+ * whose transcript exists and --resume for one whose transcript does not.
+ */
+export function transcriptFiles(projectsDir: string, codeRoot: string, claudeSessionId: string): string[] {
+  return [...new Set(spellings(codeRoot).map((c) => path.join(projectsDir, c.replace(/[^a-zA-Z0-9]/g, '-'), `${claudeSessionId}.jsonl`)))];
+}
+
+/**
  * An @-mention can attach a file before any tool or hook runs; a word joiner after the @ keeps the text readable
  * and the mention inert. An @ is left as written only when the character before it can sit inside a URL or an
  * e-mail address (a word character or one of . + - / : = ? & %), so https://medium.com/@acme, query strings and
@@ -117,7 +126,6 @@ export function buildArgv(input: InvocationInput): string[] {
   const disallowed = buildDisallowedTools(input.policy);
   return [
     '-p',
-    neutralizeFileMentions(input.userMessage),
     '--output-format',
     'stream-json',
     '--verbose',
@@ -138,6 +146,10 @@ export function buildArgv(input: InvocationInput): string[] {
     ...(input.policy.mcp === 'playwright' ? ['--mcp-config', input.mcpConfig ?? PLAYWRIGHT_MCP_PATH] : []),
     ...(input.model ? ['--model', input.model] : []),
     ...(input.maxTurns ? ['--max-turns', String(input.maxTurns)] : []),
+    // Last, after --: the CLI's option parser (and its early flag scan) stop there, so a prompt that starts with a
+    // dash ("- rename X", "-h") is the prompt and never an option or an error (probed on 2.1.289).
+    '--',
+    neutralizeFileMentions(input.userMessage),
   ];
 }
 
@@ -171,6 +183,11 @@ const ENVELOPE_CONTRACT: Record<string, string> = {
   advisor: 'To propose an app action emit one line <<cc:act {"action":"<name>","params":{...}}>>; the app asks the user to confirm anything that writes.',
 };
 
+function envelopeContractOf(modeId: string): string | undefined {
+  const id = englishModeOf(modeId);
+  return Object.hasOwn(ENVELOPE_CONTRACT, id) ? ENVELOPE_CONTRACT[id] : undefined;
+}
+
 export interface PreambleInput {
   policy: ModePolicy;
   outputLanguage: string;
@@ -178,6 +195,15 @@ export interface PreambleInput {
   blacklistAllowed?: boolean;
   codeRoot?: string;
   dataRoot?: string;
+}
+
+/** Rule 6: the web tools this session really has; a session without WebFetch is never told to use it. */
+function webRule(p: ModePolicy): string {
+  if (p.mcp === 'playwright') return '6. Playwright MCP is available in this apply session. The browser is headed so the user sees it; you stop before any submit.';
+  if (p.network.includes('WebFetch')) return '6. Playwright is unavailable. Use WebFetch when you need a page and mark the result "Verification: unconfirmed (batch mode)".';
+  const paste = 'When you need the content of a page or a form, ask the user to paste its text (or a screenshot) and end the turn.';
+  if (p.network.includes('WebSearch')) return `6. Playwright and WebFetch are unavailable; WebSearch finds pages but does not open them. ${paste}`;
+  return `6. This session has no web access (no Playwright, WebFetch or WebSearch). ${paste}`;
 }
 
 /** Spec 4.1 preamble, nine numbered rules, no em dash anywhere. */
@@ -191,10 +217,11 @@ export function buildPreamble(input: PreambleInput): string {
     '3. The app already ran the update check and doctor. Skip both.',
     `4. Router context: read modes/_shared.md when the mode file references it, then modes/_profile.md and modes/_custom.md, then the mode file for ${p.id} (${p.title}). The house rules in _custom.md apply to every evaluation.`,
     `5. Write user-facing content in the language code "${input.outputLanguage}" (profile.yml language.output).`,
-    p.mcp === 'playwright' ? '6. Playwright MCP is available in this apply session. The browser is headed so the user sees it; you stop before any submit.' : '6. Playwright is unavailable. Use WebFetch when you need a page and mark the result "Verification: unconfirmed (batch mode)".',
+    webRule(p),
     '7. When the mode needs the user to confirm or choose, ask exactly one question and end the turn. The app shows it and resumes you with the answer.',
     `8. Allowed write scope (paths relative to the repo root): ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
-    `9. Envelope contract: ${ENVELOPE_CONTRACT[p.id] ?? 'none for this mode; report results as markdown.'}`,
+    // A localized mode (de/bewerben is apply) has the contract of the English mode it stands for.
+    `9. Envelope contract: ${envelopeContractOf(p.id) ?? 'none for this mode; report results as markdown.'}`,
   ];
   if (input.reportNum !== undefined) lines.push(`10. Report number ${input.reportNum} is reserved for this evaluation. Use it for the report file name and the tracker row; do not call reserve-report-num.`);
   if (input.dataRoot && input.codeRoot && input.dataRoot !== input.codeRoot) lines.push(`User data lives in ${input.dataRoot}; read user files there by absolute path.`);

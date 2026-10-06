@@ -92,14 +92,23 @@ export function locateRead(policy, target) {
   return null;
 }
 
+/**
+ * Why a tool's file path is refused before it is resolved, or null: a leading ~ (the tool may expand it), or a ..
+ * segment (after a symlink, .. resolves differently on disk than on paper; refuse it rather than guess which the tool opens).
+ */
+export function unresolvedPathReason(target, label) {
+  if (target.startsWith('~')) return `${label}: ${target} starts with ~; use the absolute path`;
+  if (target.split(/[\\/]/).includes('..')) return `${label}: ${target} has a .. segment; use the absolute path`;
+  return null;
+}
+
 /** Null when a read of `input.file_path` is allowed, else the reason. */
 export function checkRead(policy, input, cwd, label = 'Read') {
   if (!Array.isArray(policy.readDeny)) return `${label}: the session policy predates read confinement, so every read is refused`;
   const target = input?.file_path;
   if (typeof target !== 'string' || !target) return `${label}: no file path`;
-  if (target.startsWith('~')) return `${label}: ${target} starts with ~; use the absolute path`;
-  // After a symlink, .. resolves differently on disk than on paper: refuse it rather than guess which the tool opens.
-  if (target.split(/[\\/]/).includes('..')) return `${label}: ${target} has a .. segment; use the absolute path`;
+  const unresolved = unresolvedPathReason(target, label);
+  if (unresolved) return unresolved;
   if (!path.isAbsolute(target) && cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${label}: ${target} is a relative path, it resolves against the repo root and the session is not running from it; use the absolute path`;
   const found = locateRead(policy, target);
   if (!found) return `${label}: ${target} is outside the repo and data roots; sessions read only inside them`;
@@ -340,9 +349,13 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
  *   single dash, as the scripts do) and its role;
  * - eq: flags accepted as --flag=value and the value's role;
  * - positionals: the role of each positional, in order (no more are accepted);
+ *   rest: the role of every positional after those (a name in several words);
  * - indexed: the script reads positionals by raw argv index, so no flag may sit
  *   in any of those slots (with fewer paths given, a trailing flag would be read
- *   as the missing path); modes: a first token that switches to other roles.
+ *   as the missing path); modes: a first token that switches to other roles;
+ * - readOnlyWith: switches that make the script write nothing (its read modes),
+ *   so with any of them present its outputs are only read;
+ * - outputSuffixes: each output is also written with these suffixes appended.
  * Roles: 'input' (read inside the roots), 'output' (inside the write scope),
  * 'value' (plain). Any other dash token is refused: these parsers would treat it
  * as a path (path.resolve turns -x/../cv.md into cv.md).
@@ -352,7 +365,14 @@ const ARTIFACT_FLAGS = { '--report': 'value', '--company': 'value', '--role': 'v
 const HIRED_FLAGS = { '--report': 'value', '--anonymity': 'value', '--story': 'value', '--weeks': 'value', '--feature': 'value', '--mark': 'value', '--root': 'output' };
 const RENDER_VALUES = { '--format': 'value', '--report': 'value', '--kind': 'value', '--max-pages': 'value' };
 const DIGEST_FLAGS = { '--from': 'value', '--to': 'value', '--dir': 'input' };
+// Every other --flag takes the next token as its value; there is no --flag=value form.
+const ANSWERS_FLAGS = { '--report': 'output', '--input': 'input', '--state': 'value', '--date': 'value' };
+const RECONCILE_FLAGS = { '--pipeline': 'output', '--state': 'input' };
 const WRITER_SCRIPTS = {
+  // Its --cache-dir makes that directory and writes cache files into it; sessions use the default cache.
+  'plugins/h1b-sponsor/check.mjs': { switches: ['--json', '--summary', '--refresh', '--search'], positionals: [], rest: 'value' },
+  // Upserts the answers it is given into --report; --read and --read-draft only print a section of it.
+  'application-answers.mjs': { switches: ['--read', '--read-draft', '--strict', '--help', '-h'], next: ANSWERS_FLAGS, positionals: [], readOnlyWith: ['--read', '--read-draft'] },
   'generate-pdf.mjs': {
     switches: ['--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--strict-pages', '--skip-fact-check'],
     eq: { '--format': 'value', '--report': 'value', '--kind': 'value', '--max-pages': 'value' },
@@ -365,6 +385,12 @@ const WRITER_SCRIPTS = {
   'build-cv-html.mjs': { switches: ['--help', '--test'], positionals: ['input', 'output', 'input'], indexed: true, modes: { '--preview': ['input', 'input'] } },
   'patch-latex-content.mjs': { switches: ['--help'], positionals: ['input', 'input', 'output'] },
   'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
+  // Rewrites --pipeline (by default data/pipeline.md, its own file) after copying it to <file>.pre-reconcile.bak.
+  'reconcile-pipeline.mjs': { switches: ['--dry-run', '--help', '-h'], next: RECONCILE_FLAGS, eq: RECONCILE_FLAGS, positionals: [], readOnlyWith: ['--dry-run'], outputSuffixes: ['.pre-reconcile.bak'] },
+  // Its first positional is the candidates file, created with mock candidates when it does not exist.
+  'reply-watch.mjs': { switches: ['--help', '-h'], positionals: ['output'] },
+  // --target <dir> runs every check on that folder, creating data/, output/, reports/ and seed files there; sessions use the configured root.
+  'doctor.mjs': { switches: ['--json', '--init-templates', '--strict', '--help', '-h'], next: { '--cli': 'value' }, positionals: [] },
   'application-artifacts.mjs': { switches: ['--init', '--help', '-h'], next: ARTIFACT_FLAGS, eq: ARTIFACT_FLAGS, positionals: [] },
   'contacts.mjs': { switches: ['--summary', '--self-test', '--caller-id', '--vcf', '--help', '-h'], optionalNext: { '--vcf': 'output' }, eq: { '--vcf': 'output' }, positionals: [] },
   'discover-new-companies.mjs': { switches: ['--added-only', '--summary', '--json', '--help', '-h'], next: { '--since': 'value', '--min-rows': 'value', '--limit': 'value', '--out': 'output' }, positionals: [] },
@@ -379,6 +405,9 @@ const WRITER_SCRIPTS = {
     positionals: ['output', 'output'],
   },
 };
+
+/** The scripts modelled above; every other script a session may run must write nothing or only its own fixed files. */
+export const WRITER_SCRIPT_NAMES = Object.freeze(Object.keys(WRITER_SCRIPTS));
 
 const GIT_FLAGS = {
   status: { exact: ['-s', '--short', '-b', '--branch', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--long', '-v', '--verbose', '-u', '-uno', '-unormal', '-uall', '--untracked-files', '--untracked-files=no', '--untracked-files=normal', '--untracked-files=all', '--ignored', '--show-stash', '--ahead-behind', '--no-ahead-behind', '--no-renames', '-z'], patterns: [] },
@@ -503,7 +532,18 @@ function latexCompileSiblings(input) {
 }
 
 function checkWriterScript(policy, script, spec, args, label) {
-  const check = (role, value) => (role === 'output' ? writable(policy, value, label) : role === 'input' ? readable(policy, value, label) : null);
+  // A read-mode switch is never consumed as a value: like the scripts, the walk below refuses a value that starts with --.
+  const readOnly = (spec.readOnlyWith ?? []).some((s) => args.includes(s));
+  const check = (role, value) => {
+    if (role === 'output' && !readOnly) {
+      for (const target of [value, ...(spec.outputSuffixes ?? []).map((suffix) => `${value}${suffix}`)]) {
+        const why = writable(policy, target, label);
+        if (why) return why;
+      }
+      return null;
+    }
+    return role === 'input' || role === 'output' ? readable(policy, value, label) : null;
+  };
   let roles = spec.positionals;
   let rest = args;
   if (spec.modes && args[0] !== undefined && Object.hasOwn(spec.modes, args[0])) {
@@ -544,7 +584,7 @@ function checkWriterScript(policy, script, spec, args, label) {
       if (!spec.switches?.includes(a)) return `${label}: ${script} does not accept ${a}; it would read the token as a path`;
       continue;
     }
-    const role = roles[positionals];
+    const role = roles[positionals] ?? spec.rest;
     positionals += 1;
     if (!role) return `${label}: ${script} takes at most ${roles.length} path argument${roles.length === 1 ? '' : 's'} (${a})`;
     given.push(a);
@@ -729,6 +769,80 @@ export function checkBash(command, policy, cwd) {
     reason ??= why;
   }
   return reason;
+}
+
+// ---- Playwright MCP (the version pinned in playwright-mcp.json) ----
+
+const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
+export const PLAYWRIGHT_TOOL_PREFIX = 'mcp__playwright__';
+/** Tools that only read the page, fill or pick values, or move within it; every other tool has a check below or is refused. */
+// fill_form sends no key presses: Playwright's fill and setChecked refuse buttons and submit inputs, and selectOption a non-select.
+const PLAYWRIGHT_PLAIN = new Set(['browser_snapshot', 'browser_console_messages', 'browser_network_requests', 'browser_wait_for', 'browser_hover', 'browser_resize', 'browser_select_option', 'browser_fill_form', 'browser_handle_dialog', 'browser_navigate_back', 'browser_close', 'browser_install', 'browser_take_screenshot']);
+/**
+ * Keys press_key may send: none activates a focused control (Enter and Space press a button, so does any key a page
+ * binds through a modifier), so an allowlist rather than a list of the dangerous ones. Plus any single printable
+ * character except whitespace.
+ */
+const PLAYWRIGHT_SAFE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab', 'Shift+Tab', 'Escape', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown']);
+
+function safeKey(key) {
+  if (typeof key !== 'string') return false;
+  if (PLAYWRIGHT_SAFE_KEYS.has(key)) return true;
+  const chars = [...key];
+  return chars.length === 1 && !/[\s\p{C}]/u.test(key);
+}
+
+/** A click-like target: described (so it can be judged) and not described as a submit control. */
+function clickTargetReason(description, label, submit) {
+  if (typeof description !== 'string' || !description.trim()) return `${label}: describe the element so the guard can tell it is not a submit control`;
+  return SUBMIT_RE.test(description) ? submit : null;
+}
+
+/**
+ * Null when a Playwright MCP call may run, else the reason. The session never submits (a submit-looking click, Enter,
+ * type with submit, page JavaScript), never browses outside the public web (navigate gets the WebFetch checks), never
+ * uploads a file a Read could not reach and never saves a file outside the guard. A tool not named here is refused.
+ */
+export async function checkPlaywright(policy, tool, input, cwd, lookup = lookupAll) {
+  const name = tool.slice(PLAYWRIGHT_TOOL_PREFIX.length);
+  const label = `Playwright ${name}`;
+  const i = input && typeof input === 'object' ? input : {};
+  if (policy.playwright !== true) return `${label}: Playwright is not granted to this session`;
+  if (i.filename !== undefined) return `${label}: saving to a file is not allowed; call it without filename`;
+  const submit = `${label}: this would submit the form. The user presses Submit, never the session.`;
+  switch (name) {
+    case 'browser_click':
+      return clickTargetReason(i.element, label, submit);
+    case 'browser_drag':
+      // dragTo presses the mouse on the start and releases it on the end: inside one button, that is a click on it.
+      return clickTargetReason(i.startElement, label, submit) ?? clickTargetReason(i.endElement, label, submit);
+    case 'browser_press_key':
+      return safeKey(i.key) ? null : `${label}: only keys that activate nothing may be pressed (arrows, Tab, Shift+Tab, Escape, Backspace, Delete, Home, End, PageUp, PageDown, or one printable character other than a space); ${JSON.stringify(i.key ?? null)} can submit the form`;
+    case 'browser_type':
+      if (i.submit === true) return submit;
+      // Typed slowly, every character is a key press on the focused element, and the ref may name a button (the guard
+      // cannot see the page): a space presses it, a tab can move to it, a line break is Enter. Without slowly the text
+      // is filled, which sends no key presses, and Playwright refuses to fill a button or a submit input.
+      if (i.slowly === true && /\s/.test(String(i.text ?? ''))) return `${label}: typed slowly, whitespace is a key press that can submit the form; type the text without slowly`;
+      return null;
+    case 'browser_navigate':
+      return checkFetchUrl(String(i.url ?? ''), lookup, { label });
+    case 'browser_tabs':
+      return i.url === undefined ? null : checkFetchUrl(String(i.url), lookup, { label });
+    case 'browser_file_upload': {
+      if (i.paths === undefined) return null;
+      if (!Array.isArray(i.paths)) return `${label}: paths must be a list`;
+      for (const p of i.paths) {
+        const why = checkRead(policy, { file_path: p }, cwd, label);
+        if (why) return why;
+      }
+      return null;
+    }
+    case 'browser_evaluate':
+      return `${label}: page JavaScript can submit a form or send data, so sessions never run it`;
+    default:
+      return PLAYWRIGHT_PLAIN.has(name) ? null : `${label}: not a Playwright tool the guard knows, so it is refused`;
+  }
 }
 
 /** First-touch snapshot keyed by the absolute path, so code-root and data-root files never collide. */

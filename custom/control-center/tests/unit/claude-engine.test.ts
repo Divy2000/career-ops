@@ -4,9 +4,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy } from '../../server/claude/modes.js';
-import { GUARD_HOOK_PATH } from '../../server/claude/invocation.js';
-import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn } from '../../server/claude/guard-policy.mjs';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
+import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
+import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
@@ -19,7 +19,9 @@ describe('invocation builder', () => {
   it('builds the contracted argv for a first turn of an evaluate mode', () => {
     const policy = getModePolicy('oferta')!;
     const argv = buildArgv({ ...base, policy });
-    expect(argv.slice(0, 2)).toEqual(['-p', 'Evaluate https://x.example/1']);
+    // Requirement change (SW-claude-07): the prompt is the last argument, after --, so no prompt is parsed as an option.
+    expect(argv[0]).toBe('-p');
+    expect(argv.slice(-2)).toEqual(['--', 'Evaluate https://x.example/1']);
     expect(argv).toEqual(expect.arrayContaining(['--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--session-id', base.claudeSessionId, '--permission-mode', 'dontAsk', '--append-system-prompt', 'PREAMBLE', '--settings', base.settingsFile, '--strict-mcp-config']));
     expect(argv).not.toContain('--resume');
     expect(argv).not.toContain('--mcp-config');
@@ -28,6 +30,17 @@ describe('invocation builder', () => {
     expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).toEqual(expect.arrayContaining(['Edit(//repo/career-ops/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch']));
     const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!;
     expect(disallowed.split(',')).toContain('Task');
+  });
+  it('a prompt that starts with a dash or looks like an option is never read as one: every option comes before --, the prompt after it', () => {
+    const policy = getModePolicy('apply')!;
+    for (const userMessage of ['- rename X\n- add a test', '-h', '--dangerously-skip-permissions', '--permission-mode=bypassPermissions', '--settings=/tmp/x.json', '--', '-p']) {
+      for (const turn of [{ resume: false }, { resume: true, fork: true, model: 'sonnet', maxTurns: 3 }]) {
+        const argv = buildArgv({ ...base, ...turn, policy, userMessage });
+        expect(argv.indexOf('--'), userMessage).toBe(argv.length - 2);
+        expect(argv.at(-1), userMessage).toBe(userMessage);
+        expect(argv.filter((a) => a === userMessage), userMessage).toHaveLength(userMessage === '--' || userMessage === '-p' ? 2 : 1);
+      }
+    }
   });
   it('resumes with --resume, forks with --fork-session, and passes model and max turns when set', () => {
     const policy = getModePolicy('oferta')!;
@@ -74,6 +87,27 @@ describe('invocation builder', () => {
     expect(text).toContain('Playwright');
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'es' })).toContain('Playwright is unavailable');
+  });
+  it('a localized apply mode gets the apply envelope contract: answers first, nothing filled until confirmed', () => {
+    const contract = (id: string) => buildPreamble({ policy: getModePolicy(id)!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('9. '))!;
+    for (const id of ['de/bewerben', 'fr/postuler', 'ja/oubo', 'ru/apply', 'zh-TW/apply']) expect(contract(id), id).toBe(contract('apply'));
+    expect(contract('apply')).toMatch(/<<cc:answers/);
+    expect(contract('apply')).toMatch(/Do not fill anything until the user confirms/);
+    // A localized evaluation still has no envelope contract.
+    expect(contract('de/angebot')).toMatch(/none for this mode/);
+  });
+  it('rule 6 names only the web tools the session has: never WebFetch to a session without it', () => {
+    const rule6 = (policy: ReturnType<typeof getModePolicy>) => buildPreamble({ policy: policy!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('6. '))!;
+    const { mcp: _mcp, ...applyWithoutPlaywright } = getModePolicy('apply')!;
+    for (const policy of [applyWithoutPlaywright, getModePolicy('offer-prep'), getModePolicy('update'), getModePolicy('advisor'), getModePolicy('ai-search')]) {
+      const line = rule6(policy);
+      expect(line, policy!.id).not.toContain('WebFetch when');
+      expect(line, policy!.id).toMatch(/ask the user to paste/);
+    }
+    expect(rule6(getModePolicy('ai-search'))).toMatch(/WebSearch/);
+    expect(rule6(applyWithoutPlaywright)).toMatch(/no web access/);
+    for (const id of ['oferta', 'research', 'master-profile']) expect(rule6(getModePolicy(id)), id).toMatch(/Use WebFetch when you need a page/);
+    expect(rule6(getModePolicy('apply'))).toMatch(/Playwright MCP is available/);
   });
 });
 
@@ -168,7 +202,8 @@ describe('invocation: read confinement', () => {
     for (const url of ['https://medium.com/@acme/x', 'https://jobs.example.com/a/@team?b=@c&@d', 'https://x.example/%@y', 'https://x.example/q?@z', 'mailto:me@example.com', 'first.last+tag@example.co', 'user-1@x.io', 'scheme:@x'])
       expect(neutralizeFileMentions(`read ${url} now`), url).toBe(`read ${url} now`);
     const argv = buildArgv({ ...roots, policy: oferta, userMessage: 'read @~/.ssh/id_rsa for me' });
-    expect(argv[1]).toBe('read @\u2060~/.ssh/id_rsa for me');
+    // The prompt is the last argument, after -- (SW-claude-07).
+    expect(argv.slice(-2)).toEqual(['--', 'read @\u2060~/.ssh/id_rsa for me']);
   });
 
   it('assertRootsConfinable refuses a root that is the filesystem root, the home directory or a parent of it, in any spelling', () => {
@@ -243,6 +278,26 @@ describe('guard hook', () => {
     expect(pre('Edit', { file_path: path.join(realRoot, 'data', 'applications.md'), old_string: 'a', new_string: 'b' }).status).toBe(2);
     expect(pre('MultiEdit', { file_path: path.join(realRoot, 'reports', '..', 'cv.md'), edits: [] }).status).toBe(2);
   });
+  it('refuses a write path with a .. segment or a leading ~: after a symlink the kernel resolves .. against its target, not on paper', () => {
+    const outside = fs.realpathSync(tempDir('cc-hook-outside-'));
+    fs.mkdirSync(path.join(outside, 'inner'));
+    fs.symlinkSync(path.join(outside, 'inner'), path.join(realRoot, 'link-out'));
+    // On paper this is reports/002-x.md, in scope; opened as written it lands in <outside>/reports/.
+    for (const [tool, input] of [
+      ['Write', { file_path: `${realRoot}/link-out/../reports/002-x.md`, content: 'x' }],
+      ['Edit', { file_path: `${realRoot}/link-out/../reports/001-existing.md`, old_string: 'old', new_string: 'new' }],
+      ['MultiEdit', { file_path: `${realRoot}/reports/../reports/001-existing.md`, edits: [] }],
+      ['NotebookEdit', { notebook_path: `${realRoot}/link-out/../reports/n.ipynb`, new_source: 'x' }],
+      ['Write', { file_path: 'link-out/../reports/002-x.md', content: 'x' }],
+      ['Write', { file_path: '~/reports/002-x.md', content: 'x' }],
+    ] as const) {
+      const out = pre(tool, input);
+      expect(out.status, JSON.stringify(input)).toBe(2);
+      expect(out.stderr).toMatch(/has a \.\. segment|starts with ~/);
+    }
+    expect(fs.existsSync(path.join(outside, 'reports'))).toBe(false);
+    expect(pre('Write', { file_path: path.join(realRoot, 'reports', '002-x.md'), content: 'x' }).status).toBe(0);
+  });
   it('allows Bash only for exact script prefixes and rejects chaining, git and network tools', () => {
     expect(pre('Bash', { command: 'node set-status.mjs --row 3 Applied --source web' }).status).toBe(0);
     expect(pre('Bash', { command: 'node set-status.mjs --row 3 Applied; rm -rf /' }).status).toBe(2);
@@ -265,9 +320,91 @@ describe('guard hook', () => {
     expect(allow.some((r) => r.includes('batch-runner') || r.includes('rank-pipeline'))).toBe(false);
   });
   it('denies Playwright clicks that look like a submit', () => {
-    expect(pre('mcp__playwright__browser_click', { element: 'Submit application button', ref: 'e12' }).status).toBe(2);
-    expect(pre('mcp__playwright__browser_click', { element: 'Next page', ref: 'e13' }).status).toBe(0);
-    expect(pre('mcp__playwright__browser_press_key', { key: 'Enter', element: 'Apply now' }).status).toBe(2);
+    const dir = path.join(realRoot, 'session-apply');
+    fs.mkdirSync(dir);
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('apply')! });
+    const pw = (name: string, input: Record<string, unknown>) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: `mcp__playwright__${name}`, tool_input: input, cwd: realRoot, session_id: 's' }).status;
+    expect(pw('browser_click', { element: 'Submit application button', ref: 'e12' })).toBe(2);
+    expect(pw('browser_click', { element: 'Next page', ref: 'e13' })).toBe(0);
+    // Requirement change (SW-claude-10): the inputs are the pinned @playwright/mcp 0.0.41 shapes; press_key carries only the key.
+    expect(pw('browser_press_key', { key: 'Enter' })).toBe(2);
+  });
+  it('routes every Playwright tool to the guard and refuses those that can submit, run page code, leave the public web or upload secrets (SW-claude-10)', () => {
+    const dir = path.join(realRoot, 'session-playwright');
+    fs.mkdirSync(dir);
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('apply')! });
+    const pw = (name: string, input: Record<string, unknown>, which = pf) => hookRun(dir, which, { hook_event_name: 'PreToolUse', tool_name: `mcp__playwright__${name}`, tool_input: input, cwd: realRoot, session_id: 's' });
+    const refused: Array<[string, Record<string, unknown>]> = [
+      ['browser_click', { ref: 'e14' }],
+      ['browser_press_key', { key: 'NumpadEnter' }],
+      ['browser_press_key', { key: 'Control+Enter' }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'me@example.com', submit: true }],
+      ['browser_type', { element: 'Why us', ref: 'e4', text: 'First line\nSecond line', slowly: true }],
+      ['browser_evaluate', { function: '() => document.forms[0].submit()' }],
+      ['browser_evaluate', { function: '() => document.title' }],
+      ['browser_navigate', { url: 'file:///etc/passwd' }],
+      ['browser_navigate', { url: 'http://127.0.0.1:4317/' }],
+      ['browser_navigate', { url: 'http://169.254.169.254/latest/meta-data' }],
+      ['browser_file_upload', { paths: ['/etc/passwd'] }],
+      ['browser_file_upload', { paths: [path.join(realRoot, 'output', 'cv.pdf'), path.join(realRoot, '.env')] }],
+      ['browser_take_screenshot', { filename: '/tmp/cc-shot.png' }],
+      ['browser_snapshot', { filename: 'snap.md' }],
+      ['browser_tabs', { action: 'new', url: 'http://10.0.0.1/' }],
+      ['browser_run_code_unsafe', { code: 'async (page) => page.title()' }],
+      ['browser_mouse_click_xy', { element: 'Submit', x: 10, y: 10 }],
+      // Space activates a focused button as Enter does (SW-claude-10 review): press_key takes only keys that activate nothing.
+      ['browser_press_key', { key: ' ' }],
+      ['browser_press_key', { key: 'Space' }],
+      ['browser_press_key', { key: 'Spacebar' }],
+      ['browser_press_key', { key: 'Shift+Space' }],
+      ['browser_press_key', { key: 'Meta+Enter' }],
+      ['browser_press_key', { key: 'Alt+s' }],
+      ['browser_press_key', { key: 'F5' }],
+      ['browser_press_key', { key: '' }],
+      ['browser_press_key', {}],
+      // Typed slowly, each character is a key press on the focused element: a space (or a tab that moves to a button, then
+      // a space) submits; the guard cannot see which element a ref names, so slow typing takes no whitespace at all.
+      ['browser_type', { element: 'Email', ref: 'e3', text: ' ', slowly: true }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'two words', slowly: true }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'a\t ', slowly: true }],
+      // A drag that starts and ends on the submit button is a click on it.
+      ['browser_drag', { startElement: 'Submit application button', startRef: 'e9', endElement: 'Submit application button', endRef: 'e9' }],
+      ['browser_drag', { startElement: 'Name field', startRef: 'e2', endElement: 'Apply now', endRef: 'e9' }],
+      ['browser_drag', { startRef: 'e9', endRef: 'e9' }],
+    ];
+    for (const [name, input] of refused) expect(pw(name, input).status, `${name} ${JSON.stringify(input)}`).toBe(2);
+    const allowed: Array<[string, Record<string, unknown>]> = [
+      ['browser_snapshot', {}],
+      ['browser_press_key', { key: 'Tab' }],
+      ['browser_press_key', { key: 'Shift+Tab' }],
+      ...['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'a', 'Z', '7', '@', 'é'].map((key): [string, Record<string, unknown>] => ['browser_press_key', { key }]),
+      // fill (not slowly) sends no key presses, and Playwright refuses to fill a button or a submit input.
+      ['browser_type', { element: 'Why us', ref: 'e4', text: 'two words' }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'acme', slowly: true }],
+      ['browser_drag', { startElement: 'Card A', startRef: 'e5', endElement: 'Card B', endRef: 'e6' }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'me@example.com' }],
+      ['browser_type', { element: 'Why us', ref: 'e4', text: 'First line\nSecond line' }],
+      ['browser_fill_form', { fields: [{ name: 'Name', type: 'textbox', ref: 'e2', value: 'Ada' }] }],
+      ['browser_select_option', { element: 'Country', ref: 'e5', values: ['Canada'] }],
+      ['browser_navigate', { url: 'https://93.184.215.14/jobs/1' }],
+      ['browser_file_upload', { paths: [path.join(realRoot, 'output', 'cv.pdf')] }],
+      ['browser_take_screenshot', {}],
+      ['browser_wait_for', { time: 1 }],
+      ['browser_tabs', { action: 'list' }],
+    ];
+    for (const [name, input] of allowed) expect(pw(name, input).status, `${name} ${JSON.stringify(input)}`).toBe(0);
+    // These are the tool shapes of the pinned MCP version; a version change needs this guard re-read.
+    expect(JSON.parse(fs.readFileSync(PLAYWRIGHT_MCP_PATH, 'utf8')).mcpServers.playwright.args).toContain('@playwright/mcp@0.0.41');
+    // A session whose policy grants no Playwright gets none of it, whatever the tool.
+    expect(pw('browser_snapshot', {}, policy).status).toBe(2);
+    // The settings route every Playwright tool to the hook through a second group; the probed matcher stays as recorded.
+    const settings = JSON.parse(fs.readFileSync(writeSettingsFile(path.join(dir, 'settings')), 'utf8')) as { hooks: { PreToolUse: Array<{ matcher: string }> } };
+    const groups = settings.hooks.PreToolUse.map((g) => g.matcher);
+    expect(groups[0]).toBe(PRE_TOOL_MATCHER);
+    expect(groups).toHaveLength(2);
+    const playwright = new RegExp(groups[1]!);
+    for (const name of ['mcp__playwright__browser_evaluate', 'mcp__playwright__browser_navigate', 'mcp__playwright__anything_new']) expect(playwright.test(name), name).toBe(true);
+    for (const name of ['Bash', 'Write', 'mcp__other__browser_click', 'x_mcp__playwright__y']) expect(playwright.test(name), name).toBe(false);
   });
   it('protects Blacklist.md, APPLICATIONS.md and Supervisor/ in any case, on a case-insensitive or a case-sensitive volume', () => {
     const root = fs.realpathSync(tempDir('cc-hook-case-'));
@@ -783,6 +920,92 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(scan, 'node discover-new-companies.mjs --out data/new.yml');
   });
 
+  it('application-answers --report: the section is written only inside the write scope; --read and --read-draft only read the report', () => {
+    const apply = { ...policyFor('apply', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    ok(apply, 'node application-answers.mjs --report output/r.md --input output/a.json --state filled --date 2026-10-05');
+    ok(apply, 'node application-answers.mjs --input output/a.json --report output/r.md');
+    // The review trigger: the script appends the answers it is given to whatever file --report names.
+    for (const target of ['modes/_custom.md', 'modes/_shared.md', 'AGENTS.md', 'cv.md', 'config/profile.yml', 'custom/control-center/server/claude/guard-hook.mjs', 'reports/001-acme.md', 'data/applications.md', '../outside.md', '/etc/hosts'])
+      no(apply, `node application-answers.mjs --report ${target} --input output/a.json --state filled`);
+    // Its parser takes the next token as the value even when it starts with a single dash, and path.resolve drops -x/..
+    no(apply, 'node application-answers.mjs --report -x/../modes/_custom.md --input output/a.json');
+    // The last --report wins in the script, so every one is checked.
+    no(apply, 'node application-answers.mjs --report output/r.md --report modes/_custom.md --input output/a.json');
+    // It has no --flag=value form: --report=x would be a key named "report=x" taking the next token.
+    no(apply, 'node application-answers.mjs --report=output/r.md --input output/a.json');
+    no(apply, 'node application-answers.mjs --input output/a.json --report');
+    no(apply, 'node application-answers.mjs --report output/r.md --input output/a.json --out modes/_custom.md');
+    no(apply, 'node application-answers.mjs modes/_custom.md --report output/r.md --input output/a.json');
+    no(apply, 'node application-answers.mjs --report output/r.md --input /etc/passwd');
+    no(apply, 'node application-answers.mjs --report output/r.md --input .env');
+    // The read modes print a section and write nothing, so the report is only read (inside the roots, never a secret).
+    ok(apply, 'node application-answers.mjs --report reports/001-acme.md --read --strict');
+    ok(apply, 'node application-answers.mjs --report reports/001-acme.md --read-draft');
+    ok(apply, 'node application-answers.mjs --read --report reports/001-acme.md');
+    no(apply, 'node application-answers.mjs --report /etc/hosts --read');
+    no(apply, 'node application-answers.mjs --report .env --read-draft');
+    no(apply, 'node application-answers.mjs --report reports/001-acme.md --read=1');
+    expect(checkBash('node application-answers.mjs --report modes/_custom.md --input output/a.json', apply, root)).toMatch(/modes\/_custom\.md is outside the write scope/);
+  });
+
+  it('reconcile-pipeline --pipeline: the rewritten file and its .pre-reconcile.bak copy stay inside the write scope; --dry-run only reads', () => {
+    // Only the batch mode grants it today, and batch never runs as a session: latent, but the grammar must hold wherever it is granted.
+    const pipeline = { ...policyFor('batch', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    // With no --pipeline it rewrites data/pipeline.md, its own file.
+    for (const cmd of ['node reconcile-pipeline.mjs', 'node reconcile-pipeline.mjs --dry-run', 'node reconcile-pipeline.mjs --state batch/batch-state.tsv', 'node reconcile-pipeline.mjs --pipeline output/p.md --state=output/s.tsv', 'node reconcile-pipeline.mjs --pipeline=output/p.md'])
+      ok(pipeline, cmd);
+    // The audit trigger: --pipeline names the file it rewrites and copies, anywhere inside the roots.
+    for (const cmd of [
+      'node reconcile-pipeline.mjs --pipeline modes/_custom.md',
+      'node reconcile-pipeline.mjs --pipeline=AGENTS.md',
+      'node reconcile-pipeline.mjs --pipeline data/pipeline.md',
+      'node reconcile-pipeline.mjs --pipeline -x/../cv.md',
+      'node reconcile-pipeline.mjs --pipeline output/p.md --pipeline modes/pipeline.md',
+      'node reconcile-pipeline.mjs --pipeline',
+      'node reconcile-pipeline.mjs --pipeline output/p.md --state /etc/hosts',
+      'node reconcile-pipeline.mjs --state .env',
+      'node reconcile-pipeline.mjs modes/_custom.md',
+      'node reconcile-pipeline.mjs --dry-run=1',
+    ])
+      no(pipeline, cmd);
+    // The backup copy is written next to the file, so the scope must allow it too.
+    const exact = { ...pipeline, allow: ['output/p.md'] };
+    expect(checkBash('node reconcile-pipeline.mjs --pipeline output/p.md', exact, root)).toMatch(/output\/p\.md\.pre-reconcile\.bak is outside the write scope/);
+    // A dry run writes nothing, so --pipeline is only read.
+    ok(pipeline, 'node reconcile-pipeline.mjs --pipeline modes/_custom.md --dry-run');
+    no(pipeline, 'node reconcile-pipeline.mjs --pipeline /etc/hosts --dry-run');
+  });
+
+  it('h1b-sponsor check: a company name in any number of words and its switches; never a caller-chosen cache directory', () => {
+    const sponsor = { ...policyFor('sponsorship-check', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    for (const cmd of ['node plugins/h1b-sponsor/check.mjs Acme', 'node plugins/h1b-sponsor/check.mjs "Acme Robotics" --summary', 'node plugins/h1b-sponsor/check.mjs Acme Robotics Inc --json --refresh', 'node plugins/h1b-sponsor/check.mjs --search Acme.io'])
+      ok(sponsor, cmd);
+    ok(oferta, 'node plugins/h1b-sponsor/check.mjs "Acme Robotics" --summary');
+    // The audit trigger: --cache-dir makes the directory and writes <name>-<hash>.json cache files into it.
+    for (const cmd of ['node plugins/h1b-sponsor/check.mjs --cache-dir modes Acme', 'node plugins/h1b-sponsor/check.mjs Acme --cache-dir custom/control-center/server/claude', 'node plugins/h1b-sponsor/check.mjs --cache-dir data/immigration/companies Acme', 'node plugins/h1b-sponsor/check.mjs --cache-dir=modes Acme', 'node plugins/h1b-sponsor/check.mjs --json=1 Acme'])
+      no(sponsor, cmd);
+    no(oferta, 'node plugins/h1b-sponsor/check.mjs --cache-dir reports Acme');
+  });
+
+  it('reply-watch: the candidates file it creates when missing must be inside the write scope', () => {
+    const outreach = { ...policyFor('reply-watch', [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+    ok(outreach, 'node reply-watch.mjs');
+    ok(outreach, 'node reply-watch.mjs data/reply-candidates.json');
+    // The audit trigger: a missing path is created (with its folders) and filled with mock candidates.
+    for (const cmd of ['node reply-watch.mjs modes/new-mode.md', 'node reply-watch.mjs .claude/commands/x.md', 'node reply-watch.mjs output/candidates.json', 'node reply-watch.mjs -x/../modes/y.md', 'node reply-watch.mjs data/reply-candidates.json modes/z.md', 'node reply-watch.mjs --file modes/a.md'])
+      no(outreach, cmd);
+  });
+
+  it('doctor: its checks and onboarding copies run on the configured root, never on a --target the session names', () => {
+    for (const mode of ['intake', 'update', 'triage']) {
+      const p = { ...policyFor(mode, [...ALWAYS_DENIED_WRITES]), readDeny: [...READ_DENY] };
+      for (const cmd of ['node doctor.mjs', 'node doctor.mjs --json', 'node doctor.mjs --json --init-templates', 'node doctor.mjs --strict', 'node doctor.mjs --cli claude --json']) ok(p, cmd);
+      // The audit trigger: --target makes data/, output/ and reports/ and seeds data/pipeline.md and the onboarding templates there.
+      for (const cmd of ['node doctor.mjs --target modes', 'node doctor.mjs --target custom/control-center --json --init-templates', 'node doctor.mjs --target=output', 'node doctor.mjs --json --target .', 'node doctor.mjs --cli=claude', 'node doctor.mjs modes'])
+        no(p, cmd);
+    }
+  });
+
   it('fork CV and projects scripts: outputs inside the write scope, render-pdf rewrites its input, rank reads a JD inside the roots', () => {
     ok(pdf, 'node custom/cv/build-html.mjs output/payload.json output/cv.html');
     no(pdf, 'node custom/cv/build-html.mjs output/payload.json cv.md');
@@ -826,6 +1049,74 @@ describe('checkBash: exact per-command argument grammars', () => {
   it('refuses Bash when the session is not running from the repo root', () => {
     expect(checkBash('git status', devchat, path.join(root, 'data'))).toMatch(/repo root/);
     expect(checkBash('git status', devchat, root)).toBeNull();
+  });
+});
+
+describe('every script a session may run is audited for the files it writes', () => {
+  // The generic script grammar only read-checks path arguments, so it is right only for scripts that write nothing or
+  // only their own fixed files. Each one below was audited (its parser and every write call, imports included); a script
+  // whose arguments choose a file it writes is modelled in guard-policy.mjs (WRITER_SCRIPTS) instead. A script a mode
+  // starts granting fails here until someone has read it.
+  const FIXED_OR_NO_WRITES: Record<string, string> = {
+    'add-entry.mjs': 'cv.md and article-digest.md',
+    'agent-inbox.mjs': 'data/agent-inbox.md (or CAREER_OPS_INBOX) and .gitignore',
+    'analyze-patterns.mjs': 'nothing; --self-test makes and removes tagged files in reports/',
+    'archive-posting.mjs': 'jds/<date>_<slug>_<slug>.pdf; company and role are slugified and --report must be digits',
+    'audit-portals.mjs': 'nothing',
+    'browser-extract.mjs': 'nothing',
+    'calibrate.mjs': 'nothing',
+    'career-profile.mjs': 'data/career-profile.yml; its path argument is only read',
+    'check-liveness.mjs': 'nothing',
+    'company-history.mjs': 'nothing; --self-test writes in a temp folder',
+    'contact-extract.mjs': 'data/contacts.tsv; --file is only read',
+    'custom/immigration/freshness.mjs': 'nothing',
+    'custom/projects/rank.mjs': 'nothing',
+    'cv-sync-check.mjs': 'nothing',
+    'cv-templates.mjs': 'nothing',
+    'cv-title-check.mjs': 'nothing; --self-test writes in a temp folder',
+    'dedup-tracker.mjs': 'the tracker and its backup',
+    'discover-ats.mjs': 'portals.yml (--write); --in is only read',
+    'fetch-jd.mjs': 'nothing',
+    'find.mjs': 'nothing',
+    'followup-cadence.mjs': 'nothing',
+    'followup-seed.mjs': 'data/follow-ups.md and its lock',
+    'funnel-velocity.mjs': 'nothing',
+    'intake.mjs': 'data/intake-state.json and the documents/ scaffold; --text reads inside documents/',
+    'jd-skill-gap.mjs': 'nothing',
+    'keyword-match.mjs': 'nothing',
+    'mark-pdf-ready.mjs': 'the tracker',
+    'match-star.mjs': 'nothing',
+    'merge-tracker.mjs': 'the tracker and batch/tracker-additions/',
+    'normalize-statuses.mjs': 'the tracker and its backup',
+    'outcome.mjs': 'data/outcomes/<row>/ and the tracker; --clean-output removes output/ files only after a verified copy',
+    'paste-reply.mjs': 'data/reply-candidates.json; --file is only read',
+    'prepare-application.mjs': 'nothing',
+    'rejection-latency.mjs': 'nothing',
+    'reserve-report-num.mjs': 'reports/NNN-RESERVED.md sentinels',
+    'salary-gap.mjs': 'nothing',
+    'scan.mjs': 'data/pipeline.md, data/scan-history.tsv and its run logs',
+    'set-status.mjs': 'the tracker and data/status-log.tsv',
+    'stats.mjs': 'nothing',
+    'story-provenance-check.mjs': 'nothing',
+    'update-system.mjs': 'the code checkout (apply, rollback), its lock and dismiss files',
+    'upskill.mjs': 'nothing; --self-test makes and removes tagged files in reports/',
+    'validate-portals.mjs': 'nothing; --file is only read, --self-test writes in a temp folder',
+    'validate-profile.mjs': 'nothing',
+    'verify-ats.mjs': 'nothing',
+    'verify-cv-facts.mjs': 'nothing',
+    'verify-pipeline.mjs': 'removes stale reports/*-RESERVED.md sentinels',
+    'verify-portals.mjs': 'nothing; --file is only read',
+  };
+  const granted = new Set<string>();
+  for (const id of listModeIds()) for (const [bin, script] of getModePolicy(id)!.bashPrefixes) if ((bin === 'node' || bin === 'bash') && script) granted.add(script);
+
+  it('each granted script is modelled as a writer or listed with the fixed files it writes', () => {
+    expect([...granted].filter((s) => !WRITER_SCRIPT_NAMES.includes(s) && !Object.hasOwn(FIXED_OR_NO_WRITES, s)).sort()).toEqual([]);
+    expect(Object.keys(FIXED_OR_NO_WRITES).filter((s) => WRITER_SCRIPT_NAMES.includes(s))).toEqual([]);
+  });
+
+  it('the audit list names only scripts some session is granted', () => {
+    expect(Object.keys(FIXED_OR_NO_WRITES).filter((s) => !granted.has(s))).toEqual([]);
   });
 });
 
@@ -878,6 +1169,13 @@ describe('read confinement: guard policy', () => {
     expect(read(path.join(data, 'cv.md'))).toBeNull();
     expect(read(path.join(data, 'cv.md'), outside)).toBeNull();
     expect(locateRead(policy, path.join(data, 'cv.md'))).toMatchObject({ abs: path.join(data, 'cv.md'), root: 'data', rel: 'cv.md' });
+  });
+
+  it('a .. segment is refused before any resolution, even when the path stays inside a root on paper', () => {
+    expect(read(`${code}/link-out/../cv.md`)).toMatch(/has a \.\. segment/);
+    expect(read(`${code}/data/../cv.md`)).toMatch(/has a \.\. segment/);
+    expect(read('link-out/../cv.md')).toMatch(/has a \.\. segment/);
+    expect(read(`${code}/cv.md`)).toBeNull();
   });
 
   it('the root itself is allowed', () => {

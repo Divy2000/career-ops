@@ -28,6 +28,7 @@ export function resolveReal(p: string): string;
 export function relativeToRoot(codeRoot: string, target: string): string | null;
 export function locate(policy: PathPolicy, target: string): { rel: string; abs: string; root: 'code' | 'data' } | null;
 export function locateRead(policy: ReadPolicy, target: string): { rel: string; abs: string; root: 'code' | 'data' | 'readonly' } | null;
+export function unresolvedPathReason(target: string, label: string): string | null;
 export function checkRead(policy: ReadPolicy, input: { file_path?: unknown }, cwd?: string, label?: string): string | null;
 export function checkSearch(policy: ReadPolicy, tool: string, input: Record<string, unknown>, cwd?: string): string | null;
 export function isPublicAddress(ip: string): boolean;
@@ -44,5 +45,9 @@ export function readUrlList(policy: ReadPolicy, file: string, cwd: string | unde
 export function tokenize(command: string): string[] | null;
 /** Scripts no session may run, whatever its policy lists: they start agent CLIs outside the session guard. */
 export const AGENT_SPAWNING_SCRIPTS: readonly string[];
+/** Scripts modelled on their own parsers because their arguments choose files they write. */
+export const WRITER_SCRIPT_NAMES: readonly string[];
 export function checkBash(command: string, policy: BashPolicy, cwd?: string): string | null;
+export const PLAYWRIGHT_TOOL_PREFIX: string;
+export function checkPlaywright(policy: ReadPolicy & { playwright?: boolean }, tool: string, input: unknown, cwd?: string, lookup?: DnsLookup): Promise<string | null>;
 export function snapshotKey(sessionDir: string, abs: string): string;

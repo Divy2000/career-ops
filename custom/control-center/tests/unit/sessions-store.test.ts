@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { SessionStore, sessionsDir } from '../../server/claude/sessions.js';
@@ -10,6 +10,9 @@ const guardRoot = tempDir('cc-sessions-guard-');
 describe('session store', () => {
   const store = new SessionStore(root, guardRoot);
   it('creates a session with meta.json under data/control-center/sessions and lists newest first', () => {
+    // Its own root: the list must hold exactly these two, whichever tests ran before.
+    const root = tempDir('cc-sessions-list-');
+    const store = new SessionStore(root, guardRoot);
     const a = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://x.example/1' }, model: null });
     expect(fs.existsSync(path.join(sessionsDir(root), a.id, 'meta.json'))).toBe(true);
     expect(a).toMatchObject({ status: 'queued', turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [] });
@@ -54,6 +57,41 @@ describe('session store', () => {
     expect(store.readEvents(s.id, 2)).toHaveLength(1);
     expect(store.readEvents(s.id, 2)[0]!.event).toMatchObject({ type: 'turn.done' });
     expect(store.readEvents('missing-id')).toEqual([]);
+  });
+  it('an event appended after a crash tore the last line keeps counting up from the last whole event and is read back', () => {
+    const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    store.appendEvent(s.id, { type: 'text.delta', text: 'a' });
+    store.appendEvent(s.id, { type: 'text.delta', text: 'b' });
+    const file = path.join(sessionsDir(root), s.id, 'events.ndjson');
+    // The process died halfway through writing event 3.
+    fs.appendFileSync(file, '{"seq":3,"ts":"2026-10-05T10:00:00.000Z","event":{"type":"text.de');
+    const restarted = new SessionStore(root, guardRoot);
+    expect(restarted.appendEvent(s.id, { type: 'text.delta', text: 'c' })).toBe(3);
+    expect(restarted.appendEvent(s.id, { type: 'text.delta', text: 'd' })).toBe(4);
+    expect(restarted.readEvents(s.id).map((e) => [e.seq, (e.event as { text: string }).text])).toEqual([[1, 'a'], [2, 'b'], [3, 'c'], [4, 'd']]);
+    expect(restarted.readEvents(s.id, 2).map((e) => e.seq)).toEqual([3, 4]);
+  });
+  it('two stores on one session never hand out the same seq, as during a blue/green handover', () => {
+    const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    const other = new SessionStore(root, guardRoot);
+    expect(store.appendEvent(s.id, { type: 'text.delta', text: 'a' })).toBe(1);
+    expect(other.appendEvent(s.id, { type: 'text.delta', text: 'b' })).toBe(2);
+    expect(store.appendEvent(s.id, { type: 'text.delta', text: 'c' })).toBe(3);
+    expect(other.appendEvent(s.id, { type: 'text.delta', text: 'd' })).toBe(4);
+    expect(store.readEvents(s.id).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
+  it('appending a streamed event does not read the transcript back', () => {
+    const s = store.create({ mode: 'devchat', policyClass: 'devchat', target: { type: 'none', value: null }, model: null });
+    store.appendEvent(s.id, { type: 'text.delta', text: 'first' });
+    const file = path.join(sessionsDir(root), s.id, 'events.ndjson');
+    const reads = vi.spyOn(fs, 'readFileSync');
+    try {
+      for (let i = 0; i < 50; i++) store.appendEvent(s.id, { type: 'text.delta', text: `chunk ${i}` });
+      expect(reads.mock.calls.filter(([f]) => String(f) === file)).toEqual([]);
+    } finally {
+      reads.mockRestore();
+    }
+    expect(store.readEvents(s.id).at(-1)!.seq).toBe(51);
   });
   it('forks a session into a new id that resumes the same Claude session uuid', () => {
     const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://x.example/2' }, model: null });
