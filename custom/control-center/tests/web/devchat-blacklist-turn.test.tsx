@@ -153,4 +153,41 @@ describe('Dev Chat blacklist unlock', () => {
     expect(host.textContent).toContain('only a Dev Chat turn can unlock data/blacklist.md');
     expect(checkbox().checked).toBe(true);
   });
+
+  it('given the session answers 202 with status error (no approved CLI, no token), when it fails to start, then the box stays ticked for the retry (SW5-tests-06)', async () => {
+    const failed = { ...meta, status: 'error', error: 'the Claude CLI is not approved' };
+    vi.mocked(fetch).mockImplementation(async (url) => (url === '/api/sessions' ? json(failed, 202) : url === '/api/sessions/s-1' ? json({ meta: failed, events: [] }) : json([])));
+    await click(checkbox());
+    await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'Block Initech');
+    await click(button('Send'));
+    await until(() => host.textContent?.includes('the Claude CLI is not approved'), 'the start failure');
+    expect(checkbox().checked).toBe(true);
+  });
+
+  it('given a later turn answers 202 with status error, when it fails to start, then the box stays ticked for the retry (SW5-tests-06)', async () => {
+    await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'A plain turn');
+    await click(button('Send'));
+    await until(() => FakeEventSource.last, 'the session event stream');
+    await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
+    await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the reply field');
+    const failed = { ...meta, status: 'error', error: 'the Claude CLI is not approved' };
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (init?.method === 'POST' && (String(url).endsWith('/turns') || String(url).endsWith('/fork'))) {
+        sent.push({ url: String(url), body: JSON.parse(String(init.body)) as Record<string, unknown>, headers: init.headers as Record<string, string> });
+        return json(failed, 202);
+      }
+      return String(url) === '/api/sessions/s-1' ? json({ meta: failed, events: [] }) : json([]);
+    });
+    for (const action of ['Send', 'Fork'] as const) {
+      await click(checkbox());
+      expect(checkbox().checked, action).toBe(true);
+      await type(host.querySelector('input[aria-label="Reply to the session"]')!, 'Block Initech');
+      const before = sent.length;
+      await click(button(action, 'last'));
+      await until(() => sent.length === before + 1, `the ${action} turn`);
+      await flush();
+      expect(checkbox().checked, action).toBe(true);
+      await click(checkbox());
+    }
+  });
 });

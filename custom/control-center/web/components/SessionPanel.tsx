@@ -158,7 +158,8 @@ export function SessionPanel(props: SessionPanelProps) {
     setError(null);
     try {
       const m = await startSession({ mode: props.mode, target: props.target, prompt: text, blacklistAllowed: props.blacklistAllowed });
-      props.onSent?.();
+      // A 202 can carry a session that failed before its turn ran (no approved CLI, no token): nothing was sent.
+      if (m.status !== 'error') props.onSent?.();
       seen.current = 0;
       setSessionId(m.id);
       props.onSessionId?.(m.id);
@@ -189,13 +190,13 @@ export function SessionPanel(props: SessionPanelProps) {
     try {
       if (fork) {
         const m = await forkSession(sessionId, text, props.blacklistAllowed);
-        props.onSent?.();
+        if (m.status !== 'error') props.onSent?.();
         seen.current = 0;
         setSessionId(m.id);
         props.onSessionId?.(m.id);
       } else {
-        await sendTurn(sessionId, text, props.blacklistAllowed);
-        props.onSent?.();
+        const m = await sendTurn(sessionId, text, props.blacklistAllowed);
+        if (m.status !== 'error') props.onSent?.();
       }
       setReply('');
     } catch (err) {
