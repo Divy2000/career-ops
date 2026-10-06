@@ -409,6 +409,28 @@ describe('events', () => {
     expect(domainFor('interview-prep/story-bank.md')).toBe('interviews');
     expect(domainFor('interview-prep/sessions/2026-10-05-acme-debrief.md')).toBe('interviews');
   });
+  it('maps generated documents to the documents domain: anything under output/ and the PDF index (SW4-web-a-07)', () => {
+    expect(domainFor('output/cv-jane-acme-2026-10-05.pdf')).toBe('documents');
+    expect(domainFor('output/acme/cover.html')).toBe('documents');
+    expect(domainFor('data/pdf-index.tsv')).toBe('documents');
+  });
+  it('the watcher reports a PDF a re-render writes under output/ (SW4-web-a-07)', async () => {
+    const root = tempDir('cc-watch-');
+    fs.mkdirSync(path.join(root, 'output'), { recursive: true });
+    const published: Array<{ type: string; payload: unknown }> = [];
+    const watcher = startWatcher(root, { publish: (type: string, payload: unknown) => void published.push({ type, payload }) } as unknown as EventBus, 20);
+    try {
+      await new Promise<void>((resolve) => watcher.on('ready', () => resolve()));
+      const deadline = Date.now() + 10_000;
+      for (let i = 0; published.length === 0 && Date.now() < deadline; i++) {
+        if (i % 10 === 0) fs.writeFileSync(path.join(root, 'output', 'cv-acme.pdf'), `%PDF-1.7 ${i}\n`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(published[0]).toEqual({ type: 'data.changed', payload: { domain: 'documents', paths: [path.join('output', 'cv-acme.pdf')] } });
+    } finally {
+      await watcher.close();
+    }
+  });
   it('the watcher reports a file a session writes under interview-prep/ (SW-web-a-11)', async () => {
     const root = tempDir('cc-watch-');
     fs.mkdirSync(path.join(root, 'interview-prep', 'sessions'), { recursive: true });

@@ -1,6 +1,6 @@
 import type { FastifyReply } from 'fastify';
 
-export type Domain = 'tracker' | 'pipeline' | 'reports' | 'immigration' | 'interviews' | 'followups' | 'config' | 'shortlist' | 'runs' | 'sessions';
+export type Domain = 'tracker' | 'pipeline' | 'reports' | 'immigration' | 'interviews' | 'documents' | 'followups' | 'config' | 'shortlist' | 'runs' | 'sessions';
 
 export interface BusEvent {
   seq: number;

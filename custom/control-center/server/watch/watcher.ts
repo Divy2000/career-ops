@@ -12,6 +12,8 @@ export function domainFor(relPath: string): Domain | null {
   if (p.startsWith('data/immigration/')) return 'immigration';
   // Interview prep, debrief and story-bank sessions write under interview-prep/; the active list has two upstream homes.
   if (p === 'data/active-interviews.md' || p === 'active-interviews.md' || p.startsWith('interview-prep/')) return 'interviews';
+  // A re-render or a tailored CV writes its PDF and HTML under output/, and generate-pdf.mjs files it in the PDF index.
+  if (p.startsWith('output/') || p === 'data/pdf-index.tsv') return 'documents';
   if (p === 'data/follow-ups.md') return 'followups';
   if (p === 'data/shortlist.md') return 'shortlist';
   if (p === 'portals.yml' || p === 'config/profile.yml' || p === 'config/plugins.yml' || p === 'cv.md' || p === 'article-digest.md' || p === 'data/blacklist.md') return 'config';
@@ -20,7 +22,7 @@ export function domainFor(relPath: string): Domain | null {
 }
 
 export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300): FSWatcher {
-  const targets = ['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'applications.md', 'status-log.tsv', 'interview-prep', 'active-interviews.md'].map((t) => path.join(dataRoot, t));
+  const targets = ['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'applications.md', 'status-log.tsv', 'interview-prep', 'active-interviews.md', 'output'].map((t) => path.join(dataRoot, t));
   const watcher = chokidar.watch(targets, {
     ignoreInitial: true,
     // Judged inside the data root: the root itself may sit under a folder named control-center or node_modules.
