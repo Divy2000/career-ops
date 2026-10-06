@@ -77,6 +77,8 @@ export function sessionsDir(dataRoot: string): string {
   return path.join(dataRoot, 'data', 'control-center', 'sessions');
 }
 
+const SESSION_ID = /^[\w-]+$/;
+
 function newId(): string {
   const ts = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   return `s${ts}-${crypto.randomBytes(3).toString('hex')}`;
@@ -101,7 +103,7 @@ export class SessionStore {
   }
 
   dirOf(id: string): string {
-    if (!/^[\w-]+$/.test(id)) throw new Error('bad session id');
+    if (!SESSION_ID.test(id)) throw new Error('bad session id');
     return path.join(sessionsDir(this.dataRoot), id);
   }
 
@@ -211,8 +213,10 @@ export class SessionStore {
 
   list(): SessionMeta[] {
     const out: SessionMeta[] = [];
-    for (const name of fs.readdirSync(sessionsDir(this.dataRoot))) {
-      const meta = this.read(name);
+    // Only session folders: Finder drops .DS_Store here, and anything else stray is not a session either.
+    for (const entry of fs.readdirSync(sessionsDir(this.dataRoot), { withFileTypes: true })) {
+      if (!entry.isDirectory() || !SESSION_ID.test(entry.name)) continue;
+      const meta = this.read(entry.name);
       if (meta) out.push(meta);
     }
     return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));

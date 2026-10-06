@@ -22,6 +22,16 @@ describe('session store', () => {
     expect(store.read('nope')).toBeNull();
     expect(() => store.dirOf('../etc')).toThrow(/bad session id/);
   });
+  it('lists only session folders: a stray .DS_Store, file or odd folder in the sessions folder is skipped (SW2-claude-01)', () => {
+    const root = tempDir('cc-sessions-stray-');
+    const store = new SessionStore(root, guardRoot);
+    const a = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    fs.writeFileSync(path.join(sessionsDir(root), '.DS_Store'), 'finder');
+    fs.writeFileSync(path.join(sessionsDir(root), 'notes'), 'x');
+    fs.mkdirSync(path.join(sessionsDir(root), 'not a session'));
+    fs.mkdirSync(path.join(sessionsDir(root), 'empty-folder'));
+    expect(store.list().map((m) => m.id)).toEqual([a.id]);
+  });
   it('appends turns, accumulates totals and moves through the status machine', () => {
     const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'app', value: '3' }, model: null });
     const t1 = store.beginTurn(s.id, { runId: 'r1', userText: 'Evaluate it' });

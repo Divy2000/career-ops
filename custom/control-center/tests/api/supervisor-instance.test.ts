@@ -111,6 +111,25 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('a stray .DS_Store in the sessions folder does not stop the child when it activates after listen (SW2-claude-01)', async () => {
+    const root = copyFixtureRoot();
+    const sessions = path.join(root, 'data', 'control-center', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(path.join(sessions, '.DS_Store'), 'finder');
+    const leftover = queuedRun(root);
+    const s = startSupervisor(await freePort(), root);
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      // Activation reconciled runs and then sessions: the leftover run is settled, and the child is still serving.
+      await until(() => statusOf(root, leftover.id) === 'lost', 'the child to reconcile after listen');
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      expect(s.output()).not.toMatch(/server child exited|bad session id/);
+    } finally {
+      await stop(s);
+    }
+  });
+
   it('a launch whose port is taken reconciles nothing on its own data root before it exits', async () => {
     const root = copyFixtureRoot();
     const leftover = queuedRun(root);

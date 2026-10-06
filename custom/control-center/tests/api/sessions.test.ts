@@ -187,6 +187,22 @@ describe('Claude sessions', () => {
     expect((await settle(fork.id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
   });
 
+  it('a stray .DS_Store in the sessions folder neither stops the app from starting nor breaks the sessions list (SW2-claude-01)', async () => {
+    const dataRoot = copyFixtureRoot();
+    const sessions = path.join(dataRoot, 'data', 'control-center', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(path.join(sessions, '.DS_Store'), 'finder');
+    fs.writeFileSync(path.join(sessions, 'notes'), 'x');
+    const app = await makeTestApp({ dataRoot });
+    try {
+      const res = await call(app, 'GET', '/api/sessions');
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('cancel kills the turn and leaves the session cancelled', async () => {
     const { id } = (await post('/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json();
     const deadline = Date.now() + 15_000;
