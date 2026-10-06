@@ -142,17 +142,47 @@ test('a recent start keeps the claim until it is retagged with its session', () 
   assert.equal(readClaim(r).owner, 'session:s-7');
 });
 
+test('a start keeps the claim however long it waits (a Keychain prompt), while the process that took it runs (SW8 review 2)', () => {
+  const r = root();
+  assert.equal(tryClaim(r, { owner: 'starting:slow', batch: null }).ok, true);
+  // Long past any fixed time limit: the start is still waiting on the token in this live process.
+  plant(r, { ...readClaim(r), at: new Date(Date.now() - 60 * 60_000).toISOString() });
+  const refused = tryClaim(r, { owner: 'starting:second', batch: null });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.holder.owner, 'starting:slow');
+  assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
+});
+
+test('a start whose process has exited, or whose pid now names another process, is stale at once (SW8 review 2)', () => {
+  const r = root();
+  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); tryClaim(${JSON.stringify(r)}, { owner: 'starting:crashed', batch: null });`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code]);
+  assert.equal(child.status, 0, String(child.stderr));
+  assert.equal(readClaim(r).owner, 'starting:crashed');
+  assert.equal(readClaim(r).pid, child.pid);
+  assert.deepEqual(tryClaim(r, { owner: 'starting:next', batch: null }), { ok: true });
+  // This process's pid, but a process that started at another time: the pid was reused.
+  plant(r, { owner: 'starting:reused', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.deepEqual(tryClaim(r, { owner: 'starting:next', batch: null }), { ok: true });
+});
+
 test('many processes claiming at once: exactly one gets it', async () => {
   const r = root();
-  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:' + process.pid, batch: null }).ok));`;
-  const outs = await Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--input-type=module', '-e', code]);
-    let out = '';
-    child.stdout.on('data', (d) => (out += d));
-    child.on('error', reject);
-    child.on('close', () => resolve(out));
-  })));
-  assert.equal(outs.filter((o) => o === 'true').length, 1, outs.join(','));
+  // Each claimant stays alive until all have answered: a start's claim holds only while its process runs.
+  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:' + process.pid, batch: null }).ok)); process.stdin.resume();`;
+  const children = [];
+  try {
+    const outs = await Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code]);
+      children.push(child);
+      child.stdout.once('data', (d) => resolve(String(d)));
+      child.on('error', reject);
+      child.on('close', () => resolve(''));
+    })));
+    assert.equal(outs.filter((o) => o === 'true').length, 1, outs.join(','));
+  } finally {
+    for (const child of children) child.stdin.end();
+  }
 });
 
 test('a fork takes the claim from the paused session it forks, never from another live owner', () => {

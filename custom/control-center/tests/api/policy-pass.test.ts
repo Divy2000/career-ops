@@ -11,9 +11,26 @@ import { tempDir } from '../helpers/tmp.js';
 let t: TestApp;
 // A turn that cannot read the Claude token fails before it spawns (a locked Keychain).
 let tokenMissing = false;
+// While set, a turn waits on the token as on a Keychain prompt nobody has answered yet.
+let tokenGate: Promise<void> | null = null;
 beforeAll(async () => {
-  t = await makeTestApp({}, { readToken: async () => { if (tokenMissing) throw new Error('Keychain item career-ops-claude-token not found'); return FAKE_TOKEN; } });
+  t = await makeTestApp({}, {
+    readToken: async () => {
+      if (tokenGate) await tokenGate;
+      if (tokenMissing) throw new Error('Keychain item career-ops-claude-token not found');
+      return FAKE_TOKEN;
+    },
+  });
 });
+/** Holds every turn at its token read until the returned function is called. */
+function holdToken(): () => void {
+  let open!: () => void;
+  tokenGate = new Promise((resolve) => (open = resolve));
+  return () => {
+    tokenGate = null;
+    open();
+  };
+}
 afterAll(async () => {
   await t.close();
 });
@@ -150,6 +167,15 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
   const fork = (id: string) => t.app.inject({ method: 'POST', url: `/api/sessions/${id}/fork`, headers: t.authedWrite, payload: { prompt: 'Try again.' } });
   const del = (id: string) => t.app.inject({ method: 'DELETE', url: `/api/sessions/${id}`, headers: t.authedWrite, payload: {} });
   const PAUSE = [INIT, result('Which of these two sources should I trust?')];
+  /** Deletes a cancelled session once the manager has finalized its run (it refuses a running one with 409). */
+  const delOnceStopped = async (id: string) => {
+    let res = await del(id);
+    for (let i = 0; i < 200 && res.statusCode === 409; i++) {
+      await wait(50);
+      res = await del(id);
+    }
+    return res;
+  };
 
   it('a paused pass keeps the claim: another pass is refused, its own reply goes on, and a fork takes the claim from it', async () => {
     writePending([item(4)]);
@@ -268,6 +294,91 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     expect(readPending()).toEqual([]);
     expect(claim()).toBeNull();
     expect((await del(forkId)).statusCode).toBe(200);
+    expect((await del(a.id)).statusCode).toBe(200);
+  });
+
+  it('a pass still waiting on the token keeps its claim however long it waits: a second pass is refused (SW8 review 2)', async () => {
+    writePending([item(14)]);
+    const open = holdToken();
+    let first;
+    let second;
+    try {
+      first = withScenario({ events: [INIT, result('Pass done.')] }, start);
+      for (let i = 0; i < 100 && !claim()?.owner.startsWith('starting:'); i++) await wait(20);
+      expect(claim()?.owner).toMatch(/^starting:/);
+      // Long past any fixed time limit for a start.
+      fs.writeFileSync(claimFile(), JSON.stringify({ ...claim(), at: new Date(Date.now() - 60 * 60_000).toISOString() }));
+      // Not awaited before the token is given: a second start that took the claim would wait on the token too.
+      second = withScenario({ events: [INIT, result('Pass done.')] }, start);
+      await wait(200);
+    } finally {
+      open();
+    }
+    const refused = await second!;
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json().error).toMatch(/starting/);
+    const res = await first;
+    expect(res.statusCode, res.body).toBe(202);
+    expect((await settle(res.json().id)).meta.status).toBe('done');
+    expect(readPending()).toEqual([]);
+    expect(claim()).toBeNull();
+    expect((await del(res.json().id)).statusCode).toBe(200);
+  });
+
+  it('a start whose claim was taken while it waited on the token is cancelled and refused with 409, and the holder keeps the claim (SW8 review 2)', async () => {
+    writePending([item(15)]);
+    const known = new Set(t.sessions.list().map((m) => m.id));
+    const open = holdToken();
+    let first;
+    try {
+      first = withScenario({ events: [INIT, ...Array.from({ length: 30 }, () => ({ __sleep: 100 })), result('Pass done.')] }, start);
+      for (let i = 0; i < 100 && !claim()?.owner.startsWith('starting:'); i++) await wait(20);
+      expect(claim()?.owner).toMatch(/^starting:/);
+      // Another pass took the claim over meanwhile.
+      fs.writeFileSync(claimFile(), JSON.stringify({ owner: 'session:s-other-pass', batch: null, at: new Date().toISOString() }));
+    } finally {
+      open();
+    }
+    const res = await first;
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error).toMatch(/cancelled/);
+    const started = t.sessions.list().filter((m) => !known.has(m.id));
+    expect(started).toHaveLength(1);
+    expect(t.sessions.read(started[0]!.id)!.status).toBe('cancelled');
+    expect(claim()?.owner).toBe('session:s-other-pass');
+    expect(readPending().map((i) => i.id)).toEqual([item(15).id]);
+    fs.rmSync(claimFile());
+    expect((await delOnceStopped(started[0]!.id)).statusCode).toBe(200);
+  });
+
+  it('a fork whose claim was taken while it waited on the token is cancelled and refused with 409, and the paused pass keeps its batch (SW8 review 2)', async () => {
+    writePending([item(16)]);
+    const a = (await withScenario({ events: PAUSE }, start)).json() as { id: string };
+    expect((await settle(a.id)).meta.status).toBe('awaiting_user');
+    const batch = t.sessions.read(a.id)!.policyBatch;
+    expect(batch).toBeTruthy();
+    const known = new Set(t.sessions.list().map((m) => m.id));
+    const open = holdToken();
+    let forking;
+    try {
+      forking = withScenario({ events: [INIT, ...Array.from({ length: 30 }, () => ({ __sleep: 100 })), result('Pass done.')] }, () => fork(a.id));
+      for (let i = 0; i < 100 && !claim()?.owner.startsWith('starting:'); i++) await wait(20);
+      expect(claim()?.owner).toMatch(/^starting:/);
+      fs.writeFileSync(claimFile(), JSON.stringify({ owner: 'session:s-other-pass', batch: null, at: new Date().toISOString() }));
+    } finally {
+      open();
+    }
+    const res = await forking;
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error).toMatch(/cancelled/);
+    const started = t.sessions.list().filter((m) => !known.has(m.id));
+    expect(started).toHaveLength(1);
+    expect(t.sessions.read(started[0]!.id)!.status).toBe('cancelled');
+    expect(t.sessions.read(started[0]!.id)!.policyBatch ?? null).toBeNull();
+    expect(t.sessions.read(a.id)!.policyBatch).toBe(batch);
+    expect(claim()?.owner).toBe('session:s-other-pass');
+    fs.rmSync(claimFile());
+    expect((await delOnceStopped(started[0]!.id)).statusCode).toBe(200);
     expect((await del(a.id)).statusCode).toBe(200);
   });
 });

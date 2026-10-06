@@ -80,11 +80,14 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   // The policy-pass claim (see policyClaim): a started session takes over its starting claim (and lets it go at once if
   // the session already ended, a start that failed before spawning), and a session that ends or is deleted releases it.
   const FINAL = new Set(['done', 'error', 'cancelled']);
-  const handOver = (starting: string, meta: { id: string; status: string }) => {
+  /** False when the starting claim is no longer this start's (another pass took it over): the session must not run. */
+  const handOver = (starting: string, meta: { id: string; status: string }): boolean => {
     const owner = `session:${meta.id}`;
-    policyClaim.retag(opts.cfg.dataRoot, starting, owner);
+    if (!policyClaim.retag(opts.cfg.dataRoot, starting, owner)) return false;
     if (FINAL.has(manager.read(meta.id)?.status ?? meta.status)) policyClaim.release(opts.cfg.dataRoot, owner);
+    return true;
   };
+  const LOST_CLAIM = 'another AI policy pass took over the queued items while this one was starting, so it was cancelled. Try again once that pass finishes.';
   const release = (sessionId: string) => {
     try {
       policyClaim.release(opts.cfg.dataRoot, `session:${sessionId}`);
@@ -174,12 +177,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
         if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
         throw err;
       }
-      policyClaim.take(opts.cfg.dataRoot, starting, { batch: pass.batch });
       userPrompt = pass.prompt;
     }
     try {
+      if (starting && !policyClaim.take(opts.cfg.dataRoot, starting, { batch: pass?.batch ?? null }).ok) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}` });
       const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: null, policyBatch: pass?.batch ?? null });
-      if (starting) handOver(starting, meta);
+      if (starting && !handOver(starting, meta)) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}`, session: manager.cancel(meta.id) });
       return reply.code(202).send(meta);
     } catch (err) {
       if (starting) policyClaim.release(opts.cfg.dataRoot, starting);
@@ -266,12 +269,14 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       // run before this request yields, so the fork's turn cannot end in between; the source is paused and the claim
       // is the fork's, so it cannot run meanwhile. The fork gets the batch first: a crash between the writes leaves it
       // with both, and acknowledging a batch twice is harmless, while one with neither would send its items again.
+      // The source gives its batch up only once the fork holds the claim.
       const batch = manager.read(req.params.id)?.policyBatch ?? null;
-      if (batch !== null) {
-        manager.store.setPolicyBatch(forked.id, batch);
-        manager.store.setPolicyBatch(req.params.id, null);
+      if (batch !== null) manager.store.setPolicyBatch(forked.id, batch);
+      if (!handOver(starting, forked)) {
+        if (batch !== null) manager.store.setPolicyBatch(forked.id, null);
+        return reply.code(409).send({ error: `Not forked: ${LOST_CLAIM}`, session: manager.cancel(forked.id) });
       }
-      handOver(starting, forked);
+      if (batch !== null) manager.store.setPolicyBatch(req.params.id, null);
       return reply.code(202).send(manager.read(forked.id) ?? forked);
     });
   });

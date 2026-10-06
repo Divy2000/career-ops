@@ -2,10 +2,12 @@
 // Center session (Sponsorship > Run AI policy pass). Two passes at once take the same queued items, which are
 // acknowledged only when a pass ends done, and both append the same rows to policy-changes.tsv and company-alerts.tsv
 // and a digest section. A pass takes the queue by holding data/immigration/.policy-pass.claim:
-//   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created.
+//   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created;
+//   a starting claim also names the process creating it: { pid, pidStart } (its pid and ps start time).
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
 // (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
-// .run-daily.pid names or no longer bash running run-daily.sh, or a start that never became a session within a few minutes. Every read-decide-write of the
+// .run-daily.pid names or no longer bash running run-daily.sh, or a start whose process has exited (a start can wait on a Keychain prompt
+// for as long as it is left open, so no time limit applies while that process runs). Every read-decide-write of the
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -72,8 +74,15 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
     return isDailyJob(pid);
   }
   if (kind === 'starting') {
-    const at = Date.parse(claim.at);
-    return Number.isFinite(at) && now - at < STARTING_MS;
+    if (claim.pid === undefined) {
+      // A claim written before starts named their process: only a recent one holds.
+      const at = Date.parse(claim.at);
+      return Number.isFinite(at) && now - at < STARTING_MS;
+    }
+    if (!Number.isSafeInteger(claim.pid) || claim.pid <= 0 || !pidAlive(claim.pid)) return false;
+    const started = processStart(claim.pid);
+    // Only ps naming another start time is proof the pid was reused; a ps that cannot run says nothing.
+    return started === undefined || typeof claim.pidStart !== 'string' || started === claim.pidStart;
   }
   return false;
 }
@@ -94,6 +103,23 @@ function isDailyJob(pid) {
     return !(err.status === 1 && !String(err.stdout ?? '').trim());
   }
   return DAILY_JOB_RE.test(out.trim());
+}
+
+/** pid's start time as ps prints it; null when no process has the pid, undefined when ps cannot tell. */
+function processStart(pid) {
+  try {
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C' } }).trim();
+    return out || undefined;
+  } catch (err) {
+    return err.status === 1 && !String(err.stdout ?? '').trim() ? null : undefined;
+  }
+}
+
+let ownStart;
+/** This process, as a starting claim names it. */
+function self() {
+  if (ownStart === undefined) ownStart = processStart(process.pid) ?? null;
+  return { pid: process.pid, pidStart: ownStart };
 }
 
 /**
@@ -167,7 +193,7 @@ export function tryClaim(dataRoot, { owner, batch = null, takeFrom = null }) {
   return locked(dataRoot, () => {
     const held = readClaim(dataRoot);
     if (held && held.owner !== owner && held.owner !== takeFrom && ownerLive(dataRoot, held)) return { ok: false, holder: held };
-    write(dataRoot, { owner, batch, at: held?.owner === owner ? held.at : new Date().toISOString() });
+    write(dataRoot, { owner, batch, at: held?.owner === owner ? held.at : new Date().toISOString(), ...(owner.startsWith('starting:') ? self() : {}) });
     return { ok: true };
   });
 }
@@ -177,7 +203,7 @@ export function retagClaim(dataRoot, from, to) {
   return locked(dataRoot, () => {
     const held = readClaim(dataRoot);
     if (held?.owner !== from) return false;
-    write(dataRoot, { ...held, owner: to });
+    write(dataRoot, { owner: to, batch: held.batch ?? null, at: held.at, ...(to.startsWith('starting:') ? self() : {}) });
     return true;
   });
 }
