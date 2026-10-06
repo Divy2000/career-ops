@@ -18,6 +18,31 @@ const STUBS = path.join(HERE, 'stubs');
 
 const DEFAULT_TOOLS = ['git', 'node', 'npm', 'security', 'uname', 'launchctl', 'plutil', 'claude', 'open'];
 
+// The tools install.sh probes for. A world has one only when its stub is in `tools`: the system copies are left off
+// the world PATH, so a "missing npm" spec means the same on Linux, where npm, git or gh live in /usr/bin, as on macOS.
+const PROBED = new Set(['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']);
+let systemBin = null;
+/** One folder per test process of links to every system command except the probed ones, in PATH order. */
+function systemBinDir() {
+  if (systemBin) return systemBin;
+  systemBin = path.join(fs.realpathSync(tempDir('ci-sysbin-')), 'bin');
+  fs.mkdirSync(systemBin);
+  for (const dir of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) {
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const link = path.join(systemBin, name);
+      if (PROBED.has(name) || fs.existsSync(link)) continue;
+      fs.symlinkSync(path.join(dir, name), link);
+    }
+  }
+  return systemBin;
+}
+
 const put = (file, data, mode) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, data, mode ? { mode } : undefined);
@@ -83,7 +108,7 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
   const ttyFile = path.join(T, 'tty');
 
   const baseEnv = {
-    PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    PATH: `${bin}:${systemBinDir()}`,
     HOME: home,
     USER: 'tester',
     STUB_LOG: stubLog,

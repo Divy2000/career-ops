@@ -1222,3 +1222,15 @@ test('a data root next to the home directory is fine', () => {
   assert.equal(r.status, 0, r.out);
   assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
 });
+
+test('the test world finds no system copy of a tool the installer probes for, so a missing-tool spec means the same on every OS (SW3-tests-06)', () => {
+  const w = makeWorld({ tools: ['uname'] });
+  for (const tool of ['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']) {
+    const r = spawnSync('bash', ['-c', `command -v ${tool} || true`], { env: w.env(), encoding: 'utf8' });
+    assert.equal(r.stdout.trim(), '', `${tool} found on the world PATH`);
+  }
+  for (const tool of ['bash', 'sed', 'awk', 'mktemp', 'python3']) {
+    const r = spawnSync('bash', ['-c', `command -v ${tool}`], { env: w.env(), encoding: 'utf8' });
+    assert.notEqual(r.stdout.trim(), '', `${tool} is still there for the installer`);
+  }
+});
