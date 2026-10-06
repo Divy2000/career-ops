@@ -88,6 +88,14 @@ describe('invocation builder', () => {
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'es' })).toContain('Playwright is unavailable');
   });
+  it('a localized apply mode gets the apply envelope contract: answers first, nothing filled until confirmed', () => {
+    const contract = (id: string) => buildPreamble({ policy: getModePolicy(id)!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('9. '))!;
+    for (const id of ['de/bewerben', 'fr/postuler', 'ja/oubo', 'ru/apply', 'zh-TW/apply']) expect(contract(id), id).toBe(contract('apply'));
+    expect(contract('apply')).toMatch(/<<cc:answers/);
+    expect(contract('apply')).toMatch(/Do not fill anything until the user confirms/);
+    // A localized evaluation still has no envelope contract.
+    expect(contract('de/angebot')).toMatch(/none for this mode/);
+  });
   it('rule 6 names only the web tools the session has: never WebFetch to a session without it', () => {
     const rule6 = (policy: ReturnType<typeof getModePolicy>) => buildPreamble({ policy: policy!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('6. '))!;
     const { mcp: _mcp, ...applyWithoutPlaywright } = getModePolicy('apply')!;

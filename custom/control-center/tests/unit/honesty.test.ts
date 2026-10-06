@@ -48,8 +48,10 @@ describe('evaluation honesty gate', () => {
       expect(decideTurnOutcome({ ...base, modeId }), modeId).toMatchObject({ status: 'awaiting_user', reason: expect.stringMatching(/no new report/) });
       expect(decideTurnOutcome({ ...base, modeId, newReports: [{ num: 8, file: '008-x.md', score: 4.1 }] }).status, modeId).toBe('done');
     }
-    // A pipeline or a live application assistant is not one evaluation.
-    for (const modeId of ['de/pipeline', 'de/bewerben']) expect(decideTurnOutcome({ ...base, modeId }).status, modeId).toBe('done');
+    // A pipeline or a live application assistant is not one evaluation: no report needed (the assistant waits for its
+    // answers envelope instead, SW-claude-03 review).
+    expect(decideTurnOutcome({ ...base, modeId: 'de/pipeline' }).status).toBe('done');
+    expect(decideTurnOutcome({ ...base, modeId: 'de/bewerben' })).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
   });
 
   it('advisor and ai-search may end in prose: an answer is done, a question waits, and no envelope is required', () => {
@@ -62,6 +64,13 @@ describe('evaluation honesty gate', () => {
     expect(decideTurnOutcome({ ...search, envelopeCount: 3 }).status).toBe('done');
     // The modes whose contract demands an envelope still wait without one.
     for (const modeId of ['apply', 'cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only' }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+  });
+
+  it('a localized apply mode is envelope-gated like apply: no answers envelope, no done', () => {
+    for (const modeId of ['de/bewerben', 'fr/postuler', 'ru/apply', 'zh-TW/apply']) {
+      expect(decideTurnOutcome({ ...base, modeId, policyClass: 'apply', finalText: 'Filled the form.' }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+      expect(decideTurnOutcome({ ...base, modeId, policyClass: 'apply', envelopeCount: 1 }).status, modeId).toBe('done');
+    }
   });
 
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {

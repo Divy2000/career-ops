@@ -92,7 +92,7 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
     if (!i.finalText.trim()) return { status: 'awaiting_user', reason: 'a report appeared but the turn produced no output' };
     return { status: 'done', reason: `report ${i.newReports.map((r) => r.file).join(', ')} created` };
   }
-  if (ENVELOPE_MODES.has(i.modeId)) {
+  if (ENVELOPE_MODES.has(englishModeOf(i.modeId))) {
     return i.envelopeCount > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
   }
   if (endsWithQuestion(i.finalText)) return { status: 'awaiting_user', reason: 'the turn ended with a question' };

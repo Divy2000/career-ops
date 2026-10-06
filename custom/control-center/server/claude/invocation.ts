@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALWAYS_DENIED_WRITES, READ_DENY, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, READ_DENY, englishModeOf, type ModePolicy } from './modes.js';
 import { buildReadDenyRules, guardHookCommand, guardHooks, spellings, writeGuardPolicy } from './confinement.mjs';
 
 // Shared with the daily job's policy pass (custom/immigration/run-daily.sh).
@@ -183,6 +183,11 @@ const ENVELOPE_CONTRACT: Record<string, string> = {
   advisor: 'To propose an app action emit one line <<cc:act {"action":"<name>","params":{...}}>>; the app asks the user to confirm anything that writes.',
 };
 
+function envelopeContractOf(modeId: string): string | undefined {
+  const id = englishModeOf(modeId);
+  return Object.hasOwn(ENVELOPE_CONTRACT, id) ? ENVELOPE_CONTRACT[id] : undefined;
+}
+
 export interface PreambleInput {
   policy: ModePolicy;
   outputLanguage: string;
@@ -215,7 +220,8 @@ export function buildPreamble(input: PreambleInput): string {
     webRule(p),
     '7. When the mode needs the user to confirm or choose, ask exactly one question and end the turn. The app shows it and resumes you with the answer.',
     `8. Allowed write scope (paths relative to the repo root): ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
-    `9. Envelope contract: ${ENVELOPE_CONTRACT[p.id] ?? 'none for this mode; report results as markdown.'}`,
+    // A localized mode (de/bewerben is apply) has the contract of the English mode it stands for.
+    `9. Envelope contract: ${envelopeContractOf(p.id) ?? 'none for this mode; report results as markdown.'}`,
   ];
   if (input.reportNum !== undefined) lines.push(`10. Report number ${input.reportNum} is reserved for this evaluation. Use it for the report file name and the tracker row; do not call reserve-report-num.`);
   if (input.dataRoot && input.codeRoot && input.dataRoot !== input.codeRoot) lines.push(`User data lives in ${input.dataRoot}; read user files there by absolute path.`);
