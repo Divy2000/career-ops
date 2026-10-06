@@ -136,6 +136,11 @@ export function SponsorshipPage() {
                   <WatcherState seen={d.seen} pendingCount={d.pendingCount} pendingError={d.pendingError} />
                 </div>
               )}
+              {tab === 'changes' && d.policyChangesError && (
+                <p role="alert" className="danger-text">
+                  Policy changes could not be read: {d.policyChangesError}
+                </p>
+              )}
               {tab === 'changes' && (
                 <TableScroll label="Policy changes">
                   <table className="table">
@@ -205,6 +210,11 @@ export function SponsorshipPage() {
                     </table>
                   </TableScroll>
                 ))}
+              {tab === 'alerts' && d.alertsError && (
+                <p role="alert" className="danger-text">
+                  The latest alert per company could not be read: {d.alertsError}
+                </p>
+              )}
               {tab === 'alerts' && (
                 <TableScroll label="Company alerts">
                   <table className="table">

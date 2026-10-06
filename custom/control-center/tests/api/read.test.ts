@@ -41,6 +41,31 @@ describe('read endpoints', () => {
     expect(body.companyHistory).toEqual([]);
   });
 
+  it('one malformed line in company-alerts.tsv or policy-changes.tsv degrades the sponsorship data and says why, instead of failing the Application and Sponsorship pages (SW2-server-01)', async () => {
+    const own = await makeTestApp();
+    try {
+      const imm = path.join(own.cfg.dataRoot, 'data', 'immigration');
+      // A session that writes the house rule's words ("pause") instead of the allowed status, and a non-ISO date.
+      fs.appendFileSync(path.join(imm, 'company-alerts.tsv'), '2026-10-05\tAcme Robotics\tacme-robotics\tpause\tAcme pauses H-1B\thttps://news.example/acme\n');
+      fs.appendFileSync(path.join(imm, 'policy-changes.tsv'), 'Oct 5\t\tagency\tA title\thttps://agency.example/x\tnone\n');
+      const call = (url: string) => own.app.inject({ method: 'GET', url, headers: own.authed });
+      const app = await call('/api/tracker/1');
+      expect(app.statusCode, app.body).toBe(200);
+      expect(app.json().sponsorship).toMatchObject({ companyFile: { slug: 'acme-robotics' }, alert: null, error: expect.stringMatching(/company-alerts\.tsv line 4: status must be one of/) });
+      const overview = await call('/api/immigration/overview');
+      expect(overview.statusCode, overview.body).toBe(200);
+      expect(overview.json()).toMatchObject({
+        alerts: { latest: [], history: expect.arrayContaining([expect.objectContaining({ status: 'pause' })]) },
+        alertsError: expect.stringMatching(/company-alerts\.tsv line 4/),
+        policyChanges: [],
+        policyChangesError: expect.stringMatching(/policy-changes\.tsv line 4/),
+      });
+      expect((await call('/api/immigration/companies/acme-robotics')).statusCode).toBe(200);
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n gives an unknown-employer (?) row no company history, company file or alert (SW-server-05)', async () => {
     const own = await makeTestApp();
     try {
@@ -53,7 +78,7 @@ describe('read endpoints', () => {
       const body = res.json();
       expect(body.row.company).toBe('?');
       expect(body.companyHistory).toEqual([]);
-      expect(body.sponsorship).toEqual({ companyFile: null, alert: null });
+      expect(body.sponsorship).toEqual({ companyFile: null, alert: null, error: null });
     } finally {
       await own.close();
     }

@@ -96,7 +96,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const overview = await readImmigrationOverview(cfg.codeRoot, cfg.dataRoot);
     const companyFile = overview.companies.find((c) => sameCompany(c.name)) ?? null;
     const alert = overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;
-    return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert } };
+    return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert, error: overview.alertsError } };
   });
 
   app.get('/api/pipeline', async () => readPipeline(cfg.dataRoot));
