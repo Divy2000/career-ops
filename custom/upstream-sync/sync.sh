@@ -145,7 +145,7 @@ if [ -n "$CHANGED_UPSTREAM" ]; then
 fi
 CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail "cannot compare HEAD with the merge result"
 UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"
-PROTECTED_EDITS="$(protected_paths "$CHANGED_SINCE_MERGE")"
+PROTECTED_EDITS="$({ protected_paths "$CHANGED_SINCE_MERGE"; contract_gate_edits "$MERGE_SNAPSHOT"; } | LC_ALL=C sort -u)"
 
 CUSTOM_OK=1
 custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0

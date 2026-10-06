@@ -247,14 +247,19 @@ new_failures() {
 # sync must never change on its own: the fork's tests and test helpers, the
 # sync's own gates, the guard and the other paths Dev Chat may not write
 # (DEVCHAT_DENIED_WRITES in custom/control-center/server/claude/modes.ts, kept
-# in step by sync-gates.spec), and the fork README. The sync Claude may fix
+# in step by sync-gates.spec), everything under server/core but contract.json
+# (the guard reads the contract through adapter.ts; contract.json itself is
+# section-gated by contract_gate_edits), and the fork README. The sync Claude may fix
 # other fork code under custom/; those fixes are judged by the protected tests,
 # so an edit to a test, a gate or the guard holds the PR for a human.
 protected_paths() {
   local f
   while IFS= read -r f; do
     case "$f" in
+      # Section-gated by contract_gate_edits instead: its clis, exports and writers follow upstream.
+      custom/control-center/server/core/contract.json) ;;
       custom/control-center/server/claude/* | custom/control-center/supervisor/* | \
+        custom/control-center/server/core/* | \
         custom/control-center/package.json | custom/control-center/package-lock.json | \
         custom/control-center/vite.config.* | custom/control-center/vitest.config.* | custom/control-center/playwright.config.* | \
         custom/control-center/eslint.config.* | custom/control-center/tsconfig*.json | \
@@ -266,6 +271,29 @@ protected_paths() {
         printf '%s\n' "$f" ;;
     esac
   done <<< "$1"
+}
+
+# contract_gate_edits <snapshot>: custom/control-center/server/core/contract.json
+# when this run changed its confinement gate data: the `claude` section (the
+# Claude Code versions approved to run unattended, the flags the confinement
+# relies on) or `playwrightMcp` (whether apply sessions get Playwright). The
+# other sections follow upstream's CLIs and exports, which the sync Claude may
+# update. Compared with the merge snapshot (merge_snapshot text <snapshot>); a
+# file added, removed or not parseable on either side counts as changed.
+contract_gate_edits() {
+  local f=custom/control-center/server/core/contract.json before after same
+  before="$(printf '%s\n' "$1" | awk -F'\t' -v f="$f" '$1 == f { split($2, m, " "); print m[2] }')"
+  after="$(git rev-parse --verify --quiet "HEAD:$f")"
+  [ "$before" = "$after" ] && return 0
+  if [ -n "$before" ] && [ -n "$after" ] && same="$(node -e '
+const { execFileSync } = require("child_process");
+const sorted = (v) => (Array.isArray(v) ? v.map(sorted) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])])) : v);
+const gate = (sha) => { const c = JSON.parse(execFileSync("git", ["cat-file", "blob", sha], { encoding: "utf8" })); return JSON.stringify(sorted([c.claude ?? null, c.playwrightMcp ?? null])); };
+process.stdout.write(gate(process.argv[1]) === gate(process.argv[2]) ? "same" : "changed");
+' "$before" "$after" 2>/dev/null)" && [ "$same" = same ]; then
+    return 0
+  fi
+  printf '%s\n' "$f"
 }
 
 # sync_verdict <claude-exit> <claude-output>: why the sync Claude's own run
