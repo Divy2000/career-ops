@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { acquireInstanceLock, instanceLockPath, processStartTime, UNREADABLE_LOCK_GRACE_MS, type LockResult } from '../../supervisor/instance-lock.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -90,26 +90,48 @@ describe('locks whose holder cannot be compared by start time keep it running (S
     expect(acquireInstanceLock(root, { pid: 200, port: 4401 }, procs({ 100: 'unknown', 200: 1791198000 }))).toMatchObject({ ok: false, holder: { pid: 100 } });
   });
 
-  it('only "no such process" reads as not running: a ps that fails any other way, or prints what it cannot parse, reads as unknown', () => {
+  it('ps\'s "no such process" reads as not running; when ps fails any other way, or prints what it cannot parse, the PID itself is asked', () => {
     const bin = tempDir('cc-fake-ps-');
-    const withPs = (script: string) => {
-      fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
-      const saved = process.env.PATH;
-      process.env.PATH = `${bin}:${saved}`;
-      try {
-        return processStartTime(4242);
-      } finally {
-        process.env.PATH = saved;
-      }
+    const gone = spawnSync('/usr/bin/true').pid!;
+    const withPs = (script: string, pid: number) => {
+      const ps = path.join(bin, 'ps');
+      fs.writeFileSync(ps, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+      return processStartTime(pid, ps);
     };
-    expect(withPs('exit 1')).toBeNull();
-    expect(withPs('echo boom >&2; exit 2')).toBe('unknown');
-    expect(withPs('kill -9 $$')).toBe('unknown');
-    expect(withPs("echo 'Mo.  5 Okt. 10:00:00 2026'")).toBe('unknown');
-    expect(withPs("echo 'Mon Oct  5 10:00:00 2026'")).toBe(Date.UTC(2026, 9, 5, 10, 0, 0) / 1000);
+    expect(withPs('exit 1', process.pid)).toBeNull();
+    for (const failure of ['echo boom >&2; exit 2', 'kill -9 $$', "echo 'Mo.  5 Okt. 10:00:00 2026'", 'exit 0']) {
+      expect(withPs(failure, process.pid), failure).toBe('unknown');
+      expect(withPs(failure, gone), failure).toBeNull();
+    }
+    expect(withPs("echo 'Mon Oct  5 10:00:00 2026'", 4242)).toBe(Date.UTC(2026, 9, 5, 10, 0, 0) / 1000);
     // The real one: this test process runs, a PID that does not exist does not.
     expect(typeof processStartTime(process.pid)).toBe('number');
     expect(processStartTime(2 ** 22 + 12345)).toBeNull();
+  });
+});
+
+describe('a ps that cannot be started never blocks restarts (SW-claude-02 review)', () => {
+  /** A PID that ran a moment ago and has exited. */
+  const deadPid = () => spawnSync('/usr/bin/true').pid!;
+
+  it('with PATH pointing at an empty folder, a PID that is not running reads as not running, a running one as running', () => {
+    const saved = process.env.PATH;
+    process.env.PATH = tempDir('cc-empty-path-');
+    try {
+      expect(processStartTime(deadPid())).toBeNull();
+      // ps still runs (by its own path): the live PID gets its real start, not just "running".
+      expect(typeof processStartTime(process.pid)).toBe('number');
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
+  it('when ps itself is missing, the PID is asked directly: gone is not running, alive is running with an unknown start', () => {
+    const missing = path.join(tempDir('cc-no-ps-'), 'ps');
+    expect(processStartTime(deadPid(), missing)).toBeNull();
+    expect(processStartTime(process.pid, missing)).toBe('unknown');
+    // PID 1 belongs to root: the kernel answers EPERM, which still means it runs.
+    expect(processStartTime(1, missing)).toBe('unknown');
   });
 });
 

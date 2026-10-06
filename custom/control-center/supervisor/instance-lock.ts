@@ -43,23 +43,36 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 /** `ps -o lstart` in the C locale: "Mon Oct  5 17:09:12 2026". */
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 
+/** macOS's ps, by its absolute path: what PATH holds never decides which program answers, or whether one does. */
+export const PS_PATH = '/bin/ps';
+
+/** Whether `pid` runs, asked of the kernel: ESRCH is gone; success or EPERM (another user's process) is running. */
+function runningByKill(pid: number): 'unknown' | null {
+  try {
+    process.kill(pid, 0);
+    return 'unknown';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ESRCH' ? null : 'unknown';
+  }
+}
+
 /**
  * When a process started, from `ps -o lstart` run with LC_ALL=C and TZ=UTC whatever this process's environment is.
- * Only ps's own "no such process" (exit 1, nothing printed) reads as not running; any other failure, or output that
- * does not parse, is 'unknown', which callers treat as running.
+ * ps's own "no such process" (exit 1, nothing printed) is not running. When ps fails any other way (cannot start,
+ * times out, dies) or prints a start that does not parse, the kernel is asked whether the PID runs: 'unknown' when
+ * it does, which callers treat as running, null when it does not, so a crashed holder's lock never blocks a restart.
  */
-export function processStartTime(pid: number): ProcessStart {
+export function processStartTime(pid: number, psPath: string = PS_PATH): ProcessStart {
   let out: string;
   try {
-    out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { PATH: process.env.PATH ?? '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } }).trim();
+    out = execFileSync(psPath, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { LC_ALL: 'C', TZ: 'UTC' } }).trim();
   } catch (err) {
     const e = err as { status?: number | null; signal?: string | null; stdout?: string };
-    return e.status === 1 && !e.signal && !String(e.stdout ?? '').trim() ? null : 'unknown';
+    return e.status === 1 && !e.signal && !String(e.stdout ?? '').trim() ? null : runningByKill(pid);
   }
-  if (!out) return null;
   const m = LSTART.exec(out);
   const month = m ? MONTHS.indexOf(m[1]!) : -1;
-  if (!m || month === -1) return 'unknown';
+  if (!m || month === -1) return runningByKill(pid);
   return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 
