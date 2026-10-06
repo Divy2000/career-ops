@@ -274,21 +274,40 @@ test('the same known-red suite gives the same lines on every run', () => {
   assert.equal(a.read('f.txt'), b.read('f.txt'));
 });
 
-test('a failing suite whose re-run names no failing test holds the PR with a line unique to the run', () => {
-  const w = realSuiteWorld(false);
-  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), "throw new Error('does not load');\n");
-  w.run(`suite_failures "${w.dir}/f.txt"`);
-  assert.match(w.read('f.txt'), /^❌ tests\/egress\.test\.mjs — node:test suite failed, no failing test named on a re-run \(see .*f\.txt\.raw\)$/m);
+const NO_NAMES = '❌ tests/egress.test.mjs — node:test suite failed, no test named on re-run';
+
+test('a failing suite whose re-run names no test gets one fixed line, the same in the baseline and after the merge (review of SW3-tests-02)', () => {
+  const lines = [0, 1].map(() => {
+    const w = realSuiteWorld(false);
+    writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), "throw new Error('does not load');\n");
+    w.run(`suite_failures "${w.dir}/f.txt"`);
+    return { text: w.read('f.txt'), file: path.join(w.dir, 'f.txt') };
+  });
+  assert.equal(lines[0].text, `❌ tests/egress.test.mjs — node:test suite failed (exit 1)\n${NO_NAMES}\n`);
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${lines[1].file}"`], { env: { PATH: '/usr/bin:/bin', B: lines[0].text }, encoding: 'utf8' });
+  assert.equal(r.stdout, '', 'a known-red suite that names no test does not hold every sync');
 });
 
-test('a re-run that hangs is cut off and holds the PR', () => {
+test('a re-run that hangs is cut off, its test process killed too, and the suite gets the fixed line', async () => {
   const w = realSuiteWorld(false);
-  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), "import { test } from 'node:test';\ntest('hangs', () => new Promise(() => setInterval(() => {}, 1000)));\n");
+  const pidFile = path.join(w.dir, 'child.pid');
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), `import fs from 'node:fs';\nimport { test } from 'node:test';\nfs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\ntest('hangs', () => new Promise(() => setInterval(() => {}, 1000)));\n`);
   const started = Date.now();
   const r = spawnSync('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=1500 suite_failures "${w.dir}/f.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, encoding: 'utf8' });
+  // Checked (and cleaned up) before anything else, so a failing run of this spec leaves no process behind either.
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 40 && alive(); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  const leaked = alive();
+  if (leaked) process.kill(pid, 'SIGKILL');
+  assert.equal(leaked, false, 'the per-file test process was killed with the re-run');
   assert.equal(r.status, 0, r.stderr);
   assert.ok(Date.now() - started < 20_000, `took ${Date.now() - started} ms`);
-  assert.match(w.read('f.txt'), /no failing test named on a re-run/);
+  assert.match(w.read('f.txt'), new RegExp(`^${NO_NAMES}$`, 'm'));
+});
+
+test('the re-run timeout defaults to 120 seconds', () => {
+  assert.match(readFileSync(LIB, 'utf8'), /SUITE_RERUN_TIMEOUT_MS \|\| 120000/);
 });
 
 test('a clean run of the suite records no failures', () => {

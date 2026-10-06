@@ -242,7 +242,9 @@ suite_failures() {
     if [ -n "$names" ]; then
       named="${named:+$named$'\n'}$(printf '%s\n' "$names" | sed "s|^|❌ $suite — node:test ✖ |")"
     else
-      named="${named:+$named$'\n'}❌ $suite — node:test suite failed, no failing test named on a re-run (see $out)"
+      # Fixed, not tied to this run: a known-red suite that names no test (it does not load, or it is slow) must not
+      # hold every sync. A suite that is new in the merged run is still caught by its own "❌ ... suite failed" line.
+      named="${named:+$named$'\n'}❌ $suite — node:test suite failed, no test named on re-run"
     fi
   done < <(sed -nE 's/^[[:space:]]*❌ (.*) — node:test suite failed \(exit [^)]*\)$/\1/p' "$out" | LC_ALL=C sort -u)
   {
@@ -262,24 +264,40 @@ suite_failures() {
 # rerun_failing_tests <suite>: the names of the failing tests in one node:test
 # suite, run again from the current directory with the TAP reporter (every
 # `not ok N - name`, nested ones included, numbers and directives dropped),
-# sorted. Bounded by SUITE_RERUN_TIMEOUT_MS (default 300000); nothing when the
+# sorted. Bounded by SUITE_RERUN_TIMEOUT_MS (default 120000): the run is
+# started in its own process group and the whole group is killed at the
+# deadline, so the per-file test process never outlives it. Nothing when the
 # run names no failing test (a suite that does not load reports only its file),
 # times out or cannot start.
 rerun_failing_tests() {
   SUITE="$1" node -e '
-const { spawnSync } = require("child_process");
-const env = { ...process.env, NODE_OPTIONS: (process.env.NODE_OPTIONS || "").replace(/--test-reporter(-destination)?[= ]\S+/g, "") };
+const { spawn } = require("child_process");
+const path = require("path");
 const suite = process.env.SUITE;
+const env = { ...process.env, NODE_OPTIONS: (process.env.NODE_OPTIONS || "").replace(/--test-reporter(-destination)?[= ]\S+/g, "") };
 delete env.SUITE;
-const r = spawnSync(process.execPath, ["--test", "--test-reporter=tap", suite], { env, encoding: "utf8", timeout: Number(process.env.SUITE_RERUN_TIMEOUT_MS || 300000), maxBuffer: 64 * 1024 * 1024, killSignal: "SIGKILL" });
-if (r.error) process.exit(0);
-const names = new Set();
-for (const line of (r.stdout || "").split("\n")) {
-  const m = /^\s*not ok \d+ - (.*?)(?: # .*)?$/.exec(line);
-  // A suite that does not load is reported as one failing "test" named after its file: that names no test.
-  if (m && m[1] !== suite && m[1] !== require("path").resolve(suite)) names.add(m[1]);
-}
-process.stdout.write([...names].sort().map((n) => n + "\n").join(""));
+const child = spawn(process.execPath, ["--test", "--test-reporter=tap", suite], { env, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+let out = "";
+let timedOut = false;
+child.stdout.setEncoding("utf8").on("data", (d) => { out += d; });
+const timer = setTimeout(() => {
+  timedOut = true;
+  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+}, Number(process.env.SUITE_RERUN_TIMEOUT_MS || 120000));
+child.on("error", () => { clearTimeout(timer); process.exit(0); });
+child.on("close", () => {
+  clearTimeout(timer);
+  // A run that ended on its own can still leave a stray process in its group.
+  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+  if (timedOut) process.exit(0);
+  const names = new Set();
+  for (const line of out.split("\n")) {
+    const m = /^\s*not ok \d+ - (.*?)(?: # .*)?$/.exec(line);
+    // A suite that does not load is reported as one failing "test" named after its file: that names no test.
+    if (m && m[1] !== suite && m[1] !== path.resolve(suite)) names.add(m[1]);
+  }
+  process.stdout.write([...names].sort().map((n) => n + "\n").join(""));
+});
 ' 2>/dev/null | LC_ALL=C sort -u
 }
 
