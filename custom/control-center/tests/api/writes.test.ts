@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { importCore } from '../../server/core/adapter.js';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import type { Exec } from '../../server/routes/system.js';
@@ -38,6 +39,33 @@ describe('pipeline writes', () => {
     expect(undo.statusCode).toBe(200);
     expect(readData('data/pipeline.md')).toContain(`- [ ] ${url}`);
   });
+  it('skip while another writer holds the pipeline lock answers 409 with retry-after and leaves the file alone, then works once it is free (SW4-tests-18)', async () => {
+    const url = 'https://jobs.example.com/acme/123';
+    const pipeline = path.join(t.cfg.dataRoot, 'data', 'pipeline.md');
+    const { acquirePipelineLock } = await importCore<{ acquirePipelineLock: (p: string, o?: { timeoutMs?: number }) => Promise<{ release(): void }> }>(t.cfg.codeRoot, 'pipeline-lock.mjs');
+    const before = readData('data/pipeline.md');
+    const prior = process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+    process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = '300';
+    const lock = await acquirePipelineLock(pipeline, { timeoutMs: 60_000 });
+    let released = false;
+    try {
+      const busy = await post('/api/pipeline/skip', { url, done: true });
+      expect(busy.statusCode, busy.body).toBe(409);
+      expect(busy.headers['retry-after']).toBe('1');
+      expect(readData('data/pipeline.md')).toBe(before);
+      lock.release();
+      released = true;
+      const free = await post('/api/pipeline/skip', { url, done: true });
+      expect(free.statusCode, free.body).toBe(200);
+      expect(readData('data/pipeline.md')).toContain(`- [x] ${url}`);
+      expect((await post('/api/pipeline/skip', { url, done: false })).statusCode).toBe(200);
+    } finally {
+      if (!released) lock.release();
+      if (prior === undefined) delete process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+      else process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = prior;
+    }
+  });
+
   it('skip rejects unknown and invalid URLs without touching the file', async () => {
     const before = readData('data/pipeline.md');
     expect((await post('/api/pipeline/skip', { url: 'https://nowhere.example/x', done: true })).statusCode).toBe(404);
