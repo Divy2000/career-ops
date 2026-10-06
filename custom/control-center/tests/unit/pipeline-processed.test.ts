@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { moveToProcessed, pdfGenerated, type EvaluatedPosting } from '../../server/domains/pipelineProcessed.js';
+import { markPipelineEvaluated, moveToProcessed, pdfGenerated, type EvaluatedPosting } from '../../server/domains/pipelineProcessed.js';
+import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const URL = 'https://boards.greenhouse.io/acme/jobs/1';
@@ -101,5 +102,38 @@ describe('whether a report header names a generated PDF', () => {
     fs.mkdirSync(path.join(dir, 'output', 'folder.pdf'));
     fs.symlinkSync(outside, path.join(dir, 'output', 'linked.pdf'));
     for (const header of ['output/cv-other.pdf', 'output/folder.pdf', outside, `../${path.basename(path.dirname(outside))}/cv.pdf`, 'output/linked.pdf', null]) expect(pdfGenerated(header, dir), String(header)).toBe(false);
+  });
+});
+
+describe('a PDF header path that cannot be resolved', () => {
+  // output/ exists, so the over-long name itself is what fails (ENAMETOOLONG), not a missing parent (ENOENT).
+  const LONG = `output/${'x'.repeat(300)}.pdf`;
+  function longRoot() {
+    const dir = tempDir('cc-pdf-long-');
+    fs.mkdirSync(path.join(dir, 'output'));
+    return dir;
+  }
+  function loopRoot() {
+    const dir = tempDir('cc-pdf-loop-');
+    fs.mkdirSync(path.join(dir, 'output'));
+    fs.symlinkSync(path.join(dir, 'output', 'b.pdf'), path.join(dir, 'output', 'a.pdf'));
+    fs.symlinkSync(path.join(dir, 'output', 'a.pdf'), path.join(dir, 'output', 'b.pdf'));
+    return dir;
+  }
+
+  it('a path part over 255 characters, or a symlink loop, is not a PDF', () => {
+    expect(pdfGenerated(LONG, longRoot())).toBe(false);
+    expect(pdfGenerated('output/a.pdf', loopRoot())).toBe(false);
+  });
+
+  it('still moves the row to Processed, as PDF ❌, when the header path cannot be resolved', async () => {
+    for (const [header, root] of [[LONG, longRoot()], ['output/a.pdf', loopRoot()]] as const) {
+      fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `## Pending\n\n- [ ] ${URL} | Acme | Eng\n`);
+      fs.writeFileSync(path.join(root, 'reports', '042-acme.md'), `# Evaluation: Acme - Eng\n\n**Score:** 4.2/5\n**PDF:** ${header}\n`);
+      expect(await markPipelineEvaluated(DEFAULT_CODE_ROOT, root, URL, '042-acme.md'), header).toBe(true);
+      expect(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8')).toContain(`- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌`);
+    }
   });
 });

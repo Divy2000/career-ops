@@ -34,14 +34,14 @@ export function pdfGenerated(header: string | null, dataRoot: string): boolean {
   if (!header) return false;
   const root = fs.realpathSync(dataRoot);
   for (const [token] of header.matchAll(/[^\s`'"()<>[\]|]+\.pdf\b/gi)) {
-    let real: string;
+    // A token the filesystem cannot resolve (missing, a name over 255 characters, a symlink loop, no permission) names
+    // no generated PDF; it must not stop the row's move to Processed.
     try {
-      real = fs.realpathSync(path.resolve(root, token));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR') continue;
-      throw err;
+      const real = fs.realpathSync(path.resolve(root, token));
+      if (inside(root, real) && fs.statSync(real).isFile()) return true;
+    } catch {
+      continue;
     }
-    if (inside(root, real) && fs.statSync(real).isFile()) return true;
   }
   return false;
 }
