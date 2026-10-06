@@ -430,7 +430,8 @@ export class SessionManager {
           turnDone = ev;
           sawResult = true;
         }
-        if (ev.type === 'text.done') finalText = ev.text;
+        // The honesty gate reads the last message (the result), as it always has; text.done holds every message for the transcript.
+        if (ev.type === 'text.done') finalText = parser.lastVisibleText;
         // A fork's first turn reports the id --fork-session minted; later turns must resume that one.
         if (ev.type === 'session.init') {
           this.store.adoptForkedClaudeSessionId(id, ev.claudeSessionId);

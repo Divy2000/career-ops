@@ -1586,8 +1586,19 @@ describe('stream parser', () => {
     ev({ type: 'assistant', message: { content: [{ type: 'text', text: last }] } });
     const done = ev({ type: 'result', subtype: 'success', result: last, num_turns: 5, is_error: false, usage: {} });
     expect(done.filter((e) => e.type === 'envelope').map((e) => (e.type === 'envelope' ? (e.payload as { company: string }).company : ''))).toEqual(['C1', 'C2']);
-    // The visible text is still the final message's.
-    expect(done.find((e) => e.type === 'text.done')).toEqual({ type: 'text.done', text: 'Found another:\nThat is all.' });
+    // The visible text is every message's, envelopes removed, so the transcript keeps what was said before the last tool call (SW7-web-a-04).
+    expect(done.find((e) => e.type === 'text.done')).toEqual({ type: 'text.done', text: 'Found one:\nLet me search further.\n\nStill that one:\n\nFound another:\nThat is all.' });
+  });
+
+  it('streams a break between two assistant messages, so their text does not run together (SW7-web-a-04)', () => {
+    const p = new StreamParser();
+    const ev = (o: unknown) => p.push(JSON.stringify(o));
+    const delta = (text: string) => ev({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+    expect(delta('Let me search.')).toEqual([{ type: 'text.delta', text: 'Let me search.' }]);
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: 'Let me search.' }, { type: 'tool_use', id: 't1', name: 'WebSearch', input: { query: 'x' } }] } });
+    ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'results' }] } });
+    expect(delta('Found it.')).toEqual([{ type: 'text.delta', text: '\n\nFound it.' }]);
+    expect(delta(' Done.')).toEqual([{ type: 'text.delta', text: ' Done.' }]);
   });
 
   it('an apply answers envelope written before a later tool call is kept, so the turn has its terminal envelope (SW4-claude-03)', () => {
