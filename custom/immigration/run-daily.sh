@@ -14,6 +14,12 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 source "$ROOT/custom/launchd/pinned-node.sh"
 # User data follows career-ops' data-root contract (CAREER_OPS_ROOT / .career-ops-data).
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+# No node, or a root that is not there (an unmounted drive): stop here, before anything is created under "/data" or a
+# missing root. There is no day log yet, so the reason goes to stderr (launchd.err.log).
+if [ -z "$DATA" ] || [ ! -d "$DATA" ]; then
+  echo "run-daily: cannot resolve the career-ops data root (got '${DATA}'); check that node runs and that CAREER_OPS_ROOT or .career-ops-data names an existing folder" >&2
+  exit 1
+fi
 IMM="$DATA/data/immigration"
 mkdir -p "$IMM/logs"
 # One run at a time: re-exec under a kernel lock (released automatically when

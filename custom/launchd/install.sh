@@ -2,10 +2,14 @@
 # Install (or reinstall) the fork's launchd jobs for this checkout.
 #   daily  08:00  custom/immigration/run-daily.sh   policy watch, scan, rank, shortlist
 #   weekly Sun 03:00 custom/upstream-sync/sync.sh   merge upstream main into the fork
-# /bin/bash needs Full Disk Access when the checkout lives under ~/Desktop or ~/Documents.
-# Usage: install.sh [--jobs daily|all]   (default all; "daily" skips the weekly sync, which only the fork maintainer needs)
+# /bin/bash needs Full Disk Access when the checkout or the data root lives under ~/Desktop or ~/Documents.
+# Usage: install.sh [--jobs daily|all] [--reset]
+#   --jobs   default all; "daily" skips the weekly sync, which only the fork maintainer needs
+#   --reset  put each job back at its default time and turn it on. Without it, a job that is already installed keeps
+#            the time and the on/off state set in the Control Center (Runs & Schedule); only its paths are rewritten.
 set -euo pipefail
 JOBS=all
+RESET=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --jobs)
@@ -13,7 +17,8 @@ while [ "$#" -gt 0 ]; do
       JOBS="$2"
       shift
       ;;
-    *) echo "error: unknown option $1 (usage: install.sh [--jobs daily|all])" >&2; exit 2 ;;
+    --reset) RESET=1 ;;
+    *) echo "error: unknown option $1 (usage: install.sh [--jobs daily|all] [--reset])" >&2; exit 2 ;;
   esac
   shift
 done
@@ -27,6 +32,12 @@ AGENTS="$HOME/Library/LaunchAgents"
 # script to point them at the new root.
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 mkdir -p "$AGENTS" "$DATA/data/immigration/logs"
+# launchd's /bin/bash reads the checkout and writes the data root (lock, day logs, launchd.out/err.log).
+fda_note() { # what path
+  case "$2" in "$HOME/Desktop"/* | "$HOME/Documents"/*) echo "note: the $1 $2 is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security), or the jobs cannot use it." ;; esac
+}
+fda_note checkout "$ROOT"
+fda_note "data root" "$DATA"
 if [ "$JOBS" = all ]; then mkdir -p "$DATA/data/upstream-sync"; fi
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
 ENV_ROOT=0
@@ -84,9 +95,46 @@ process.stdout.write(keep ? found : process.execPath);
 ' "$(command -v node)")"
 echo "jobs use node $NODE_BIN ($("$NODE_BIN" --version))"
 
+# The schedule of the installed plist for <label> as "hour minute weekday" (weekday may be empty), or nothing when there
+# is none or it cannot be read (plutil -extract is read-only).
+installed_schedule() {
+  local f="$AGENTS/$1.plist" h m w
+  [ -f "$f" ] || return 0
+  h="$(plutil -extract StartCalendarInterval.Hour raw -o - "$f" 2>/dev/null)" || return 0
+  m="$(plutil -extract StartCalendarInterval.Minute raw -o - "$f" 2>/dev/null)" || return 0
+  w="$(plutil -extract StartCalendarInterval.Weekday raw -o - "$f" 2>/dev/null)" || w=""
+  [[ "$h" =~ ^[0-9]+$ ]] && [[ "$m" =~ ^[0-9]+$ ]] && [[ -z "$w" || "$w" =~ ^[0-9]+$ ]] || return 0
+  printf '%s %s %s' "$h" "$m" "$w"
+}
+
+# Whether launchd keeps <label> disabled (`launchctl disable`, which the Control Center's off switch uses): its line in
+# `launchctl print-disabled` reads `"<label>" => disabled`, or `=> true` on older macOS (parsePrintDisabled in the
+# Control Center's schedule.ts reads it the same way). The list is read whole first: grep -q on a pipe would stop
+# early, launchctl would die of SIGPIPE, and under pipefail a job that is off would read as on.
+label_disabled() {
+  local out line
+  out="$(launchctl print-disabled "gui/$(id -u)" 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*\"([^\"]*)\"[[:space:]]*=\>[[:space:]]*([A-Za-z]+) ]] || continue
+    [ "${BASH_REMATCH[1]}" = "$1" ] || continue
+    case "${BASH_REMATCH[2]}" in disabled | true) return 0 ;; *) return 1 ;; esac
+  done <<<"$out"
+  return 1
+}
+
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
-  local wd="" envxml vars="" xdata xroot tmp
+  local wd="" envxml vars="" xdata xroot tmp kept="" off=0 sched reinstall=0
+  # A job that is already installed keeps the time and on/off state the user chose in the Control Center; the paths,
+  # pins and logs are rewritten for this checkout and data root. --reset goes back to the defaults.
+  if [ "$RESET" = 0 ] && [ -f "$AGENTS/$label.plist" ]; then
+    reinstall=1
+    sched="$(installed_schedule "$label")"
+    if [ -n "$sched" ]; then
+      read -r hour minute weekday <<<"$sched"
+      kept="keeping its $(printf '%02d:%02d' "$hour" "$minute") schedule"
+    fi
+  fi
   xdata="$(xml_escape "$DATA")"
   xroot="$(xml_escape "$ROOT")"
   if [ "$ENV_ROOT" = 1 ]; then vars="<key>CAREER_OPS_ROOT</key><string>$xdata</string>"; fi
@@ -121,11 +169,16 @@ PLIST
   fi
   chmod 644 "$tmp"
   mv -f "$tmp" "$AGENTS/$label.plist"
+  if [ "$reinstall" = 1 ] && label_disabled "$label"; then off=1; kept="${kept:+$kept; }left off, as set in the Control Center"; fi
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-  # Disabling the job in the Control Center is persistent and bootstrap refuses a disabled label: reinstalling re-enables it.
+  if [ "$off" = 1 ]; then
+    echo "installed $label ($kept)"
+    return 0
+  fi
+  # Disabling is persistent and bootstrap refuses a disabled label: a fresh install, or --reset, turns the job on.
   launchctl enable "gui/$(id -u)/$label"
   launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"
-  echo "installed $label"
+  echo "installed $label${kept:+ ($kept)}"
 }
 
 write_plist com.career-ops.immigration-watch custom/immigration/run-daily.sh 8 0 "" data/immigration/logs

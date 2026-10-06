@@ -80,6 +80,14 @@ test('sponsorAdjustment scores tiers from strong (boost) to none (heavy penalty)
   assert.equal(d('staffing-shop'), d('none'));
 });
 
+test('sponsorAdjustment leaves a row with no DOL answer unadjusted and says why, never as the DOL tier unknown', () => {
+  for (const tier of ['lookup unavailable', 'lookup failed']) {
+    const a = sponsorAdjustment({ tier, alert: null });
+    assert.equal(a.delta, 0);
+    assert.equal(a.label, tier);
+  }
+});
+
 test('sponsorAdjustment rejects an unrecognised tier', () => {
   assert.throws(() => sponsorAdjustment({ tier: 'great', alert: null }), /tier/);
 });

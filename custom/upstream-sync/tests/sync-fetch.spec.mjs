@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyF
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitTestEnv } from '../../test-support/git-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC_DIR = path.resolve(HERE, '..');
@@ -16,15 +17,7 @@ const LIB = path.join(SYNC_DIR, 'lib.sh');
 const SYNC = path.join(SYNC_DIR, 'sync.sh');
 const TAG_ONLY = '+refs/tags/career-ops-v1.35.0:refs/tags/career-ops-v1.35.0';
 
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.invalid',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.invalid',
-};
+const GIT_ENV = gitTestEnv();
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -285,7 +278,7 @@ test('sync.sh uses the shared helpers: no bare "git fetch upstream main", no unc
   assert.equal(/npm ci/.test(sync.replace(/"Bash\(npm ci:\*\)"/, '')), false, 'root installs go through install_root_deps');
   assert.equal(/rev-parse HEAD:package-lock\.json/.test(sync), false);
   assert.match(sync, /install_root_deps ignore-scripts/);
-  assert.match(sync, /deps_fingerprint/);
+  assert.match(sync, /update_live_checkout/, 'the live checkout is updated through the tested helper, which reinstalls only on a dependency change');
   assert.match(sync, /\^\[0-9\]\+\$/, 'BEHIND is checked to be numeric');
 });
 
@@ -750,4 +743,131 @@ test('a fetch that moves origin/main while Claude runs does not change the base 
     assert.equal(res.status, 0, res.stderr);
     assert.match(npmCalls(w)[0], /^ci\b/, 'compared with the recorded base, so the baseline tree is reinstalled');
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+// ---- the one step that touches the live checkout: update_live_checkout ----
+
+/**
+ * A live checkout cloned from a bare origin whose main then gets one more commit (`depsChange` edits the root
+ * dependencies, else an unrelated file). npm is a stub that logs its calls, or fails with `npmExit`.
+ */
+function liveWorld({ depsChange = false, ccChange = false, npmExit = 0 } = {}) {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-live-'));
+  const seed = path.join(base, 'seed');
+  const origin = path.join(base, 'origin.git');
+  const live = path.join(base, 'live');
+  const bin = path.join(base, 'bin');
+  const log = path.join(base, 'npm.log');
+  stub(bin, 'npm', `echo "$*" >> "${log}"\nexit ${npmExit}`);
+  mkdirSync(seed);
+  git(seed, 'init', '-q', '-b', 'main');
+  commitFile(seed, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"leftish":"^1.0.0"}}\n', 'pkg');
+  commitFile(seed, 'custom/control-center/package-lock.json', '{"lockfileVersion":3,"packages":{"node_modules/fastify":{"version":"5.0.0"}}}\n', 'cc lock');
+  git(base, 'init', '-q', '--bare', '-b', 'main', origin);
+  git(seed, 'push', '-q', origin, 'main');
+  git(base, 'clone', '-q', origin, live);
+  if (depsChange) commitFile(seed, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"leftish":"^2.0.0"}}\n', 'merged sync PR changes dependencies');
+  if (ccChange) commitFile(seed, 'custom/control-center/package-lock.json', '{"lockfileVersion":3,"packages":{"node_modules/fastify":{"version":"5.1.0"}}}\n', 'merged PR bumps a Control Center dependency');
+  commitFile(seed, 'scan.mjs', 'merged\n', 'merged sync PR');
+  git(seed, 'push', '-q', origin, 'main');
+  const target = git(seed, 'rev-parse', 'HEAD').trim();
+  const update = () => bashLib(live, 'out="$(update_live_checkout)"; rc=$?; printf "%s" "$out"; exit $rc', { PATH: `${bin}:${process.env.PATH}` });
+  return { base, live, log, target, update, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
+}
+
+const LIVE_CASES = [
+  { name: 'a clean main with unchanged dependencies fast-forwards and installs nothing', setup: () => {}, status: 0, moves: true, npm: '', out: /^live checkout now at [0-9a-f]+$/ },
+  { name: 'changed dependencies fast-forward and install with lifecycle scripts', opts: { depsChange: true }, setup: () => {}, status: 0, moves: true, npm: /^install --no-package-lock --silent$/m, out: /^live checkout now at / },
+  { name: 'a failed install after the fast-forward is reported, not fatal', opts: { depsChange: true, npmExit: 1 }, setup: () => {}, status: 3, moves: true, npm: /^install /m, out: /npm install failed; run it by hand/ },
+  { name: 'a changed Control Center lockfile reinstalls the Control Center with npm ci, and only it (SW3-scripts-01)', opts: { ccChange: true }, setup: () => {}, status: 0, moves: true, npm: /^--prefix custom\/control-center ci\n$/, out: /^live checkout now at / },
+  { name: 'a failed Control Center reinstall is reported, not fatal (SW3-scripts-01)', opts: { ccChange: true, npmExit: 1 }, setup: () => {}, status: 3, moves: true, npm: /^--prefix custom\/control-center ci$/m, out: /npm --prefix custom\/control-center ci failed; run it by hand/ },
+  { name: 'tracked local changes leave the checkout alone', setup: (w) => writeFileSync(path.join(w.live, 'package.json'), '{"edited":true}\n'), status: 10, moves: false, npm: '', out: /^the live checkout has local changes$/ },
+  { name: 'a branch other than main leaves the checkout alone', setup: (w) => git(w.live, 'checkout', '-q', '-b', 'mine'), status: 10, moves: false, npm: '', out: /^the live checkout is not on main$/ },
+  { name: 'a main that cannot fast-forward fails', setup: (w) => commitFile(w.live, 'local.txt', 'mine\n', 'a local commit'), status: 1, moves: false, npm: '', out: /^live checkout could not fast-forward$/ },
+];
+
+for (const c of LIVE_CASES) {
+  test(`update_live_checkout: ${c.name} (SW2-tests-14)`, () => {
+    const w = liveWorld(c.opts);
+    try {
+      c.setup(w);
+      const before = w.head();
+      const res = w.update();
+      assert.equal(res.status, c.status, res.stdout + res.stderr);
+      assert.match(res.stdout, c.out);
+      if (c.moves) assert.equal(w.head(), w.target);
+      else assert.equal(w.head(), before);
+      if (c.npm === '') assert.equal(w.npm(), '');
+      else assert.match(w.npm(), c.npm);
+    } finally { rmSync(w.base, { recursive: true, force: true }); }
+  });
+}
+
+test('sync.sh updates the live checkout through update_live_checkout and fails the run only on its failures (SW2-tests-14)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout)"'));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  assert.ok(from > -1 && to > from, 'no LIVE_UPDATE .. esac block in sync.sh');
+  const block = lines.slice(from, to + 1).join('\n');
+  const decide = (status, out) => spawnSync('bash', ['-c', `update_live_checkout() { echo "${out}"; return ${status}; }\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\n${block}\necho continued`], { encoding: 'utf8' });
+  assert.match(decide(0, 'live checkout now at abc').stdout, /live checkout now at abc\nNOTIFY: Merged upstream \(2 commits\) and updated career-ops\ncontinued/);
+  assert.match(decide(3, 'live checkout now at abc, but npm install failed; run it by hand').stdout, /NOTIFY: Merged upstream, but in the live checkout npm install failed; run it by hand\ncontinued/);
+  assert.match(decide(3, 'live checkout now at abc, but npm --prefix custom/control-center ci failed; run it by hand').stdout, /NOTIFY: Merged upstream, but in the live checkout npm --prefix custom\/control-center ci failed; run it by hand\ncontinued/);
+  assert.match(decide(10, 'the live checkout has local changes').stdout, /NOTIFY: Merged upstream; the live checkout has local changes, so it was not updated\. Run: git switch main && git pull --ff-only\ncontinued/);
+  const failed = decide(1, 'live checkout could not fast-forward');
+  assert.equal(failed.status, 1);
+  assert.match(failed.stdout, /^!!! live checkout could not fast-forward$/m);
+  assert.doesNotMatch(failed.stdout, /continued/);
+});
+
+// ---- Playwright's browser after an install without lifecycle scripts (SW3-scripts-04) ----
+
+/** A worktree with an npx stub that logs its calls (or fails), and optionally an installed playwright package. */
+function browserWorld({ playwright = true, npxExit = 0 } = {}) {
+  const w = npmStubWorld();
+  const npxLog = path.join(w.dir, 'npx.log');
+  stub(w.bin, 'npx', `echo "$*" >> "${npxLog}"\nexit ${npxExit}`);
+  if (playwright) {
+    mkdirSync(path.join(w.repo, 'node_modules', 'playwright'), { recursive: true });
+    writeFileSync(path.join(w.repo, 'node_modules', 'playwright', 'package.json'), '{"name":"playwright","version":"1.64.0"}\n');
+  }
+  return { ...w, npx: () => (existsSync(npxLog) ? readFileSync(npxLog, 'utf8') : '') };
+}
+
+test('ensure_playwright_browser installs the installed Playwright\'s Chromium, the one postinstall step --ignore-scripts skips', () => {
+  const w = browserWorld();
+  try {
+    const res = bashLib(w.repo, 'ensure_playwright_browser', w.env);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(w.npx(), '--no-install playwright install chromium\n');
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('ensure_playwright_browser does nothing without Playwright, and fails when the browser cannot be installed', () => {
+  const none = browserWorld({ playwright: false });
+  const failing = browserWorld({ npxExit: 1 });
+  try {
+    assert.equal(bashLib(none.repo, 'ensure_playwright_browser', none.env).status, 0);
+    assert.equal(none.npx(), '');
+    const res = bashLib(failing.repo, 'ensure_playwright_browser', failing.env);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /cannot install Chromium for Playwright 1\.64\.0/);
+  } finally {
+    rmSync(none.dir, { recursive: true, force: true });
+    rmSync(failing.dir, { recursive: true, force: true });
+  }
+});
+
+test('sync.sh provides the browser after the baseline install and after the post-merge reinstall, before any suite runs, and fails the run when it cannot', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const lines = sync.split('\n');
+  const at = (prefix, from = 0) => lines.findIndex((l, i) => i >= from && l.startsWith(prefix));
+  const baseInstall = at('install_root_deps ignore-scripts');
+  const baseSuite = at('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"');
+  const firstBrowser = at('ensure_playwright_browser || fail ', baseInstall);
+  assert.ok(baseInstall > -1 && firstBrowser > baseInstall && firstBrowser < baseSuite, `baseline install=${baseInstall} browser=${firstBrowser} suite=${baseSuite}`);
+  const refresh = at('refresh_root_deps ');
+  const custom = at('custom_tests ');
+  const secondBrowser = at('ensure_playwright_browser || fail ', refresh);
+  assert.ok(refresh > -1 && secondBrowser > refresh && secondBrowser < custom, `refresh=${refresh} browser=${secondBrowser} custom=${custom}`);
 });

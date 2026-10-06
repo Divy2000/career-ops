@@ -168,3 +168,19 @@ test('given a bad --max-pages or missing arguments, when run, then it exits non-
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /max-pages/);
 });
+
+test('the render children run on their temp root only: no CAREER_OPS_* override from the shell reaches them', () => {
+  const keys = ['CAREER_OPS_TRACKER', 'CAREER_OPS_PDF_INDEX', 'CAREER_OPS_DATA_DIR', 'CAREER_OPS_PIPELINE'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const k of keys) process.env[k] = `/real/data/${k}`;
+  try {
+    const env = envFor('/tmp/cv-root');
+    assert.deepEqual(Object.keys(env).filter((k) => k.startsWith('CAREER_OPS_')), ['CAREER_OPS_ROOT']);
+    assert.equal(env.CAREER_OPS_ROOT, '/tmp/cv-root');
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+});

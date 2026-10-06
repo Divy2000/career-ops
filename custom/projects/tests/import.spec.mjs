@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findCvEntry, findCvBlock, wordDiff, validateLibrary, parseLibrary } from '../lib.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { rootEnv } from '../../test-support/root-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -19,9 +20,7 @@ const dataRoot = ({ library = null, cv = read('cv-sample.md') } = {}) => {
   return d;
 };
 const run = (root, args) => {
-  const env = { ...process.env, CAREER_OPS_ROOT: root };
-  delete env.CAREER_OPS_DATA_DIR;
-  return spawnSync(process.execPath, [IMPORT, ...args], { cwd: root, env, encoding: 'utf8', timeout: 20000 });
+  return spawnSync(process.execPath, [IMPORT, ...args], { cwd: root, env: rootEnv(root), encoding: 'utf8', timeout: 20000 });
 };
 const target = (root) => path.join(root, 'article-digest.md');
 const input = (root, name, data) => {

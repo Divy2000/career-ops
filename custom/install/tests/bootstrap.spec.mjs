@@ -44,7 +44,7 @@ test('it says what it will do, then answering n clones nothing and exits 1', () 
   assert.equal(r.status, 1);
   assert.match(r.out, new RegExp(FORK_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(r.out, /fork-install-v3/);
-  assert.match(r.out, /career-ops/);
+  assert.ok(r.out.split('\n').includes(`  clone into: ${path.join(w.home, 'career-ops')}`), r.out);
   assert.equal(w.log().length, 0);
 });
 

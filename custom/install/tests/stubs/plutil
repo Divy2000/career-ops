@@ -1,4 +1,6 @@
 #!/bin/bash
 echo "plutil $*" >> "$STUB_LOG"
+# Reading a value is read-only: the real plutil answers it where there is one (macOS).
+if [ "${1:-}" = "-extract" ]; then [ -x /usr/bin/plutil ] && exec /usr/bin/plutil "$@"; exit 1; fi
 if [ -n "${STUB_PLUTIL_FAIL:-}" ]; then echo "${*: -1}: Encountered unknown tag" >&2; exit 1; fi
 exit 0

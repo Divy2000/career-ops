@@ -3,6 +3,8 @@
 echo "git $*" >> "$STUB_LOG"
 dir=""
 if [ "${1:-}" = "-C" ]; then dir="$2"; shift 2; fi
+# FAKE_GIT_FAIL=<subcommand> makes that subcommand fail, as offline or with a pull that cannot fast-forward.
+if [ -n "${FAKE_GIT_FAIL:-}" ] && [ "${1:-}" = "$FAKE_GIT_FAIL" ]; then echo "fatal: unable to access 'https://github.com/': Could not resolve host (stub)" >&2; exit 128; fi
 case "${1:-}" in
   clone)
     shift

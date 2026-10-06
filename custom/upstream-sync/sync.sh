@@ -80,6 +80,7 @@ cd "$WT" || fail "worktree missing"
 # The base the merge is compared with, fixed now: a fetch from any checkout while Claude runs moves origin/main.
 BASE_REV="$(git rev-parse HEAD)" || fail "cannot read the sync worktree's base commit"
 install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"
+ensure_playwright_browser || fail "cannot install Playwright's Chromium for origin/main (see the line above)"
 # The tree the baseline runs on, kept in memory: after Claude the same tree is reinstalled unless the merge changed it.
 BASE_DEPS_TREE="$(root_deps_tree)" || fail "cannot read the baseline's installed dependency tree"
 
@@ -131,6 +132,7 @@ echo "--- verifying"
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
 clean_sync_worktree "$WT" || fail "cannot clean untracked and ignored files from the sync worktree"
 refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
+ensure_playwright_browser || fail "cannot install the merged Playwright's Chromium (see the line above)"
 
 CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then
@@ -184,18 +186,13 @@ if [ -z "$BLOCKERS" ]; then
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
-  fetch_main origin || fail "cannot refresh origin/main after the merge"
-  if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-    DEPS_BEFORE="$(deps_fingerprint HEAD)" || fail "cannot read the live checkout's dependency files"
-    git merge -q --ff-only origin/main || fail "live checkout could not fast-forward"
-    if [ "$DEPS_BEFORE" != "$(deps_fingerprint HEAD)" ]; then
-      install_root_deps run-scripts >/dev/null 2>&1 || notify "Merged upstream, but npm install failed in the live checkout; run it by hand"
-    fi
-    echo "live checkout now at $(git rev-parse --short HEAD)"
-    notify "Merged upstream ($BEHIND commits) and updated career-ops"
-  else
-    notify "Merged upstream; live checkout has local changes, run: git pull --ff-only"
-  fi
+  LIVE_UPDATE="$(update_live_checkout)"
+  case $? in
+    0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
+    3) echo "$LIVE_UPDATE"; notify "Merged upstream, but in the live checkout ${LIVE_UPDATE#*, but }" ;;
+    10) echo "live checkout not updated: $LIVE_UPDATE"; notify "Merged upstream; $LIVE_UPDATE, so it was not updated. Run: git switch main && git pull --ff-only" ;;
+    *) fail "$LIVE_UPDATE" ;;
+  esac
   git worktree remove --force "$WT" >/dev/null 2>&1
 else
   gh pr comment "$PR_URL" --body "Not auto-merged: $BLOCKERS." >/dev/null || true

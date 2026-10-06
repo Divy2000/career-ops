@@ -435,8 +435,10 @@ update_checkout() {
     elif [ "$DRY_RUN" = 1 ]; then
       dry "fetch tags and check out $REF"
     else
-      git -C "$DIR" fetch --tags origin
-      git -C "$DIR" checkout "$REF"
+      # Explicit, not left to set -e: its trap points at the install log, which this early step has not created yet.
+      if ! git -C "$DIR" fetch --tags origin || ! git -C "$DIR" checkout "$REF"; then
+        die 1 "could not check out $REF in $DIR (offline, or no such tag or branch; see the git error above)."
+      fi
       say "  checked out $REF"
     fi
     return 0
@@ -470,8 +472,10 @@ elif [ "$DRY_RUN" = 1 ]; then
   dry "git clone $FORK_URL $DIR${REF:+ and check out $REF}"
   dry "add the upstream remote $UPSTREAM_URL"
 else
-  git clone "$FORK_URL" "$DIR"
-  if [ -n "$REF" ]; then git -C "$DIR" checkout "$REF"; fi
+  git clone "$FORK_URL" "$DIR" || die 1 "git clone of $FORK_URL into $DIR failed (offline? see the git error above). Re-run once the network is back."
+  if [ -n "$REF" ] && ! git -C "$DIR" checkout "$REF"; then
+    die 1 "could not check out $REF in $DIR (no such tag or branch; see the git error above)."
+  fi
   ensure_upstream
 fi
 
@@ -793,8 +797,16 @@ else
   else
     jobs=daily
     if [ "$WITH_UPSTREAM_SYNC" = 1 ]; then jobs=all; fi
-    say "  The daily job (08:00) runs headless Claude on your subscription: policy watch, scan, rank, shortlist."
+    if [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ]; then
+      # Reinstalled so its paths follow this checkout and data root; launchd/install.sh keeps the time and on/off state
+      # set in the Control Center (Runs & Schedule).
+      say "  The daily job is already installed; reinstalling it for this checkout keeps its time and on/off state from the Control Center."
+    else
+      say "  The daily job (08:00) runs headless Claude on your subscription: policy watch, scan, rank, shortlist."
+    fi
     case "$DIR" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: this checkout is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can read it." ;; esac
+    # The job's bash writes its lock, day logs and launchd logs under the data root, so that needs it too.
+    case "$DATA" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: the data root is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it." ;; esac
     if [ "$PROMPT_OK" = 1 ] && ! ask "Install the daily job now?" y; then
       say "  skipped; install later: $DAILY_CMD"
     elif ! run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs"; then

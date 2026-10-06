@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
@@ -234,13 +236,17 @@ test('re-running is idempotent: one clone, one upstream remote, and a fast-forwa
 });
 
 test('a dirty tree or a non-main branch is never pulled', () => {
-  for (const state of [{ file: 'dirty', data: ' M cv.md\n' }, { file: 'branch', data: 'feature/x\n' }]) {
+  const states = [
+    { file: 'dirty', data: ' M cv.md\n', says: /^ {2}Not pulling: the working tree has local changes\.$/m },
+    { file: 'branch', data: 'feature/x\n', says: /^ {2}Not pulling: on branch feature\/x, not main\.$/m },
+  ];
+  for (const state of states) {
     const { w, D, args } = fresh();
     w.makeCheckout(D);
     fs.writeFileSync(path.join(D, '.git', state.file), state.data);
     const r = w.run(args());
     assert.ok(!w.log().some((l) => l.includes('pull')), `${state.file}: ${w.log().join('\n')}`);
-    assert.match(r.out, /not pull|skip/i);
+    assert.match(r.out, state.says);
   }
 });
 
@@ -429,6 +435,8 @@ test('under a real pseudo-terminal the same questions work through /dev/tty (pyt
     const r = w.runInPty(['--dir', D, ...QUIET, '--resume', resume], { steps: [{ expect: 'Proceed\\?', send: 'y\n' }, { expect: 'Replace cv\\.md\\?', send: `${answer}\n` }] });
     assert.match(r.out, /Replace cv\.md\?/);
     assert.equal(read(D, 'cv.md'), replaced ? '# New\n' : 'OLD line\n', r.out);
+    // Keeping the old cv.md leaves "replace it" as a pending action (exit 3); replacing it leaves nothing pending.
+    assert.equal(r.status, replaced ? 0 : 3, r.out);
   }
 });
 
@@ -794,6 +802,37 @@ test('a ready install gets the daily job only; --with-upstream-sync gets both', 
   assert.deepEqual(b.w.calls('launchd-install'), ['launchd-install --jobs all']);
 });
 
+test('a daily job that is already installed is reinstalled for this checkout, which keeps its time and on/off state (SW3-scripts-02)', () => {
+  for (const [extra, jobs] of [[[], 'daily'], [['--with-upstream-sync'], 'all']]) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: READY_FILES });
+    const agents = path.join(w.home, 'Library', 'LaunchAgents');
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), 'an install from another checkout');
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none', ...extra]);
+    assert.deepEqual(w.calls('launchd-install'), [`launchd-install --jobs ${jobs}`], r.out);
+    assert.match(r.out, /The daily job is already installed; reinstalling it for this checkout keeps its time and on\/off state from the Control Center\./);
+    assert.equal(r.status, 0, r.out);
+  }
+});
+
+test('a data root under Documents or Desktop gets the Full Disk Access note too, though the checkout is elsewhere (SW3-scripts-03)', () => {
+  for (const place of ['Documents', 'Desktop']) {
+    const { w, D } = fresh({ keychain: true });
+    const data = path.join(w.home, place, 'career-data');
+    w.makeCheckout(D);
+    fs.mkdirSync(data, { recursive: true });
+    for (const [rel, text] of Object.entries(READY_FILES)) {
+      fs.mkdirSync(path.dirname(path.join(data, rel)), { recursive: true });
+      fs.writeFileSync(path.join(data, rel), text);
+    }
+    const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+    assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
+    assert.match(r.out, /Note: the data root is under Desktop or Documents; give \/bin\/bash Full Disk Access \(System Settings > Privacy & Security\) so launchd can write it\./, place);
+    assert.doesNotMatch(r.out, /this checkout is under Desktop or Documents/, place);
+  }
+});
+
 test('--no-launchd and a missing Keychain item both skip the job', () => {
   const a = fresh({ keychain: true });
   a.w.makeCheckout(a.D, { files: READY_FILES });
@@ -1034,4 +1073,65 @@ test('the pending text for a dirty checkout and for a failed doctor quotes the d
 
 test('INSTALL_SH exists and is executable bash', () => {
   assert.ok(fs.existsSync(INSTALL_SH));
+});
+
+// ---- git failing: offline, or a pull that cannot fast-forward (SW2-tests-31) ----
+
+test('a clone that fails (offline) stops with exit 1 and says so, never "unexpected failure" pointing at a log that does not exist', () => {
+  const { w, D, args } = fresh();
+  const r = w.run(args(), { env: { FAKE_GIT_FAIL: 'clone' } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /^error: git clone of https:\/\/github\.com\/Divy2000\/career-ops\.git into .* failed/m);
+  assert.doesNotMatch(r.out, /unexpected failure|see the install log/);
+  assert.equal(exists(D, 'package.json'), false);
+});
+
+test('a tag that cannot be fetched or checked out stops with exit 1 and names it', () => {
+  for (const sub of ['fetch', 'checkout']) {
+    const { w, D, args } = fresh();
+    w.makeCheckout(D);
+    const r = w.run(args('--ref', 'fork-install-v9'), { env: { FAKE_GIT_FAIL: sub } });
+    assert.equal(r.status, 1, `${sub}: ${r.out}`);
+    assert.match(r.out, /^error: could not check out fork-install-v9 in /m, sub);
+    assert.doesNotMatch(r.out, /unexpected failure/, sub);
+  }
+});
+
+test('a pull that cannot fast-forward is a pending action, not a failure', () => {
+  const { w, D, args } = fresh({ keychain: true });
+  w.makeCheckout(D);
+  const r = w.run(args(), { env: { FAKE_GIT_FAIL: 'pull' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /git pull --ff-only failed in .*; resolve it by hand\./);
+});
+
+// ---- pty_run.py itself: a prompt that never comes, a command that never ends, an older Python (SW2-tests-32) ----
+
+const PTY_RUN = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pty_run.py');
+const ptyRun = (steps, cmd, { env = {}, pre = '' } = {}) => {
+  const args = pre
+    ? ['-c', `${pre}\nimport runpy, sys\nsys.argv = ${JSON.stringify([PTY_RUN, JSON.stringify(steps), '--', ...cmd])}\nrunpy.run_path(${JSON.stringify(PTY_RUN)}, run_name='__main__')`]
+    : [PTY_RUN, JSON.stringify(steps), '--', ...cmd];
+  return spawnSync('python3', args, { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 20_000 });
+};
+
+test('pty_run.py fails when a prompt it was told to answer never appears', () => {
+  const r = ptyRun([{ expect: 'Never asked\\?', send: 'y\n' }], ['bash', '-c', 'echo hello']);
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /pty_run: prompt never appeared: Never asked/);
+  assert.match(r.stdout, /hello/);
+});
+
+test('pty_run.py kills a command still running at its deadline, and fails', () => {
+  const started = Date.now();
+  const r = ptyRun([], ['sleep', '30'], { env: { PTY_RUN_TIMEOUT: '1' } });
+  assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /pty_run: timed out after 1 s; killed the command/);
+});
+
+test('pty_run.py exits with the command\'s own status, also on a Python without os.waitstatus_to_exitcode (before 3.9)', () => {
+  assert.equal(ptyRun([], ['bash', '-c', 'exit 3']).status, 3);
+  const old = ptyRun([], ['bash', '-c', 'exit 3'], { pre: 'import os\ndel os.waitstatus_to_exitcode' });
+  assert.equal(old.status, 3, old.stderr);
 });

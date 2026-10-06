@@ -1,5 +1,8 @@
 #!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
+# STUB_PRINT_DISABLED_OUTPUT names a file that `print-disabled` prints as is (a long list, the older "=> true" form).
+# exec, so a reader that stops early kills the printer with SIGPIPE, as it would the real launchctl.
+if [ "${1:-}" = print-disabled ] && [ -n "${STUB_PRINT_DISABLED_OUTPUT:-}" ]; then exec cat "$STUB_PRINT_DISABLED_OUTPUT"; fi
 # With STUB_LAUNCHD_DISABLED set, model launchd's persistent disabled list in that file: disable and enable
 # edit it, and bootstrap refuses a disabled label the way macOS does (error 5).
 if [ -n "${STUB_LAUNCHD_DISABLED:-}" ]; then
@@ -7,6 +10,7 @@ if [ -n "${STUB_LAUNCHD_DISABLED:-}" ]; then
   case "$1" in
     disable) echo "${2##*/}" >> "$STUB_LAUNCHD_DISABLED" ;;
     enable) grep -vxF "${2##*/}" "$STUB_LAUNCHD_DISABLED" > "$STUB_LAUNCHD_DISABLED.new" || true; mv "$STUB_LAUNCHD_DISABLED.new" "$STUB_LAUNCHD_DISABLED" ;;
+    print-disabled) sed 's/.*/	"&" => disabled/' "$STUB_LAUNCHD_DISABLED" ;;
     bootstrap)
       label="$(basename "$3" .plist)"
       if grep -qxF "$label" "$STUB_LAUNCHD_DISABLED"; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi

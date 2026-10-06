@@ -126,6 +126,24 @@ refresh_root_deps() {
   return "$rc"
 }
 
+# ensure_playwright_browser: install the Chromium that the installed Playwright
+# expects, the one thing the root postinstall (`npx playwright install
+# chromium`) does that the sync's --ignore-scripts installs skip. Nothing else's
+# lifecycle scripts run: this is Playwright's own CLI, the same package code the
+# PDF specs run anyway, and it downloads only when that revision is missing
+# from the shared browser cache. No-op without Playwright installed; fails when
+# the browser cannot be installed, so a Playwright bump never reads as failing
+# PDF tests that the merge caused.
+ensure_playwright_browser() {
+  local version
+  [ -f node_modules/playwright/package.json ] || return 0
+  version="$(node -p 'require("./node_modules/playwright/package.json").version')" || return 1
+  if ! npx --no-install playwright install chromium; then
+    echo "ensure_playwright_browser: cannot install Chromium for Playwright $version" >&2
+    return 1
+  fi
+}
+
 # control_center_checks <log>: install custom/control-center from its tracked
 # lockfile with npm ci, which deletes any node_modules Claude left (no
 # lifecycle scripts), then run its vitest suite (which holds the contract test
@@ -237,4 +255,36 @@ merge_blockers() {
   [ -z "${UNEXPECTED_UPSTREAM:-}" ] || why+=("upstream files edited outside conflict resolution: ${UNEXPECTED_UPSTREAM//$'\n'/, }")
   for w in ${why[@]+"${why[@]}"}; do out="${out:+$out; }$w"; done
   printf '%s' "$out"
+}
+
+# update_live_checkout: after the sync PR merged, bring the live checkout (the
+# current directory) up to the new origin/main: fetch, then fast-forward only
+# when it is on main with no tracked local changes. Then reinstall what the
+# merge changed, as a user's own install would: the root dependencies
+# (lifecycle scripts included) when deps_fingerprint changed, and the Control
+# Center's (npm ci) when its tracked lockfile changed, since bin/cc only checks
+# that its node_modules exists. Prints one line saying what happened. Returns 0
+# when updated, 3 when updated but an install failed, 10 when left alone (not
+# on main, or local changes), 1 when the fetch, the fingerprint or the
+# fast-forward failed.
+update_live_checkout() {
+  local deps_before cc_before failed=""
+  fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
+  if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
+  deps_before="$(deps_fingerprint HEAD)" || { echo "cannot read the live checkout's dependency files"; return 1; }
+  cc_before="$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)"
+  git merge -q --ff-only origin/main || { echo "live checkout could not fast-forward"; return 1; }
+  if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
+    failed="npm install"
+  fi
+  if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ] &&
+    ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
+    failed="${failed:+$failed and }npm --prefix custom/control-center ci"
+  fi
+  if [ -n "$failed" ]; then
+    echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand"
+    return 3
+  fi
+  echo "live checkout now at $(git rev-parse --short HEAD)"
 }

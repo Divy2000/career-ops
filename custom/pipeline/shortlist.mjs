@@ -17,6 +17,7 @@ import * as yaml from 'js-yaml';
 import { buildTitleFilter, PIPELINE_PATH, PORTALS_PATH } from '../../scan.mjs';
 import { companySlug, parseCompanyAlerts } from '../immigration/lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
+import { hasIndex } from '../../plugins/h1b-sponsor/lib/index.mjs';
 import { localToday } from '../../lib/local-today.mjs';
 
 const run = promisify(execFile);
@@ -60,9 +61,39 @@ async function lookupTier(company) {
   return { ...(await checkName(legal)), searched: true };
 }
 
+// Why no lookup can run, or null when check.mjs has a backend: an explicit H1B_API_BASE, else a local index (check.mjs's
+// own order). Without either, every call would fail with the same reason, which check.mjs puts on stdout.
+function lookupBackendMissing() {
+  if (process.env.H1B_API_BASE !== undefined) return null;
+  try {
+    return hasIndex() ? null : 'no local H-1B index and no H1B_API_BASE, so no company was checked against DOL data. Install the index with: node plugins/h1b-sponsor/install-h1b-index.mjs';
+  } catch (err) {
+    return err.message;
+  }
+}
+
+// check.mjs reports why a lookup failed in the JSON `error` field on stdout; execFile's own message only names the command.
+function lookupError(err) {
+  try {
+    const reason = JSON.parse(err.stdout ?? '').error;
+    if (reason) return String(reason);
+  } catch {
+    // not check.mjs's JSON envelope: fall back to execFile's message
+  }
+  return err.message.split('\n')[0];
+}
+
 async function loadTiers(companies, today) {
   const cache = existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {};
-  const fresh = (e) => e && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
+  const fresh = (e) => e && !e.error && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
+  const stale = companies.filter((c) => !fresh(cache[c]));
+  const missing = stale.length ? lookupBackendMissing() : null;
+  if (missing) {
+    // Nothing is cached for these, so the first run after an install looks them up.
+    process.stderr.write(`shortlist: ${missing}\n`);
+    const tierOf = (c) => (stale.includes(c) ? 'lookup unavailable' : cache[c].tier);
+    return { tiers: new Map(companies.map((c) => [c, tierOf(c)])), looked: 0 };
+  }
   let looked = 0;
   for (const c of companies) {
     if (fresh(cache[c])) continue;
@@ -73,8 +104,8 @@ async function loadTiers(companies, today) {
     try {
       cache[c] = { ...(await lookupTier(c)), checked: today };
     } catch (err) {
-      process.stderr.write(`tier lookup failed for ${c}: ${err.message.split('\n')[0]}\n`);
-      cache[c] = { tier: 'unknown', matched: null, checked: today, error: true };
+      process.stderr.write(`tier lookup failed for ${c}: ${lookupError(err)}\n`);
+      cache[c] = { tier: 'lookup failed', matched: null, checked: today, error: true };
     }
     looked++;
   }
@@ -164,7 +195,7 @@ async function main() {
   const md = [
     `# Shortlist - ${today}`,
     '',
-    `Ranked rows with rank >= ${minRank}: ${shortlist.length + excluded.length}. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5). Sponsorship tier is DOL filing history and lags policy; full evaluation re-checks current news.`,
+    `Ranked rows with rank >= ${minRank}: ${shortlist.length + excluded.length}. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5; lookup unavailable/failed: no DOL answer, no adjustment). Sponsorship tier is DOL filing history and lags policy; full evaluation re-checks current news.`,
     '',
     '| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |',
     '|---|---|---|---|---|---|---|---|---|',

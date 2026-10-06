@@ -7,11 +7,15 @@
 //   node custom/pipeline/prioritize.mjs [--today YYYY-MM-DD]
 
 import { readFile, writeFile, copyFile, rename } from 'node:fs/promises';
-import { orderPending } from './lib.mjs';
+import { orderPending, parseRow } from './lib.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
 import { localToday } from '../../lib/local-today.mjs';
 // Same resolved paths (data root + CAREER_OPS_* overrides) the scanner writes to.
-import { PIPELINE_PATH as PIPELINE, SCAN_HISTORY_PATH as HISTORY } from '../../scan.mjs';
+import { PIPELINE_PATH as PIPELINE, SCAN_HISTORY_PATH as HISTORY, formatPipelineOffer } from '../../scan.mjs';
+
+// scan.mjs stores the raw URL in scan-history.tsv but escapes it in pipeline.md ([ and ] backslashed, | as %7C), so a
+// history URL is keyed by the form the pipeline row carries, made by the same writer.
+const pipelineUrl = (url) => parseRow(formatPipelineOffer({ url, company: '-', title: '-' }))?.url ?? url;
 
 async function readFirstSeen() {
   const firstSeen = new Map();
@@ -33,7 +37,7 @@ async function readFirstSeen() {
     // Only an `added` row is the day the job entered the pipeline: skipped_location, age and cooldown rows never pin a
     // URL (scan.mjs), so a later added row for it is the date that counts. The latest added row wins.
     const status = statusAt >= 0 ? cells[statusAt] : undefined;
-    if (url && seen && (status === undefined || status.trim() === 'added')) firstSeen.set(url, seen);
+    if (url && seen && (status === undefined || status.trim() === 'added')) firstSeen.set(pipelineUrl(url), seen);
   }
   return firstSeen;
 }

@@ -16,6 +16,10 @@ const TIER_DELTA = {
   weak: -1.0,
   none: -1.5,
   'staffing-shop': -1.5,
+  // No DOL answer at all (no index installed, or the lookup errored): no data, so no adjustment, and never read as
+  // "unknown", which is DOL having no record of the company.
+  'lookup unavailable': 0,
+  'lookup failed': 0,
 };
 const EXCLUDING_ALERTS = new Set(['paused', 'stopped', 'restricted']);
 

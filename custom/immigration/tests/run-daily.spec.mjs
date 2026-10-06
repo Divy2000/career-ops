@@ -79,7 +79,8 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const run = (extraEnv = {}) => {
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
     assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
-    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
+    // TZ passes through: the job dates its log and digest by its local day, which the specs compute in this process's zone.
+    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
@@ -91,7 +92,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const steps = fs.existsSync(stepLog) ? readFileSync(stepLog, 'utf8') : '';
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
-    return { status: r.status, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    return { status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, fakeClaude, run };
 }
@@ -382,4 +383,27 @@ jobTest('a run that starts while another holds the lock is skipped: a dated line
   } finally {
     holder.kill();
   }
+});
+
+jobTest('with no working node, the job stops with a clear reason instead of running against an empty data root (SW2-tests-12)', () => {
+  const w = dailyWorld();
+  // The pinned node goes first on the job's PATH (pinned-node.sh): one that answers nothing stands in for no node at all.
+  const pinned = path.join(w.T, 'broken-node');
+  fs.mkdirSync(pinned);
+  fs.writeFileSync(path.join(pinned, 'node'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+  const r = w.run({ CC_NODE_BIN: path.join(pinned, 'node') });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /run-daily: cannot resolve the career-ops data root/);
+  assert.equal(r.steps, '');
+  assert.equal(fs.existsSync(path.join(w.data, 'data', 'immigration')), false);
+});
+
+jobTest('a data root that does not exist (an unmounted drive, a moved folder) is refused, not created (SW2-tests-12)', () => {
+  const w = dailyWorld();
+  const missing = path.join(w.T, 'unmounted', 'career-data');
+  const r = w.run({ CAREER_OPS_ROOT: missing });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /run-daily: cannot resolve the career-ops data root/);
+  assert.equal(fs.existsSync(path.join(w.T, 'unmounted')), false);
+  assert.equal(r.steps, '');
 });
