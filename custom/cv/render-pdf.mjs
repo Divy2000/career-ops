@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Render a fork-template CV to PDF, tightening the layout until it fits the
-// page budget. Each attempt sets html[data-density] (0 = 10pt, 3 = 8.5pt) in
-// the HTML file and runs upstream generate-pdf.mjs, so every upstream check
-// (fact gate, section order, chronology, ATS normalization) still runs; the
-// first density whose PDF fits wins, and the HTML keeps it so a re-render of
+// page budget. Each attempt sets html[data-density] (0 = 10pt, 3 = 8.5pt) on a
+// draft copy of the HTML and runs upstream generate-pdf.mjs, so every upstream
+// check (fact gate, section order, chronology, ATS normalization) still runs;
+// the first density whose PDF fits wins, and the HTML keeps it so a re-render of
 // that file reproduces the same PDF. A failing upstream check stops at once.
 //
 //   node custom/cv/render-pdf.mjs <input.html> <output.pdf> [--max-pages=N] [--strict-pages]
@@ -13,16 +13,20 @@
 // Without --strict-pages a CV that overflows even the tightest density is a
 // warning (the densest PDF is kept), matching generate-pdf.mjs's own default.
 //
-// Each density attempt runs generate-pdf.mjs with --strict-pages, so an attempt
-// that overflows leaves its PDF on disk to count but publishes nothing to
-// data/pdf-index.tsv; only the attempt that fits, or (without --strict-pages)
-// one more render of the densest layout, indexes the PDF for --report.
+// The density attempts render a draft HTML beside the input to a draft PDF in a
+// scratch folder in the workspace root, with a scratch data/pdf-index.tsv, so the
+// real input, output and index stay untouched until a layout is chosen. Only
+// then is the chosen HTML written to the input and rendered once more to the
+// output, which publishes the PDF for --report. A failed run, including a
+// --strict-pages overflow, leaves an already indexed CV exactly as it was.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fitToPages, countPdfPages } from './lib.mjs';
+import { getCareerOpsRoot } from '../../path-resolver.mjs';
+import { resolveWorkspaceRootFor } from '../../tracker-utils.mjs';
 import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const CODE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -37,11 +41,6 @@ class RenderFailed extends Error {
     this.attempt = attempt;
   }
 }
-
-const print = (attempt) => {
-  process.stdout.write(attempt.stdout ?? '');
-  process.stderr.write(attempt.stderr ?? '');
-};
 
 async function main() {
   const args = process.argv.slice(2);
@@ -63,22 +62,35 @@ async function main() {
     .map((f) => (VALUE_FLAGS.includes(f) ? `${f}=${flagValue(args, f)}` : f));
 
   const html = readFileSync(input, 'utf8');
-  let lastAttempt = null;
-  const generate = (extra) => {
-    const attempt = spawnSync(process.execPath, [GENERATE, input, output, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
-      cwd: CODE, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  // The draft HTML sits beside the input so relative assets resolve the same;
+  // the draft PDF keeps the output's file name, from which generate-pdf.mjs infers the kind.
+  // The scratch folder sits in the workspace root generate-pdf.mjs confines output to, never beside an output it may
+  // refuse (a new folder, or one linked outside); the final render to the output does that check and creates its folder.
+  const scratch = mkdtempSync(path.join(resolveWorkspaceRootFor(getCareerOpsRoot()), '.render-pdf-'));
+  const draftHtml = path.join(path.dirname(input), `.${path.basename(scratch)}-${path.basename(input)}`);
+  const draftPdf = path.join(scratch, path.basename(output));
+  const draftEnv = { ...process.env, CAREER_OPS_PDF_INDEX: path.join(scratch, 'pdf-index.tsv') };
+  // Messages name the files the user passed, not the drafts.
+  const real = (text) => (text ?? '').replaceAll(draftHtml, input).replaceAll(path.basename(draftHtml), path.basename(input))
+    .replaceAll(draftPdf, output);
+  const print = (attempt) => {
+    process.stdout.write(real(attempt.stdout));
+    process.stderr.write(real(attempt.stderr));
+  };
+  const generate = (from, to, extra, env = process.env) => {
+    const attempt = spawnSync(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
+      cwd: CODE, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
     });
     if (attempt.error) throw attempt.error;
     return attempt;
   };
   const render = async (candidate) => {
-    writeFileSync(input, candidate);
-    const attempt = generate(['--strict-pages']);
+    writeFileSync(draftHtml, candidate);
+    const attempt = generate(draftHtml, draftPdf, ['--strict-pages'], draftEnv);
     // generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, nothing else is.
     const overflowed = attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
     if (attempt.status !== 0 && !overflowed) throw new RenderFailed(attempt);
-    lastAttempt = attempt;
-    return { pages: countPdfPages(readFileSync(output)) };
+    return { pages: countPdfPages(readFileSync(draftPdf)) };
   };
 
   let result;
@@ -87,34 +99,45 @@ async function main() {
   } catch (err) {
     if (err instanceof RenderFailed) {
       print(err.attempt);
-      process.exit(err.attempt.status || 1);
+      return err.attempt.status || 1;
     }
     throw err;
+  } finally {
+    rmSync(draftHtml, { force: true });
+    rmSync(scratch, { recursive: true, force: true });
   }
-  if (!result.fits && !strict) {
-    // The densest layout is what the input holds after the last attempt; render it once more to publish it.
-    lastAttempt = generate([]);
-    if (lastAttempt.status !== 0) {
-      print(lastAttempt);
-      process.exit(lastAttempt.status || 1);
+  let published = null;
+  if (result.fits || !strict) {
+    // Publish the chosen layout: the input keeps its density and this render indexes the PDF.
+    writeFileSync(input, result.html);
+    try {
+      published = generate(input, output, result.fits ? ['--strict-pages'] : []);
+    } finally {
+      // Nothing was published, so the input keeps the layout it had.
+      if (published?.status !== 0) writeFileSync(input, html);
     }
+    if (published.status !== 0) {
+      print(published);
+      return published.status || 1;
+    }
+    print(published);
   }
-  if (result.fits || !strict) print(lastAttempt);
   const tried = result.attempts.map((a) => `d${a.density}=${a.pages}`).join(', ');
   const pages = `${result.pages} page${result.pages === 1 ? '' : 's'}`;
   if (result.fits) {
     process.stdout.write(`fit: density ${result.density}, ${pages} (budget ${maxPages}; tried ${tried})\n`);
-    return;
+    return 0;
   }
   const message = `CV does not fit ${maxPages} page${maxPages === 1 ? '' : 's'} even at the tightest density (${pages}; tried ${tried}). Drop the lowest-ranked project first, then older roles' bullets.`;
   if (strict) {
     process.stderr.write(`render-pdf failed: ${message}\n`);
-    process.exit(1);
+    return 1;
   }
   process.stderr.write(`warning: ${message} Kept the density ${result.density} PDF; use --strict-pages to fail instead.\n`);
+  return 0;
 }
 
-main().catch((err) => {
+main().then((code) => { process.exitCode = code; }, (err) => {
   process.stderr.write(`render-pdf failed: ${err.message}\n`);
   process.exit(1);
 });
