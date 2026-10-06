@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { changesByTurn, devChatChangeInEffect, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
 import { plainTail, renderDownPage, renderStatus, stripAnsi } from '../../supervisor/down-page.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
+import { processStartTime } from '../../supervisor/instance-lock.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -313,6 +315,78 @@ describe('/__recovery revert requests', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\n');
     expect(call(1)).toMatchObject({ status: 200 });
     expect(fs.existsSync(created)).toBe(false);
+  });
+});
+
+describe('a Dev Chat turn left running when no server can start (SW3-claude-02)', () => {
+  /**
+   * A Dev Chat session whose turn 1 edited custom/notes.md and was still running when the supervisor stopped: its
+   * meta still says running and the server never finalized the turn, so there is no after.json. Its run record (data
+   * root) is written by `run`.
+   */
+  function stalled(run: ((runDir: string) => void) | null) {
+    const root = fs.realpathSync(tempDir('cc-stalled-'));
+    const guardRoot = fs.realpathSync(tempDir('cc-stalled-guard-'));
+    const sessionsDir = path.join(root, 'data', 'control-center', 'sessions');
+    const file = path.join(root, 'custom', 'notes.md');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'before\n');
+    const sessionDir = path.join(guardRoot, 'sessions', 's1');
+    const turnDir = path.join(sessionDir, 'turns', '1');
+    fs.mkdirSync(path.join(turnDir, 'before'), { recursive: true });
+    fs.writeFileSync(path.join(turnDir, 'turn.json'), JSON.stringify({ filesOffset: 0 }));
+    fs.writeFileSync(path.join(turnDir, 'policy.json'), JSON.stringify({ allow: ['custom/**'], deny: [] }));
+    fs.copyFileSync(file, snapshotKey(turnDir, file));
+    fs.writeFileSync(file, 'broken by the turn\n');
+    fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), `${JSON.stringify({ path: 'custom/notes.md', abs: file, root: 'code', tool: 'Edit', ts: 't', sha256: sha('broken by the turn\n') })}\n`);
+    fs.mkdirSync(path.join(sessionsDir, 's1'), { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'running', createdAt: 't', turns: [{ n: 1, runId: 'r20261006000000-abcdef' }] }));
+    const runDir = path.join(root, 'data', 'control-center', 'runs', 'r20261006000000-abcdef');
+    if (run) {
+      fs.mkdirSync(runDir, { recursive: true });
+      run(runDir);
+    }
+    const revert = (serverRunning: boolean) => recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: root, dataRoot: root }, sessionId: 's1', turn: 1, serverRunning });
+    return { file, turnDir, revert };
+  }
+  const runMeta = (runDir: string, fields: Record<string, unknown>) => fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({ id: path.basename(runDir), status: 'running', wrapperPid: null, childPid: null, ...fields }));
+  /** A PID that ran and has exited. */
+  const deadPid = () => spawnSync(process.execPath, ['-e', '0']).pid!;
+
+  it('with no server running, a turn whose run has exited is reverted: its post-turn record is built from the hook\'s hashes first', () => {
+    const t = stalled((dir) => {
+      runMeta(dir, { wrapperPid: deadPid(), childPid: deadPid() });
+      fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
+    });
+    expect(t.revert(false)).toMatchObject({ status: 200, text: 'notes.md: restored' });
+    expect(fs.readFileSync(t.file, 'utf8')).toBe('before\n');
+    expect(JSON.parse(fs.readFileSync(path.join(t.turnDir, 'after.json'), 'utf8')).files).toEqual({ [t.file]: sha('broken by the turn\n') });
+  });
+
+  it('a run killed before it could record its exit counts as ended once its processes are gone, or their PIDs belong to processes that started at another time', () => {
+    const gone = stalled((dir) => runMeta(dir, { wrapperPid: deadPid(), childPid: deadPid() }));
+    expect(gone.revert(false).status).toBe(200);
+    const reused = stalled((dir) => runMeta(dir, { wrapperPid: process.pid, wrapperStartedAt: 1_000_000, childPid: deadPid() }));
+    expect(reused.revert(false).status).toBe(200);
+  });
+
+  it('a run still going is never reverted under it, nor one that cannot be shown to have ended, nor any while a server runs', () => {
+    const alive = stalled((dir) => runMeta(dir, { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid) }));
+    expect(alive.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    const noStart = stalled((dir) => runMeta(dir, { wrapperPid: process.pid }));
+    expect(noStart.revert(false).status).toBe(409);
+    const noRecord = stalled(null);
+    expect(noRecord.revert(false).status).toBe(409);
+    const exited = stalled((dir) => {
+      runMeta(dir, { status: 'done' });
+      fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
+    });
+    // A running server finalizes the turn itself: the supervisor never touches it then.
+    expect(exited.revert(true)).toMatchObject({ status: 409, text: expect.stringMatching(/cancel it before reverting/) });
+    for (const t of [alive, noStart, noRecord, exited]) {
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('broken by the turn\n');
+      expect(fs.existsSync(path.join(t.turnDir, 'after.json'))).toBe(false);
+    }
   });
 });
 

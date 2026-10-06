@@ -12,6 +12,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
 import { locate, matches, relativeToRoot, resolveReal } from '../server/claude/guard-policy.mjs';
+import { processStartTime, type ProcessStart } from './instance-lock.js';
 
 export interface ChangeRecord {
   path: string;
@@ -44,7 +45,7 @@ export interface TurnChanges {
 interface MetaLike {
   id: string;
   mode: string;
-  turns: Array<{ n: number }>;
+  turns: Array<{ n: number; runId?: string }>;
 }
 
 /**
@@ -347,12 +348,50 @@ export function recoveryRequestAllowed(headers: Record<string, string | string[]
   return (origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`) && headers['x-cc'] === '1';
 }
 
+/**
+ * Whether a turn's run has ended, from its run record under the data root as the server's runner keeps it: an exit
+ * record, a finished status, a run that never left the queue, or processes that are gone (a PID that now belongs to a
+ * process started at another time is gone too). What cannot be shown to have ended (no record, a live PID with no
+ * recorded start, a start ps cannot read) counts as running.
+ */
+export function runEnded(dataRoot: string, runId: string | undefined, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
+  if (!runId || !/^[\w-]+$/.test(runId)) return false;
+  const dir = path.join(dataRoot, 'data', 'control-center', 'runs', runId);
+  if (fs.existsSync(path.join(dir, 'exit.json'))) return true;
+  let run: { status?: string; wrapperPid?: number | null; childPid?: number | null; wrapperStartedAt?: unknown; childStartedAt?: unknown } | null;
+  try {
+    run = readJson(path.join(dir, 'meta.json'));
+  } catch {
+    return false;
+  }
+  if (!run) return false;
+  if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost' || run.status === 'queued') return true;
+  const procs = [
+    { pid: run.wrapperPid, started: run.wrapperStartedAt },
+    { pid: run.childPid, started: run.childStartedAt },
+  ].filter((p): p is { pid: number; started: unknown } => Number.isInteger(p.pid) && (p.pid as number) > 0);
+  if (procs.length === 0) return false;
+  return procs.every(({ pid, started }) => {
+    const now = startOf(pid);
+    return now === null || (typeof started === 'number' && typeof now === 'number' && now !== started);
+  });
+}
+
 /** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
-export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null }): { status: number; text: string } {
+export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null; serverRunning?: boolean }): { status: number; text: string } {
   const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
   if (!meta || !Number.isInteger(opts.turn)) return { status: 404, text: 'unknown session or turn' };
-  if (meta.status === 'running' || meta.status === 'queued') return { status: 409, text: 'the session is still running; cancel it before reverting' };
   const sessionDir = guardSessionDir(opts.guardRoot, meta.id);
+  if (meta.status === 'running' || meta.status === 'queued') {
+    // A running server tracks and finalizes the session itself. With none (it cannot start), a session left running by
+    // a supervisor that stopped mid-turn stays so until a server reconciles it, so once its run has ended the turn is
+    // finalized here the way the server would: its post-turn record from the hashes the hook took at each write.
+    if (opts.serverRunning !== false) return { status: 409, text: 'the session is still running; cancel it before reverting' };
+    const last = Array.isArray(meta.turns) ? meta.turns.at(-1) : undefined;
+    if (!last || !runEnded(opts.ctx.dataRoot, last.runId)) return { status: 409, text: 'the session\'s last turn is still running (its run has not ended); wait for it to finish before reverting' };
+    const offset = turnOffset(sessionDir, last.n);
+    if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
+  }
   try {
     if (opts.abs) {
       const known = changesByTurn(sessionDir, meta).find((t) => t.n === opts.turn)?.records.some((r) => r.abs === opts.abs);
