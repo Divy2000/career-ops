@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import { apiGet, apiSend, type ApiError } from './api';
 import type { ActionMeta } from '@shared/api';
 
-export type ActionOutcome = { runId: string } | { result: unknown; stderr?: string };
+/** A sync action's answer; findings: the check ran and found problems (its output says which), not a failure to run. */
+export type ActionOutcome = { runId: string } | { result: unknown; stderr?: string; findings?: string };
 
 export const useActions = () => useQuery({ queryKey: ['actions'], queryFn: () => apiGet<ActionMeta[]>('/api/actions'), staleTime: 60_000 });
 
@@ -61,6 +62,13 @@ export function useRunAction() {
     setOutput(null);
     try {
       const out = await apiSend<ActionOutcome>('POST', `/api/actions/${id}`, opts.confirmed ? { params, confirmed: true } : { params });
+      if ('findings' in out && out.findings) {
+        setMessage({ tone: 'danger', text: out.findings });
+        setOutput(actionOutputText(out.result, out.stderr));
+        toast.warning(out.findings);
+        await qc.invalidateQueries({ queryKey: ['runs'] });
+        return out;
+      }
       const text = okText ?? ('runId' in out ? `Started run ${out.runId}` : 'Done');
       setMessage({ tone: 'ok', text });
       if ('result' in out) setOutput(actionOutputText(out.result, out.stderr));

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
-import type { Cost } from '../runner/store.js';
+import type { Cost, ExitMeaning } from '../runner/store.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
@@ -71,6 +71,13 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
   check?: (params: z.infer<S>, ctx: ActionContext) => CheckProblem | null | Promise<CheckProblem | null>;
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
+  /** A background run's exit code that means more than "failed" (a check that found something, a silent refusal). */
+  exitMeaning?: ExitMeaning;
+  /**
+   * A sync check's non-zero exit that means it ran and found problems: the reason to show with its output, answered as
+   * 200 instead of a failure. null: a real failure.
+   */
+  findings?: (r: { code: number; stdout: string; stderr: string }) => string | null;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
   /** A readable status and message for a failed sync run, replacing the generic "exited N" and the raw stderr. */
@@ -186,7 +193,19 @@ export const ACTIONS: ActionDef[] = [
   // merge-tracker.mjs --backfill-urls fills the URL column and exits before any merge or --verify, so it is its own action.
   define({ id: 'tracker.backfillUrls', label: 'Backfill tracker URLs from reports', cost: 'free', resources: ['tracker'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'mergeTracker', ['--backfill-urls', ...flag(p.dryRun, '--dry-run')]) }),
   define({ id: 'tracker.reconcile', label: 'Reconcile pipeline with tracker', cost: 'free', resources: ['tracker', 'pipeline'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'reconcilePipeline', flag(p.dryRun, '--dry-run')) }),
-  define({ id: 'tracker.syncCheck', label: 'Tracker sync check', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']) }),
+  define({
+    id: 'tracker.syncCheck',
+    label: 'Tracker sync check',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: true,
+    params: none,
+    build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']),
+    // tracker.mjs sync --check exits 1 when its diagnosis found issues, after its closing "(--check" line; any other
+    // exit 1 (no tracker, no node:sqlite) is a failure.
+    findings: (r) => (r.code === 1 && r.stderr.includes('(--check') ? 'The tracker sync check found problems; see its output.' : null),
+  }),
   define({
     id: 'tracker.hiredShare',
     label: 'Draft Hired Wall story',
@@ -386,8 +405,30 @@ export const ACTIONS: ActionDef[] = [
     check: (p, ctx) => (listReportFiles(ctx.dataRoot).has(p.report) ? null : `There is no file for report ${p.report} under reports/.`),
     build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.report)]),
   }),
-  define({ id: 'docs.liveness', label: 'Check posting liveness', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ urls: z.array(httpUrl).min(1).max(200) }), build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]) }),
-  define({ id: 'docs.fetchJd', label: 'Fetch job description', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'fetchJd', [p.url]) }),
+  define({
+    id: 'docs.liveness',
+    label: 'Check posting liveness',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ urls: z.array(httpUrl).min(1).max(200) }),
+    build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]),
+    // check-liveness.mjs exits 1 when a posting is expired or uncertain: the check is done, its log says which.
+    exitMeaning: { code: 1, status: 'done', onlyWithoutStderr: true },
+  }),
+  define({
+    id: 'docs.fetchJd',
+    label: 'Fetch job description',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ url: httpUrl }),
+    build: (p, ctx) => node(ctx, 'fetchJd', [p.url]),
+    // fetch-jd.mjs exits 1 without a word when no job-board API it knows covers the URL (by design: callers fall back).
+    exitMeaning: { code: 1, status: 'failed', onlyWithoutStderr: true, error: 'No job-board API that fetch-jd.mjs knows covers this URL. Open the posting in the browser and copy the description instead.' },
+  }),
   define({
     id: 'docs.prepareApplication',
     label: 'Prepare application (zero-token prefill)',
@@ -545,7 +586,7 @@ export const ACTIONS: ActionDef[] = [
   define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),
   define({ id: 'system.updateCheck', label: 'Check for updates', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ force: z.boolean().default(false) }), build: (p, ctx) => node(ctx, 'updateSystem', ['check', ...flag(p.force, '--force')]) }),
   define({ id: 'system.updateApply', label: 'Apply update', cost: 'network', confirm: 'This fork takes updates through the weekly sync PR. Applying directly can conflict with it. Continue anyway?', resources: ['tracker', 'pipeline', 'portals', 'profile'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['apply', '--confirm']) }),
-  define({ id: 'system.updateDismiss', label: 'Dismiss update', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ version: z.string().regex(/^[\w.+-]+$/) }), build: (p, ctx) => node(ctx, 'updateSystem', ['dismiss', '--version', p.version]) }),
+  define({ id: 'system.updateDismiss', label: 'Dismiss update', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ version: z.string().regex(/^v?\d+\.\d+\.\d+$/i, 'a release version, X.Y.Z, as update-system.mjs dismiss takes') }), build: (p, ctx) => node(ctx, 'updateSystem', ['dismiss', '--version', p.version]) }),
   define({ id: 'system.rollback', label: 'Roll back update', cost: 'free', confirm: 'Rolls back the last applied update. Continue?', resources: ['tracker', 'pipeline', 'portals', 'profile'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['rollback']) }),
   // ---- daily job, dev chat ----
   define({

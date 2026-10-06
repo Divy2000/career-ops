@@ -198,6 +198,32 @@ describe('Paste a reply', () => {
   });
 });
 
+describe('checks that ran and found something (server-7 minor wording)', () => {
+  it('Tracker sync check on a tracker with a problem answers 200 with the findings and its output, not a failure', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'applications.md');
+    const before = fs.readFileSync(file, 'utf8');
+    try {
+      fs.appendFileSync(file, '| 9 | 2026-10-01 | Bad Row | Engineer | 4.0/5 | NotAState | ❌ | - | x |\n');
+      const res = await post('tracker.syncCheck', {});
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().findings).toMatch(/found problems/);
+      expect(res.json().stderr).toContain('Corruption detected');
+    } finally {
+      fs.writeFileSync(file, before);
+    }
+    const clean = await post('tracker.syncCheck', {});
+    expect(clean.statusCode).toBe(200);
+    expect(clean.json().findings).toBeUndefined();
+  });
+
+  it('Dismiss update refuses a version that is not X.Y.Z before running, as update-system.mjs would', () => {
+    const action = findAction('system.updateDismiss')!;
+    expect(action.params.safeParse({ version: '1.2.3' }).success).toBe(true);
+    expect(action.params.safeParse({ version: 'v1.2.3' }).success).toBe(true);
+    for (const version of ['latest', '1.2', '1.2.3-beta']) expect(action.params.safeParse({ version }).success, version).toBe(false);
+  });
+});
+
 describe('Recently funded companies', () => {
   it('offers exactly the sorts company-funded.mjs accepts', () => {
     const source = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'company-funded.mjs'), 'utf8');

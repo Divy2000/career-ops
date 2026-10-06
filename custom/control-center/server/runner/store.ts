@@ -31,6 +31,22 @@ export interface RunMeta {
   error: string | null;
   /** Input files the app wrote for this run under data/control-center/tmp, removed when it ends (absent on older runs). */
   tmpInputs?: string[];
+  /** What one exit code of this command means (see ExitMeaning); absent: 0 is done, anything else failed. */
+  exitMeaning?: ExitMeaning;
+}
+
+/**
+ * A command whose exit code says more than "failed": check-liveness.mjs exits 1 when it found an expired posting (a
+ * finished check: done, unless it wrote to stderr, which only its errors do), fetch-jd.mjs exits 1 silently when no
+ * known job-board API covers the URL (failed, with the reason it does not print).
+ */
+export interface ExitMeaning {
+  code: number;
+  status: 'done' | 'failed';
+  /** The run's error when it ends failed this way. */
+  error?: string;
+  /** Only when the run wrote nothing to stderr (a script that reports its own errors there). */
+  onlyWithoutStderr?: boolean;
 }
 
 export interface RawLine {

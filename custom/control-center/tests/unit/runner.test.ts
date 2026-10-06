@@ -247,6 +247,26 @@ describe('Runner', () => {
     await until(() => runner.store.read(next.id)?.status === 'done');
   });
 
+  it('a run whose exit code means "found something" ends done when it wrote nothing to stderr, and failed otherwise (check-liveness.mjs found an expired posting)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meaning = { code: 1, status: 'done' as const, onlyWithoutStderr: true };
+    const found = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', 'console.log("Results: 0 active  1 expired"); process.exitCode = 1'], cwd: PACKAGE_ROOT }, exitMeaning: meaning });
+    await until(() => ['done', 'failed'].includes(runner.store.read(found.id)?.status ?? ''));
+    expect(runner.store.read(found.id)).toMatchObject({ status: 'done', exitCode: 1 });
+    const fatal = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', 'console.error("Fatal: no browser"); process.exitCode = 1'], cwd: PACKAGE_ROOT }, exitMeaning: meaning });
+    await until(() => ['done', 'failed'].includes(runner.store.read(fatal.id)?.status ?? ''));
+    expect(runner.store.read(fatal.id)).toMatchObject({ status: 'failed', exitCode: 1 });
+  });
+
+  it('a run whose exit code has a known meaning and printed nothing fails with that meaning as its error (fetch-jd.mjs on a host no ATS API covers)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const silent = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', 'process.exitCode = 1'], cwd: PACKAGE_ROOT }, exitMeaning: { code: 1, status: 'failed', error: 'no known job-board API covers this URL' } });
+    await until(() => runner.store.read(silent.id)?.status === 'failed');
+    expect(runner.store.read(silent.id)!.error).toBe('no known job-board API covers this URL');
+  });
+
   it('orders runs that share a resource and drops a queued run on cancel', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);

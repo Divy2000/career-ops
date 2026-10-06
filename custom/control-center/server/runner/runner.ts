@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
-import { RunStore, type RunMeta } from './store.js';
+import { RunStore, type ExitMeaning, type RunMeta } from './store.js';
 import { childEnv } from '../system/child-env.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
 
@@ -20,6 +20,8 @@ export interface StartRequest {
   env?: NodeJS.ProcessEnv;
   /** Input files the app wrote for this run (an argument or only an env value names them); removed when it ends. */
   tmpInputs?: string[];
+  /** What one exit code of the command means, when it is not simply failed. */
+  exitMeaning?: ExitMeaning;
 }
 
 /**
@@ -203,6 +205,7 @@ export class Runner {
       cmd: req.cmd,
       params: req.params,
       tmpInputs: req.tmpInputs ?? [],
+      ...(req.exitMeaning ? { exitMeaning: req.exitMeaning } : {}),
     });
     const env = childEnv(req.env);
     this.envById.set(meta.id, env);
@@ -322,8 +325,14 @@ export class Runner {
   }
 
   private finalize(meta: RunMeta, exit: { code: number | null; signal: string | null; endedAt: string }): void {
-    const status: RunMeta['status'] = meta.status === 'cancelled' || exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL' ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
-    this.store.write({ ...meta, status, endedAt: exit.endedAt, exitCode: exit.code, signal: exit.signal });
+    let status: RunMeta['status'] = meta.status === 'cancelled' || exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL' ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
+    let error = meta.error;
+    const meaning = meta.exitMeaning;
+    if (status !== 'cancelled' && meaning && exit.code === meaning.code && !(meaning.onlyWithoutStderr && this.store.readRaw(meta.id).lines.some((l) => l.stream === 'stderr'))) {
+      status = meaning.status;
+      if (meaning.status === 'failed' && meaning.error) error = meaning.error;
+    }
+    this.store.write({ ...meta, status, error, endedAt: exit.endedAt, exitCode: exit.code, signal: exit.signal });
     this.envById.delete(meta.id);
     this.dropInputs(meta);
     this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId, exitCode: exit.code });

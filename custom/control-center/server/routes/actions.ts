@@ -47,6 +47,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
         cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
         env: { ...coreEnv, ...cmd.env },
         tmpInputs: ctx.tmpInputs,
+        ...(action.exitMeaning ? { exitMeaning: action.exitMeaning } : {}),
       };
       if (action.single) {
         const started = runner.startUnlessPending(startRequest);
@@ -72,6 +73,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       /* plain text output */
     }
     if (r.code !== 0) {
+      const findings = action.findings?.(r);
+      if (findings) return { result, stderr: r.stderr.slice(-4000), findings };
       const explained = action.explainFailure?.(r);
       if (explained) return reply.code(explained.status).send({ error: explained.error, exit: r.code, result });
       const status = action.exitMap?.[r.code] ?? 500;
