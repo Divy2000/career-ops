@@ -243,6 +243,15 @@ export function writeGlobsByRoot(globs: readonly string[]): { data: string[]; co
   return { data: globs.filter((g) => !CODE_ROOT_WRITE_GLOBS.includes(g)), code: globs.filter((g) => CODE_ROOT_WRITE_GLOBS.includes(g)) };
 }
 
+/**
+ * Writes one mode needs beyond its class, keyed by its English mode id (a localized copy gets the same). Pipeline mode
+ * resolves its own inbox rows (modes/pipeline.md: a finished row moves to Processed, a pre-screen discard is logged), which
+ * no other evaluate-class mode may touch.
+ */
+const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
+  pipeline: ['data/pipeline.md', 'data/discard.log'],
+};
+
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
   advisor: { title: 'Ask (advisor)', policyClass: 'read-only' },
@@ -401,7 +410,7 @@ export function getModePolicy(id: string): ModePolicy | null {
     id,
     title: derived?.title ?? virtual!.title,
     policyClass,
-    writeGlobs: [...def.writeGlobs],
+    writeGlobs: [...def.writeGlobs, ...(Object.hasOwn(MODE_EXTRA_WRITES, englishModeOf(id)) ? MODE_EXTRA_WRITES[englishModeOf(id)]! : [])],
     network: virtual?.network ?? [...def.network],
     scripts,
     bashRules: explicit ? explicit.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
