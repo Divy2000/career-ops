@@ -94,7 +94,11 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const sameCompany = (name: string) => key !== '' && normalizeTextKey(name, ' ') === key;
     const companyHistory = tracker.rows.filter((r) => r.num !== n && sameCompany(r.company));
     const overview = await readImmigrationOverview(cfg.codeRoot, cfg.dataRoot);
-    const companyFile = overview.companies.find((c) => sameCompany(c.name)) ?? null;
+    // The check file is named by companySlug (custom/immigration/lib.mjs), which drops legal suffixes; its heading may
+    // carry the DOL legal name ("Acme Robotics, Inc." from a Lookup), so the slug decides and the heading is the fallback.
+    const { companySlug } = await importCore<{ companySlug: (name: string) => string }>(cfg.codeRoot, 'custom/immigration/lib.mjs');
+    const slug = key === '' ? '' : companySlug(row.company);
+    const companyFile = (slug ? overview.companies.find((c) => c.slug === slug) : undefined) ?? overview.companies.find((c) => sameCompany(c.name)) ?? null;
     const alert = overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;
     return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert, error: overview.alertsError } };
   });

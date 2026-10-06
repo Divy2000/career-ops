@@ -66,6 +66,20 @@ describe('read endpoints', () => {
     }
   });
 
+  it('GET /api/tracker/:n finds the company check by its file slug when the check is headed with the DOL legal name (SW2-tests-07)', async () => {
+    const own = await makeTestApp();
+    try {
+      // A check started from Sponsorship > Lookup names the DOL entity, so its heading carries the legal suffix.
+      const file = path.join(own.cfg.dataRoot, 'data', 'immigration', 'companies', 'acme-robotics.md');
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/^# .*$/m, '# Acme Robotics, Inc. sponsorship check'));
+      const body = (await own.app.inject({ method: 'GET', url: '/api/tracker/1', headers: own.authed })).json();
+      expect(body.row.company).toBe('Acme Robotics');
+      expect(body.sponsorship.companyFile).toMatchObject({ slug: 'acme-robotics', name: 'Acme Robotics, Inc.', verdict: 'sponsoring' });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n gives an unknown-employer (?) row no company history, company file or alert (SW-server-05)', async () => {
     const own = await makeTestApp();
     try {
