@@ -84,7 +84,8 @@ function sentenceEnd(text: string): number {
   for (const m of text.matchAll(/[.!?](?=\s|$)/g)) {
     const i = m.index!;
     if (text[i] === '.') {
-      const word = text.slice(0, i).split(/\s/).pop() ?? '';
+      // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
+      const word = (text.slice(0, i).split(/\s/).pop() ?? '').replace(/^[(["'\u2018\u201c]+/u, '');
       if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
       if (ABBREVIATIONS.has(word.toLowerCase())) continue;
     }

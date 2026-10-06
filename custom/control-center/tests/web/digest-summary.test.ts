@@ -20,6 +20,16 @@ describe('summarizeDigest', () => {
     expect(lines('- Fees rise for some forms, e.g. the I-129, under Rule No. 5 from Dr. Smith. Later text.')).toEqual(['Fees rise for some forms, e.g. the I-129, under Rule No. 5 from Dr. Smith.']);
   });
 
+  it('recognises an abbreviation after an opening bracket or quote (SW3-web-a-08 review)', () => {
+    expect(lines('- Stamping paused (U.S. State Department) until further notice. Later text.')).toEqual(['Stamping paused (U.S. State Department) until further notice.']);
+    expect(lines('- Some forms ("e.g. Form I-129") cost more. Later text.')).toEqual(['Some forms ("e.g. Form I-129") cost more.']);
+    expect(lines('- A memo [Dr. Smith] explains the change. Later text.')).toEqual(['A memo [Dr. Smith] explains the change.']);
+  });
+
+  it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
+    expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
+  });
+
   it('still ends the first sentence at a period before the next sentence', () => {
     expect(lines('- USCIS updated the fee page. The premium fee is unchanged.')).toEqual(['USCIS updated the fee page.']);
     expect(lines('- Processing paused! Check back Monday.')).toEqual(['Processing paused!']);
