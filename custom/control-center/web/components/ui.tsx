@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
+import { describeError } from '../lib/actions';
 
 export function Pill({ children, tone = 'neutral', title }: { children: ReactNode; tone?: 'neutral' | 'ok' | 'warn' | 'danger' | 'info' | 'accent'; title?: string }) {
   return (
@@ -95,6 +96,12 @@ export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs:
   );
 }
 
+/** Why a read failed, in the server's words (its error and detail), not just the HTTP status line. */
+function loadError(err: unknown): string {
+  const detail = (err as { body?: { detail?: unknown } } | null)?.body?.detail;
+  return `${describeError(err)}${typeof detail === 'string' && detail.trim() ? `: ${detail.trim()}` : ''}`;
+}
+
 /** Loading, error, missing-file and malformed-file states, kept distinct on purpose. */
 /** `emptyState` replaces the generic missing-file card when an absent file is the normal first-run state. */
 /** `editable`: the children are the way to create the file, so a missing file renders them like an empty one. */
@@ -111,7 +118,7 @@ export function DataState({ query, missing, emptyState, editable, children }: { 
   if (query.isError) {
     return (
       <div className="card card--danger" role="alert">
-        <strong>Could not load.</strong> <span className="muted">{String((query.error as Error).message)}</span>
+        <strong>Could not load.</strong> <span className="muted">{loadError(query.error)}</span>
         <div style={{ marginTop: 8 }}>
           <button type="button" onClick={() => void query.refetch()}>
             Retry
