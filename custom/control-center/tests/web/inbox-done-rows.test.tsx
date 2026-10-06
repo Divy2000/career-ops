@@ -81,3 +81,17 @@ describe('Inbox rows that are checked off', () => {
   });
 });
 
+
+describe('Inbox with no data/pipeline.md yet (SW6-web-a-04)', () => {
+  it('still offers Add URLs, which creates the file, beside the note that there is no pipeline yet', async () => {
+    await act(async () => root.unmount());
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url === '/api/pipeline' ? json({ kind: 'missing', path: 'data/pipeline.md' }) : json([]))));
+    root = createRoot(host);
+    const rootRoute = createRootRoute();
+    const pipeline = createRoute({ getParentRoute: () => rootRoute, path: '/pipeline', component: PipelinePage, validateSearch: () => ({ tab: 'inbox' as const }) });
+    const router = createRouter({ routeTree: rootRoute.addChildren([pipeline]), history: createMemoryHistory({ initialEntries: ['/pipeline'] }) });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(RouterProvider, { router })))));
+    await until(() => host.textContent?.includes('No pipeline yet'), 'the missing-file note');
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add URLs')).toBe(true);
+  });
+});
