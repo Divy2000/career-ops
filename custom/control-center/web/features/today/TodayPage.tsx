@@ -195,7 +195,8 @@ export function TodayPage() {
                               <td>
                                 <div className="stack-tight">
                                   <ScorePill score={r.score} />
-                                  <SponsorPill tier={r.sponsor} />
+                                  <SponsorPill tier={r.sponsorTier} />
+                                  {r.sponsorNote && <span className="faint small">{r.sponsorNote}</span>}
                                 </div>
                               </td>
                               <td>

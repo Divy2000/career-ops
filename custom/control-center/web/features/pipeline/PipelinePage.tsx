@@ -257,7 +257,8 @@ function Shortlist() {
                     </td>
                     <td className="mono">{r.relevance ?? ''}</td>
                     <td>
-                      <SponsorPill tier={r.sponsor} />
+                      <SponsorPill tier={r.sponsorTier} />
+                      {r.sponsorNote && <span className="faint small"> {r.sponsorNote}</span>}
                     </td>
                     <td>{r.company}</td>
                     <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>

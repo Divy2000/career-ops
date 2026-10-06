@@ -140,6 +140,18 @@ test.describe('read-only pages render fixture data', () => {
     await page.getByRole('tab', { name: 'Shortlist' }).click();
     await expect(page).toHaveURL(/tab=shortlist/);
     await expect(page.getByText('Initech pauses visa sponsorship for new hires')).toBeVisible();
+    // shortlist.mjs writes a non-blocking alert after the tier ("strong; resumed 2026-09-25"): the pill keeps the tier's
+    // color and the note sits beside it (SW2-tests-09).
+    const globex = page.getByRole('row', { name: /Globex Payments/ });
+    await expect(globex.getByText('sponsor: strong', { exact: true })).toHaveClass(/chip--ok/);
+    await expect(globex).toContainText('resumed 2026-09-25');
+  });
+
+  test('Today: a shortlist row with a non-blocking sponsorship alert keeps its tier color (SW2-tests-09)', async ({ page }) => {
+    const shortlist = page.locator('.card', { has: page.getByRole('heading', { name: /^Shortlist/ }) });
+    const globex = shortlist.getByRole('row', { name: /Globex Payments/ });
+    await expect(globex.getByText('sponsor: strong', { exact: true })).toHaveClass(/chip--ok/);
+    await expect(globex).toContainText('resumed 2026-09-25');
   });
 
   test('Sponsorship tabs', async ({ page }) => {
