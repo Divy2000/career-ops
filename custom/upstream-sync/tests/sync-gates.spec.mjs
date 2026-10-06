@@ -109,7 +109,7 @@ test('sync.sh runs the control-center checks after the custom tests and before p
   assert.ok(custom > -1 && cc > custom && push > cc, `order was custom=${custom} cc=${cc} push=${push}`);
 });
 
-const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '' };
+const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
 // Each gate that must hold the PR for a human, alone, and the reason the PR comment gives for it.
 const BLOCKING = [
   [{ CUSTOM_OK: '0' }, 'custom tests FAIL'],
@@ -119,6 +119,7 @@ const BLOCKING = [
   [{ KEPT_README: '1' }, 'fork README kept over an upstream .github/README.md (compare by hand)'],
   [{ UNEXPECTED_UPSTREAM: 'scan.mjs\nmodes/oferta.md' }, 'upstream files edited outside conflict resolution: scan.mjs, modes/oferta.md'],
   [{ CLAUDE_HOLD: 'the sync Claude asked for a human: check X' }, 'the sync Claude asked for a human: check X'],
+  [{ PROTECTED_EDITS: 'custom/a/tests/x.spec.mjs\ncustom/upstream-sync/lib.sh' }, 'fork tests, gates or guard files edited by the sync (review by hand): custom/a/tests/x.spec.mjs, custom/upstream-sync/lib.sh'],
 ];
 
 function mergeBlockers(vars) {
@@ -304,4 +305,27 @@ test('sync.sh reads the verdict before it pushes or decides', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const hold = sync.indexOf('CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"');
   assert.ok(hold > sync.indexOf('claude -p') && hold < sync.indexOf('git push') && hold < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `verdict at ${hold}`);
+});
+
+// ---- which custom/ paths the sync Claude may change without a human (SW4-scripts-02) ----
+
+const isProtected = (p) => spawnSync('bash', ['-c', `source "${LIB}"\nprotected_paths "$P"`], { env: { PATH: '/usr/bin:/bin', P: p }, encoding: 'utf8' }).stdout.trim();
+
+test('protected_paths keeps every path Dev Chat may not write under custom/, and nothing else', () => {
+  const modes = readFileSync(path.join(HERE, '../../control-center/server/claude/modes.ts'), 'utf8');
+  const list = modes.slice(modes.indexOf('export const DEVCHAT_DENIED_WRITES'), modes.indexOf('];', modes.indexOf('export const DEVCHAT_DENIED_WRITES')));
+  const globs = [...list.matchAll(/'(custom\/[^']+)'/g)].map((m) => m[1]);
+  assert.ok(globs.length > 15, `read ${globs.length} globs from modes.ts`);
+  for (const glob of globs) {
+    const sample = glob.replaceAll('**/', 'a/b/').replaceAll('**', 'a/b').replaceAll('*', 'x');
+    assert.equal(isProtected(sample), sample, `${glob} (sample ${sample}) is protected`);
+  }
+  for (const free of ['custom/a.mjs', 'custom/pipeline/shortlist.mjs', 'custom/control-center/server/routes/read.ts', 'custom/control-center/web/App.tsx', 'scan.mjs']) assert.equal(isProtected(free), '', free);
+});
+
+test('sync.sh holds on protected edits found in the same snapshot comparison', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const changed = sync.indexOf('CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")"');
+  const guarded = sync.indexOf('PROTECTED_EDITS="$(protected_paths "$CHANGED_SINCE_MERGE")"');
+  assert.ok(changed > -1 && guarded > changed && guarded < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `protected at ${guarded}`);
 });

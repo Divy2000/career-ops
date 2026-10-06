@@ -145,6 +145,7 @@ if [ -n "$CHANGED_UPSTREAM" ]; then
 fi
 CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail "cannot compare HEAD with the merge result"
 UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"
+PROTECTED_EDITS="$(protected_paths "$CHANGED_SINCE_MERGE")"
 
 CUSTOM_OK=1
 custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0
@@ -169,6 +170,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   echo "- New failures in test-all.mjs --quick vs origin/main: ${NEW_FAILURES:-none}"
   echo "- Files outside custom/ that differ from upstream: ${CHANGED_UPSTREAM:-none}"
   echo "- Upstream files this run edited after the merge outside conflict resolution (blocks auto-merge): ${UNEXPECTED_UPSTREAM:-none}"
+  echo "- Fork tests, gates, guard or README files this run edited (blocks auto-merge; check no test was weakened): ${PROTECTED_EDITS:-none}"
   if [ $KEPT_README = 1 ]; then
     echo "- .github/README.md conflicted with upstream: the fork's version was kept. Upstream's copy: data/upstream-sync/$TODAY.upstream-github-readme.md (not auto-merged; compare, then merge by hand)."
   fi

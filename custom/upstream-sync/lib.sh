@@ -191,28 +191,30 @@ merge_snapshot() {
   printf '%s\n' "$snap"
 }
 
-# changed_since_snapshot <snapshot>: the paths outside custom/ and
-# .github/README.md whose content, mode or presence at HEAD differs from the
-# merge_snapshot text <snapshot>: what this run changed after the merge. A fork
-# difference from upstream kept by an earlier sync is in both, so it is not here.
-# Fails closed: an empty snapshot or an unreadable HEAD is an error, never
-# "nothing changed".
+# changed_since_snapshot <snapshot>: every path whose content, mode or
+# presence at HEAD differs from the merge_snapshot text <snapshot>: what this
+# run changed after the merge. A fork difference from upstream kept by an
+# earlier sync is in both, so it is not here. unexpected_upstream and
+# protected_paths each take their share of it. Fails closed: an empty snapshot
+# or an unreadable HEAD is an error, never "nothing changed".
 changed_since_snapshot() {
   local tree
   if [ -z "${1:-}" ]; then echo "changed_since_snapshot: no merge snapshot to compare with" >&2; return 1; fi
   tree="$(git ls-tree -r HEAD)" || return 1
   printf '%s\n' "$tree" | awk -F'\t' '$2 != "" { split($1, m, " "); print $2 "\t" m[1] " " m[3] }' | LC_ALL=C sort |
     LC_ALL=C comm -3 <(printf '%s\n' "$1") - | sed -e 's/^\t//' | cut -f1 |
-    awk '$0 != "" && !/^custom\// && $0 != ".github/README.md"' | LC_ALL=C sort -u
+    awk '$0 != ""' | LC_ALL=C sort -u
 }
 
-# unexpected_upstream <changed> <conflicts>: the files (one per line) in
-# <changed> that are not in <conflicts>. Upstream files may only be edited to
+# unexpected_upstream <changed> <conflicts>: the upstream files (one per line,
+# outside custom/ and .github/README.md) in <changed> that are not in
+# <conflicts>. Upstream files may only be edited to
 # resolve a merge conflict, so any of these holds the PR for a human.
 unexpected_upstream() {
   local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
+    case "$f" in custom/* | .github/README.md) continue ;; esac
     printf '%s\n' "$2" | grep -qxF -- "$f" || printf '%s\n' "$f"
   done <<< "$1"
 }
@@ -241,6 +243,31 @@ new_failures() {
   comm -13 <(printf '%s\n' "$1" | sed '/^$/d') "$2"
 }
 
+# protected_paths <changed>: the paths (one per line) in <changed> that the
+# sync must never change on its own: the fork's tests and test helpers, the
+# sync's own gates, the guard and the other paths Dev Chat may not write
+# (DEVCHAT_DENIED_WRITES in custom/control-center/server/claude/modes.ts, kept
+# in step by sync-gates.spec), and the fork README. The sync Claude may fix
+# other fork code under custom/; those fixes are judged by the protected tests,
+# so an edit to a test, a gate or the guard holds the PR for a human.
+protected_paths() {
+  local f
+  while IFS= read -r f; do
+    case "$f" in
+      custom/control-center/server/claude/* | custom/control-center/supervisor/* | \
+        custom/control-center/package.json | custom/control-center/package-lock.json | \
+        custom/control-center/vite.config.* | custom/control-center/vitest.config.* | custom/control-center/playwright.config.* | \
+        custom/control-center/eslint.config.* | custom/control-center/tsconfig*.json | \
+        custom/control-center/tests/* | custom/control-center/scripts/* | \
+        custom/immigration/run-daily.sh | custom/immigration/daily-prompt.md | \
+        custom/*/tests/* | custom/*.spec.* | custom/*.test.* | \
+        custom/test-support/* | custom/install/* | custom/upstream-sync/* | custom/launchd/* | \
+        .github/README.md)
+        printf '%s\n' "$f" ;;
+    esac
+  done <<< "$1"
+}
+
 # sync_verdict <claude-exit> <claude-output>: why the sync Claude's own run
 # holds the PR, or nothing. The prompt asks it to end with `SYNC: ok` or
 # `SYNC: needs-human <reason>`; the last such line counts. A non-zero exit, no
@@ -260,7 +287,7 @@ sync_verdict() {
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons
 # joined by "; ", or nothing when it may auto-merge. Reads CUSTOM_OK, CC_OK,
 # AUTO_MERGE and KEPT_README (an unset flag blocks), NEW_FAILURES and
-# UNEXPECTED_UPSTREAM (one entry per line), and CLAUDE_HOLD (sync_verdict's
+# UNEXPECTED_UPSTREAM and PROTECTED_EDITS (one entry per line), and CLAUDE_HOLD (sync_verdict's
 # reason; unset blocks, since the verdict was never read).
 merge_blockers() {
   local why=() out="" w
@@ -270,6 +297,7 @@ merge_blockers() {
   [ "${AUTO_MERGE:-0}" = 1 ] || why+=("run with --no-merge")
   [ "${KEPT_README:-1}" = 0 ] || why+=("fork README kept over an upstream .github/README.md (compare by hand)")
   [ -z "${UNEXPECTED_UPSTREAM:-}" ] || why+=("upstream files edited outside conflict resolution: ${UNEXPECTED_UPSTREAM//$'\n'/, }")
+  [ -z "${PROTECTED_EDITS:-}" ] || why+=("fork tests, gates or guard files edited by the sync (review by hand): ${PROTECTED_EDITS//$'\n'/, }")
   if [ -z "${CLAUDE_HOLD+set}" ]; then why+=("the sync Claude verdict was never read"); elif [ -n "$CLAUDE_HOLD" ]; then why+=("$CLAUDE_HOLD"); fi
   for w in ${why[@]+"${why[@]}"}; do out="${out:+$out; }$w"; done
   printf '%s' "$out"
