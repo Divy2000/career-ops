@@ -323,16 +323,31 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   }, 70_000);
 
+  /**
+   * Waits until the supervisor itself has dropped its server child: its status names no active child. The child's own
+   * error line comes first and is not enough: until the supervisor handles the child's exit, it still routes requests
+   * to it (a 502 while it goes), and under load that takes a while.
+   */
+  async function untilChildDropped(port: number, s: Started): Promise<{ state: string; error: string; activePid: number | null }> {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const r = await request(port, 'GET', '/__supervisor/status?t=supervisor-instance-test-token').catch(() => null);
+      const status = r?.status === 200 ? (JSON.parse(r.body) as { state: string; error: string; activePid: number | null }) : null;
+      if (status && status.activePid === null) return status;
+      if (s.proc.exitCode !== null || Date.now() > deadline) throw new Error(`the supervisor did not drop its server child\n${s.output()}`);
+      await new Promise((r2) => setTimeout(r2, 50));
+    }
+  }
+
   it('a server child that dies after it passed its health check (activate throws) leaves the supervisor and /__recovery up (SW3-claude-01)', async () => {
     const port = await freePort();
     const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageWhoseActivateThrows(), reload: true });
     try {
       await until(() => /reconcil is not a function/.test(s.output()) || s.proc.exitCode !== null, 'the child to die in activate()');
       await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
-      await new Promise((r) => setTimeout(r, 1000));
+      const status = await untilChildDropped(port, s);
       expect(s.proc.exitCode, s.output()).toBeNull();
       const cookie = await signIn(port);
-      const status = JSON.parse((await request(port, 'GET', '/__supervisor/status', { cookie })).body) as { state: string; error: string; activePid: number | null };
       expect(status).toMatchObject({ state: 'failed', activePid: null });
       expect(status.error).toMatch(/server child exited \(code 1, signal null\) after it started/);
       const page = await request(port, 'GET', '/__recovery', { cookie });
@@ -344,8 +359,9 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       expect(down.body).toMatch(/The server stopped/);
       // A Restart runs the same broken code: it fails again, and the supervisor still stays up.
       const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' });
-      await until(() => (s.output().match(/reconcil is not a function/g) ?? []).length >= 2 || s.proc.exitCode !== null, 'the restarted child to die in activate() too');
-      await new Promise((r) => setTimeout(r, 1000));
+      // The restarted child is dropped in its turn, and the supervisor, which used to stop here, is still up.
+      await until(() => (s.output().match(/the server child exited \(code 1, signal null\) after it started/g) ?? []).length >= 2 || s.proc.exitCode !== null, 'the supervisor to drop the restarted child too');
+      await untilChildDropped(port, s);
       expect(s.proc.exitCode, `${restart.status} ${restart.body}\n${s.output()}`).toBeNull();
       expect((await request(port, 'GET', '/__recovery', { cookie })).status).toBe(200);
     } finally {
@@ -360,6 +376,7 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       await until(() => /reconcil is not a function/.test(s.output()) || s.proc.exitCode !== null, 'the child to die in activate()');
       await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
       expect(s.output()).toContain(`Recovery page: http://127.0.0.1:${port}/__recovery?t=supervisor-instance-test-token`);
+      await untilChildDropped(port, s);
       // The link printed (and opened) at startup, followed by a browser with no cookie yet.
       const landing = await request(port, 'GET', '/auth?t=supervisor-instance-test-token');
       expect(landing.status).toBe(503);
