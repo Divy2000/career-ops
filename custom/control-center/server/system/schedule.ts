@@ -217,7 +217,7 @@ export class ScheduleService {
   }
 
   /**
-   * Writes the plist and lints it. Enabling runs launchctl enable, bootout and
+   * Writes the plist, lints it, and installs it once the lint passes. Enabling runs launchctl enable, bootout and
    * bootstrap; disabling runs launchctl disable (persistent: launchd would
    * otherwise load the plist again at the next login) and bootout.
    */
@@ -226,11 +226,17 @@ export class ScheduleService {
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv, claudeBin: this.deps.claudeBin, nodeBin: this.deps.nodeBin }));
+    // Linted beside the installed plist and moved over it only once it passes: launchd loads whatever is in
+    // LaunchAgents at login, so a plist that fails the lint must never replace a working one. The temp name does not
+    // end in .plist, so launchd never loads it.
+    const lint = await this.deps.exec('plutil', ['-lint', tmp], { timeoutMs: 10_000 });
+    if (lint.code !== 0) {
+      fs.rmSync(tmp, { force: true });
+      return { ok: false, status: 500, error: `plutil -lint rejected the plist (exit ${lint.code}); the installed one is unchanged`, stderr: lint.stderr.trim() };
+    }
     // launchd does not create the log directory; without it the job's output is lost.
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);
-    const lint = await this.deps.exec('plutil', ['-lint', plistPath], { timeoutMs: 10_000 });
-    if (lint.code !== 0) return { ok: false, status: 500, error: `plutil -lint rejected the plist (exit ${lint.code})`, stderr: lint.stderr.trim() };
     const target = `gui/${this.deps.uid}/${job.label}`;
     if (input.enabled) {
       const enable = await this.deps.exec('launchctl', ['enable', target], { timeoutMs: 20_000 });

@@ -41,7 +41,10 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): {
   login: (agentsDir: string) => void;
   /** launchd firing a loaded job once, which exits with `code`. */
   fire: (label: string, code: number) => void;
+  /** Steps to fail, as "<cmd> <subcommand>" ("plutil -lint", "launchctl bootstrap"): each fails until removed. */
+  fail: Set<string>;
 } {
+  const fail = new Set<string>();
   const calls: LaunchdCall[] = [];
   const loaded = new Set<string>();
   // Per label, as launchd keeps it while the job stays loaded: a bootout or a fresh bootstrap starts it over.
@@ -64,6 +67,7 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): {
   const exec: Exec = async (cmd, args, opts) => {
     if (cmd !== 'launchctl' && cmd !== 'plutil') return fallback(cmd, args, opts);
     calls.push({ cmd, args: [...args] });
+    if (fail.has(`${cmd} ${args[0]}`)) return { code: cmd === 'plutil' ? 1 : 5, stdout: '', stderr: `fake ${cmd}: ${args[0]} failed as the test asked` };
     if (cmd === 'plutil') {
       const file = args[args.length - 1]!;
       let xml: string;
@@ -103,7 +107,7 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): {
     }
     return { code: 2, stdout: '', stderr: `fake launchctl: unsupported subcommand ${sub}` };
   };
-  return { exec, calls, loaded, disabled, login, fire };
+  return { exec, calls, loaded, disabled, login, fire, fail };
 }
 
 /** Test builds only: swap the real launchctl/plutil for the fake when asked. */

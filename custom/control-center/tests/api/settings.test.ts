@@ -213,8 +213,9 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(path.join(t.cfg.codeRoot, 'custom/upstream-sync/sync.sh'));
     expect(xml).toContain('<key>Hour</key><integer>4</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>0</integer>');
     const uid = String(process.getuid?.() ?? 0);
+    // The new plist is linted beside the installed one and only then moved over it (SW2-tests-19).
     expect(fake.calls.map((c) => [c.cmd, ...c.args].join(' '))).toEqual([
-      `plutil -lint ${plist}`,
+      expect.stringMatching(new RegExp(`^plutil -lint ${plist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-\\d+$`)),
       `launchctl enable gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootout gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootstrap gui/${uid} ${plist}`,
@@ -232,6 +233,48 @@ describe('launchd schedule through the injectable executor (never the real launc
     fake.fire('com.career-ops.upstream-sync', 1);
     const job = (await get('/api/schedule')).json().jobs[1];
     expect(job).toMatchObject({ loaded: true, state: 'not running', runs: 2, lastExit: 1 });
+  });
+  it('a plist that fails the lint never replaces the installed one, which stays byte for byte, and launchd is not touched (SW2-tests-19)', async () => {
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    const plist = path.join(t.cfg.launchAgentsDir, 'com.career-ops.upstream-sync.plist');
+    const installed = fs.readFileSync(plist, 'utf8');
+    fake.calls.length = 0;
+    fake.fail.add('plutil -lint');
+    try {
+      const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 6, minute: 0, weekday: 0, enabled: true });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toMatch(/plutil -lint rejected the plist/);
+    } finally {
+      fake.fail.clear();
+    }
+    expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+    expect(fs.readdirSync(t.cfg.launchAgentsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
+    expect(fake.calls.filter((c) => c.cmd === 'launchctl')).toEqual([]);
+  });
+  for (const [step, status, error] of [
+    ['launchctl enable', 502, /launchctl enable failed/],
+    ['launchctl bootstrap', 502, /launchctl bootstrap failed/],
+  ] as const) {
+    it(`a failing ${step} on Install and enable answers ${status} with the reason (SW2-tests-19)`, async () => {
+      fake.fail.add(step);
+      try {
+        const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true });
+        expect(res.statusCode).toBe(status);
+        expect(res.json().error).toMatch(error);
+      } finally {
+        fake.fail.clear();
+      }
+    });
+  }
+  it('a failing launchctl disable answers 502 and says the job would load again at login (SW2-tests-19)', async () => {
+    fake.fail.add('launchctl disable');
+    try {
+      const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: false });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error).toMatch(/launchctl disable failed .*would load again at the next login/);
+    } finally {
+      fake.fail.clear();
+    }
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
     // The weekly job installed and loaded, as the test above leaves it, so this test holds alone too.
