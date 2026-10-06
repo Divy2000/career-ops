@@ -113,7 +113,7 @@ function Inbox() {
   };
   // A checked Pending row may have been evaluated in place, so putting it back queues it for a second evaluation.
   const restore = async (url: string, name: string) => {
-    if (!(await confirm({ title: `Put ${name} back in the queue?`, body: 'If it was evaluated, not just skipped, Evaluate visible and Batch will see it as new and it will be evaluated again.', confirmLabel: 'Back to queue' }))) return;
+    if (!(await confirm({ title: `Put ${name} back in the queue?`, body: 'If it was evaluated, not just skipped, Evaluate visible and Batch will see it as new and it will be evaluated again.', confirmLabel: 'Back to queue', danger: true }))) return;
     await skip(url, false);
   };
   const [source, setSource] = useState('');

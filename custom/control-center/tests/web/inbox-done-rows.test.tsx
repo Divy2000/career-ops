@@ -74,4 +74,10 @@ describe('Inbox rows that are checked off', () => {
     await until(() => skips.length > 0, 'the restore request');
     expect(skips).toEqual([{ url: 'https://jobs.example.com/checked', done: false }]);
   });
+
+  it('the Back to queue confirm can start a paid re-evaluation, so it opens on Cancel (SW4-web-a-03 review)', async () => {
+    await act(async () => rowOf('Checked Co').querySelector('button')!.click());
+    expect((document.activeElement as HTMLElement | null)?.textContent?.trim()).toBe('Cancel');
+  });
 });
+
