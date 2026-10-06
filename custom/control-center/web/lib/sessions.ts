@@ -179,7 +179,8 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
             return;
           }
           const meta = r.meta;
-          const counted = Math.max(0, ...r.events.map((e) => e.seq));
+          // A loop, not Math.max(...seqs): a long session's log can pass the engine's argument-count limit.
+          const counted = r.events.reduce((max, e) => (e.seq > max ? e.seq : max), 0);
           const waiting = pending;
           pending = [];
           const ended = apply([...r.events, ...waiting]);
