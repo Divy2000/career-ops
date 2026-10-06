@@ -22,6 +22,19 @@ export interface StartRequest {
   tmpInputs?: string[];
 }
 
+/**
+ * kill(pid, 0): 'own' when it succeeds, 'other' when refused (EPERM: the PID runs as another user), 'gone' otherwise.
+ * A run's wrapper and child run as this user, so only 'own' can be one of our runs; 'other' is a reused PID.
+ */
+export function pidLiveness(pid: number, kill: (pid: number, signal: 0) => void = (p, signal) => process.kill(p, signal)): 'own' | 'other' | 'gone' {
+  try {
+    kill(pid, 0);
+    return 'own';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM' ? 'other' : 'gone';
+  }
+}
+
 export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -56,7 +69,7 @@ export function processStartTime(pid: number, ps: (pid: number) => string = runP
   } catch (err) {
     const e = err as { status?: number | null; signal?: string | null; stdout?: string };
     if (e.status === 1 && !e.signal && !String(e.stdout ?? '').trim()) return null;
-    return pidAlive(pid) ? 'unknown' : null;
+    return pidLiveness(pid) === 'own' ? 'unknown' : null;
   }
   if (!out) return null;
   const m = LSTART.exec(out);
@@ -87,30 +100,29 @@ export class Runner {
   }
 
   /**
-   * true: the PID is alive and started when we recorded; false: it is gone, or
-   * it now belongs to another process; null: only liveness is known, because no
+   * true: the PID is ours and started when we recorded; false: it is gone, or
+   * it now belongs to another process (another user's, which kill(pid, 0)
+   * refuses, included); null: it is ours but only that is known, because no
    * start time was recorded, the recorded one is in the earlier format (ps text
    * in that server's TZ and locale, which cannot be compared), or ps cannot
    * read the start now.
    */
   private identity(pid: number | null | undefined, startedAt: RunMeta['wrapperStartedAt']): boolean | null {
-    if (!pid || this.liveness(pid) === 'gone') return false;
+    if (!pid || !this.ours(pid)) return false;
     if (typeof startedAt !== 'number') return null;
     const now = this.procStart(pid);
-    // ps says "no such process" although the PID just answered: liveness alone decides, and only a kill(pid, 0) that
-    // succeeds counts. Our wrapper and child run as this user, so EPERM means the PID is now another user's process.
-    if (now === null) return this.liveness(pid) === 'own' ? null : false;
+    // ps says "no such process" although the PID just answered: it decides only if it is still ours now.
+    if (now === null) return this.ours(pid) ? null : false;
     return now === 'unknown' ? null : now === startedAt;
   }
 
-  /** kill(pid, 0): 'own' when it succeeds, 'other' when refused (EPERM: the PID runs as another user), 'gone' otherwise. */
   private liveness(pid: number): 'own' | 'other' | 'gone' {
-    try {
-      (this.opts.kill ?? ((p: number, signal: 0) => process.kill(p, signal)))(pid, 0);
-      return 'own';
-    } catch (err) {
-      return (err as NodeJS.ErrnoException).code === 'EPERM' ? 'other' : 'gone';
-    }
+    return pidLiveness(pid, this.opts.kill);
+  }
+
+  /** A process that can be one of our runs: kill(pid, 0) succeeds (a PID another user owns now is not ours). */
+  private ours(pid: number): boolean {
+    return this.liveness(pid) === 'own';
   }
 
   /** The start to record for a new PID: a number, or null when it cannot be read. */
@@ -166,8 +178,15 @@ export class Runner {
       } else if (wrapper !== false) {
         this.track(meta);
       } else {
-        const reused = Boolean(meta.wrapperPid && pidAlive(meta.wrapperPid));
-        this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error: reused ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone' : 'wrapper process disappeared without an exit record' });
+        // The PID still runs, as ours with another start or as another user's: reused, not just gone.
+        const now = meta.wrapperPid ? this.liveness(meta.wrapperPid) : 'gone';
+        const error =
+          now === 'other'
+            ? "the wrapper PID now belongs to another user's process; the run is gone"
+            : now === 'own'
+              ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone'
+              : 'wrapper process disappeared without an exit record';
+        this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
         this.dropInputs(meta);
         this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
       }
@@ -264,7 +283,7 @@ export class Runner {
         this.active.delete(meta.id);
         this.finalize(current, exit);
         this.pump();
-      } else if (current.wrapperPid && !pidAlive(current.wrapperPid)) {
+      } else if (current.wrapperPid && !this.ours(current.wrapperPid)) {
         clearInterval(timer);
         this.active.delete(meta.id);
         this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });

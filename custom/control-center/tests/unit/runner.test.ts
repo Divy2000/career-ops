@@ -323,6 +323,53 @@ describe('Runner', () => {
     }
   });
 
+  it('a PID that answers kill(pid, 0) only with EPERM is never our run, whatever its recorded start: reconcile marks the run lost as reused (EPERM review)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: ['tracker'], claude: true, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      // No start was recorded; after a reboot the PID belongs to a root process (kill(pid, 0) is refused).
+      store.write({ ...run, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: null });
+      const eperm = () => {
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      };
+      const runner = new Runner(root, new EventBus(), { pollMs: 50, kill: eperm });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(run.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/belongs to another user's process/) });
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('a tracked run whose wrapper PID turns into another user\'s process (kill answers EPERM) ends lost instead of running for good (EPERM review)', async () => {
+    let refused = false;
+    const kill = (pid: number, signal: 0) => {
+      if (refused) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      process.kill(pid, signal);
+    };
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50, kill });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '20000']));
+    await until(() => runner.store.read(meta.id)?.status === 'running');
+    refused = true;
+    try {
+      await until(() => runner.store.read(meta.id)?.status === 'lost');
+    } finally {
+      refused = false;
+      const pid = runner.store.read(meta.id)?.childPid;
+      if (pid) process.kill(-pid, 'SIGKILL');
+    }
+  });
+
+  it('when ps cannot answer, a PID that is not ours (pid 1, which kill refuses with EPERM) reads as gone, not unknown (EPERM review)', () => {
+    const noPs = () => {
+      throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });
+    };
+    expect(processStartTime(1, noPs)).toBeNull();
+  });
+
   it('when ps cannot answer, a live PID reads as unknown (kept) and a dead one as gone', () => {
     const noPs = () => {
       throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });
