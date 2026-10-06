@@ -70,8 +70,8 @@ describe('a slow extractor does not block other requests', () => {
   it('answers a concurrent request while an upload is being extracted', async () => {
     const started = Date.now();
     const upload = t.app.inject({ method: 'POST', url: '/api/projects/upload?name=slow.pdf', headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: makePdf(['x']) });
-    // Let the upload handler reach the extractor before the second request is made.
-    await new Promise((r) => setTimeout(r, 200));
+    // Wait until the extractor is running (the stub logs -layout as it starts) before the second request is made.
+    for (let i = 0; i < 100 && !(fs.existsSync(calls) && fs.readFileSync(calls, 'utf8').split('\n').includes('-layout')); i++) await new Promise((r) => setTimeout(r, 10));
     const list = await t.app.inject({ method: 'GET', url: '/api/projects', headers: t.authed });
     const listDone = Date.now() - started;
     const res = await upload;
@@ -84,12 +84,18 @@ describe('a slow extractor does not block other requests', () => {
   });
 
   it('probes for the extractor once and reuses it for later extractions', async () => {
-    const vCalls = () => fs.readFileSync(calls, 'utf8').split('\n').filter((l) => l === '-v').length;
-    const before = vCalls();
-    const res = await t.app.inject({ method: 'POST', url: '/api/projects/upload?name=again.pdf', headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: makePdf(['y']) });
+    const count = (flag: string) => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').split('\n').filter((l) => l === flag).length : 0);
+    const upload = (name: string) => t.app.inject({ method: 'POST', url: `/api/projects/upload?name=${name}`, headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: makePdf([name]) });
+    // An extraction of its own first, so the test holds alone and after the one above.
+    // The probe result is kept for the process: an earlier test file section may have probed already.
+    expect((await upload('first.pdf')).statusCode).toBe(200);
+    const probes = count('-v');
+    expect(probes).toBeLessThanOrEqual(1);
+    const layouts = count('-layout');
+    const res = await upload('again.pdf');
     expect(res.statusCode, res.body).toBe(200);
-    expect(vCalls()).toBe(before);
-    expect(fs.readFileSync(calls, 'utf8').split('\n').filter((l) => l === '-layout').length).toBe(2);
+    expect(count('-v')).toBe(probes);
+    expect(count('-layout')).toBe(layouts + 1);
   });
 });
 

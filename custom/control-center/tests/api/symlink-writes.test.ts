@@ -17,6 +17,9 @@ const get = (url: string) => t.app.inject({ method: 'GET', url, headers: t.authe
 const send = (method: 'PUT' | 'POST', url: string, payload: Record<string, unknown>, headers: Record<string, string | undefined> = {}) =>
   t.app.inject({ method, url, headers: { ...t.authedWrite, ...Object.fromEntries(Object.entries(headers).filter(([, v]) => typeof v === 'string')) as Record<string, string> }, payload });
 
+const PIPELINE_SEED = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/acme/123 | Acme Robotics | Senior Backend Engineer\n';
+const FOLLOWUPS_SEED = '# Follow-ups\n\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 1 | 2026-09-28 | Acme Robotics | Senior Backend Engineer | Email | Pat Example | first nudge |\n';
+
 /** Every writer that saves a user file through writeFileAtomic, with the file it writes and a request that makes it write. */
 const WRITERS: Array<{ name: string; rel: string; seed: string; write: () => Promise<{ statusCode: number; body: string }> }> = [
   {
@@ -67,6 +70,37 @@ const WRITERS: Array<{ name: string; rel: string; seed: string; write: () => Pro
     rel: 'data/pipeline.md',
     seed: '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/acme/123 | Acme Robotics | Senior Backend Engineer\n',
     write: async () => send('POST', '/api/pipeline/skip', { url: 'https://jobs.example.com/acme/123', done: true }),
+  },
+  // SW-tests-06: the pipeline adds write through scan.mjs, the follow-up edits through a child of their own.
+  {
+    name: 'POST /api/pipeline/add (pipeline.md)',
+    rel: 'data/pipeline.md',
+    seed: PIPELINE_SEED,
+    write: async () => send('POST', '/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/new/1', company: 'New Co', title: 'Platform Engineer' }] }),
+  },
+  {
+    name: 'POST /api/pipeline/add (scan-history.tsv)',
+    rel: 'data/scan-history.tsv',
+    seed: 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\n',
+    write: async () => send('POST', '/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/new/2', company: 'New Co', title: 'Platform Engineer' }] }),
+  },
+  {
+    name: 'POST /api/pipeline/urls',
+    rel: 'data/pipeline.md',
+    seed: PIPELINE_SEED,
+    write: async () => send('POST', '/api/pipeline/urls', { urls: ['https://jobs.example.com/new/3'] }),
+  },
+  {
+    name: 'POST /api/followups/log',
+    rel: 'data/follow-ups.md',
+    seed: FOLLOWUPS_SEED,
+    write: async () => send('POST', '/api/followups/log', { appNum: 1, date: '2026-10-04', channel: 'Email', contact: 'Pat', notes: 'nudged' }),
+  },
+  {
+    name: 'POST /api/followups/override',
+    rel: 'data/follow-ups.md',
+    seed: FOLLOWUPS_SEED,
+    write: async () => send('POST', '/api/followups/override', { appNum: 1, date: '2026-10-20' }),
   },
 ];
 

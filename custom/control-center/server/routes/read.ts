@@ -90,10 +90,12 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const statusLog = readStatusLog(tracker.path).filter((s) => s.num === n);
     const { normalizeTextKey } = await importCore<{ normalizeTextKey: NormalizeTextKey }>(cfg.codeRoot, 'tracker-parse.mjs');
     const key = normalizeTextKey(row.company, ' ');
-    const companyHistory = tracker.rows.filter((r) => r.num !== n && normalizeTextKey(r.company, ' ') === key);
+    // An unknown employer (the tracker's `?`) or a blank cell has an empty key: it names no company to match.
+    const sameCompany = (name: string) => key !== '' && normalizeTextKey(name, ' ') === key;
+    const companyHistory = tracker.rows.filter((r) => r.num !== n && sameCompany(r.company));
     const overview = await readImmigrationOverview(cfg.codeRoot, cfg.dataRoot);
-    const companyFile = overview.companies.find((c) => normalizeTextKey(c.name, ' ') === key) ?? null;
-    const alert = overview.alerts.latest.find((a) => normalizeTextKey(String(a.company ?? ''), ' ') === key) ?? null;
+    const companyFile = overview.companies.find((c) => sameCompany(c.name)) ?? null;
+    const alert = overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;
     return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert } };
   });
 

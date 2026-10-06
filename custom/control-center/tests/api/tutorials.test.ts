@@ -215,8 +215,8 @@ describe('GET /api/tutorials', () => {
   });
 
   it('requires the session cookie', async () => {
-    expect([401, 403]).toContain((await t.app.inject({ method: 'GET', url: '/api/tutorials', headers: { host: t.authed.host } })).statusCode);
-    expect([401, 403]).toContain((await t.app.inject({ method: 'GET', url: '/api/tutorials/demo/media/demo.mp4', headers: { host: t.authed.host } })).statusCode);
+    expect((await t.app.inject({ method: 'GET', url: '/api/tutorials', headers: { host: t.authed.host } })).statusCode).toBe(401);
+    expect((await t.app.inject({ method: 'GET', url: '/api/tutorials/demo/media/demo.mp4', headers: { host: t.authed.host } })).statusCode).toBe(401);
   });
 });
 
@@ -298,43 +298,44 @@ describe('GET /api/tutorials/:id/media/:file', () => {
 
   it('refuses file types the player never asks for, including the manifest itself', async () => {
     fs.writeFileSync(path.join(tutorialsDir(), 'demo', 'notes.txt'), 'x');
-    for (const file of ['tutorial.json', 'notes.txt']) expect([403, 404, 415]).toContain((await media('demo', file)).statusCode);
+    for (const file of ['tutorial.json', 'notes.txt']) expect((await media('demo', file)).statusCode, file).toBe(415);
   });
 
   describe('containment', () => {
-    const bad = (res: { statusCode: number; body: string }) => {
-      expect([400, 403, 404]).toContain(res.statusCode);
+    // 400: the name is refused before any lookup; 404: it resolves to nothing servable inside the folder.
+    const bad = (res: { statusCode: number; body: string }, status: 400 | 404) => {
+      expect(res.statusCode).toBe(status);
       expect(res.body).not.toContain(SECRET);
     };
 
     it.each([
-      ['a parent segment', '..%2Fsecret.mp4'],
-      ['an encoded dot-dot', '%2e%2e%2fsecret.mp4'],
-      ['a nested climb', 'sub%2F..%2F..%2Fsecret.mp4'],
-      ['a double-encoded climb', '..%252Fsecret.mp4'],
-      ['a backslash climb', '..%5Csecret.mp4'],
-      ['an absolute path', `${encodeURIComponent(path.join(os.tmpdir(), 'x.mp4'))}`],
-      ['an absolute path to a known file', encodeURIComponent('/etc/hosts')],
-      ['a NUL byte', 'demo.mp4%00.md'],
-      ['a bare dot-dot', '..'],
-    ])('refuses %s in the file name', async (_label, file) => {
-      bad(await get(`/api/tutorials/demo/media/${file}`));
+      ['a parent segment', '..%2Fsecret.mp4', 400],
+      ['an encoded dot-dot', '%2e%2e%2fsecret.mp4', 400],
+      ['a nested climb', 'sub%2F..%2F..%2Fsecret.mp4', 400],
+      ['a double-encoded climb', '..%252Fsecret.mp4', 404],
+      ['a backslash climb', '..%5Csecret.mp4', 400],
+      ['an absolute path', `${encodeURIComponent(path.join(os.tmpdir(), 'x.mp4'))}`, 400],
+      ['an absolute path to a known file', encodeURIComponent('/etc/hosts'), 400],
+      ['a NUL byte', 'demo.mp4%00.md', 400],
+      ['a bare dot-dot', '..', 404],
+    ] as const)('refuses %s in the file name', async (_label, file, status) => {
+      bad(await get(`/api/tutorials/demo/media/${file}`), status);
     });
 
     it.each([['a parent segment', '..%2Fdemo'], ['an absolute path', encodeURIComponent('/etc')], ['a NUL byte', 'demo%00'], ['a dot-dot', '..']])('refuses %s in the tutorial id', async (_label, id) => {
-      bad(await get(`/api/tutorials/${id}/media/demo.mp4`));
+      bad(await get(`/api/tutorials/${id}/media/demo.mp4`), 404);
     });
 
     it('refuses a symlinked file that points outside the tutorial folder', async () => {
-      bad(await media('demo', 'escape.mp4'));
+      bad(await media('demo', 'escape.mp4'), 404);
     });
 
     it('refuses a file reached through a symlinked directory', async () => {
-      bad(await get('/api/tutorials/demo/media/escape-dir%2Fsecret.mp4'));
+      bad(await get('/api/tutorials/demo/media/escape-dir%2Fsecret.mp4'), 400);
     });
 
     it('refuses a tutorial folder that is itself a symlink out of the tutorials folder', async () => {
-      bad(await media('linked', 'a.mp4'));
+      bad(await media('linked', 'a.mp4'), 404);
     });
   });
 });

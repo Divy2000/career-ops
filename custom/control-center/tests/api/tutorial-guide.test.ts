@@ -262,11 +262,11 @@ describe('guide media', () => {
 
   it('refuses a gif that is a symlink out of the tutorial folder', async () => {
     const res = await get('/api/tutorials/escape-gif/media/escape.gif');
-    expect([400, 403, 404]).toContain(res.statusCode);
+    expect(res.statusCode).toBe(404);
     expect(res.body).not.toContain(SECRET);
   });
 
   it('still refuses to serve guide.json itself', async () => {
-    expect([403, 404, 415]).toContain((await get('/api/tutorials/good/media/guide.json')).statusCode);
+    expect((await get('/api/tutorials/good/media/guide.json')).statusCode).toBe(415);
   });
 });

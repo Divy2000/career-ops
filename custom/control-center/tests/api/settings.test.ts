@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -31,7 +32,7 @@ describe('structured portals editor (ops through the yaml Document API)', () => 
       {
         ops: [
           { op: 'set', path: ['tracked_companies', 1, 'enabled'], value: false },
-          { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', ats: 'greenhouse', slug: 'umbrella', enabled: true } },
+          { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', careers_url: 'https://job-boards.greenhouse.io/umbrella', provider: 'greenhouse', enabled: true } },
           { op: 'set', path: ['max_posting_age_days'], value: 14 },
           { op: 'set', path: ['location_filter', 'strict'], value: true },
         ],
@@ -44,7 +45,8 @@ describe('structured portals editor (ops through the yaml Document API)', () => 
     expect(raw).toContain('name: Umbrella Corp');
     expect(raw).toContain('max_posting_age_days: 14');
     expect(raw).toContain('strict: true');
-    expect(raw).toMatch(/slug: northwind\n\s+enabled: false/);
+    // Northwind has no enabled key (upstream defaults it on): the op adds it.
+    expect(raw).toMatch(/provider: lever\n\s+enabled: false/);
     expect(res.json().etag).not.toBe(before.etag);
     const after = (await get('/api/config/portals')).json();
     expect(after.etag).toBe(res.json().etag);
@@ -224,6 +226,8 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(typeof res.json().nextFire).toBe('string');
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
+    // The weekly job installed and loaded, as the test above leaves it, so this test holds alone too.
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
     fake.calls.length = 0;
     const res = await send('PUT', '/api/schedule/com.career-ops.immigration-watch', { hour: 8, minute: 0, enabled: false });
     expect(res.statusCode, res.body).toBe(200);
@@ -262,7 +266,15 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(`<key>StandardOutPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.out.log')}</string>`);
     expect(xml).toContain(`<key>StandardErrorPath</key><string>${path.join(t.cfg.dataRoot, 'data', 'upstream-sync', 'launchd.err.log')}</string>`);
     expect(fs.statSync(path.join(t.cfg.dataRoot, 'data', 'upstream-sync')).isDirectory()).toBe(true);
-    expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string></dict>`);
+    expect(xml).toContain(`<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${t.cfg.dataRoot}</string><key>CC_NODE_BIN</key><string>${pinnedNodeBin()}</string></dict>`);
+  });
+
+  it('both plists pin the node the app runs on (CC_NODE_BIN): launchd\'s PATH never reaches an nvm or volta node (SW-scripts-03)', async () => {
+    for (const [label, weekday] of [['com.career-ops.immigration-watch', undefined], ['com.career-ops.upstream-sync', 0]] as const) {
+      const res = await send('PUT', `/api/schedule/${label}`, { hour: 3, minute: 0, weekday, enabled: true });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fs.readFileSync(path.join(t.cfg.launchAgentsDir, `${label}.plist`), 'utf8')).toContain(`<key>CC_NODE_BIN</key><string>${pinnedNodeBin()}</string>`);
+    }
   });
 
   it('the daily plist pins the claude the app runs (CC_CLAUDE_BIN), so launchd never picks another one on its own PATH', async () => {

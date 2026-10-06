@@ -188,6 +188,43 @@ describe('DELETE /api/projects/:id', () => {
   });
 });
 
+describe('an entry the form cannot save (SW-libs-04)', () => {
+  it('names the field and the rule: a bullet with a line break, a title over 300 characters, a tag over 60', async () => {
+    const before = await current();
+    const text = read();
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ title: 'Two lines', bullets: ['Built X', 'Built Y\nShipped Z'] }, /^bullet 2 must be one line$/],
+      [{ title: 'x'.repeat(301), bullets: ['One.'] }, /^title must be at most 300 characters$/],
+      [{ title: 'Tagged', tags: ['ok', 't'.repeat(61)], bullets: ['One.'] }, /^tag 2 must be at most 60 characters$/],
+    ];
+    for (const [entry, message] of cases) {
+      const res = await send('POST', '/api/projects', entry, before.etag);
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error).toMatch(message);
+      expect(res.json().issues.length).toBeGreaterThan(0);
+    }
+    expect(read()).toBe(text);
+  });
+});
+
+describe('projects that share an id (SW-libs-03)', () => {
+  it('Delete and Edit refuse an id two titles share (C# and C), name both and write nothing', async () => {
+    const original = read();
+    try {
+      fs.writeFileSync(file(), '# Projects\n\n## C# Compiler\n- Wrote a C# front end.\n\n---\n\n## C Compiler\n- Wrote a C back end.\n');
+      const before = await current();
+      const text = read();
+      for (const res of [await send('DELETE', '/api/projects/c-compiler', {}, before.etag), await send('PUT', '/api/projects/c-compiler', { title: 'C Compiler', bullets: ['Rewritten.'] }, before.etag)]) {
+        expect(res.statusCode, res.body).toBe(422);
+        expect(res.json().error).toMatch(/2 projects share the id "c-compiler" \(C# Compiler, C Compiler\); rename one/);
+      }
+      expect(read()).toBe(text);
+    } finally {
+      fs.writeFileSync(file(), original);
+    }
+  });
+});
+
 describe('POST /api/projects/validate and /convert', () => {
   it('validates library text without writing', async () => {
     const text = read();

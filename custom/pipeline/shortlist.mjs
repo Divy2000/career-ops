@@ -137,7 +137,17 @@ async function readPortals() {
 
 const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 
+const USAGE = `Usage: node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
+Writes data/shortlist.md from the ranked pending rows, scored with each company's DOL sponsorship tier.
+  --min-rank N   leave out rows ranked below N (default 3)
+  --top N        list at most N rows (default 40)
+`;
+
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    process.stdout.write(USAGE);
+    return;
+  }
   const minRank = arg('--min-rank', 3);
   const top = arg('--top', 40);
   const today = localToday();

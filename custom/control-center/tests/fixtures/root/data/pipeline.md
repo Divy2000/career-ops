@@ -11,6 +11,6 @@ Paste job URLs below as `- [ ] {url}` then run `/career-ops pipeline`.
 - [ ] https://careers.example.com/soylent/42 | Soylent Foods | Junior Data Analyst | Chicago, IL
 - not a checkbox line
 
-## Done
+## Processed
 
 - [x] https://jobs.example.com/oldcorp/1 | Old Corp | Engineer | Remote

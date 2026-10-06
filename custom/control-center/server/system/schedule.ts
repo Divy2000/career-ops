@@ -53,6 +53,37 @@ export interface ScheduleInput {
   enabled: boolean;
 }
 
+/**
+ * The node the jobs are pinned to (CC_NODE_BIN, which custom/launchd/pinned-node.sh puts first on the job's PATH), by
+ * the rule custom/launchd/install.sh uses: the first node on PATH (what `command -v node` finds) as written, such as
+ * /opt/homebrew/bin/node, which outlives an upgrade where the versioned binary it links to does not. It is the real
+ * binary (process.execPath) when that entry is relative, is an fnm per-shell link (fnm_multishells, gone with its
+ * shell), or does not resolve to the node that runs (a shim, another install).
+ */
+export function pinnedNodeBin(execPath: string = process.execPath, pathEnv: string = process.env.PATH ?? ''): string {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return null;
+    }
+  };
+  const self = real(execPath) ?? execPath;
+  const found = pathEnv
+    .split(path.delimiter)
+    .map((dir) => path.join(dir || '.', 'node'))
+    .find((candidate) => {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return fs.statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    });
+  const keep = found !== undefined && path.isAbsolute(found) && !found.includes('fnm_multishells') && real(found) === self;
+  return keep ? found : self;
+}
+
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /**
@@ -61,15 +92,17 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  * the job reads and writes the same data the app shows; its launchd logs go to
  * the data root too, where the log browser reads them. The daily job also gets
  * CC_CLAUDE_BIN, the absolute claude the app runs: launchd's own PATH could
- * otherwise reach another install (an old one in /usr/local/bin, say) first.
+ * otherwise reach another install (an old one in /usr/local/bin, say) first. Both jobs get CC_NODE_BIN, the node the
+ * app runs on: launchd's PATH has no nvm, fnm, volta or asdf node.
  */
-export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string, opts: { pinDataRoot?: boolean; claudeBin?: string } = {}): string {
+export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: number; minute: number; weekday: number | null }, dataRoot: string, opts: { pinDataRoot?: boolean; claudeBin?: string; nodeBin?: string } = {}): string {
   const root = esc(codeRoot);
   const logs = esc(path.join(dataRoot, job.logDir));
   const wd = t.weekday === null ? '' : `<key>Weekday</key><integer>${t.weekday}</integer>`;
   const vars = [
     ...(opts.pinDataRoot === false ? [] : [`<key>CAREER_OPS_ROOT</key><string>${esc(dataRoot)}</string>`]),
     ...(job.kind === 'daily' && opts.claudeBin && path.isAbsolute(opts.claudeBin) ? [`<key>CC_CLAUDE_BIN</key><string>${esc(opts.claudeBin)}</string>`] : []),
+    ...(opts.nodeBin && path.isAbsolute(opts.nodeBin) ? [`<key>CC_NODE_BIN</key><string>${esc(opts.nodeBin)}</string>`] : []),
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -125,7 +158,7 @@ interface PlistJson {
 
 export class ScheduleService {
   constructor(
-    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; dataRootFromEnv?: boolean; claudeBin?: string; now?: () => Date },
+    private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; dataRootFromEnv?: boolean; claudeBin?: string; nodeBin?: string; now?: () => Date },
   ) {}
 
   job(label: string): ScheduleJob | undefined {
@@ -192,7 +225,7 @@ export class ScheduleService {
     const plistPath = this.plistPath(job);
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv, claudeBin: this.deps.claudeBin }));
+    fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv, claudeBin: this.deps.claudeBin, nodeBin: this.deps.nodeBin }));
     // launchd does not create the log directory; without it the job's output is lost.
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);

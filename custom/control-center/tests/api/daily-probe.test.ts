@@ -25,9 +25,22 @@ afterEach(async () => {
   t = undefined;
 });
 
+/**
+ * The watcher's answer from a poll that started after this call (so after any pidfile the test wrote), not a fixed
+ * sleep's: the first poll to finish after now may have started before it, the one after that did not.
+ */
 async function dailyRunning(app: TestApp): Promise<boolean> {
-  await new Promise((r) => setTimeout(r, 150));
-  return (await app.app.inject({ method: 'GET', url: '/api/system/daily', headers: app.authed })).json().running;
+  const since = Date.now();
+  let first: string | null = null;
+  for (let i = 0; i < 200; i++) {
+    const status = (await app.app.inject({ method: 'GET', url: '/api/system/daily', headers: app.authed })).json() as { running: boolean; checkedAt: string | null };
+    if (status.checkedAt && Date.parse(status.checkedAt) > since) {
+      if (first === null) first = status.checkedAt;
+      else if (status.checkedAt !== first) return status.running;
+    }
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  throw new Error('the daily watcher did not poll twice');
 }
 
 describe('daily job detection', () => {
@@ -107,7 +120,8 @@ describe('the daily job probe on real processes', () => {
     expect(await probeOf(data).runningNow()).toBe(false);
   });
 
-  describe('the real run-daily.sh, typed with a relative path', () => {
+  // run-daily.sh re-execs itself under macOS's /usr/bin/lockf; on a host without it the script cannot hold its lock.
+  describe.skipIf(!fs.existsSync('/usr/bin/lockf'))('the real run-daily.sh, typed with a relative path (macOS: needs /usr/bin/lockf)', () => {
     // A checkout holding the real script and its data-root resolver, with a Keychain lookup that hangs: the job holds its
     // lock and has written its pidfile, and never gets to a step.
     function world() {

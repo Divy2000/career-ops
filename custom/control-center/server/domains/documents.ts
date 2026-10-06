@@ -75,6 +75,11 @@ export function companySlug(company: string): string {
   return company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+/** A file name naming the company as a whole word: "box" never matches cv-dropbox.pdf, "meta" never metabase. */
+function namesCompany(slug: string, file: string): boolean {
+  return Boolean(slug) && new RegExp(`(^|[^a-z0-9])${slug}([^a-z0-9]|$)`).test(path.basename(file).toLowerCase());
+}
+
 function exists(dataRoot: string, rel: string): boolean {
   try {
     return fs.statSync(path.join(dataRoot, rel)).isFile();
@@ -107,7 +112,7 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
   const outDir = path.join(dataRoot, 'output');
   if (slug && fs.existsSync(outDir)) {
     for (const name of fs.readdirSync(outDir)) {
-      if (!name.toLowerCase().endsWith('.pdf') || !name.toLowerCase().includes(slug)) continue;
+      if (!name.toLowerCase().endsWith('.pdf') || !namesCompany(slug, name)) continue;
       const rel = `output/${name}`;
       if (seen.has(rel)) continue;
       seen.add(rel);
@@ -119,7 +124,7 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
   for (const f of files) f.rerenderBlock = report !== null && f.html ? rerenderProblem(rows, report, f.html, f.path) : null;
   const jdsDir = path.join(dataRoot, 'jds');
   // With a report, only its own jds/NNN- captures: a company match would also list the JDs of the company's other reports.
-  const ownsJd = report === null ? (f: string) => Boolean(slug) && f.toLowerCase().includes(slug) : (f: string) => f.startsWith(`${String(report).padStart(3, '0')}-`);
+  const ownsJd = report === null ? (f: string) => namesCompany(slug, f) : (f: string) => f.startsWith(`${String(report).padStart(3, '0')}-`);
   const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter(ownsJd).map((f) => `jds/${f}`) : [];
   return { files, jds, indexPresent, report };
 }
@@ -196,8 +201,8 @@ export function readApplyDocuments(dataRoot: string, row: { report: number | nul
   const covers = files.filter((f) => COVER_TEXT.test(f) && artifactKindFromName(f) === 'cover');
   if (!row) return { pdfs, covers, suggestedPdf: null, suggestedCover: null };
   const slug = companySlug(row.company);
-  const namesCompany = (f: string) => Boolean(slug) && new RegExp(`(^|[^a-z0-9])${slug}([^a-z0-9]|$)`).test(path.basename(f).toLowerCase());
-  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? pdfs.find(namesCompany) ?? null, suggestedCover: covers.find(namesCompany) ?? null };
+  const named = (f: string) => namesCompany(slug, f);
+  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? pdfs.find(named) ?? null, suggestedCover: covers.find(named) ?? null };
 }
 
 /** The manifest's CV for the report (its last row is the newest), else the highest tailored version in the report's bundle. */

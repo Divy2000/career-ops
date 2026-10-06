@@ -1,5 +1,6 @@
 // Static action registry: the only way the client runs anything. Every entry
 // builds an argv array; the client never sends a command string.
+import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
@@ -155,9 +156,11 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: false,
-    params: z.object({ dryRun: z.boolean().default(false), verify: z.boolean().default(false), backfillUrls: z.boolean().default(false) }),
-    build: (p, ctx) => node(ctx, 'mergeTracker', [...flag(p.dryRun, '--dry-run'), ...flag(p.verify, '--verify'), ...flag(p.backfillUrls, '--backfill-urls')]),
+    params: z.object({ dryRun: z.boolean().default(false), verify: z.boolean().default(false) }),
+    build: (p, ctx) => node(ctx, 'mergeTracker', [...flag(p.dryRun, '--dry-run'), ...flag(p.verify, '--verify')]),
   }),
+  // merge-tracker.mjs --backfill-urls fills the URL column and exits before any merge or --verify, so it is its own action.
+  define({ id: 'tracker.backfillUrls', label: 'Backfill tracker URLs from reports', cost: 'free', resources: ['tracker'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'mergeTracker', ['--backfill-urls', ...flag(p.dryRun, '--dry-run')]) }),
   define({ id: 'tracker.reconcile', label: 'Reconcile pipeline with tracker', cost: 'free', resources: ['tracker', 'pipeline'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'reconcilePipeline', flag(p.dryRun, '--dry-run')) }),
   define({ id: 'tracker.syncCheck', label: 'Tracker sync check', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']) }),
   define({
@@ -443,7 +446,19 @@ export const ACTIONS: ActionDef[] = [
     params: z.object({ subject: z.string().max(500), from: z.string().max(300), body: z.string().min(1).max(50_000) }),
     build: (p, ctx) => node(ctx, 'pasteReply', ['--file', tmpFile(ctx, 'eml', `From: ${p.from.replace(/[\r\n]+/g, ' ')}\nSubject: ${p.subject.replace(/[\r\n]+/g, ' ')}\n\n${p.body}\n`)]),
   }),
-  define({ id: 'followups.replyWatch', label: 'Reply watch digest', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'replyWatch', []) }),
+  define({
+    id: 'followups.replyWatch',
+    label: 'Reply watch digest',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: none,
+    // reply-watch.mjs writes a set of mock emails to data/reply-candidates.json when the file is missing, and paste-reply
+    // only ever appends to it, so a digest before the first pasted reply would make them permanent.
+    check: (_p, ctx) => (fs.existsSync(path.join(ctx.dataRoot, 'data', 'reply-candidates.json')) ? null : 'No replies to review yet. Paste a reply first, then run the digest.'),
+    build: (_p, ctx) => node(ctx, 'replyWatch', []),
+  }),
   define({ id: 'followups.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),
   define({
     id: 'followups.contactsVcf',

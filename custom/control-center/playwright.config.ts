@@ -3,8 +3,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { e2eTempParent, writeDemoTutorials, writeEmptyRoot, writeStressRoot } from './tests/e2e/roots.js';
+import { dropCareerOpsOverrides } from './tests/helpers/env.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
+// The app servers get process.env too: a CAREER_OPS_TRACKER or _PIPELINE from the shell would outrank their data root.
+dropCareerOpsOverrides(process.env);
 
 // The e2e suite never touches the real data root: the fixture root is copied
 // into a fresh temp dir per Playwright invocation and handed to the app.

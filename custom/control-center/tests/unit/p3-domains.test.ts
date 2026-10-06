@@ -3,16 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
-import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
+import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, pinnedNodeBin, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
 import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings } from '../../server/domains/settings.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const PORTALS = `# Synthetic portals config for tests
 title_filter:
-  include:
+  positive:
     - backend # keep this comment
-  exclude:
+  negative:
     - intern
 
 location_filter:
@@ -22,8 +22,8 @@ location_filter:
 
 tracked_companies:
   - name: Acme Robotics
-    ats: greenhouse
-    slug: acme-robotics
+    careers_url: https://jobs.example.com/acme
+    provider: greenhouse
     enabled: true
 
 custom_unknown_key: # a key the editor does not know about
@@ -36,11 +36,11 @@ describe('applyYamlOps (yaml Document API)', () => {
   it('set, insert and delete keep comments and unknown keys intact', () => {
     const out = applyYamlOps(PORTALS, [
       { op: 'set', path: ['tracked_companies', 0, 'enabled'], value: false },
-      { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', ats: 'lever', slug: 'umbrella', enabled: true } },
+      { op: 'insert', path: ['tracked_companies'], value: { name: 'Umbrella Corp', careers_url: 'https://jobs.lever.co/umbrella', provider: 'lever', enabled: true } },
       { op: 'set', path: ['location_filter', 'strict'], value: true },
-      { op: 'insert', path: ['title_filter', 'include'], index: 0, value: 'platform' },
+      { op: 'insert', path: ['title_filter', 'positive'], index: 0, value: 'platform' },
       { op: 'set', path: ['max_posting_age_days'], value: 14 },
-      { op: 'delete', path: ['title_filter', 'exclude'] },
+      { op: 'delete', path: ['title_filter', 'negative'] },
     ]);
     expect(out.startsWith('# Synthetic portals config for tests')).toBe(true);
     expect(out).toContain('- backend # keep this comment');
@@ -51,7 +51,7 @@ describe('applyYamlOps (yaml Document API)', () => {
     expect(out).toContain('name: Umbrella Corp');
     expect(out).toContain('strict: true');
     expect(out).toContain('max_posting_age_days: 14');
-    expect(out).not.toContain('exclude');
+    expect(out).not.toContain('negative');
     expect(out.indexOf('- platform')).toBeLessThan(out.indexOf('- backend'));
   });
 
@@ -171,6 +171,57 @@ describe('launchd schedule helpers', () => {
     expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { pinDataRoot: false, claudeBin: '/Users/me/R&D <bin>/claude' })).toContain('<key>EnvironmentVariables</key><dict><key>CC_CLAUDE_BIN</key><string>/Users/me/R&amp;D &lt;bin&gt;/claude</string></dict>');
     expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { claudeBin: 'claude' })).not.toContain('CC_CLAUDE_BIN');
     expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { claudeBin: '/opt/homebrew/bin/claude' })).not.toContain('CC_CLAUDE_BIN');
+  });
+  it('pins both jobs to the absolute node the app runs on (CC_NODE_BIN), escaped and last, and never a bare name (SW-scripts-03)', () => {
+    expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { claudeBin: '/b/claude', nodeBin: '/Users/me/.nvm/versions/node/v22.6.0/bin/node' })).toContain(
+      '<key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>/data</string><key>CC_CLAUDE_BIN</key><string>/b/claude</string><key>CC_NODE_BIN</key><string>/Users/me/.nvm/versions/node/v22.6.0/bin/node</string></dict>',
+    );
+    expect(renderPlist('/code', SCHEDULE_JOBS[1]!, { hour: 3, minute: 0, weekday: 0 }, '/data', { pinDataRoot: false, nodeBin: '/R&D <n>/node' })).toContain('<key>EnvironmentVariables</key><dict><key>CC_NODE_BIN</key><string>/R&amp;D &lt;n&gt;/node</string></dict>');
+    expect(renderPlist('/code', SCHEDULE_JOBS[0]!, { hour: 8, minute: 0, weekday: null }, '/data', { nodeBin: 'node' })).not.toContain('CC_NODE_BIN');
+  });
+  describe('pinnedNodeBin: the node CC_NODE_BIN names', () => {
+    // process.execPath is the real binary (/opt/homebrew/Cellar/node/<version>/bin/node), which a Homebrew upgrade
+    // removes; the stable name is the link on PATH that leads to it.
+    function onPath(dirs: Record<string, string | null>): { pathEnv: string; dir: (k: string) => string } {
+      const root = tempDir('cc-node-pin-');
+      const dir = (k: string) => path.join(root, k);
+      for (const [k, target] of Object.entries(dirs)) {
+        fs.mkdirSync(dir(k), { recursive: true });
+        if (target) fs.symlinkSync(target, path.join(dir(k), 'node'));
+      }
+      return { pathEnv: Object.keys(dirs).map(dir).join(path.delimiter), dir };
+    }
+    const real = fs.realpathSync(process.execPath);
+
+    it('keeps a package manager\'s stable link on PATH (Homebrew\'s /opt/homebrew/bin/node) as given, so an upgrade cannot stale the pin', () => {
+      const { pathEnv, dir } = onPath({ 'homebrew/bin': process.execPath });
+      expect(pinnedNodeBin(real, pathEnv)).toBe(path.join(dir('homebrew/bin'), 'node'));
+    });
+
+    it('resolves a per-shell link (fnm\'s multishell folders, gone after logout) to the real binary', () => {
+      const { pathEnv } = onPath({ 'fnm_multishells/1234_5678/bin': process.execPath });
+      expect(pinnedNodeBin(real, pathEnv)).toBe(real);
+    });
+
+    it('looks only at the first node on PATH, as install.sh\'s `command -v node` does: one that is another binary (a shim) pins the real binary', () => {
+      const other = tempDir('cc-node-other-');
+      fs.writeFileSync(path.join(other, 'node'), '#!/bin/sh\n', { mode: 0o755 });
+      const shimFirst = onPath({ shim: path.join(other, 'node'), 'homebrew/bin': process.execPath });
+      expect(pinnedNodeBin(real, shimFirst.pathEnv)).toBe(real);
+      // A folder with no node is passed over, like command -v does.
+      const gapFirst = onPath({ empty: null, 'homebrew/bin': process.execPath });
+      expect(pinnedNodeBin(real, gapFirst.pathEnv)).toBe(path.join(gapFirst.dir('homebrew/bin'), 'node'));
+    });
+
+    it('pins the real binary when no node is on PATH, or the first one is reached through a relative entry', () => {
+      expect(pinnedNodeBin(real, onPath({ empty: null }).pathEnv)).toBe(real);
+      // A relative entry (node_modules/.bin, say) found first, written relative to the current folder.
+      const rel = tempDir('cc-node-rel-');
+      fs.symlinkSync(process.execPath, path.join(rel, 'node'));
+      const relative = path.relative(process.cwd(), rel);
+      expect(path.isAbsolute(relative)).toBe(false);
+      expect(pinnedNodeBin(real, `${relative}${path.delimiter}${onPath({ 'homebrew/bin': process.execPath }).pathEnv}`)).toBe(real);
+    });
   });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
     const out = 'disabled services = {\n\t"com.apple.Siri.agent" => enabled\n\t"com.career-ops.immigration-watch" => disabled\n\t"com.career-ops.upstream-sync" => false\n\t"com.old.style" => true\n}\n';

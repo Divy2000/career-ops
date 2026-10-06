@@ -5,20 +5,24 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { rootEnv } from './root-env.mjs';
+import { formatRankSegment } from '../../../rank-pipeline.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
 import { localToday } from '../../../lib/local-today.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHORTLIST = path.join(REPO, 'custom', 'pipeline', 'shortlist.mjs');
+// A row rank-pipeline.mjs ranked 1.0, below the default --min-rank 3, in the writer's own format (an em dash before the reason).
+const LOW_RANKED = `- [ ] https://jobs.example.com/1 | Low Co | Data Analyst | Remote | ${formatRankSegment(1.0, 'weak fit')}`;
 
 test('the shortlist is dated by the local day, also when the UTC date is already another day', () => {
   const { zone, localToday } = zoneOffUtcDay();
   const root = tempDir('shortlist-');
   fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
   // Ranked below the cut, so no sponsorship lookup runs.
-  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Low Co | Data Analyst | Remote | rank: 1.0/5 - weak fit\n');
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, TZ: zone, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { TZ: zone }), encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8').split('\n')[0], `# Shortlist - ${localToday}`);
 });
@@ -26,9 +30,9 @@ test('the shortlist is dated by the local day, also when the UTC date is already
 test('the shortlist is written on a root with no data/immigration folder (the daily job never ran)', () => {
   const root = tempDir('shortlist-');
   fs.mkdirSync(path.join(root, 'data'));
-  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Low Co | Data Analyst | Remote | rank: 1.0/5 - weak fit\n');
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
 });
@@ -37,7 +41,7 @@ test('the shortlist is written, empty, on a root with no data/pipeline.md yet (a
   const root = tempDir('shortlist-');
   fs.mkdirSync(path.join(root, 'data'));
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /shortlist: 0 kept, 0 excluded/);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^Ranked rows with rank >= 3: 0\./m);
@@ -50,7 +54,7 @@ test('URL-only pipeline rows each get a shortlist row whose link reads as the UR
   const urls = ['https://jobs.example.com/1', 'https://jobs.example.com/2', 'https://jobs.example.com/3'];
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${urls.map((u) => `- [ ] ${u} | rank: 4.0/5 — fit`).join('\n')}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stderr);
   const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
   for (const u of urls) assert.ok(md.includes(`[${u}](${u})`), `${u} in\n${md}`);
@@ -72,7 +76,7 @@ test('a paused sponsor is excluded whatever slug the alert row carries, keyed by
     path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
     `date\tcompany\tslug\tstatus\theadline\turl\n${companies.map((c, i) => `2026-09-29\t${c}\t${slugs[i]}\tpaused\t${c} pauses sponsorship\thttps://news.example/${i}`).join('\n')}\n`,
   );
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /shortlist: 0 kept, 5 excluded/);
 });
@@ -85,10 +89,33 @@ for (const [what, write] of [
   test(`the shortlist is written with no title negatives on a root with ${what} (R8-13)`, () => {
     const root = tempDir('shortlist-');
     fs.mkdirSync(path.join(root, 'data'));
-    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Low Co | Data Analyst | Remote | rank: 1.0/5 - weak fit\n');
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
     write(root);
-    const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+    const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
   });
 }
+
+test('--help prints the usage and touches nothing: no lookups, no shortlist, no tier cache (SW-libs-05)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Data Analyst | Remote\n';
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
+  const r = spawnSync(process.execPath, [SHORTLIST, '--help'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Usage: node custom\/pipeline\/shortlist\.mjs \[--min-rank 3\] \[--top 40\]/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+});
+
+test('the low-ranked fixture row reads as ranked, so the tests above cover the --min-rank cut, not an unranked row (SW-tests-16)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  // A fresh tier cache entry, so the run looks nothing up.
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Low Co': { tier: 'strong', matched: 'Low Co', checked: localToday() } }));
+  const r = spawnSync(process.execPath, [SHORTLIST, '--min-rank', '1'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /Ranked rows with rank >= 1: 1\./);
+});

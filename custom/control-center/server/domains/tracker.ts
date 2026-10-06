@@ -53,7 +53,8 @@ export function postedFromNotes(notes: string): string | null {
 
 export function pdfPresent(cell: string): boolean {
   const v = cell.trim();
-  return v !== '' && v !== '-' && v !== String.fromCharCode(0x2014) && !/^(no|pending|n\/a)$/i.test(v);
+  // merge-tracker.mjs writes ❌ for "no PDF yet" (and flips it to ✅ when one is generated).
+  return v !== '' && v !== '-' && v !== String.fromCharCode(0x2014) && v !== '❌' && !/^(no|pending|n\/a)$/i.test(v);
 }
 
 export async function readTracker(codeRoot: string, dataRoot: string): Promise<TrackerRead> {

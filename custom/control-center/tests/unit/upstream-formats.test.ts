@@ -7,7 +7,7 @@ import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { readShortlist } from '../../server/domains/shortlist.js';
 import { parseReport } from '../../server/domains/reports.js';
-import { readInterviews } from '../../server/domains/contacts.js';
+import { parseContacts, readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
 import { parsePipeline, readScanHistory } from '../../server/domains/pipeline.js';
 import { activePin, parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
@@ -45,6 +45,26 @@ describe('custom/pipeline/shortlist.mjs output', () => {
     expect(s.rows.map((row) => row.company)).toEqual(['Acme Robotics']);
     expect(s.excluded).toEqual([
       { company: 'Initech Cloud', role: 'Backend Engineer II', url: 'https://jobs.example.com/initech/9', alert: 'paused', date: '2026-09-29', headline: 'Initech pauses visa sponsorship' },
+    ]);
+  });
+});
+
+describe('custom/pipeline/shortlist.mjs sponsor label (SW-libs-07)', () => {
+  it('splits a shortlisted company\'s DOL tier from its non-blocking alert note, so the tier keeps its color', () => {
+    const root = tempDir('cc-shortlist-contract-');
+    const today = localDate();
+    fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/acme/1 | Acme Robotics | Platform Engineer | Remote | ${rankCell('4.0', 'good fit')}\n- [ ] https://jobs.example.com/globex/2 | Globex Payments | Backend Engineer | Remote | ${rankCell('3.8', 'fit')}\n`);
+    fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+    fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Acme Robotics': { tier: 'strong', matched: 'X', checked: today }, 'Globex Payments': { tier: 'moderate', matched: 'Y', checked: today } }));
+    fs.writeFileSync(path.join(root, 'data', 'immigration', 'company-alerts.tsv'), `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme Robotics\tacme-robotics\tresumed\tAcme resumes sponsorship\thttps://news.example/2\n`);
+    const r = spawnSync(process.execPath, [path.join(DEFAULT_CODE_ROOT, 'custom', 'pipeline', 'shortlist.mjs')], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const s = readShortlist(root);
+    if (s.kind !== 'ok') throw new Error(s.kind);
+    expect(s.rows.map((row) => [row.company, row.sponsor, row.sponsorTier, row.sponsorNote])).toEqual([
+      ['Acme Robotics', 'strong; resumed 2026-10-01', 'strong', 'resumed 2026-10-01'],
+      ['Globex Payments', 'moderate', 'moderate', null],
     ]);
   });
 });
@@ -303,5 +323,22 @@ process.stdout.write(JSON.stringify([...m.parseNextOverrides(${JSON.stringify(te
     const cadence = JSON.parse(r.stdout) as unknown[];
     expect(cadence).toContainEqual({ appNum: 1, date: '2026-10-20', setOn: '2026-10-05' });
     expect([...parseNextOverrides(text).values()]).toEqual(cadence);
+  });
+});
+
+describe('data/contacts.tsv (contact-extract.mjs appendContact, read back like contacts.mjs parseContacts)', () => {
+  it('shows a cell the writer formula-escaped as it was typed, folds a stray tab back into the notes and skips a short row (SW-server-04)', async () => {
+    const file = path.join(tempDir('cc-contacts-contract-'), 'contacts.tsv');
+    const { appendContact } = (await import(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'contact-extract.mjs')).href)) as { appendContact: (c: Record<string, string>, p: string) => Promise<number> };
+    await appendContact({ name: 'Pat Example', company: 'Acme Robotics', type: 'recruiter', title: '-Lead recruiter', phone: '+49 123', email: 'pat@acme.example', linkedin: '', tracker: '1', notes: '=friendly' }, file);
+    const written = fs.readFileSync(file, 'utf8');
+    expect(written).toContain("\t'+49 123\t");
+    fs.appendFileSync(file, 'Sam Other\tGlobex Payments\tpeer\tEngineer\t-\t-\t-\t-\tmet at meetup\tasked about visas\nShort\tRow\n');
+    const { rows, skipped } = parseContacts(fs.readFileSync(file, 'utf8'));
+    expect(rows.map((r) => [r.name, r.title, r.phone, r.notes])).toEqual([
+      ['Pat Example', '-Lead recruiter', '+49 123', '=friendly'],
+      ['Sam Other', 'Engineer', '', 'met at meetup asked about visas'],
+    ]);
+    expect(skipped).toBe(1);
   });
 });

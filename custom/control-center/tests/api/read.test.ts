@@ -41,6 +41,24 @@ describe('read endpoints', () => {
     expect(body.companyHistory).toEqual([]);
   });
 
+  it('GET /api/tracker/:n gives an unknown-employer (?) row no company history, company file or alert (SW-server-05)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.appendFileSync(
+        path.join(own.cfg.dataRoot, 'data', 'applications.md'),
+        '| 7 | 2026-10-01 | ? | Hays | Recruiter role | 3.0/5 | Applied | ❌ | - | agency, employer not named |\n| 8 | 2026-10-02 | ? | Randstad | Data role | 3.1/5 | Applied | ❌ | - | agency |\n',
+      );
+      const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json();
+      expect(body.row.company).toBe('?');
+      expect(body.companyHistory).toEqual([]);
+      expect(body.sponsorship).toEqual({ companyFile: null, alert: null });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n distinguishes a row without a report and rejects bad numbers', async () => {
     expect((await get('/api/tracker/5')).json().report).toEqual({ kind: 'none' });
     expect((await get('/api/tracker/99')).statusCode).toBe(404);
@@ -50,9 +68,26 @@ describe('read endpoints', () => {
   it('GET /api/pipeline, /api/shortlist and /api/whats-new read the fixtures', async () => {
     expect((await get('/api/pipeline')).json().rows).toHaveLength(6);
     expect((await get('/api/shortlist')).json().rows).toHaveLength(3);
-    const fresh = (await get('/api/whats-new?days=30&limit=5')).json();
-    expect(fresh.count).toBeGreaterThanOrEqual(0);
-    expect(Array.isArray(fresh.offers)).toBe(true);
+  });
+
+  it('GET /api/whats-new lists the scanner\'s added, not yet evaluated rows inside the day window, newest first, up to the limit', async () => {
+    // vitest runs in America/Los_Angeles; the fixture's scan history was written as of 2026-10-05.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 9, 5, 12, 0));
+      const week = (await get('/api/whats-new?days=7&limit=5')).json();
+      // Northwind and Acme are in the tracker, Hooli was skipped, and not-a-url is no posting.
+      expect(week.count).toBe(2);
+      expect(week.offers.map((o: { company: string; firstSeen: string; postedAt: string }) => [o.company, o.firstSeen, o.postedAt])).toEqual([
+        ['Pied Piper', '2026-10-03', ''],
+        ['Soylent Foods', '2026-10-02', '2026-10-02'],
+      ]);
+      expect((await get('/api/whats-new?days=7&limit=1')).json()).toMatchObject({ count: 2, offers: [{ company: 'Pied Piper' }] });
+      expect((await get('/api/whats-new?days=3')).json().offers.map((o: { company: string }) => o.company)).toEqual(['Pied Piper']);
+      expect((await get('/api/whats-new?days=2')).json()).toEqual({ offers: [], count: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('GET /api/immigration/overview and a company file with its freshness verdict', async () => {
