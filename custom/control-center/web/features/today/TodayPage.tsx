@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
+import { useFollowups, useImmigration, useShortlist, useTracker, useUserFile, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
@@ -136,8 +136,12 @@ export function TodayPage() {
   const tracker = useTracker();
   const followups = useFollowups();
   const fresh = useWhatsNew(7, 6);
+  // A new user who already has cv.md (onboarding writes it) is pointed at the next step, not at importing a CV.
+  const cv = useUserFile('cv');
   const today = localDate();
   const trackerEmpty = tracker.data?.kind === 'missing' || (tracker.data?.kind === 'ok' && tracker.data.rows.length === 0);
+  // Only a CV on disk moves past the first step: a missing, blank or unreadable cv.md (a 502 mid-restart) asks for one.
+  const hasCv = cv.data?.kind === 'ok' && cv.data.text.trim() !== '';
 
   return (
     <section aria-labelledby="page-title">
@@ -152,12 +156,21 @@ export function TodayPage() {
 
       <QuickEvaluate />
 
-      {trackerEmpty && (
+      {trackerEmpty && !cv.isPending && !hasCv && (
         <div className="card hero">
           <h2>Start with your CV</h2>
           <p className="muted">No applications yet. Import your CV on the Profile & CV page, then run a free scan to seed matches.</p>
           <Link to="/profile" className="button-link">
             Go to Profile & CV
+          </Link>
+        </div>
+      )}
+      {trackerEmpty && hasCv && (
+        <div className="card hero">
+          <h2>Find your first matches</h2>
+          <p className="muted">No applications yet. Run a free scan from Discover to seed matches, or paste a posting into Quick evaluate above.</p>
+          <Link to="/discover" className="button-link">
+            Go to Discover
           </Link>
         </div>
       )}

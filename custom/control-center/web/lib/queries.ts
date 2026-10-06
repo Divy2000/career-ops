@@ -26,3 +26,14 @@ export const useFollowups = () => useQuery({ queryKey: ['followups'], queryFn: (
 export const useDashboard = () => useQuery({ queryKey: ['insights', 'dashboard'], queryFn: () => apiGet<DashboardRead>('/api/insights/dashboard') });
 export const useScheduleLogs = () => useQuery({ queryKey: ['immigration', 'logs'], queryFn: () => apiGet<ScheduleLogs>('/api/schedule/logs') });
 export const useTutorials = () => useQuery({ queryKey: ['tutorials'], queryFn: () => apiGet<TutorialsRead>('/api/tutorials') });
+
+/** A user-layer file (cv.md, the house rules, the story bank) as GET /api/files/user/:key reads it. */
+export interface UserFile {
+  key: string;
+  path: string;
+  kind: 'ok' | 'missing';
+  text: string;
+  etag: string | null;
+}
+
+export const useUserFile = (key: string) => useQuery({ queryKey: ['config', 'user-file', key], queryFn: () => apiGet<UserFile>(`/api/files/user/${key}`) });

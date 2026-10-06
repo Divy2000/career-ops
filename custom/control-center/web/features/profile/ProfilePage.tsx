@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { SessionPanel } from '../../components/SessionPanel';
 import { ModeLauncher } from '../../components/ModeLauncher';
@@ -9,14 +9,8 @@ import { describeError } from '../../lib/actions';
 import { ProjectsLibrary } from './ProjectsLibrary';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { UnsavedProvider, useGuardedTab, useUnsaved } from '../../lib/unsaved';
+import { useUserFile, type UserFile } from '../../lib/queries';
 
-interface UserFile {
-  key: string;
-  path: string;
-  kind: 'ok' | 'missing';
-  text: string;
-  etag: string | null;
-}
 
 /** Raw editors under "More files"; cv.md has its own tab and article-digest.md its Projects tab (raw text here too). */
 const USER_FILE_KEYS: Array<{ key: string; label: string }> = [
@@ -38,9 +32,6 @@ const AI_FLOWS = [
   { id: 'project', label: 'Evaluate a project', prompt: 'Evaluate this project idea for my goals: ' },
 ];
 
-function useUserFile(key: string) {
-  return useQuery({ queryKey: ['config', 'user-file', key], queryFn: () => apiGet<UserFile>(`/api/files/user/${key}`) });
-}
 
 /**
  * Plain textarea editor with ETag save. It saves against the version the draft was made on, so a change on disk
