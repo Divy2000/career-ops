@@ -69,9 +69,14 @@ test.describe('auto follows the OS', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
     expect(await attrs(page)).toEqual({ theme: 'light', mode: 'light', scheme: 'light' });
     expect(await activeThemeColor(page)).toBe('#fbfcfe');
+    // The OS flips to light and back to dark: the change is seen by the page (and its listeners have had two frames to
+    // run) before the theme is checked, so an app that followed the OS would fail here (SW3-tests-08).
     await page.emulateMedia({ colorScheme: 'light' });
+    await expect.poll(() => page.evaluate(() => matchMedia('(prefers-color-scheme: light)').matches)).toBe(true);
     await page.emulateMedia({ colorScheme: 'dark' });
-    expect((await attrs(page)).theme).toBe('light');
+    await expect.poll(() => page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches)).toBe(true);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    expect(await attrs(page)).toEqual({ theme: 'light', mode: 'light', scheme: 'light' });
     await ctx.close();
   });
 });
