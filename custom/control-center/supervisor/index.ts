@@ -22,6 +22,7 @@ import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
 import { serverChildCommand } from './child-command.js';
 import { escapeHtml, renderDownPage, stripAnsi } from './down-page.js';
+import { RECOVERY_SCRIPT } from './recovery-script.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -138,28 +139,6 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
-/**
- * The recovery page's only script: it submits the revert and restart forms with
- * fetch so the POST carries X-CC (a plain form cannot), and shows a refusal
- * instead of navigating. The CSP allows exactly this script by its hash.
- */
-const RECOVERY_SCRIPT = `const LABELS = new Map([['revert', ['Reverting...', 'Revert refused: ', 'Revert failed: ']], ['restart', ['Restarting the server...', 'Restart failed: ', 'Restart failed: ']]]);
-document.addEventListener('submit', async (e) => {
-  const form = e.target;
-  const labels = form instanceof HTMLFormElement ? LABELS.get(form.dataset.cc) : undefined;
-  if (!labels) return;
-  e.preventDefault();
-  const out = document.getElementById('revert-status');
-  out.textContent = labels[0];
-  try {
-    const res = await fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { 'X-CC': '1', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(form)).toString() });
-    const text = await res.text();
-    if (res.ok) location.reload();
-    else out.textContent = labels[1] + text;
-  } catch (err) {
-    out.textContent = labels[2] + err.message;
-  }
-});`;
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
@@ -189,9 +168,10 @@ h1{font-size:22px}h2{font-size:16px;margin-top:32px}h3{font-size:14px}a{color:va
 pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px}
 .s{color:var(--text-muted)}button{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);border-radius:6px;padding:4px 10px;min-height:32px;cursor:pointer}
 form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:12px}
+#revert-status{margin:12px 0}#revert-status details{margin-top:6px}#revert-status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}
 </style></head><body><h1>Control Center recovery</h1>
 <p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
-<p id="revert-status" role="alert"></p>
+<div id="revert-status" role="alert"></div>
 <div class="status"><strong>Server reload status</strong><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
 ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 <script>${RECOVERY_SCRIPT}</script>
