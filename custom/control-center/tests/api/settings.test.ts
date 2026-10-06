@@ -173,6 +173,25 @@ describe('plugins', () => {
     expect(res.json().plugins.some((p: { id: string }) => p.id === '_template')).toBe(false);
     expect(res.json().config.kind).toBe('missing');
   });
+  it('refuses a plugin toggle sent with a stale ETag: 409 with the current version, and config/plugins.yml unchanged (SW2-tests-22)', async () => {
+    const stale = (await get('/api/plugins')).json().config.etag as string | null;
+    const file = path.join(t.cfg.dataRoot, 'config', 'plugins.yml');
+    const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      // Another writer (the CLI's plugins.mjs enable, a session) changes the file after the page loaded it.
+      fs.writeFileSync(file, 'plugins:\n  gmail:\n    enabled: true\n');
+      const before = fs.readFileSync(file, 'utf8');
+      const res = await send('PUT', '/api/config/plugins/gmail', { enabled: false }, stale === null ? { 'if-match': '"stale"' } : { 'if-match': stale });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'config/plugins.yml changed since you loaded it', current: { raw: before } });
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      if (original === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, original);
+    }
+  });
+
   it('enables a plugin by writing config/plugins.yml and rejects unknown ids', async () => {
     const res = await send('PUT', '/api/config/plugins/gmail', { enabled: true });
     expect(res.statusCode, res.body).toBe(200);
