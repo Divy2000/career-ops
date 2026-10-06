@@ -13,13 +13,14 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
 import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates } from './preflight.js';
 import { BlueGreen, type ChildHandle } from './bluegreen.js';
-import { guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
+import { devChatChangesRecorded, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
 import { watchCoreGraph } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
+import { escapeHtml, renderDownPage } from './down-page.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -133,28 +134,26 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
-}
-
 /**
- * The recovery page's only script: it submits the revert forms with fetch so the
- * POST carries X-CC (a plain form cannot), and shows a refusal instead of
- * navigating. The CSP allows exactly this script by its hash.
+ * The recovery page's only script: it submits the revert and restart forms with
+ * fetch so the POST carries X-CC (a plain form cannot), and shows a refusal
+ * instead of navigating. The CSP allows exactly this script by its hash.
  */
-const RECOVERY_SCRIPT = `document.addEventListener('submit', async (e) => {
+const RECOVERY_SCRIPT = `const LABELS = new Map([['revert', ['Reverting...', 'Revert refused: ', 'Revert failed: ']], ['restart', ['Restarting the server...', 'Restart failed: ', 'Restart failed: ']]]);
+document.addEventListener('submit', async (e) => {
   const form = e.target;
-  if (!(form instanceof HTMLFormElement) || form.dataset.cc !== 'revert') return;
+  const labels = form instanceof HTMLFormElement ? LABELS.get(form.dataset.cc) : undefined;
+  if (!labels) return;
   e.preventDefault();
   const out = document.getElementById('revert-status');
-  out.textContent = 'Reverting...';
+  out.textContent = labels[0];
   try {
     const res = await fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { 'X-CC': '1', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(form)).toString() });
     const text = await res.text();
     if (res.ok) location.reload();
-    else out.textContent = 'Revert refused: ' + text;
+    else out.textContent = labels[1] + text;
   } catch (err) {
-    out.textContent = 'Revert failed: ' + err.message;
+    out.textContent = labels[2] + err.message;
   }
 });`;
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
@@ -189,7 +188,7 @@ form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:var(--
 </style></head><body><h1>Control Center recovery</h1>
 <p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
 <p id="revert-status" role="alert"></p>
-<div class="status"><strong>Server reload status</strong><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre></div>
+<div class="status"><strong>Server reload status</strong><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
 ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 <script>${RECOVERY_SCRIPT}</script>
 </body></html>`;
@@ -245,7 +244,10 @@ async function main(): Promise<void> {
     startError = { error: (err as Error).message, stderrTail: first?.stderrTail() ?? '' };
     first?.kill();
     first = null;
-    console.error(`[supervisor] the server child could not start: ${startError.error}\nOnly /__recovery is served until a reload brings the server up (a revert there, or a fix under server/ or shared/).`);
+    console.error(`[supervisor] the server child could not start: ${startError.error}`);
+    // Without reloads nothing could bring the server up again, so stop as before.
+    if (process.env.CC_NO_RELOAD) process.exit(1);
+    console.error('Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).');
   }
   const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
   if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
@@ -319,6 +321,19 @@ async function main(): Promise<void> {
       res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(r.text);
       return true;
     }
+    if (url.pathname === '/__recovery/restart' && req.method === 'POST') {
+      if (!recoveryRequestAllowed(req.headers, PORT)) {
+        res.writeHead(403, { 'content-type': 'text/plain' }).end('cross-origin request refused');
+        return true;
+      }
+      // A blue/green reload: with no server running (a first start that failed) the new one takes over at once.
+      const started = await bg.reload();
+      const s = bg.status;
+      // A reload queued behind this one may already be running, so the status no longer holds this failure.
+      const text = started ? 'the server started' : `the server still does not start: ${s.state === 'failed' ? s.error : 'another restart is under way'}`;
+      res.writeHead(started ? 200 : 502, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(text);
+      return true;
+    }
     res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
     return true;
   };
@@ -334,7 +349,9 @@ async function main(): Promise<void> {
       if (handled) return;
       const active = bg.active;
       if (!active) {
-        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center is not running</title><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:32px;max-width:640px}a{color:var(--accent)}</style></head><body><h1>The Control Center server could not start</h1><p>The last change to its code broke it. <a href="/__recovery">Open the recovery page</a> to revert the Dev Chat turn that made it; the app comes back by itself once the server starts.</p></body></html>`);
+        const signedIn = hostOk(req) && authed(req, new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`));
+        const html = renderDownPage(bg.status, signedIn ? { devChatChanged: devChatChangesRecorded(sessionsDir, guardRoot) } : null);
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(html);
         return;
       }
       const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {

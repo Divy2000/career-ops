@@ -368,6 +368,11 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
   }
 }
 
+/** Whether any Dev Chat turn recorded a changed file: only then can a server that will not start be blamed on one. */
+export function devChatChangesRecorded(sessionsDir: string, guardRoot: string): boolean {
+  return listDevSessions(sessionsDir).some((meta) => changesByTurn(guardSessionDir(guardRoot, meta.id), meta).some((t) => t.records.length > 0));
+}
+
 /** Dev Chat sessions on disk, newest first, for the recovery page. */
 export function listDevSessions(sessionsDir: string): Array<MetaLike & { createdAt: string; status: string }> {
   let names: string[];

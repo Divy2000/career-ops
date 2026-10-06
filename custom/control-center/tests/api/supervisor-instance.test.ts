@@ -29,7 +29,7 @@ interface Started {
 }
 
 /** A real supervisor (and its server child) on a temp data root, hermetic like the e2e servers. */
-function startSupervisor(port: number, dataRoot: string, opts: { packageRoot?: string; reload?: boolean } = {}): Started {
+function startSupervisor(port: number, dataRoot: string, opts: { packageRoot?: string; reload?: boolean; guardRoot?: string; env?: NodeJS.ProcessEnv } = {}): Started {
   const pkg = opts.packageRoot ?? PACKAGE_ROOT;
   const proc = spawn(TSX, [path.join(pkg, 'supervisor', 'index.ts')], {
     cwd: pkg,
@@ -39,7 +39,7 @@ function startSupervisor(port: number, dataRoot: string, opts: { packageRoot?: s
       CC_PORT: String(port),
       CC_TOKEN: 'supervisor-instance-test-token',
       CC_DATA_ROOT: dataRoot,
-      CC_GUARD_DIR: tempDir('cc-sup-guard-'),
+      CC_GUARD_DIR: opts.guardRoot ?? tempDir('cc-sup-guard-'),
       CC_CLAUDE_BIN: FAKE_CLAUDE,
       CC_FAKE_TOKEN: 'supervisor-instance-fake-token',
       CC_FAKE_LAUNCHD: '1',
@@ -52,6 +52,7 @@ function startSupervisor(port: number, dataRoot: string, opts: { packageRoot?: s
       CC_FAKE_DAILY: 'idle',
       // tsx keeps a cache in TMPDIR; give the processes their own, removed with this file's temp dirs.
       TMPDIR: tempDir('cc-sup-tmp-'),
+      ...opts.env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -175,6 +176,109 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       }
     } finally {
       await stop(s);
+    }
+  });
+
+  /** A port held open, so a server child told to listen there (CC_CHILD_PORT) cannot start until it is released. */
+  async function heldPort() {
+    const blocker = net.createServer();
+    const port = await new Promise<number>((resolve) => blocker.listen(0, '127.0.0.1', () => resolve((blocker.address() as net.AddressInfo).port)));
+    return { port, release: () => new Promise<void>((resolve) => blocker.close(() => resolve())) };
+  }
+  type Reply = { status: number; body: string; setCookie: string };
+  const request = (port: number, method: 'GET' | 'POST', url: string, headers: Record<string, string> = {}) =>
+    new Promise<Reply>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: url, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+        let body = '';
+        res.on('data', (d: Buffer) => (body += d.toString()));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, setCookie: String(res.headers['set-cookie'] ?? '') }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  const signIn = async (port: number) => (await request(port, 'GET', '/__recovery?t=supervisor-instance-test-token')).setCookie.split(';')[0]!;
+
+  it('with CC_NO_RELOAD set, a server child that cannot start still stops the supervisor with exit 1 (SW2-claude-05 review)', async () => {
+    const held = await heldPort();
+    const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      // Bounded below the test timeout, so a supervisor that stays up is still stopped by the finally block.
+      await until(() => s.proc.exitCode !== null, 'the supervisor to exit', 30_000);
+      expect(s.proc.exitCode, s.output()).toBe(1);
+      expect(s.output()).toMatch(/server child could not start/);
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
+  it('a first start that fails with no Dev Chat change shows its error, not a change to blame, and /__recovery/restart retries it (SW2-claude-05 review)', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port) } });
+    let released = false;
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      // Not signed in: the way to recovery, nothing about the failure.
+      const anonymous = await request(port, 'GET', '/');
+      expect(anonymous.status).toBe(503);
+      expect(anonymous.body).toContain('/__recovery');
+      expect(anonymous.body).not.toMatch(/EADDRINUSE|exited before listening/);
+      const cookie = await signIn(port);
+      const down = await request(port, 'GET', '/', { cookie });
+      expect(down.status).toBe(503);
+      expect(down.body).toMatch(/server child exited before listening/);
+      expect(down.body).toMatch(/EADDRINUSE/);
+      expect(down.body).not.toMatch(/last change|Dev Chat/i);
+      expect(down.body).toContain('/__recovery');
+      const page = await request(port, 'GET', '/__recovery', { cookie });
+      expect(page.body).toMatch(/<form method="post" action="\/__recovery\/restart" data-cc="restart">/);
+      // The same rules as a revert: signed in, from the app origin, with X-CC.
+      const origin = `http://127.0.0.1:${port}`;
+      expect((await request(port, 'POST', '/__recovery/restart', { origin, 'x-cc': '1' })).status).toBe(401);
+      expect((await request(port, 'POST', '/__recovery/restart', { cookie })).status).toBe(403);
+      expect((await request(port, 'POST', '/__recovery/restart', { cookie, origin })).status).toBe(403);
+      expect((await request(port, 'POST', '/__recovery/restart', { cookie, origin: 'http://127.0.0.1:4387', 'x-cc': '1' })).status).toBe(403);
+      const again = await request(port, 'POST', '/__recovery/restart', { cookie, origin, 'x-cc': '1' });
+      expect(again.status, again.body).toBe(502);
+      expect(again.body).toMatch(/still does not start: server child exited before listening/);
+      expect(s.proc.exitCode).toBeNull();
+      // Once the cause is gone, a restart brings the app up without restarting the supervisor.
+      await held.release();
+      released = true;
+      const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin, 'x-cc': '1' });
+      expect(restart.status, restart.body).toBe(200);
+      expect((await request(port, 'GET', '/healthz')).status).toBe(200);
+      expect(s.proc.exitCode).toBeNull();
+    } finally {
+      await stop(s);
+      if (!released) await held.release();
+    }
+  });
+
+  it('a first start that fails after a Dev Chat turn changed files points at reverting that turn (SW2-claude-05 review)', async () => {
+    const root = copyFixtureRoot();
+    const guardRoot = tempDir('cc-sup-guard-devchat-');
+    const id = 's20261005000000-abcdef';
+    fs.mkdirSync(path.join(root, 'data', 'control-center', 'sessions', id), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data', 'control-center', 'sessions', id, 'meta.json'), JSON.stringify({ id, mode: 'devchat', status: 'done', createdAt: '2026-10-05T00:00:00.000Z', turns: [{ n: 1 }] }));
+    fs.mkdirSync(path.join(guardRoot, 'sessions', id, 'turns', '1'), { recursive: true });
+    fs.writeFileSync(path.join(guardRoot, 'sessions', id, 'turns', '1', 'turn.json'), JSON.stringify({ filesOffset: 0 }));
+    fs.writeFileSync(path.join(guardRoot, 'sessions', id, 'files.ndjson'), `${JSON.stringify({ path: 'custom/control-center/server/app.ts', abs: '/nowhere/server/app.ts', root: 'code', tool: 'Write', ts: 't' })}\n`);
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, root, { reload: true, guardRoot, env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      const down = await request(port, 'GET', '/', { cookie: await signIn(port) });
+      expect(down.status).toBe(503);
+      expect(down.body).toMatch(/Dev Chat turn/);
+      expect(down.body).toMatch(/server child exited before listening/);
+    } finally {
+      await stop(s);
+      await held.release();
     }
   });
 

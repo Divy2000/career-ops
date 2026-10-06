@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { changesByTurn, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
+import { changesByTurn, devChatChangesRecorded, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
+import { renderDownPage } from '../../supervisor/down-page.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
@@ -312,6 +313,68 @@ describe('/__recovery revert requests', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('line one\nline TWO\n');
     expect(call(1)).toMatchObject({ status: 200 });
     expect(fs.existsSync(created)).toBe(false);
+  });
+});
+
+describe('the page a down server answers with (SW2-claude-05 review)', () => {
+  /** A sessions dir and guard root holding one session of `mode` whose turn 1 recorded `files`. */
+  function recorded(mode: string, files: string[]) {
+    const sessionsDir = tempDir('cc-down-sessions-');
+    const guardRoot = tempDir('cc-down-guard-');
+    const id = 's20261005000000-abcdef';
+    fs.mkdirSync(path.join(sessionsDir, id));
+    fs.writeFileSync(path.join(sessionsDir, id, 'meta.json'), JSON.stringify({ id, mode, status: 'done', createdAt: '2026-10-05T00:00:00.000Z', turns: [{ n: 1 }] }));
+    const sessionDir = path.join(guardRoot, 'sessions', id);
+    fs.mkdirSync(path.join(sessionDir, 'turns', '1'), { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'turns', '1', 'turn.json'), JSON.stringify({ filesOffset: 0 }));
+    if (files.length) fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), files.map((f) => `${JSON.stringify({ path: f, abs: `/nowhere/${f}`, root: 'code', tool: 'Write', ts: 't' })}\n`).join(''));
+    return { sessionsDir, guardRoot };
+  }
+  const failed = { state: 'failed' as const, at: 't', error: 'server child exited before listening (code 1, signal null)\nError: listen EADDRINUSE <127.0.0.1>', stderrTail: 'Error: listen EADDRINUSE <127.0.0.1>' };
+
+  it('counts a change only when a Dev Chat turn recorded one', () => {
+    expect(devChatChangesRecorded(path.join(tempDir('cc-down-none-'), 'missing'), tempDir('cc-down-guard-'))).toBe(false);
+    const none = recorded('devchat', []);
+    expect(devChatChangesRecorded(none.sessionsDir, none.guardRoot)).toBe(false);
+    const evaluation = recorded('oferta', ['reports/001-acme.md']);
+    expect(devChatChangesRecorded(evaluation.sessionsDir, evaluation.guardRoot)).toBe(false);
+    const devchat = recorded('devchat', ['custom/control-center/server/app.ts']);
+    expect(devChatChangesRecorded(devchat.sessionsDir, devchat.guardRoot)).toBe(true);
+  });
+
+  it('without a Dev Chat change, a signed-in viewer sees the startup error (escaped, once) and no blame on a change', () => {
+    const html = renderDownPage(failed, { devChatChanged: false });
+    expect(html).toContain('server child exited before listening (code 1, signal null)');
+    expect(html).toContain('EADDRINUSE &lt;127.0.0.1&gt;');
+    expect(html).not.toContain('<127.0.0.1>');
+    expect(html.match(/EADDRINUSE/g)).toHaveLength(1);
+    expect(html).not.toMatch(/last change|Dev Chat/i);
+    expect(html).toMatch(/restart/i);
+    expect(html).toContain('href="/__recovery"');
+  });
+
+  it('a stderr tail the error does not already carry is shown after it', () => {
+    const html = renderDownPage({ ...failed, error: 'healthz did not return 200 in time', stderrTail: 'warning: slow disk' }, { devChatChanged: false });
+    expect(html).toMatch(/healthz did not return 200 in time\nwarning: slow disk/);
+  });
+
+  it('with a Dev Chat change recorded, it points at reverting that turn and still shows the error', () => {
+    const html = renderDownPage(failed, { devChatChanged: true });
+    expect(html).toMatch(/Dev Chat turn/);
+    expect(html).toContain('server child exited before listening');
+    expect(html).toContain('href="/__recovery"');
+  });
+
+  it('a viewer who is not signed in gets the recovery link but neither the error nor whether Dev Chat changed anything', () => {
+    const html = renderDownPage(failed, null);
+    expect(html).toContain('href="/__recovery"');
+    expect(html).not.toMatch(/EADDRINUSE|exited before listening|Dev Chat/);
+  });
+
+  it('while a restart is starting the server, it says so instead of showing an error', () => {
+    const html = renderDownPage({ state: 'reloading', startedAt: 't' }, { devChatChanged: true });
+    expect(html).toMatch(/starting/);
+    expect(html).not.toMatch(/Dev Chat|could not start/);
   });
 });
 
