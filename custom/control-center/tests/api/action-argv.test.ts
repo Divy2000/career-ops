@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
+import { execFileSync } from 'node:child_process';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { findAction } from '../../server/actions/registry.js';
 import { RunStore } from '../../server/runner/store.js';
@@ -79,6 +80,44 @@ describe('Reply watch digest (SW-server-02)', () => {
       expect(text).toMatch(/Today: 1 application updates need review/);
       expect(text).not.toMatch(/wingyun|zhaopin|mock candidates/i);
       expect(JSON.parse(fs.readFileSync(candidates(), 'utf8'))).toEqual(pasted);
+    } finally {
+      fs.rmSync(candidates(), { force: true });
+    }
+  });
+});
+
+describe('Reply watch digest: a file holding only the mock emails is no replies (SW7-web-a-02 review)', () => {
+  const candidates = () => path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json');
+  /** What a direct `node reply-watch.mjs` run leaves behind when the file is missing: its own mock emails. */
+  const seedMocks = () => {
+    fs.rmSync(candidates(), { force: true });
+    try {
+      execFileSync(process.execPath, [path.join(DEFAULT_CODE_ROOT, 'reply-watch.mjs')], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: t.cfg.dataRoot, NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 });
+    } catch {
+      // The digest may exit non-zero on the fixture; the seeding happens first either way.
+    }
+    expect(JSON.parse(fs.readFileSync(candidates(), 'utf8')).length).toBeGreaterThan(0);
+  };
+
+  it('refuses the digest when every entry is one of the mocks reply-watch.mjs seeds', async () => {
+    seedMocks();
+    try {
+      const res = await post('followups.replyWatch', {});
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/No replies to review yet.*Paste a reply/);
+    } finally {
+      fs.rmSync(candidates(), { force: true });
+    }
+  });
+
+  it('runs once a real reply was pasted next to the mocks', async () => {
+    seedMocks();
+    const seeded = JSON.parse(fs.readFileSync(candidates(), 'utf8')) as unknown[];
+    fs.writeFileSync(candidates(), JSON.stringify([...seeded, { message_id: 'paste-1', from: 'talent@acme.example', subject: 'Next steps', body_snippet: 'Thanks for applying.', signal: null }], null, 2));
+    try {
+      const res = await post('followups.replyWatch', {});
+      expect(res.statusCode, res.body).toBe(202);
+      await finished(res.json().runId);
     } finally {
       fs.rmSync(candidates(), { force: true });
     }

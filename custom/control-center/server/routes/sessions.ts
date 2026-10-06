@@ -10,6 +10,7 @@ import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
 import crypto from 'node:crypto';
+import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
@@ -143,6 +144,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
+    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
+    if (noReplies) return reply.code(422).send({ error: noReplies });
     // An upload is stored in its canonical form, so the delete that removes it can tell every session naming it.
     if (parsed.data.target.type === 'text' && parsed.data.target.value) {
       const upload = uploadTarget(opts.cfg.dataRoot, parsed.data.target.value);
@@ -195,6 +198,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(z.string().url().max(2048)).min(1).transform((urls) => [...new Set(urls)]).pipe(z.array(z.string()).max(BATCH_MAX_URLS)), model }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
+    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
+    if (noReplies) return reply.code(422).send({ error: noReplies });
     try {
       const out = await manager.fanOut({ mode: parsed.data.mode, urls: parsed.data.urls, model: sessionModel(opts.cfg.dataRoot, parsed.data.model) });
       return reply.code(202).send(out);
@@ -229,6 +234,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const refused = unlockRefused(meta.mode, req.headers);
       if (refused) return reply.code(403).send({ error: refused });
     }
+    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(req.params.id)?.mode ?? '');
+    if (noReplies) return reply.code(422).send({ error: noReplies });
     const busy = claimForTurn(req.params.id, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
     return mutate(reply, async () => reply.code(202).send(await manager.send(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
@@ -244,6 +251,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const refused = unlockRefused(meta.mode, req.headers);
       if (refused) return reply.code(403).send({ error: refused });
     }
+    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(req.params.id)?.mode ?? '');
+    if (noReplies) return reply.code(422).send({ error: noReplies });
     const source = manager.read(req.params.id);
     const isPass = source?.mode === 'immigration-policy';
     // A fork continues the pass of the session it forks, taking over its claim: only a pass paused for a reply has no
