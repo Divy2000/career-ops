@@ -534,6 +534,26 @@ describe('guard hook', () => {
     for (const rel of ['custom/control-center/server/routes/read.ts', 'custom/control-center/web/features/today/TodayPage.tsx', 'data/notes/devchat.md', 'modes/_custom.md']) expect(write(rel).status, rel).toBe(0);
   });
 
+  it('Dev Chat cannot write any custom test suite, the shared test helpers or the installer: they run outside any guard (SW2-libs-01, SW2-tests-17)', () => {
+    const root = fs.realpathSync(tempDir('cc-hook-devchat-suites-'));
+    const dir = fs.realpathSync(tempDir('cc-hook-devchat-suites-guard-'));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    // The real files of this checkout: install.sh and upstream-sync run `node --test custom/*/tests/*.spec.mjs`, and every
+    // spec imports custom/test-support.
+    const custom = path.join(PACKAGE_ROOT, '..');
+    const files = (fs.readdirSync(custom, { recursive: true }) as string[]).map((f) => `custom/${f.split(path.sep).join('/')}`).filter((f) => !f.includes('/node_modules/') && fs.statSync(path.join(custom, '..', f)).isFile());
+    const suites = files.filter((f) => /^custom\/[^/]+\/tests\//.test(f) || /\.(spec|test)\.[cm]?[jt]sx?$/.test(f) || f.startsWith('custom/test-support/') || f.startsWith('custom/install/'));
+    for (const must of ['custom/test-support/tmp.mjs', 'custom/install/install.sh', 'custom/install/bootstrap.sh', 'custom/projects/tests/rank.spec.mjs']) expect(suites, must).toContain(must);
+    expect(suites.length).toBeGreaterThan(20);
+    for (const rel of suites) expect(write(rel), rel).toBe(2);
+    // The custom modules those suites test stay Dev Chat's to edit.
+    for (const rel of ['custom/projects/lib.mjs', 'custom/cv/build-html.mjs', 'custom/pipeline/shortlist.mjs', 'custom/immigration/freshness.mjs']) {
+      expect(files, rel).toContain(rel);
+      expect(write(rel), rel).toBe(0);
+    }
+  });
+
   it('a tampered or unverifiable policy fails closed for every tool call', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-tamper-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
