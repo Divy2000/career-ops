@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseRow, buildShortlist, pickSearchMatch } from './lib.mjs';
+import { parseRow, buildShortlist, pickSearchMatch, strayOperands } from './lib.mjs';
 import * as yaml from 'js-yaml';
 import { buildTitleFilter, PIPELINE_PATH, PORTALS_PATH } from '../../scan.mjs';
 import { companySlug, parseCompanyAlerts } from '../immigration/lib.mjs';
@@ -186,8 +186,13 @@ async function main() {
     process.stdout.write(USAGE);
     return;
   }
+  const stray = strayOperands(args, ['--min-rank', '--top']);
+  if (stray.length) throw new Error(`unexpected argument(s): ${stray.join(' ')}\n${USAGE}`);
   const minRank = arg(args, '--min-rank', 3);
+  if (minRank < 0 || minRank > 5) throw new Error('--min-rank needs a number from 0 to 5');
+  // slice(0, -n) would drop the bottom rows instead.
   const top = arg(args, '--top', 40);
+  if (!Number.isInteger(top) || top < 1) throw new Error('--top needs a positive whole number');
   const today = localToday();
   const rows = (await readPipeline()).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];

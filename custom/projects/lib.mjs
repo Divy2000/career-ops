@@ -167,9 +167,15 @@ function layoutProblem(lines, { spans }) {
   }
   // A nested item or a lazy continuation right after the last bullet belongs to that bullet, but a rewrite would leave
   // it in place, under whichever bullet ends up last. A label, fence, rule or heading there starts its own block.
-  const after = lines[spans[spans.length - 1][1] + 1] ?? '';
-  const ownBlock = LABEL.test(after) || FENCE.test(after) || RULE.test(after) || /^#{1,6}(\s|$)/.test(after);
-  if (/^\s+\S/.test(after) || (after.trim() && !ownBlock)) {
+  // After blank lines any indented line still continues that bullet, a label, fence, rule or heading included; only an
+  // unindented line starts its own block.
+  const last = spans[spans.length - 1][1];
+  const after = lines[last + 1] ?? '';
+  const ownBlock = (l) => LABEL.test(l) || FENCE.test(l) || RULE.test(l) || /^#{1,6}(\s|$)/.test(l);
+  let next = last + 1;
+  while (next < lines.length && !lines[next].trim()) next++;
+  const later = next > last + 1 ? lines[next] ?? '' : '';
+  if (/^\s+\S/.test(after) || (after.trim() && !ownBlock(after)) || /^\s+\S/.test(later)) {
     return 'it has a nested item or text right after its last copy-paste bullet, which the form cannot keep with that bullet; edit article-digest.md directly';
   }
   return null;
@@ -185,7 +191,8 @@ function lineTable(src) {
   return { starts, clean: lines.map((l) => l.replace(/\r$/, '')) };
 }
 
-const isBlankOrRule = (l) => !l.trim() || RULE.test(l);
+// An entry separator is an unindented rule; an indented one belongs to the list item above it.
+const isBlankOrRule = (l) => !l.trim() || (RULE.test(l) && !/^\s/.test(l));
 
 // A `# Section` heading is never part of an entry: it ends the one above it.
 export function parseLibrary(text) {

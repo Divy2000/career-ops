@@ -7,7 +7,7 @@
 //   node custom/pipeline/prioritize.mjs [--today YYYY-MM-DD]
 
 import { readFile, writeFile, copyFile, rename } from 'node:fs/promises';
-import { orderPending, parseRow } from './lib.mjs';
+import { orderPending, parseRow, strayOperands } from './lib.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
 import { localToday } from '../../lib/local-today.mjs';
 import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
@@ -56,6 +56,9 @@ async function main() {
     process.stdout.write(USAGE);
     return;
   }
+  // A date without --today is refused too, rather than ignored for the local date.
+  const stray = strayOperands(args, ['--today']);
+  if (stray.length) throw new Error(`unexpected argument(s): ${stray.join(' ')}\n${USAGE}`);
   // The local day, as scan.mjs stamps first-seen dates; the UTC day is already tomorrow on a US evening.
   const today = hasFlag(args, '--today') ? flagValue(args, '--today') : localToday();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(today ?? '')) throw new Error('--today needs a YYYY-MM-DD date');

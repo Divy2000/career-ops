@@ -65,6 +65,20 @@ test('prioritize refuses an unknown flag such as --dry-run before it rewrites an
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
 });
 
+test('prioritize refuses a stray operand, such as a date given without --today, before it rewrites anything (SW7-libs-02)', () => {
+  for (const args of [['2026-10-01'], ['--today', '2026-10-01', 'extra']]) {
+    const root = tempDir('prioritize-');
+    fs.mkdirSync(path.join(root, 'data'));
+    const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n- [ ] https://jobs.example.com/b | B Co | Backend Engineer | Remote\n';
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
+    const r = spawnSync(process.execPath, [PRIORITIZE, ...args], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 1, args.join(' '));
+    assert.match(r.stderr, new RegExp(`unexpected argument\\(s\\): ${args[args.length - 1]}`));
+    assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+  }
+});
+
 test('prioritize treats a root with no data/pipeline.md yet (a first scan that added nothing) as an empty pipeline', () => {
   const root = tempDir('prioritize-');
   fs.mkdirSync(path.join(root, 'data'));

@@ -22,10 +22,11 @@ export function tempDir(prefix) {
 /**
  * The environment for a guard child: `tmp` as TMPDIR, TEMP and TMP (os.tmpdir() reads TEMP or TMP before
  * TMPDIR on Windows), no NODE_TEST_CONTEXT, which, inherited from this test process, makes the child
- * skip every file, and no test reporter in NODE_OPTIONS but spec or tap.
+ * skip every file, no FORCE_COLOR, whose escapes would split the summary suiteRanTests reads, and no test
+ * reporter in NODE_OPTIONS but spec or tap.
  */
 export function suiteEnv(base, tmp) {
-  const { NODE_TEST_CONTEXT: _ctx, ...env } = base;
+  const { NODE_TEST_CONTEXT: _ctx, FORCE_COLOR: _color, ...env } = base;
   const out = { ...env, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
   // A reporter the caller chose in NODE_OPTIONS other than spec or tap (dot, junit...), or a destination that sends the
   // report elsewhere, leaves no summary suiteRanTests can read.

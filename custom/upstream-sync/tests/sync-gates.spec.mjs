@@ -649,3 +649,22 @@ test('custom_tests reads its summary even when the caller\'s NODE_OPTIONS picks 
     assert.equal(r.status, 0, `${opts}: ${readFileSync(path.join(dir, 'custom.log'), 'utf8')}`);
   }
 });
+
+test('custom_tests reads its summary even when the caller exports FORCE_COLOR (SW5-tests-18)', () => {
+  const dir = tempDir('sync-custom-color-');
+  mkdirSync(path.join(dir, 'custom/a/tests'), { recursive: true });
+  writeFileSync(path.join(dir, 'custom/a/tests/a.spec.mjs'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
+  for (const FORCE_COLOR of ['1', '', '3']) {
+    const r = spawnSync('bash', ['-c', `source "${LIB}"\ncustom_tests "${dir}/custom.log"`], { cwd: dir, env: { PATH: process.env.PATH, FORCE_COLOR }, encoding: 'utf8' });
+    assert.equal(r.status, 0, `FORCE_COLOR=${FORCE_COLOR}: ${readFileSync(path.join(dir, 'custom.log'), 'utf8')}`);
+  }
+});
+
+test('control_center_checks reads the vitest summary even when the caller exports FORCE_COLOR (SW5-tests-18)', () => {
+  const dir = tempDir('sync-cc-color-');
+  const bin = path.join(dir, 'bin');
+  // Like vitest (tinyrainbow): colors when FORCE_COLOR is set and NO_COLOR is not, so the count sits after an escape.
+  stub(bin, 'npm', `case " $* " in *" test "*) if [ -n "\${FORCE_COLOR+x}" ] && [ -z "\${NO_COLOR+x}" ]; then printf '\\033[2m      Tests \\033[22m \\033[1m\\033[32m42 passed\\033[39m\\033[22m\\n'; else printf '      Tests  42 passed (42)\\n'; fi;; esac`);
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\ncontrol_center_checks "${dir}/cc.log"`], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin`, FORCE_COLOR: '1' }, encoding: 'utf8' });
+  assert.equal(r.status, 0, readFileSync(path.join(dir, 'cc.log'), 'utf8'));
+});

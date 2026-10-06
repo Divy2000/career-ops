@@ -209,7 +209,7 @@ test('deps_fingerprint falls back to package.json when the root has no tracked l
 
 // ---- sync.sh end to end, as far as it can go without Keychain, Claude or network ----
 
-function runSync(world, { home, inherited = {} }) {
+function runSync(world, { home, inherited = {}, security = 'exit 44' }) {
   const syncDir = path.join(world.live, 'custom/upstream-sync');
   mkdirSync(syncDir, { recursive: true });
   for (const f of ['sync.sh', 'keep-fork-readme.sh', 'lib.sh', 'sync-prompt.md']) copyFileSync(path.join(SYNC_DIR, f), path.join(syncDir, f));
@@ -219,7 +219,7 @@ function runSync(world, { home, inherited = {} }) {
   const bin = path.join(world.base, 'bin');
   // The Keychain is never touched: a stub that finds no item stops the run right after the fetch checks.
   for (const dir of [bin, path.join(home, '.local/bin')]) {
-    stub(dir, 'security', 'exit 44');
+    stub(dir, 'security', security);
     stub(dir, 'osascript', 'exit 0');
   }
   // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
@@ -295,6 +295,20 @@ test('Given the shell exports a data root (as the launchd plist does), sync.sh u
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.log, /nothing to do/);
     assert.deepEqual(readdirSync(decoy), []);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('Given the plist pins a data root (CAREER_OPS_*), sync.sh logs there but every later child, the worktree suites included, runs without it (SW10-scripts-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'security-env.txt');
+  mkdirSync(home);
+  try {
+    // The Keychain lookup is the first child after the data root is resolved; it records what it inherits and stops the run.
+    const res = runSync(w, { home, inherited: { CAREER_OPS_PDF_INDEX: path.join(w.live, 'data/pdf-index.tsv') }, security: `env | grep '^CAREER_OPS_' > "${seen}"\nexit 44` });
+    assert.equal(res.env.CAREER_OPS_ROOT, w.live, 'the run starts with a pinned data root');
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, 'the log still goes to the pinned root');
+    assert.equal(readFileSync(seen, 'utf8'), '');
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 

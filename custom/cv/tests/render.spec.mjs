@@ -148,16 +148,93 @@ test('given a report whose good CV is indexed, when a strict render for it overf
   assert.match(fs.readFileSync(index, 'utf8'), /^12\toutput\/cv-test\.pdf\toutput\/cv-test\.html\tletter\t\d{4}-\d{2}-\d{2}\tcv$/m, 'without --strict-pages the kept PDF is indexed for the report, as before');
 });
 
-test('given generate-pdf.mjs failing the fact check, when run, then it stops after one attempt and passes the message through', { timeout: 120000 }, () => {
+test('given an indexed CV with the same file names, when a strict re-render of it overflows every density, then its PDF, HTML and index row are untouched and no draft is left behind (SW5-tests-01)', { timeout: 240000 }, () => {
+  const payload = longPayload();
+  const root = dataRoot({ cv: cvMarkdownFor(payload) });
+  const html = buildInto(root, payload);
+  const goodHtml = setDensity(fs.readFileSync(html, 'utf8'), 1);
+  fs.writeFileSync(html, goodHtml);
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const goodPdf = pdfWith(1);
+  fs.writeFileSync(pdf, goodPdf);
+  const index = path.join(root, 'data', 'pdf-index.tsv');
+  fs.mkdirSync(path.dirname(index), { recursive: true });
+  const indexed = '# report\tpdf\thtml\tformat\tdate\tkind - written by generate-pdf.mjs, do not edit\n12\toutput/cv-test.pdf\toutput/cv-test.html\tletter\t2026-10-01\tcv\n';
+  fs.writeFileSync(index, indexed);
+  const strict = render(root, html, ['--max-pages=1', '--strict-pages', '--report=12']);
+  assert.notEqual(strict.status, 0);
+  assert.match(strict.stderr, /does not fit 1 page/);
+  assert.equal(fs.readFileSync(html, 'utf8'), goodHtml, 'the indexed HTML keeps its density');
+  assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the indexed PDF is not overwritten by an overflowing draft');
+  assert.equal(fs.readFileSync(index, 'utf8'), indexed);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), ['cv-test.html', 'cv-test.pdf']);
+});
+
+test('given generate-pdf.mjs failing the fact check, when run, then it passes the message through and leaves the input untouched', { timeout: 120000 }, () => {
   const cv = cvMarkdownFor(fixture).replace('saves the team lead about 5 hours every week', 'saves the team lead time every week');
   const root = dataRoot({ cv });
   const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
   const r = render(root, html, ['--max-pages=1']);
   assert.notEqual(r.status, 0);
   assert.match(r.stdout + r.stderr, /fact/i);
   assert.match(r.stdout + r.stderr, /5 hours/);
-  assert.match(fs.readFileSync(html, 'utf8'), /<html[^>]*data-density="0"/);
-  assert.equal(fs.existsSync(path.join(root, 'output', 'cv-test.pdf')), false);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'a failed run leaves the input HTML as it was');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no PDF and no draft is left behind');
+});
+
+test('given an output folder that does not exist yet, when rendered, then it is created as upstream does and the PDF lands there (review of SW5-tests-01)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const pdf = path.join(root, 'output', '2026', 'cv-test.pdf');
+  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(countPdfPages(fs.readFileSync(pdf)), 1);
+  assert.deepEqual(fs.readdirSync(path.dirname(pdf)), ['cv-test.pdf'], 'no scratch folder is left behind');
+});
+
+test('given an output in a new folder outside the workspace, when rendered, then upstream refuses it and no folder is created (review of SW5-tests-01)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const outside = dataRoot();
+  const pdf = path.join(outside, 'new-dir', 'cv-test.pdf');
+  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000 });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout + r.stderr, /outside the tracker workspace/);
+  assert.equal(fs.existsSync(path.dirname(pdf)), false, 'the new folder is not created');
+  assert.deepEqual(fs.readdirSync(outside).sort(), ['output']);
+  assert.equal(fs.readFileSync(html, 'utf8'), before);
+});
+
+test('given an output under a folder linked outside the workspace, when rendered, then upstream refuses it and nothing is written through the link (review of SW5-tests-01)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const foreign = path.join(dataRoot(), 'output');
+  fs.symlinkSync(foreign, path.join(root, 'output', 'link'));
+  // Read-only, so even a scratch folder created there for a moment fails the run.
+  fs.chmodSync(foreign, 0o555);
+  try {
+    const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'link', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000 });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout + r.stderr, /outside the tracker workspace/);
+    assert.deepEqual(fs.readdirSync(foreign), []);
+  } finally {
+    fs.chmodSync(foreign, 0o755);
+  }
+});
+
+test('given an output path that is an existing folder, when the final render fails, then the input HTML is left as it was (review of SW5-tests-01)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = setDensity(fs.readFileSync(html, 'utf8'), 3);
+  fs.writeFileSync(html, before);
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  fs.mkdirSync(pdf);
+  const r = render(root, html, ['--max-pages=2']);
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'the chosen density is not kept when nothing was published');
+  assert.deepEqual(fs.readdirSync(pdf), []);
 });
 
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {

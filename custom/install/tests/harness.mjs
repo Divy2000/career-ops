@@ -21,9 +21,14 @@ const DEFAULT_TOOLS = ['git', 'node', 'npm', 'security', 'uname', 'launchctl', '
 // The tools install.sh probes for. A world has one only when its stub is in `tools`: the system copies are left off
 // the world PATH, so a "missing npm" spec means the same on Linux, where npm, git or gh live in /usr/bin, as on macOS.
 const PROBED = new Set(['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']);
+// The system tools that change real state (Keychain, launchd, plists). A world reaches them only through its stubs,
+// so a spec that forgets one fails on a missing command instead of touching the real system.
+const REAL_STATE = new Set(['security', 'launchctl', 'plutil']);
+/** The system folders a world links commands from, in PATH order. */
+export const SYSTEM_DIRS = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 let systemBin = null;
 
-/** Links every command in `dirs` (earlier folders win) into `into`, except the probed tools. */
+/** Links every command in `dirs` (earlier folders win) into `into`, except the probed and real-state tools. */
 export function linkSystemCommands(dirs, into) {
   // Names already linked, not fs.existsSync: that follows the link, so a dangling one seen again (a command in both
   // /usr/bin and /bin on merged-/usr systems) would be linked twice and throw EEXIST.
@@ -37,7 +42,7 @@ export function linkSystemCommands(dirs, into) {
     }
     for (const name of names) {
       const link = path.join(into, name);
-      if (PROBED.has(name) || linked.has(name)) continue;
+      if (PROBED.has(name) || REAL_STATE.has(name) || linked.has(name)) continue;
       linked.add(name);
       fs.symlinkSync(path.join(dir, name), link);
     }
@@ -49,7 +54,7 @@ function systemBinDir() {
   if (systemBin) return systemBin;
   systemBin = path.join(fs.realpathSync(tempDir('ci-sysbin-')), 'bin');
   fs.mkdirSync(systemBin);
-  linkSystemCommands(['/usr/bin', '/bin', '/usr/sbin', '/sbin'], systemBin);
+  linkSystemCommands(SYSTEM_DIRS, systemBin);
   return systemBin;
 }
 
@@ -204,4 +209,16 @@ export function installLogs(dataRoot) {
   const dir = path.join(dataRoot, 'data', 'install');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((n) => /^install-.*\.log$/.test(n)).map((n) => path.join(dir, n));
+}
+
+/** Why the pty tests cannot run on `searchPath` (no python3, or one that cannot import pty), or false when they can. */
+/** What pythonPtyMissing's probe prints once `import pty` ran, so a shim that only exits 0 does not pass. */
+export const PTY_PROBE_OK = 'pty-probe-ok';
+
+export function pythonPtyMissing(searchPath) {
+  const r = spawnSync('python3', ['-c', `import pty; print(${JSON.stringify(PTY_PROBE_OK)})`], { env: { ...process.env, PATH: searchPath }, encoding: 'utf8', timeout: 20_000 });
+  if (r.error) return `python3 is not available (${r.error.code ?? r.error.message})`;
+  if (r.status !== 0) return `python3 cannot run: ${`${r.stderr}`.trim().split('\n')[0] || `exit ${r.status}`}`;
+  if (`${r.stdout}`.trim() !== PTY_PROBE_OK) return 'python3 exited 0 without running the pty probe';
+  return false;
 }
