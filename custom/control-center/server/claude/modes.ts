@@ -209,6 +209,8 @@ export { ALWAYS_DENIED_WRITES };
 export const DEVCHAT_DENIED_WRITES = [
   ...ALWAYS_DENIED_WRITES,
   'custom/control-center/server/claude/**',
+  // The core adapter and contract.json: its claude.approvedVersions is the confinement gate, and the supervisor loads both.
+  'custom/control-center/server/core/**',
   'custom/control-center/supervisor/**',
   'custom/control-center/package.json',
   'custom/control-center/package-lock.json',

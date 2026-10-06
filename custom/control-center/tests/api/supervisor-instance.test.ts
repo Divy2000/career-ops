@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -8,7 +9,6 @@ import { RunStore, type RunMeta } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const TSX = path.join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx');
-const SUPERVISOR = path.join(PACKAGE_ROOT, 'supervisor', 'index.ts');
 
 /** A port nothing listens on right now (the OS picks it, so it is never 4317 or 4390). */
 function freePort(): Promise<number> {
@@ -29,9 +29,10 @@ interface Started {
 }
 
 /** A real supervisor (and its server child) on a temp data root, hermetic like the e2e servers. */
-function startSupervisor(port: number, dataRoot: string): Started {
-  const proc = spawn(TSX, [SUPERVISOR], {
-    cwd: PACKAGE_ROOT,
+function startSupervisor(port: number, dataRoot: string, opts: { packageRoot?: string; reload?: boolean } = {}): Started {
+  const pkg = opts.packageRoot ?? PACKAGE_ROOT;
+  const proc = spawn(TSX, [path.join(pkg, 'supervisor', 'index.ts')], {
+    cwd: pkg,
     env: {
       ...process.env,
       NODE_ENV: 'test',
@@ -45,7 +46,9 @@ function startSupervisor(port: number, dataRoot: string): Started {
       CC_LAUNCH_AGENTS_DIR: path.join(dataRoot, '.launch-agents'),
       CC_CLAUDE_PROJECTS_DIR: path.join(dataRoot, '.claude-projects'),
       CC_NO_OPEN: '1',
-      CC_NO_RELOAD: '1',
+      // The code root stays this checkout (path-resolver.mjs, the core modules) when the package itself is a copy.
+      CC_CODE_ROOT: path.resolve(PACKAGE_ROOT, '..', '..'),
+      ...(opts.reload ? {} : { CC_NO_RELOAD: '1' }),
       CC_FAKE_DAILY: 'idle',
       // tsx keeps a cache in TMPDIR; give the processes their own, removed with this file's temp dirs.
       TMPDIR: tempDir('cc-sup-tmp-'),
@@ -125,6 +128,51 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       await new Promise((r) => setTimeout(r, 1000));
       expect(s.proc.exitCode, s.output()).toBeNull();
       expect(s.output()).not.toMatch(/server child exited|bad session id/);
+    } finally {
+      await stop(s);
+    }
+  });
+
+  it('a Dev Chat edit that breaks a module the server and the old supervisor load still leaves /__recovery up, and the fix brings the app back (SW2-claude-05)', async () => {
+    // A copy of the package (its node_modules linked), so the broken file is never this checkout's.
+    const pkg = path.join(tempDir('cc-sup-pkg-'), 'control-center');
+    for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
+    fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    const theme = path.join(pkg, 'shared', 'page-theme.ts');
+    const good = fs.readFileSync(theme, 'utf8');
+    fs.writeFileSync(theme, 'export const PAGE_THEME_CSS = ;\n');
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: pkg, reload: true });
+    const get = (url: string, cookie = '') =>
+      new Promise<{ status: number; body: string; setCookie: string }>((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port, path: url, headers: { host: `127.0.0.1:${port}`, cookie } }, (res) => {
+          let body = '';
+          res.on('data', (d: Buffer) => (body += d.toString()));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body, setCookie: String(res.headers['set-cookie'] ?? '') }));
+        }).on('error', reject);
+      });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      const login = await get('/__recovery?t=supervisor-instance-test-token');
+      expect(login.status).toBe(302);
+      const cookie = login.setCookie.split(';')[0]!;
+      const page = await get('/__recovery', cookie);
+      expect(page.status, page.body).toBe(200);
+      expect(page.body).toContain('Control Center recovery');
+      // Every other route says the server is down and where to recover.
+      const app = await get('/', cookie);
+      expect(app.status).toBe(503);
+      expect(app.body).toContain('/__recovery');
+      // The Dev Chat change is undone (here by hand): the reload that follows brings the server child up.
+      fs.writeFileSync(theme, good);
+      const deadline = Date.now() + 60_000;
+      for (;;) {
+        const health = await get('/healthz').catch(() => ({ status: 0, body: '', setCookie: '' }));
+        if (health.status === 200) break;
+        if (Date.now() > deadline || s.proc.exitCode !== null) throw new Error(`the app did not come back\n${s.output()}`);
+        await new Promise((r) => setTimeout(r, 250));
+      }
     } finally {
       await stop(s);
     }

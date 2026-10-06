@@ -6,6 +6,8 @@
 // both append the same transcript events and finalize the same turn. A reload
 // child starts passive; it is activated (reconciles) only after every older
 // child has exited, which happens after it stopped its own trackers on drain.
+// There may be no active child at all: the first one could not start (a bad
+// Dev Chat edit), and the next reload that comes up takes over at once.
 
 export interface ChildHandle {
   port: number;
@@ -24,20 +26,21 @@ export type ReloadState = { state: 'idle' } | { state: 'reloading'; startedAt: s
 
 export class BlueGreen {
   status: ReloadState = { state: 'idle' };
-  private listeners = new Set<(s: ReloadState, active: ChildHandle) => void>();
+  private listeners = new Set<(s: ReloadState, active: ChildHandle | null) => void>();
   private inFlight: Promise<boolean> | null = null;
   private pending = false;
   /** Settles after every child swapped out so far has exited. */
   private handover: Promise<void> = Promise.resolve();
 
   constructor(
-    public active: ChildHandle,
+    public active: ChildHandle | null,
     private spawn: () => Promise<ChildHandle>,
     private health: (port: number) => Promise<void>,
     private opts: { drainMs?: number; now?: () => string } = {},
   ) {}
 
-  onStatus(cb: (s: ReloadState, active: ChildHandle) => void): () => void {
+  /** Status changes, with the active child (null while none could start). */
+  onStatus(cb: (s: ReloadState, active: ChildHandle | null) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
   }
@@ -80,11 +83,14 @@ export class BlueGreen {
     const next = fresh;
     this.active = next;
     this.set({ state: 'ok', at: now(), pid: next.pid });
-    old.drain();
-    const timer = setTimeout(() => old.kill(), this.opts.drainMs ?? 2000);
-    if (typeof timer.unref === 'function') timer.unref();
-    this.handover = Promise.all([this.handover, old.exited]).then(() => {
-      clearTimeout(timer);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (old) {
+      old.drain();
+      timer = setTimeout(() => old.kill(), this.opts.drainMs ?? 2000);
+      if (typeof timer.unref === 'function') timer.unref();
+    }
+    this.handover = Promise.all([this.handover, old?.exited]).then(() => {
+      if (timer) clearTimeout(timer);
       // A later reload may already have replaced (and drained) this child; only the active one reconciles.
       if (this.active === next) next.activate();
     });

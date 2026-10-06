@@ -18,8 +18,7 @@ import { resolveGuardRoot } from './guard-root.js';
 import { watchCoreGraph } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
-import { PAGE_THEME_CSS } from '../shared/page-theme.js';
-import { dataRootFromEnv } from '../shared/data-root.js';
+import { dataRootFromEnv } from './data-root.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -159,8 +158,30 @@ const RECOVERY_SCRIPT = `document.addEventListener('submit', async (e) => {
 });`;
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
 
+/** Plain colors (CSS system colors, light and dark) for the supervisor's pages when the app's page theme does not load. */
+const FALLBACK_PAGE_CSS = ':root{color-scheme:light dark;--bg:Canvas;--surface-1:Canvas;--surface-2:ButtonFace;--border:GrayText;--border-strong:GrayText;--text:CanvasText;--text-muted:GrayText;--accent:LinkText}';
+
+let pageTheme: Promise<string> | null = null;
+
+/**
+ * The app's page theme. shared/page-theme.ts stays Dev Chat's to edit (it follows the app's tokens), so it is loaded
+ * here, never imported: a broken copy costs the supervisor's pages their colors, not the supervisor itself.
+ */
+function pageThemeCss(): Promise<string> {
+  pageTheme ??= import('../shared/page-theme.js').then(
+    (mod: { PAGE_THEME_CSS?: unknown }) => {
+      if (typeof mod.PAGE_THEME_CSS !== 'string') throw new Error('it exports no PAGE_THEME_CSS string');
+      return mod.PAGE_THEME_CSS;
+    },
+  ).catch((err: Error) => {
+    console.error(`[supervisor] the page theme did not load (${err.message}); its pages use plain colors`);
+    return FALLBACK_PAGE_CSS;
+  });
+  return pageTheme;
+}
+
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
-export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown): string {
+export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown, themeCss: string): string {
   const sessions = listDevSessions(sessionsDir);
   const blocks = sessions.map((meta) => {
     const turns = listChanges(guardSessionDir(guardRoot, meta.id), meta);
@@ -180,7 +201,7 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: u
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;
   });
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${themeCss}
 body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:24px;max-width:960px}
 h1{font-size:22px}h2{font-size:16px;margin-top:32px}h3{font-size:14px}a{color:var(--accent)}code,pre{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px}
@@ -234,9 +255,21 @@ async function main(): Promise<void> {
 
   // Every child starts passive (CC_DEFER_RECONCILE): the first reconciles runs and sessions only once the port is
   // ours (a launch that cannot listen touches nothing), reload children when BlueGreen activates them.
-  const first = await spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' });
-  await waitHealthy(first.port, 20_000);
+  // A first child that cannot start (a bad Dev Chat edit under server/ or shared/) does not stop the supervisor:
+  // /__recovery is how such an edit is undone, and the reload that follows the fix brings the app up.
+  let first: Child | null = null;
+  let startError: { error: string; stderrTail: string } | null = null;
+  try {
+    first = await spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' });
+    await waitHealthy(first.port, 20_000);
+  } catch (err) {
+    startError = { error: (err as Error).message, stderrTail: first?.stderrTail() ?? '' };
+    first?.kill();
+    first = null;
+    console.error(`[supervisor] the server child could not start: ${startError.error}\nOnly /__recovery is served until a reload brings the server up (a revert there, or a fix under server/ or shared/).`);
+  }
   const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
+  if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
 
   // Only the active child's exit stops the supervisor; drained children exit on purpose.
   const watchExit = (c: Child) =>
@@ -246,9 +279,9 @@ async function main(): Promise<void> {
       proxy.close();
       process.exit(code ?? 1);
     });
-  watchExit(first);
+  if (first) watchExit(first);
   bg.onStatus((s, active) => {
-    if (s.state === 'ok') watchExit(active as Child);
+    if (s.state === 'ok' && active) watchExit(active as Child);
     console.error(`[supervisor] reload ${s.state}${s.state === 'failed' ? `: ${s.error}` : ''}`);
   });
 
@@ -284,7 +317,7 @@ async function main(): Promise<void> {
     }
     const headers = { 'content-security-policy': RECOVERY_CSP, 'x-content-type-options': 'nosniff' };
     if (url.pathname === '/__supervisor/status') {
-      res.writeHead(200, { ...headers, 'content-type': 'application/json' }).end(JSON.stringify({ ...bg.status, activePid: bg.active.pid, activePort: bg.active.port }));
+      res.writeHead(200, { ...headers, 'content-type': 'application/json' }).end(JSON.stringify({ ...bg.status, activePid: bg.active?.pid ?? null, activePort: bg.active?.port ?? null }));
       return true;
     }
     if (url.pathname === '/__recovery' && req.method === 'GET') {
@@ -292,7 +325,7 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`, location: '/__recovery' }).end();
         return true;
       }
-      const html = renderRecovery(sessionsDir, guardRoot, bg.status);
+      const html = renderRecovery(sessionsDir, guardRoot, bg.status, await pageThemeCss());
       res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(html);
       return true;
     }
@@ -318,9 +351,14 @@ async function main(): Promise<void> {
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' });
       res.end(`supervisor error: ${(err as Error).message}`);
     };
-    handleLocal(req, res).then((handled) => {
+    handleLocal(req, res).then(async (handled) => {
       if (handled) return;
-      const upstream = http.request({ host: '127.0.0.1', port: bg.active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
+      const active = bg.active;
+      if (!active) {
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center is not running</title><meta name="color-scheme" content="dark light"><style>${await pageThemeCss()}body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:32px;max-width:640px}a{color:var(--accent)}</style></head><body><h1>The Control Center server could not start</h1><p>The last change to its code broke it. <a href="/__recovery">Open the recovery page</a> to revert the Dev Chat turn that made it; the app comes back by itself once the server starts.</p></body></html>`);
+        return;
+      }
+      const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
         res.writeHead(ures.statusCode ?? 502, ures.headers);
         ures.pipe(res);
       });
@@ -336,7 +374,12 @@ async function main(): Promise<void> {
     }).catch(failed);
   });
   proxy.on('upgrade', (req, socket, head) => {
-    const target = net.connect(bg.active.port, '127.0.0.1', () => {
+    const active = bg.active;
+    if (!active) {
+      socket.destroy();
+      return;
+    }
+    const target = net.connect(active.port, '127.0.0.1', () => {
       const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
       target.write(lines.join('\r\n') + '\r\n\r\n');
@@ -353,7 +396,7 @@ async function main(): Promise<void> {
     } else {
       console.error(`Supervisor failed to listen: ${err.message}`);
     }
-    bg.active.kill();
+    bg.active?.kill();
     process.exit(1);
   });
 
@@ -361,13 +404,14 @@ async function main(): Promise<void> {
     // Only the instance whose lock is still the one on disk may reconcile; one displaced while starting stops here.
     if (!lock.verify()) {
       console.error(`Another Control Center took this data root's lock while this one was starting: ${dataRoot}. This one stops.`);
-      bg.active.kill();
+      bg.active?.kill();
       process.exit(1);
     }
     // A reload that already swapped the first child out activates its replacement itself.
-    if (bg.active === first) first.activate();
-    const url = `http://127.0.0.1:${PORT}/auth?t=${token}`;
-    console.log(`Control Center ready: ${url}`);
+    if (first && bg.active === first) first.activate();
+    // Without a server child, /auth is not served: the recovery link sets the session cookie itself.
+    const url = first ? `http://127.0.0.1:${PORT}/auth?t=${token}` : `http://127.0.0.1:${PORT}/__recovery?t=${token}`;
+    console.log(first ? `Control Center ready: ${url}` : `Control Center server did not start; recover at: ${url}`);
     console.log(`Recovery page: http://127.0.0.1:${PORT}/__recovery`);
     if (!process.env.CC_NO_OPEN && process.platform === 'darwin') {
       execFile('open', [url], { shell: false }, () => undefined);
@@ -396,7 +440,7 @@ async function main(): Promise<void> {
   }
 
   const stop = () => {
-    bg.active.kill();
+    bg.active?.kill();
     proxy.close();
     setTimeout(() => process.exit(0), 200);
   };

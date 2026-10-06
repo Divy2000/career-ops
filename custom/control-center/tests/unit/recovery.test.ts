@@ -391,6 +391,25 @@ describe('blue/green reload', () => {
     vi.useRealTimers();
   });
 
+  it('with no server child running (the first one could not start), a reload that comes up is active and activated at once (SW2-claude-05)', async () => {
+    const log: string[] = [];
+    const fixed = handle(5003, 13, log);
+    let attempt = 0;
+    const bg = new BlueGreen(null, async () => {
+      attempt++;
+      if (attempt === 1) throw new Error('server child exited before listening (code 1)');
+      return fixed;
+    }, async () => undefined, { now: () => 'T' });
+    expect(bg.active).toBeNull();
+    expect(await bg.reload()).toBe(false);
+    expect(bg.active).toBeNull();
+    expect(bg.status).toMatchObject({ state: 'failed' });
+    expect(await bg.reload()).toBe(true);
+    expect(bg.active).toBe(fixed);
+    await flush();
+    expect(log).toEqual(['activate 13']);
+  });
+
   it('the new child reconciles (activates) only after the old one stopped its trackers and exited', async () => {
     const log: string[] = [];
     const first = handle(5001, 11, log);

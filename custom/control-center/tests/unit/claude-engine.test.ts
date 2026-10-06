@@ -623,6 +623,35 @@ describe('guard hook', () => {
     }
   });
 
+  it('Dev Chat cannot write any file the supervisor loads at startup, so a bad edit never stops /__recovery (SW2-claude-05)', () => {
+    const root = fs.realpathSync(tempDir('cc-hook-devchat-supervisor-'));
+    const dir = fs.realpathSync(tempDir('cc-hook-devchat-supervisor-guard-'));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    // Static imports only: a failing one stops the process before it listens. (A dynamic import must have a fallback.)
+    const STATIC = /(?:^|\n)\s*(?:import|export)\s[^;'"]*?\sfrom\s*['"](\.[^'"]+)['"]|(?:^|\n)\s*import\s*['"](\.[^'"]+)['"]/g;
+    const seen = new Set<string>();
+    const stack = ['supervisor/index.ts', 'supervisor/preflight-cli.ts'].map((f) => path.join(PACKAGE_ROOT, f));
+    while (stack.length) {
+      const file = stack.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (file.endsWith('.json')) continue;
+      for (const m of fs.readFileSync(file, 'utf8').matchAll(STATIC)) {
+        const spec = path.resolve(path.dirname(file), (m[1] ?? m[2])!);
+        const found = [spec, spec.replace(/\.js$/, '.ts'), spec.replace(/\.js$/, '.tsx'), `${spec}.ts`].find((f) => fs.existsSync(f));
+        expect(found, `${file} imports ${spec}`).toBeDefined();
+        stack.push(found!);
+      }
+    }
+    const loaded = [...seen].map((f) => `custom/control-center/${path.relative(PACKAGE_ROOT, f).split(path.sep).join('/')}`).sort();
+    expect(loaded).toEqual(expect.arrayContaining(['custom/control-center/supervisor/recovery.ts', 'custom/control-center/server/claude/guard-policy.mjs']));
+    for (const rel of loaded) expect(write(rel), rel).toBe(2);
+    // server/core holds contract.json, whose claude.approvedVersions is the confinement gate: never Dev Chat's to change.
+    expect(write('custom/control-center/server/core/contract.json')).toBe(2);
+    expect(write('custom/control-center/server/core/adapter.ts')).toBe(2);
+  });
+
   it('a tampered or unverifiable policy fails closed for every tool call', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-tamper-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
