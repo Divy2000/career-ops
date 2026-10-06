@@ -6,6 +6,7 @@ import { describeError } from '../../lib/actions';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
 import { isPlainObject } from '../../lib/yamlOpsClient';
 import { useGuardedTab, useUnsaved } from '../../lib/unsaved';
+import { useEditBase } from '../../lib/editBase';
 import { KeyEditor, type ColumnsAt, type FieldRules } from './StructuredEditor';
 import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
 import { ConfigEditor } from './RawConfigEditor';
@@ -73,7 +74,13 @@ const CADENCE_HELP: Record<string, string> = {
 export function CadenceForm() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', 'cadence'], queryFn: () => apiGet<CadenceRead>('/api/followups/cadence') });
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  // Saves against the version the edit started from, so a change on disk meanwhile gets the 409, not an overwrite.
+  const edit = useEditBase(q.data);
+  const [draft, setDraftState] = useState<Record<string, string>>({});
+  const setDraft = (next: Record<string, string>) => {
+    if (Object.keys(next).length) edit.pin();
+    setDraftState(next);
+  };
   useUnsaved('the follow-up cadence', Object.keys(draft).length > 0);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const value = (k: string) => draft[k] ?? (q.data?.cadence[k] !== undefined ? String(q.data.cadence[k]) : '');
@@ -84,16 +91,21 @@ export function CadenceForm() {
       setNote({ tone: 'danger', text: 'Cadence values are whole numbers of days (0 or more).' });
       return;
     }
+    const from = edit.base ?? q.data;
     try {
-      await apiSend('PUT', '/api/followups/cadence', { cadence }, q.data?.etag ? { 'If-Match': q.data.etag } : {});
-      setDraft({});
+      await apiSend('PUT', '/api/followups/cadence', { cadence }, from?.etag ? { 'If-Match': from.etag } : {});
+      edit.rebase(null);
+      setDraftState({});
       setNote({ tone: 'ok', text: 'Follow-up cadence saved (validated by validate-profile.mjs).' });
       toast.success('Follow-up cadence saved');
       await Promise.all([qc.invalidateQueries({ queryKey: ['config'] }), qc.invalidateQueries({ queryKey: ['followups'] })]);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
+        // Told, the user may now save their values over the version on disk they were shown: the next save carries
+        // that version's ETag, so a further change on disk meanwhile is refused again.
         await qc.invalidateQueries({ queryKey: ['config', 'cadence'] });
-        setNote({ tone: 'danger', text: 'The profile changed on disk; the current values were reloaded. Apply your change again.' });
+        edit.rebase(qc.getQueryData<CadenceRead>(['config', 'cadence']) ?? null);
+        setNote({ tone: 'danger', text: 'config/profile.yml changed on disk since you started editing; nothing was written. Your values are still in the form: save again to apply them over the current version.' });
       } else setNote({ tone: 'danger', text: `Could not save cadence: ${describeError(err)}` });
     }
   };
@@ -121,6 +133,11 @@ export function CadenceForm() {
             Save cadence
           </button>
         </div>
+        {edit.drifted && !note && (
+          <p role="alert" className="danger-text">
+            config/profile.yml changed on disk since you started editing. Your values are kept; Save cadence shows the conflict before anything is written.
+          </p>
+        )}
         {note && (
           <p role={note.tone === 'danger' ? 'alert' : 'status'} className={note.tone === 'danger' ? 'danger-text' : 'muted'}>
             {note.text}

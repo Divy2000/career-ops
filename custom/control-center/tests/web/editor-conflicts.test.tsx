@@ -173,6 +173,50 @@ describe('raw YAML editor (Settings)', () => {
   });
 });
 
+describe('follow-up cadence form (Settings > Profile)', () => {
+  beforeEach(() => {
+    files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
+  });
+
+  it('a change on disk mid-edit shows "changed on disk", and Save sends the ETag the edit started from and gets the 409 instead of overwriting it (SW3-tests-07)', async () => {
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    await changeOnDisk('/api/followups/cadence', { etag: 'c2', cadence: { applied_first_days: 5 } });
+    await until(() => /changed on disk since you started editing/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save cadence')!);
+    await until(() => /changed on disk/.test(alerts()) && writes().length === 1, 'the conflict');
+    expect(writes()).toEqual([expect.objectContaining({ method: 'PUT', url: '/api/followups/cadence', headers: expect.objectContaining({ 'If-Match': 'c1' }) })]);
+    expect(files['/api/followups/cadence']).toMatchObject({ etag: 'c2', cadence: { applied_first_days: 5 } });
+    // The user's value stays in the form; saving again applies it over the version now on disk.
+    expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.value).toBe('9');
+    await click(button('Save cadence')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]!.headers['If-Match']).toBe('c2');
+  });
+
+  it('a second change on disk after the conflict is not overwritten either: the next save is pinned to the version the user was shown', async () => {
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    await changeOnDisk('/api/followups/cadence', { etag: 'c2', cadence: { applied_first_days: 5 } });
+    await click(button('Save cadence')!);
+    await until(() => writes().length === 1 && /changed on disk/.test(alerts()), 'the first conflict');
+    // Another writer changes it again after the user was told about c2, and the page has refetched it.
+    const reads = () => calls.filter((c) => c.method === 'GET' && c.url === '/api/followups/cadence').length;
+    const before = reads();
+    await changeOnDisk('/api/followups/cadence', { etag: 'c3', cadence: { applied_first_days: 3 } });
+    await until(() => reads() > before, 'the refetch of c3');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await click(button('Save cadence')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]!.headers['If-Match']).toBe('c2');
+    expect(files['/api/followups/cadence']).toMatchObject({ etag: 'c3', cadence: { applied_first_days: 3 } });
+  });
+});
+
 describe('structured editors (useStructuredConfig)', () => {
   beforeEach(() => {
     files = { '/api/config/portals': { key: 'portals', path: 'portals.yml', kind: 'ok', raw: 'a: 1\nlist: [x, y]\n', etag: 'p1', doc: { a: 1, list: ['x', 'y'] }, parseError: null } };
