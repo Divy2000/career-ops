@@ -63,7 +63,8 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const stepLog = path.join(T, 'steps.log');
   // Each step and the rank-pipeline stand-in also note whether the Claude OAuth token reached them.
   const tokenLog = path.join(T, 'step-tokens.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\n`;
+  const nodeLog = path.join(T, 'step-nodes.log');
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -83,7 +84,8 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
     assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
     // TZ passes through: the job dates its log and digest by its local day, which the specs compute in this process's zone.
-    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
+    // CC_NODE_BIN: the node running these specs, pinned as the plist pins one; run-daily.sh puts Homebrew first on PATH.
+    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, CC_NODE_BIN: process.execPath, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
@@ -96,7 +98,8 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
     const stepTokens = fs.existsSync(tokenLog) ? readFileSync(tokenLog, 'utf8') : '';
-    return { stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    const stepNodes = fs.existsSync(nodeLog) ? [...new Set(readFileSync(nodeLog, 'utf8').trim().split('\n'))] : [];
+    return { stepNodes, stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, fakeClaude, run };
 }
@@ -499,4 +502,10 @@ test('the daily policy pass and the Control Center immigration-policy session ma
   const cls = modes.slice(modes.indexOf("'immigration-policy': {"));
   const globs = [...(cls.match(/writeGlobs: \[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual([...globs].sort(), outputs.map((f) => `data/immigration/${f}`).sort());
+});
+
+jobTest('the job under test runs on the node running these specs, not a Homebrew one first on its PATH (SW4-tests-26)', () => {
+  const r = dailyWorld().run();
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(r.stepNodes, [fs.realpathSync(process.execPath)]);
 });
