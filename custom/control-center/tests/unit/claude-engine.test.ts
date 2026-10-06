@@ -324,6 +324,17 @@ describe('guard hook', () => {
     }
   });
 
+  it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
+    const code = fs.realpathSync(tempDir('cc-int-code-'));
+    const data = fs.realpathSync(tempDir('cc-int-data-'));
+    for (const mode of ['interview/debrief', 'de/interview/debrief', 'interview-prep']) {
+      const dir = fs.realpathSync(tempDir(`cc-int-guard-${mode.replace(/\//g, '-')}-`));
+      const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] });
+      const status = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(data, 'data', 'salary-observations.tsv'), content: 'x' }, cwd: code, session_id: 's' }).status;
+      expect(status, mode).toBe(0);
+    }
+  });
+
   it('with a separate data root, user-layer writes go to the data root only and custom/** and templates to the code root only (SW2-claude-02)', () => {
     const code = fs.realpathSync(tempDir('cc-split-code-'));
     const data = fs.realpathSync(tempDir('cc-split-data-'));

@@ -85,7 +85,8 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
     extraBash: ['followup-cadence.mjs', 'set-status.mjs'],
   },
   interview: {
-    writeGlobs: ['interview-prep/**'],
+    // A debrief records a compensation figure stated in the round (modes/interview/debrief.md), as the offer class does.
+    writeGlobs: ['interview-prep/**', 'data/salary-observations.tsv'],
     network: ['WebFetch', 'WebSearch'],
     extraBash: ['match-star.mjs', 'weekly-digest.mjs', 'story-provenance-check.mjs', 'salary-gap.mjs'],
   },
