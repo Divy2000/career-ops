@@ -70,7 +70,7 @@ Sessions run `claude -p` headless with `--restricted`, an exact `--tools` list p
 | documents | `output/`, `jds/`; may run `custom/projects/rank.mjs` and the fork CV build and render | pdf, text, latex, cover |
 | outreach and interview | `interview-prep/`, follow-up drafts | followup, interview-prep, interview/plan, interview/practice |
 | profile | user markdown files; may run `custom/projects/rank.mjs --check` | interview (onboarding), master-profile, add, expand, intake |
-| immigration | `data/immigration/**` | immigration-policy, sponsorship-check |
+| immigration | the policy pass: only `data/immigration/policy-changes.tsv`, `company-alerts.tsv` and `policy-digest.md` (the job state there stays the daily job's); the company check: `data/immigration/companies/**` and `company-alerts.tsv` | immigration-policy, sponsorship-check |
 | devchat | user layer and `custom/**` (see section 5 for what stays protected) | Dev Chat |
 
 With a separate data root (`CAREER_OPS_ROOT`, `CAREER_OPS_DATA_DIR` or `.career-ops-data`), user files are written in the data root only: the `Edit(...)` rules and the guard hook allow a class's user-layer paths there, and only `custom/**` and the CV and cover templates (`templates/cv-*.html`, `templates/cover-*.html`) in the code checkout. The preamble gives the session the data root's absolute path to write to, and a write aimed at the wrong root is refused with the path it belongs at.

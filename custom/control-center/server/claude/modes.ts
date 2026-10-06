@@ -122,7 +122,9 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
     extraBash: ['verify-portals.mjs'],
   },
   'immigration-policy': {
-    writeGlobs: ['data/immigration/**'],
+    // Only the pass's three outputs, as run-daily.sh allows its own pass: the queue, seen ids, batches, the pidfile and the
+    // cached company verdicts under data/immigration are job state, never for a session that reads untrusted pages.
+    writeGlobs: ['data/immigration/policy-changes.tsv', 'data/immigration/company-alerts.tsv', 'data/immigration/policy-digest.md'],
     network: ['WebFetch', 'WebSearch'],
     extraBash: [],
   },
