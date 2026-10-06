@@ -4,7 +4,50 @@ import os from 'node:os';
 import path from 'node:path';
 import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../server/claude/cli-version.js';
 
-export const NODE_FLOOR = '22.6.0';
+/**
+ * The Node versions every dependency in package-lock.json accepts (the app's and the test suite's alike, since the
+ * installer and the weekly sync run the tests on this machine), and the lowest of them. tests/unit/node-floor.test.ts
+ * computes both from the lockfile and checks every copy (contract.json, package.json, install.sh, the READMEs).
+ */
+export const NODE_RANGE = '^22.22.2 || ^24.15.0 || >=26.0.0';
+export const NODE_FLOOR = '22.22.2';
+
+const fullVersion = (v: string): [number, number, number] | null => {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+};
+const compare = (a: number[], b: number[]) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!;
+
+/**
+ * Whether `version` is in `range`, written as NODE_RANGE is: alternatives joined by ||, each one or more of ^X.Y.Z (that
+ * major, from X.Y.Z), >=X.Y.Z and <X.Y.Z. A range or version it cannot read accepts nothing.
+ */
+export function nodeSupported(version: string, range: string): boolean {
+  const v = fullVersion(version);
+  if (!v) return false;
+  return range.split('||').some((alt) => {
+    const terms = alt.trim().split(/\s+/).filter(Boolean);
+    return (
+      terms.length > 0 &&
+      terms.every((term) => {
+        const m = /^(\^|>=|<)(\d+\.\d+\.\d+)$/.exec(term);
+        const b = m ? fullVersion(m[2]!) : null;
+        if (!m || !b) return false;
+        if (m[1] === '<') return compare(v, b) < 0;
+        return compare(v, b) >= 0 && (m[1] === '>=' || v[0] === b[0]);
+      })
+    );
+  });
+}
+
+/** The range in words for messages: each alternative's lowest version, then +, as in "22.22.2+, 24.15+ or 26+". */
+export function describeNodeRange(range: string): string {
+  const lows = range.split('||').map((alt) => {
+    const low = /(?:\^|>=)(\d+\.\d+\.\d+)/.exec(alt)?.[1] ?? alt.trim();
+    return `${low.replace(/(\.0)+$/, '')}+`;
+  });
+  return lows.length > 1 ? `${lows.slice(0, -1).join(', ')} or ${lows.at(-1)}` : (lows[0] ?? range);
+}
 
 export interface PreflightInput {
   claudeBin: string;
@@ -248,8 +291,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
   const exec = input.exec ?? exitCode;
   const errors: string[] = [];
   const warnings: string[] = [];
-  if (!versionAtLeast(input.nodeVersion, NODE_FLOOR)) {
-    errors.push(`Node ${input.nodeVersion} is below the floor ${NODE_FLOOR}. Install a newer Node.`);
+  if (!nodeSupported(input.nodeVersion, NODE_RANGE)) {
+    errors.push(`Node ${input.nodeVersion.replace(/^v/, '')} is not supported; use ${describeNodeRange(NODE_RANGE)}. Install a supported Node.`);
   }
   const platform = input.platform ?? process.platform;
   if (platform !== 'darwin') errors.push(`The Control Center runs on macOS only (this is ${platform}): it reads the session token from the macOS Keychain and confines sessions with macOS paths.`);

@@ -58,7 +58,7 @@ export function renderStatus(status: ReloadState): string {
     case 'ok':
       return `<p>The last reload came up at ${escapeHtml(status.at)} (pid ${status.pid}).</p>`;
     case 'failed':
-      return `<p>The last start failed at ${escapeHtml(status.at)}.</p><pre>${escapeHtml(errorText(status))}</pre>`;
+      return `<p>${status.crashed ? 'The server stopped' : 'The last start failed'} at ${escapeHtml(status.at)}.</p><pre>${escapeHtml(errorText(status))}</pre>`;
   }
 }
 
@@ -78,7 +78,7 @@ export function renderDownPage(status: ReloadState, viewer: { devChatChanged: bo
     const advice = viewer.devChatChanged
       ? `<p>The last Dev Chat change to its code may have broken it. <a href="/__recovery">Open the recovery page</a> to revert the Dev Chat turn that made it, or to restart the server; the app comes back by itself once the server starts.</p>`
       : `<p>It stopped with the error below. Once its cause is fixed, <a href="/__recovery">open the recovery page</a> and restart the server.</p>`;
-    body = `<h2>The server could not start</h2>${advice}<pre>${escapeHtml(detail)}</pre>`;
+    body = `<h2>${status.crashed ? 'The server stopped' : 'The server could not start'}</h2>${advice}<pre>${escapeHtml(detail)}</pre>`;
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center is not running</title><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:32px;max-width:640px}a{color:var(--accent)}h2{font-size:17px}pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px;white-space:pre-wrap;font:12px/1.4 ui-monospace,Menlo,monospace}</style></head><body><h1>The Control Center server is not running</h1>${body}</body></html>`;
 }

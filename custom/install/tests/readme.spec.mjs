@@ -238,7 +238,10 @@ test('the README discloses the hardcoded backend/AI priority and the macOS requi
   assert.match(readme, /backend/i);
   assert.match(readme, /PRIORITY_TITLE|hardcoded/i);
   assert.match(readme, /macOS/);
-  assert.match(readme, /Node(\.js)? (>= ?|22\.6)/i);
+  // Requirement change: the README names the Node versions the installer accepts (22.22.2+, 24.15+ or 26+).
+  const supported = /^NODE_SUPPORTED="([^"]+)"$/m.exec(readFileSync(path.join(ROOT, 'custom/install/install.sh'), 'utf8'))?.[1];
+  assert.ok(supported);
+  assert.ok(readme.includes(`Node.js ${supported}`), `the README names Node.js ${supported}`);
 });
 
 test('the README warns not to run update-system apply and not to use npx init for this fork', () => {

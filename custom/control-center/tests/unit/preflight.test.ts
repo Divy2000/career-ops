@@ -16,9 +16,11 @@ const host = () => ({ platform: 'darwin' as const, managedSettings: { dir: tempD
 
 describe('preflight', () => {
   it('compares versions numerically against the Node floor', () => {
-    expect(versionAtLeast('v22.6.0', NODE_FLOOR)).toBe(true);
+    // Requirement change: the floor is the lowest Node every dependency accepts, 22.22.2 (it was 22.6.0).
+    expect(versionAtLeast('v22.22.2', NODE_FLOOR)).toBe(true);
     expect(versionAtLeast('v26.4.0', NODE_FLOOR)).toBe(true);
-    expect(versionAtLeast('v22.5.9', NODE_FLOOR)).toBe(false);
+    expect(versionAtLeast('v22.22.1', NODE_FLOOR)).toBe(false);
+    expect(versionAtLeast('v22.6.0', NODE_FLOOR)).toBe(false);
     expect(versionAtLeast('v9.99.0', NODE_FLOOR)).toBe(false);
   });
 
@@ -50,7 +52,8 @@ describe('preflight', () => {
   it('fails below the Node floor and warns about ANTHROPIC_API_KEY', async () => {
     const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v20.0.0', env: { ANTHROPIC_API_KEY: 'x' }, exec: execOk });
     expect(r.ok).toBe(false);
-    expect(r.errors[0]).toContain('below the floor');
+    // Requirement change: the check is the supported range, and the message names it (it said "below the floor").
+    expect(r.errors[0]).toBe('Node 20.0.0 is not supported; use 22.22.2+, 24.15+ or 26+. Install a supported Node.');
     expect(r.warnings[0]).toContain('ANTHROPIC_API_KEY');
   });
 });

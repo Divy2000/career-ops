@@ -196,6 +196,12 @@ test('cli.mjs doctor-state reads stdin and prints a ready or incomplete line', (
   assert.equal(late.stdout.trim(), 'incomplete\tcv.md');
 });
 
+test('cli.mjs node-supported exits 0 for a Node in the range and 1 otherwise, the gaps between majors included', () => {
+  const range = '^22.22.2 || ^24.15.0 || >=26.0.0';
+  for (const v of ['v22.22.2', 'v24.15.0', 'v26.4.0']) assert.equal(run(CLI, ['node-supported', v, range]).status, 0, v);
+  for (const v of ['v22.22.1', 'v23.0.0', 'v24.14.0', 'v25.0.0', 'not-a-version']) assert.equal(run(CLI, ['node-supported', v, range]).status, 1, v);
+});
+
 test('cli.mjs version-ge exits 0 when the version meets the floor and 1 otherwise', () => {
   assert.equal(run(CLI, ['version-ge', 'v22.6.0', '22.6.0']).status, 0);
   assert.equal(run(CLI, ['version-ge', 'v20.19.0', '22.6.0']).status, 1);

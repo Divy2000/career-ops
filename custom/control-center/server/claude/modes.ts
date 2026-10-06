@@ -122,7 +122,10 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
     extraBash: ['verify-portals.mjs'],
   },
   'immigration-policy': {
-    writeGlobs: ['data/immigration/**'],
+    // Only the three files daily-prompt.md asks the pass for: the queue, seen ids, batches, the pidfile and the cached
+    // company verdicts under data/immigration are job state, never for a session that reads untrusted pages. The daily
+    // job's own pass gets the same rule in run-daily.sh with SW7-scripts-02 (fix/sweep-7-sc, not yet merged here).
+    writeGlobs: ['data/immigration/policy-changes.tsv', 'data/immigration/company-alerts.tsv', 'data/immigration/policy-digest.md'],
     network: ['WebFetch', 'WebSearch'],
     extraBash: [],
   },

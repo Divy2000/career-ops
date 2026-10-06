@@ -5,7 +5,7 @@
   "description": "Local dark-mode control center for career-ops (fork add-on under custom/)",
   "type": "module",
   "engines": {
-    "node": ">=22.6"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "start": "tsx supervisor/index.ts",

@@ -235,17 +235,25 @@ async function main(): Promise<void> {
   const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
   if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
 
-  // Only the active child's exit stops the supervisor; drained children exit on purpose.
+  // Drained children exit on purpose, and so does the active one when the supervisor stops. An active child that exits on
+  // its own (a Dev Chat edit that throws in activate(), say) leaves no server, but the supervisor stays up with /__recovery,
+  // where a revert or Restart brings it back. Without reloads nothing could, so then the supervisor stops, as before.
+  let stopping = false;
   const watchExit = (c: Child) =>
-    c.proc.on('exit', (code) => {
-      if (bg.active !== c) return;
-      console.error(`server child exited (${code}); supervisor stopping`);
-      proxy.close();
-      process.exit(code ?? 1);
+    c.proc.on('exit', (code, signal) => {
+      if (bg.active !== c || stopping) return;
+      if (process.env.CC_NO_RELOAD) {
+        console.error(`server child exited (${code}); supervisor stopping`);
+        proxy.close();
+        process.exit(code ?? 1);
+      }
+      console.error(`[supervisor] the server child exited (code ${code}, signal ${signal}) after it started. Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).`);
+      bg.lost(c, `server child exited (code ${code}, signal ${signal}) after it started`);
     });
   if (first) watchExit(first);
   bg.onStatus((s, active) => {
     if (s.state === 'ok' && active) watchExit(active as Child);
+    if (s.state === 'failed' && s.crashed) return;
     console.error(`[supervisor] reload ${s.state}${s.state === 'failed' ? `: ${s.error}` : ''}`);
   });
 
@@ -300,7 +308,7 @@ async function main(): Promise<void> {
         return true;
       }
       const form = new URLSearchParams(await readBody(req));
-      const r = recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: CODE_ROOT, dataRoot }, sessionId: form.get('sessionId') ?? '', turn: Number(form.get('turn')), abs: form.get('abs') });
+      const r = recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: CODE_ROOT, dataRoot }, sessionId: form.get('sessionId') ?? '', turn: Number(form.get('turn')), abs: form.get('abs'), serverRunning: bg.active !== null });
       res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(r.text);
       return true;
     }
@@ -418,6 +426,7 @@ async function main(): Promise<void> {
   }
 
   const stop = () => {
+    stopping = true;
     bg.active?.kill();
     proxy.close();
     setTimeout(() => process.exit(0), 200);

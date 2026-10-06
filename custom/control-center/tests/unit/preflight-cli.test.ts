@@ -30,10 +30,13 @@ describe('runPreflightCli', () => {
     expect(r.output).toContain('preflight ok');
   });
 
-  it('exits 1 below the Node floor', async () => {
-    const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion: 'v20.0.0', ...host() });
-    expect(r.code).toBe(1);
-    expect(r.output).toContain('below the floor');
+  it('exits 1 below the Node floor, and on a version above it that the dependencies do not support', async () => {
+    for (const nodeVersion of ['v20.0.0', 'v23.0.0', 'v24.14.0', 'v25.0.0']) {
+      const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test' }, nodeVersion, ...host() });
+      expect(r.code, nodeVersion).toBe(1);
+      // Requirement change: the message names the supported versions (it said "below the floor").
+      expect(r.output, nodeVersion).toContain(`Node ${nodeVersion.slice(1)} is not supported; use 22.22.2+, 24.15+ or 26+`);
+    }
   });
 
   it('an unapproved Claude Code version is a warning, not an error: exits 0 so the app starts and only sessions are refused', async () => {

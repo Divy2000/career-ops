@@ -281,6 +281,60 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  /** A copy of the package (its node_modules linked) whose server/app.ts activate() throws, as a Dev Chat edit could make it. */
+  function packageWhoseActivateThrows(): string {
+    const pkg = path.join(tempDir('cc-sup-pkg-activate-'), 'control-center');
+    for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
+    fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    const app = path.join(pkg, 'server', 'app.ts');
+    const text = fs.readFileSync(app, 'utf8');
+    expect(text).toContain('    runner.reconcile();\n');
+    // tsx does not typecheck: the module loads, the child passes its health check, and activate() throws a TypeError.
+    fs.writeFileSync(app, text.replace('    runner.reconcile();\n', '    (runner as unknown as { reconcil: () => void }).reconcil();\n'));
+    return pkg;
+  }
+
+  it('a server child that dies after it passed its health check (activate throws) leaves the supervisor and /__recovery up (SW3-claude-01)', async () => {
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageWhoseActivateThrows(), reload: true });
+    try {
+      await until(() => /reconcil is not a function/.test(s.output()) || s.proc.exitCode !== null, 'the child to die in activate()');
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      const cookie = await signIn(port);
+      const status = JSON.parse((await request(port, 'GET', '/__supervisor/status', { cookie })).body) as { state: string; error: string; activePid: number | null };
+      expect(status).toMatchObject({ state: 'failed', activePid: null });
+      expect(status.error).toMatch(/server child exited \(code 1, signal null\) after it started/);
+      const page = await request(port, 'GET', '/__recovery', { cookie });
+      expect(page.status).toBe(200);
+      expect(page.body).toMatch(/The server stopped at/);
+      expect(page.body).toMatch(/reconcil is not a function/);
+      const down = await request(port, 'GET', '/', { cookie });
+      expect(down.status).toBe(503);
+      expect(down.body).toMatch(/The server stopped/);
+      // A Restart runs the same broken code: it fails again, and the supervisor still stays up.
+      const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' });
+      await until(() => (s.output().match(/reconcil is not a function/g) ?? []).length >= 2 || s.proc.exitCode !== null, 'the restarted child to die in activate() too');
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(s.proc.exitCode, `${restart.status} ${restart.body}\n${s.output()}`).toBeNull();
+      expect((await request(port, 'GET', '/__recovery', { cookie })).status).toBe(200);
+    } finally {
+      await stop(s);
+    }
+  });
+
+  it('with CC_NO_RELOAD set, a server child that dies after its health check still stops the supervisor, as before (SW3-claude-01)', async () => {
+    const s = startSupervisor(await freePort(), copyFixtureRoot(), { packageRoot: packageWhoseActivateThrows() });
+    try {
+      await until(() => s.proc.exitCode !== null, 'the supervisor to stop', 30_000);
+      expect(s.proc.exitCode, s.output()).toBe(1);
+      expect(s.output()).toMatch(/server child exited \(1\); supervisor stopping/);
+    } finally {
+      await stop(s);
+    }
+  });
+
   it('a Dev Chat edit that breaks a module the server and the old supervisor load still leaves /__recovery up, and the fix brings the app back (SW2-claude-05)', async () => {
     // A copy of the package (its node_modules linked), so the broken file is never this checkout's.
     const pkg = path.join(tempDir('cc-sup-pkg-'), 'control-center');

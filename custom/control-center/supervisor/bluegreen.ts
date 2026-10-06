@@ -22,7 +22,8 @@ export interface ChildHandle {
   exited: Promise<void>;
 }
 
-export type ReloadState = { state: 'idle' } | { state: 'reloading'; startedAt: string } | { state: 'ok'; at: string; pid: number } | { state: 'failed'; at: string; error: string; stderrTail: string };
+/** `failed` with `crashed`: the active child exited on its own after it started, rather than a new one failing to start. */
+export type ReloadState = { state: 'idle' } | { state: 'reloading'; startedAt: string } | { state: 'ok'; at: string; pid: number } | { state: 'failed'; at: string; error: string; stderrTail: string; crashed?: true };
 /** How one reload run ended. */
 export type ReloadResult = Extract<ReloadState, { state: 'ok' | 'failed' }>;
 
@@ -51,6 +52,16 @@ export class BlueGreen {
   private set(s: ReloadState): void {
     this.status = s;
     for (const l of this.listeners) l(s, this.active);
+  }
+
+  /**
+   * The active child exited without being asked (it crashed after it started): no child serves until a reload or a
+   * restart brings one up, and that one takes over at once. A child that is no longer active is ignored.
+   */
+  lost(child: ChildHandle, error: string): void {
+    if (this.active !== child) return;
+    this.active = null;
+    this.set({ state: 'failed', at: (this.opts.now ?? (() => new Date().toISOString()))(), error, stderrTail: child.stderrTail(), crashed: true });
   }
 
   /**

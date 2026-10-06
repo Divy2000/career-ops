@@ -1,6 +1,7 @@
 {
   "generatedAt": "2026-10-03",
-  "nodeFloor": "22.6.0",
+  "nodeFloor": "22.22.2",
+  "nodeRange": "^22.22.2 || ^24.15.0 || >=26.0.0",
   "notes": [
     "Every CLI below is invoked as node <script> <helpArgs> with cwd at the code root and CAREER_OPS_ROOT at a fixture copy.",
     "expectExit null means the usage text is checked but the exit code is not pinned.",

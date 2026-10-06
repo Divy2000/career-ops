@@ -69,18 +69,26 @@ describe('a slow extractor does not block other requests', () => {
 
   it('answers a concurrent request while an upload is being extracted', async () => {
     const started = Date.now();
-    const upload = t.app.inject({ method: 'POST', url: '/api/projects/upload?name=slow.pdf', headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: makePdf(['x']) });
+    let uploadAt = 0;
+    const upload = t.app.inject({ method: 'POST', url: '/api/projects/upload?name=slow.pdf', headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: makePdf(['x']) }).then((r) => {
+      uploadAt = Date.now();
+      return r;
+    });
     // Wait until the extractor is running (the stub logs -layout as it starts) before the second request is made.
     for (let i = 0; i < 100 && !(fs.existsSync(calls) && fs.readFileSync(calls, 'utf8').split('\n').includes('-layout')); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(fs.readFileSync(calls, 'utf8').split('\n')).toContain('-layout');
+    // Timed from its own start, not the upload's: waiting for the extractor to start is no part of the answer's time.
+    const listStart = Date.now();
     const list = await t.app.inject({ method: 'GET', url: '/api/projects', headers: t.authed });
-    const listDone = Date.now() - started;
+    const listAt = Date.now();
     const res = await upload;
-    const uploadDone = Date.now() - started;
     expect(list.statusCode).toBe(200);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json().chars).toBe('Slow Kite\n'.length);
-    expect(uploadDone).toBeGreaterThanOrEqual(1500);
-    expect(listDone).toBeLessThan(1000);
+    expect(uploadAt - started).toBeGreaterThanOrEqual(1500);
+    // The list answered while the extraction still ran, and quickly.
+    expect(listAt).toBeLessThan(uploadAt);
+    expect(listAt - listStart).toBeLessThan(1000);
   });
 
   it('probes for the extractor once and reuses it for later extractions', async () => {
