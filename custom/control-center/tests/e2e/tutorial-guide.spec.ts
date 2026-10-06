@@ -53,6 +53,46 @@ const pushSubDown = (page: Page, subId: string) =>
     sheet.replaceSync(`.guide-doc [data-sub="${id}"] { margin-top: 10000px !important; }`);
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
   }, subId);
+/**
+ * Makes every smooth scrollIntoView take 1.5 s, as a slow smooth scroll in another browser can. With `scrollend`, one fires when it
+ * stops (the browser's own per-step events are held back); without, the browser is made to look as if it had no scrollend at all.
+ */
+const slowSmoothScroll = (page: Page, scrollend: boolean) =>
+  page.addInitScript((withScrollend) => {
+    const DURATION = 1500;
+    let animating = false;
+    if (!withScrollend) {
+      // Chromium defines the handler on the window object itself, and on the element and document prototypes.
+      for (const owner of [window, HTMLElement.prototype, Document.prototype]) delete (owner as { onscrollend?: unknown }).onscrollend;
+    }
+    window.addEventListener(
+      'scrollend',
+      (e) => {
+        if (animating || !withScrollend) e.stopImmediatePropagation();
+      },
+      true,
+    );
+    const native = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      const main = document.querySelector<HTMLElement>('.shell__main');
+      if (!main || typeof arg !== 'object' || arg.behavior !== 'smooth') return native.call(this, arg);
+      const from = main.scrollTop;
+      const margin = parseFloat(getComputedStyle(this).scrollMarginTop) || 0;
+      const to = Math.min(main.scrollHeight - main.clientHeight, Math.max(0, from + this.getBoundingClientRect().top - main.getBoundingClientRect().top - margin));
+      const start = performance.now();
+      animating = true;
+      const step = () => {
+        const t = Math.min(1, (performance.now() - start) / DURATION);
+        main.scrollTop = from + (to - from) * t;
+        if (t < 1) requestAnimationFrame(step);
+        else {
+          animating = false;
+          if (withScrollend) main.dispatchEvent(new Event('scrollend'));
+        }
+      };
+      requestAnimationFrame(step);
+    };
+  }, scrollend);
 /** Pixels between the bottom of the viewport and the top of an element that is still below it. */
 const belowViewport = (loc: Locator) => loc.evaluate((el) => el.getBoundingClientRect().top - window.innerHeight);
 const historyLength = (page: Page) => page.evaluate(() => history.length);
@@ -195,6 +235,42 @@ test.describe('Tutorials guide, documentation style', () => {
       await expect(toc(page).getByRole('link', { name: 'Follow-ups and replies' })).toHaveAttribute('aria-current', 'true');
     });
 
+    test('a deep link near the end of a section keeps its subsection current until the reader scrolls', async ({ page }) => {
+      // So tall that landing on Follow-ups leaves the page at its bottom with that heading below the reading band, where the spy reads another subsection.
+      await page.setViewportSize({ width: 1440, height: 2000 });
+      await openDocs(page, '&section=tracking&sub=follow-ups');
+      await expect(h3(page, 'Follow-ups and replies')).toBeInViewport();
+      await expect.poll(() => page.locator('.shell__main').evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
+      // Well past the landing lock and the spy's debounce.
+      await new Promise((r) => setTimeout(r, 1000));
+      await expect(page).toHaveURL(/sub=follow-ups/);
+      await expect(toc(page).getByRole('link', { name: 'Follow-ups and replies' })).toHaveAttribute('aria-current', 'true');
+    });
+
+    test('a deep link lets go once the reader scrolls with the keyboard', async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 2000 });
+      await openDocs(page, '&section=tracking&sub=follow-ups');
+      await expect(h3(page, 'Follow-ups and replies')).toBeInViewport();
+      // Keys scroll the area that was last clicked, as for a reader who clicked into the text first.
+      await page.getByText('Files stay in your data root.').click();
+      await expect(page).toHaveURL(/sub=follow-ups/);
+      await page.keyboard.press('Home');
+      await expect.poll(() => scrollTop(page)).toBe(0);
+      await expect(page).toHaveURL(/sub=change-status/);
+      await expect(toc(page).getByRole('link', { name: 'Change a status' })).toHaveAttribute('aria-current', 'true');
+    });
+
+    test('after a deep link, a reader scroll to the bottom still reads the last subsection', async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await openDocs(page, '&section=tracking&sub=follow-ups');
+      await expect(h3(page, 'Follow-ups and replies')).toBeInViewport();
+      const box = (await page.locator('.shell__main').boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, 4000);
+      await expect(page).toHaveURL(/sub=safety/);
+      await expect(toc(page).getByRole('link', { name: 'Safety of the data' })).toHaveAttribute('aria-current', 'true');
+    });
+
     test('the same subsection id in two sections is told apart by the section', async ({ page }) => {
       await openDocs(page, '&section=tracking&sub=safety');
       await expect(h3(page, 'Safety of the data')).toBeInViewport();
@@ -260,6 +336,94 @@ test.describe('Tutorials guide, documentation style', () => {
         main.scrollTo({ top: main.scrollHeight });
       });
       await expect(page).toHaveURL(/sub=appearance/);
+    });
+
+    test('at the very bottom the last subsection is the one being read, even when earlier headings are still in the reading band', async ({ page }) => {
+      // So tall that at the bottom of Tracking, Change a status still sits in the top 40% of the scroll area.
+      await page.setViewportSize({ width: 1440, height: 2000 });
+      await openDocs(page, '&section=tracking');
+      await expect(page).toHaveURL(/sub=change-status/);
+      const box = (await page.locator('.shell__main').boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, 4000);
+      await expect(page).toHaveURL(/sub=safety/);
+      await expect(toc(page).getByRole('link', { name: 'Safety of the data' })).toHaveAttribute('aria-current', 'true');
+    });
+
+    test('a reader who scrolls while a contents jump is still moving ends up with the subsection in view, not the one clicked', async ({ page }) => {
+      await openDocs(page, '&section=getting-started&sub=launch');
+      await expect(page).toHaveURL(/sub=launch/);
+      await toc(page).getByRole('link', { name: 'Appearance' }).click();
+      await expect(page).toHaveURL(/sub=appearance/);
+      await expect.poll(() => atTop(h3(page, 'Appearance'))).toBe(true);
+      // Back to the top while the jump is still inside its 900 ms lock, with the pointer over the page rather than the contents.
+      const box = (await page.locator('.guide-doc').boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, 450);
+      // A wheel that lands while the jump's own animation is still running can be swallowed by it; the reader just wheels again.
+      await expect
+        .poll(async () => {
+          await page.mouse.wheel(0, -20000);
+          return scrollTop(page);
+        })
+        .toBe(0);
+      await new Promise((r) => setTimeout(r, 1500));
+      await expect(page).toHaveURL(/sub=launch/);
+      await expect(toc(page).getByRole('link', { name: 'Launch and sign in' })).toHaveAttribute('aria-current', 'true');
+    });
+
+    test('a contents click that does not move the page still lets go once something else scrolls it', async ({ page }) => {
+      await openDocs(page, '&section=tracking&sub=safety');
+      await expect.poll(() => page.locator('.shell__main').evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
+      // The page is already as far down as it goes, so this jump has nowhere to move: no scroll, no scrollend.
+      await toc(page).getByRole('link', { name: 'Safety of the data' }).click();
+      await new Promise((r) => setTimeout(r, 1200));
+      // A scroll no reader input caused, as find-in-page or a focus move would make.
+      await page.locator('.shell__main').evaluate((el) => {
+        el.scrollTop = 0;
+      });
+      await expect(page).toHaveURL(/sub=change-status/);
+    });
+
+    test('a contents jump keeps its subsection through a smooth scroll slower than its lock, in a browser that fires scrollend when it stops', async ({ page }) => {
+      await slowSmoothScroll(page, true);
+      // So tall that the jump to Follow-ups ends at the bottom of the page, where the spy alone would read Safety.
+      await page.setViewportSize({ width: 1440, height: 2000 });
+      await openDocs(page, '&section=tracking');
+      await expect(page).toHaveURL(/sub=change-status/);
+      expect(await page.evaluate(() => 'onscrollend' in window)).toBe(true);
+      await toc(page).getByRole('link', { name: 'Follow-ups and replies' }).click();
+      await expect(page).toHaveURL(/sub=follow-ups/);
+      await expect.poll(() => page.locator('.shell__main').evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), { timeout: 5000 }).toBeLessThan(2);
+      // Past the end of the scroll, the spy's debounce and any idle wait.
+      await new Promise((r) => setTimeout(r, 1000));
+      await expect(page).toHaveURL(/sub=follow-ups/);
+      await expect(toc(page).getByRole('link', { name: 'Follow-ups and replies' })).toHaveAttribute('aria-current', 'true');
+      // The jump has come to rest, so a later scroll that no reader input caused lets go of it.
+      await page.locator('.shell__main').evaluate((el) => {
+        el.scrollTop = 0;
+      });
+      await expect(page).toHaveURL(/sub=change-status/);
+    });
+
+    test('a contents jump keeps its subsection through a smooth scroll slower than its lock, in a browser without scrollend', async ({ page }) => {
+      await slowSmoothScroll(page, false);
+      // So tall that the jump to Follow-ups ends at the bottom of the page, where the spy alone would read Safety.
+      await page.setViewportSize({ width: 1440, height: 2000 });
+      await openDocs(page, '&section=tracking');
+      await expect(page).toHaveURL(/sub=change-status/);
+      expect(await page.evaluate(() => 'onscrollend' in window)).toBe(false);
+      await toc(page).getByRole('link', { name: 'Follow-ups and replies' }).click();
+      await expect(page).toHaveURL(/sub=follow-ups/);
+      await expect.poll(() => page.locator('.shell__main').evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), { timeout: 5000 }).toBeLessThan(2);
+      // Past the end of the scroll, the spy's debounce and any idle wait.
+      await new Promise((r) => setTimeout(r, 1000));
+      await expect(page).toHaveURL(/sub=follow-ups/);
+      await expect(toc(page).getByRole('link', { name: 'Follow-ups and replies' })).toHaveAttribute('aria-current', 'true');
+      // The jump has come to rest, so a later scroll that no reader input caused lets go of it.
+      await page.locator('.shell__main').evaluate((el) => {
+        el.scrollTop = 0;
+      });
+      await expect(page).toHaveURL(/sub=change-status/);
     });
 
     test('a click in the contents pushes a history entry, scrolls there, and Back returns to the previous place', async ({ page }) => {
