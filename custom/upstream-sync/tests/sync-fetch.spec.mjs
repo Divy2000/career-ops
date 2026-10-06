@@ -721,8 +721,8 @@ test('deps_fingerprint ignores everything but how dependencies resolve, in any k
     const first = fp(base);
     assert.equal(fp({ ...base, version: '1.0.1', description: 'new', scripts: { t: 'x' }, engines: { node: '>=22' }, bin: { x: 'x.js' } }), first);
     assert.equal(fp({ version: '9', dependencies: { b: '^2.0.0', a: '^1.0.0' }, name: 'x' }), first, 'key order does not matter');
-    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides', 'bundleDependencies', 'bundledDependencies', 'workspaces']) {
-      const value = field === 'dependencies' ? { a: '^1.1.0', b: '^2.0.0' } : field.startsWith('bundle') || field === 'workspaces' ? ['a'] : { c: '1.0.0' };
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'overrides', 'bundleDependencies', 'bundledDependencies', 'workspaces']) {
+      const value = field === 'dependencies' ? { a: '^1.1.0', b: '^2.0.0' } : field === 'peerDependenciesMeta' ? { c: { optional: true } } : field.startsWith('bundle') || field === 'workspaces' ? ['a'] : { c: '1.0.0' };
       assert.notEqual(fp({ ...base, [field]: value }), first, `${field} changes the fingerprint`);
     }
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
