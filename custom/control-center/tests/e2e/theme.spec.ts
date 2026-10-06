@@ -303,13 +303,24 @@ test.describe('accessibility in both themes (serious and critical axe violations
         await axeSerious(page);
       });
 
-      test('confirm dialog open', async ({ page }) => {
+      test('parameter dialog open', async ({ page }) => {
         await page.keyboard.press('Control+k');
         await page.getByPlaceholder(/Go to a page/).fill('tracker.delete');
         await expect(page.locator('[cmdk-item]', { hasText: 'tracker.delete' })).toBeVisible();
         await page.keyboard.press('Enter');
         await expect(page.locator('[role="dialog"].dialog')).toBeVisible();
         await axeSerious(page);
+      });
+
+      // The danger-styled confirm a registry action with a confirm text opens (SW2-tests-06); Cancel runs nothing.
+      test('confirm dialog open', async ({ page }) => {
+        await page.keyboard.press('Control+k');
+        await page.getByPlaceholder(/Go to a page/).fill('Roll back update');
+        await page.locator('[cmdk-item]', { hasText: 'Roll back update' }).click();
+        const confirm = page.getByRole('dialog', { name: 'Roll back update' });
+        await expect(confirm.getByRole('button', { name: 'Run' })).toHaveClass(/button--danger/);
+        await axeSerious(page);
+        await confirm.getByRole('button', { name: 'Cancel' }).click();
       });
     });
   }
