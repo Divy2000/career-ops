@@ -263,7 +263,9 @@ const DNS_STUB = pathToFileURL(path.join(PACKAGE_ROOT, 'tests', 'fakes', 'dns-st
 
 function hookRun(sessionDir: string, policy: { file: string; sha256: string }, payload: Record<string, unknown>) {
   // The hook resolves names through the DNS stub, never the machine's resolver (SW2-tests-24).
-  const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${DNS_STUB}`.trim(), CC_TEST_DNS: JSON.stringify(TEST_DNS), CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${DNS_STUB}`.trim(), CC_TEST_DNS: JSON.stringify(TEST_DNS), CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
+  // Snapshots go to the session dir given here, never to a turn dir the suite's own environment names (SW4-tests-02).
+  delete env.CC_TURN_DIR;
   const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env });
   return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
