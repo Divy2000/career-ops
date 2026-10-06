@@ -10,7 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FORK_URL="${CAREER_OPS_REPO_URL:-https://github.com/Divy2000/career-ops.git}"
 UPSTREAM_URL="https://github.com/career-ops-hq/career-ops.git"
-NODE_FLOOR="22.6.0"
+# The Control Center's Node floor (supervisor/preflight.ts; a test there checks this copy).
+NODE_FLOOR="22.22.2"
 KEYCHAIN_SERVICE="career-ops-claude-token"
 # The terminal the installer talks to. Overridable so tests can feed answers from a file.
 TTY_DEV="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"

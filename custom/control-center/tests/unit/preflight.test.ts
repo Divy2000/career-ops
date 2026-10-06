@@ -16,9 +16,11 @@ const host = () => ({ platform: 'darwin' as const, managedSettings: { dir: tempD
 
 describe('preflight', () => {
   it('compares versions numerically against the Node floor', () => {
-    expect(versionAtLeast('v22.6.0', NODE_FLOOR)).toBe(true);
+    // Requirement change: the floor is the lowest Node every dependency accepts, 22.22.2 (it was 22.6.0).
+    expect(versionAtLeast('v22.22.2', NODE_FLOOR)).toBe(true);
     expect(versionAtLeast('v26.4.0', NODE_FLOOR)).toBe(true);
-    expect(versionAtLeast('v22.5.9', NODE_FLOOR)).toBe(false);
+    expect(versionAtLeast('v22.22.1', NODE_FLOOR)).toBe(false);
+    expect(versionAtLeast('v22.6.0', NODE_FLOOR)).toBe(false);
     expect(versionAtLeast('v9.99.0', NODE_FLOOR)).toBe(false);
   });
 

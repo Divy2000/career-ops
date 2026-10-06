@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../server/claude/cli-version.js';
 
-export const NODE_FLOOR = '22.6.0';
+/** The lowest Node every dependency in package-lock.json accepts (tests/unit/node-floor.test.ts keeps it, and every copy, so). */
+export const NODE_FLOOR = '22.22.2';
 
 export interface PreflightInput {
   claudeBin: string;

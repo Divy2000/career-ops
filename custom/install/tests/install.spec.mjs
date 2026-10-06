@@ -92,18 +92,29 @@ test('without --dir the installer targets ~/career-ops when the script is not in
 
 // ---------------------------------------------------------------- platform and prerequisites
 
-test('Node 20 fails with exit 1 naming the 22.6 floor, before anything is changed', () => {
+// Requirement change: the floor is the Control Center's, the lowest Node every dependency accepts, 22.22.2 (it was 22.6.0).
+test('Node 20 fails with exit 1 naming the 22.22.2 floor, before anything is changed', () => {
   const { w, D, args } = fresh();
   const r = w.run(args(), { env: { FAKE_NODE_VERSION: 'v20.11.0' } });
   assert.equal(r.status, 1);
-  assert.match(r.out, /22\.6/);
+  assert.match(r.out, /22\.22\.2/);
   assert.equal(exists(D), false);
   assert.equal(w.calls('git').length, 0);
 });
 
-test('Node 22.6.0 is accepted', () => {
+test('Node just below the floor (22.22.1, or the old floor 22.6.0) fails the same way', () => {
+  for (const version of ['v22.22.1', 'v22.6.0']) {
+    const { w, D, args } = fresh();
+    const r = w.run(args(), { env: { FAKE_NODE_VERSION: version } });
+    assert.equal(r.status, 1, version);
+    assert.match(r.out, /older than the required 22\.22\.2/, version);
+    assert.equal(exists(D), false, version);
+  }
+});
+
+test('Node 22.22.2 is accepted', () => {
   const { w, args } = fresh();
-  const r = w.run(args('--dry-run'), { env: { FAKE_NODE_VERSION: 'v22.6.0' } });
+  const r = w.run(args('--dry-run'), { env: { FAKE_NODE_VERSION: 'v22.22.2' } });
   assert.equal(r.status, 0, r.out);
 });
 
