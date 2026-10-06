@@ -24,7 +24,7 @@ function describeIssues(issues: unknown): string {
 
 export function describeError(err: unknown): string {
   const e = err as ApiError;
-  const body = e?.body as { error?: string; stderr?: string; issues?: unknown } | null | undefined;
+  const body = e?.body as { error?: string; message?: unknown; stderr?: string; issues?: unknown } | null | undefined;
   // A schema label ("invalid body", or one with a hint: "invalid rows: company, since ...") says what was refused, not
   // where. A route that wrote the issues into its error in its own words (the projects routes: "bullet 2 must be one
   // line") would show them twice, and so would a label that already quotes every issue's message.
@@ -32,7 +32,9 @@ export function describeError(err: unknown): string {
   const list = Array.isArray(body?.issues) ? (body.issues as Array<{ message?: unknown }>) : [];
   const said = list.length > 0 && list.every((i) => error.includes(String(i.message ?? '')));
   const issues = /^invalid\b/.test(error) && !said ? describeIssues(body?.issues) : '';
-  return `${body?.error ?? e?.message ?? 'unknown error'}${issues}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
+  // Fastify's own error body (an unhandled throw) names the status in error and puts the reason in message.
+  const reason = typeof body?.message === 'string' && body.message.trim() && body.message !== body.error ? `: ${body.message.trim()}` : '';
+  return `${body?.error ?? e?.message ?? 'unknown error'}${reason}${issues}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
 }
 
 /**
