@@ -64,7 +64,8 @@ describe('structured portals editor (ops through the yaml Document API)', () => 
 
 describe('follow-up cadence form (PUT /api/followups/cadence)', () => {
   it('writes only the followup_cadence keys through comment-preserving ops and validates the profile', async () => {
-    const created = await send('PUT', '/api/config/profile', { raw: 'language:\n  output: en\n# keep this comment\nfollowup_cadence:\n  applied_first_days: 7\n' });
+    const current = (await get('/api/config/profile')).json();
+    const created = await send('PUT', '/api/config/profile', { raw: 'language:\n  output: en\n# keep this comment\nfollowup_cadence:\n  applied_first_days: 7\n' }, { 'if-match': current.etag });
     expect(created.statusCode, created.body).toBe(200);
     const res = await send('PUT', '/api/followups/cadence', { cadence: { applied_first_days: 10, responded_initial_days: 2 } }, { 'if-match': created.json().etag });
     expect(res.statusCode, res.body).toBe(200);
