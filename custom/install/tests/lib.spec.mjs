@@ -96,6 +96,13 @@ test('interactiveOnboardPrompt without inputs is just the instruction', () => {
   assert.equal(interactiveOnboardPrompt({ cv: null, docs: [] }), 'Read custom/install/ONBOARDING.md and follow it.');
 });
 
+test('renderHeadlessPrompt keeps paths verbatim, even when they hold $ replacement patterns (SW3-scripts-05)', () => {
+  const draftDir = "/data/$&root/draft $'x";
+  const inputs = ['/data/documents/projects/Budget $$ plan.md', "/data/notes $` and $& too.md", '/data/{{DRAFT_DIR}}.md'];
+  const out = renderHeadlessPrompt('Drafts: {{DRAFT_DIR}}\nInputs: {{INPUTS}}\n', { draftDir, inputs });
+  assert.equal(out, `Drafts: ${draftDir}\nInputs: ${inputs.join(', ')}\n`);
+});
+
 test('renderHeadlessPrompt fills the draft dir and inputs and leaves no placeholder behind', () => {
   const out = renderHeadlessPrompt('Drafts: {{DRAFT_DIR}}\nInputs: {{INPUTS}}\n', { draftDir: '/d/draft', inputs: ['/d/cv.md', '/d/p.md'] });
   assert.equal(out, 'Drafts: /d/draft\nInputs: /d/cv.md, /d/p.md\n');

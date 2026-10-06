@@ -105,7 +105,10 @@ export function interactiveOnboardPrompt({ cv, docs }) {
 }
 
 export function renderHeadlessPrompt(template, { draftDir, inputs }) {
-  return template.replaceAll('{{DRAFT_DIR}}', draftDir).replaceAll('{{INPUTS}}', inputs.length ? inputs.join(', ') : 'none provided');
+  // One pass with a replacer function: a string replacement would expand $&, $$, $` and $' inside a path, and a second
+  // pass would fill a placeholder that the first one's path happened to contain.
+  const values = { DRAFT_DIR: draftDir, INPUTS: inputs.length ? inputs.join(', ') : 'none provided' };
+  return template.replace(/\{\{(DRAFT_DIR|INPUTS)\}\}/g, (_, key) => values[key]);
 }
 
 /** `--flag value` pairs; the flags named in `listFlags` take every value up to the next `--flag`. Returns Map(flag -> string | string[]). */
