@@ -16,6 +16,7 @@ let root: Root;
 let posts: Array<{ url: string; body: { params: Record<string, unknown> } }>;
 let markStatus: number;
 let statusFails: boolean;
+let shareOutput: string;
 
 const ROW: TrackerRow = {
   num: 6, date: '2026-09-30', company: 'Vandelay Systems', role: 'Senior Python Engineer', score: 4.1, scoreRaw: '4.1/5', status: 'Offer',
@@ -30,11 +31,13 @@ beforeEach(async () => {
   posts = [];
   markStatus = 200;
   statusFails = false;
+  shareOutput = 'ok';
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) });
       if (url === '/api/actions/tracker.setStatus' && statusFails) return json(409, { error: 'tracker is locked by another writer' });
+      if (url === '/api/actions/tracker.hiredShare') return json(200, { result: shareOutput });
       if (url === '/api/actions/tracker.hiredMark') return markStatus === 200 ? json(200, { result: 'marked' }) : json(markStatus, { error: 'No tracker row with state Hired' });
       return json(200, { result: 'ok' });
     }),
@@ -91,4 +94,14 @@ describe('Hired Wall dialog', () => {
     expect(dialog()).toBeNull();
     expect(posts.some((p) => p.url === '/api/actions/tracker.hiredMark')).toBe(false);
   });
+
+  it('links the prefilled issue hired-share.mjs printed, not a GitHub URL quoted in the story (SW4-web-a-06)', async () => {
+    const issue = 'https://github.com/career-ops-hq/career-ops/issues/new?template=hired.yml&title=Hired';
+    // hired-share.mjs prints the payload JSON, story included, and then the issue URL on its own line.
+    shareOutput = `This is EXACTLY what the prefilled issue will contain:\n{\n  "story": "Thanks to https://github.com/santifer/career-ops",\n  "anonymity": "role"\n}\n\nReview and submit it yourself on GitHub (nothing has been sent):\n${issue}`;
+    await act(async () => button('Draft story').click());
+    await until(() => host.querySelector('a[href^="https://github.com"]'), 'the issue link');
+    expect(host.querySelector('a[href^="https://github.com"]')!.getAttribute('href')).toBe(issue);
+  });
 });
+
