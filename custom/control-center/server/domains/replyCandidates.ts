@@ -9,7 +9,7 @@ import { englishModeOf } from '../claude/modes.js';
  */
 export function replyWatchRefused(dataRoot: string): string | null {
   const file = path.join(dataRoot, 'data', 'reply-candidates.json');
-  return fs.existsSync(file) && !onlySeededMocks(file) ? null : 'No replies to review yet. Paste a reply first, then run the digest.';
+  return fs.existsSync(file) && !holdsNoPastedReply(file) ? null : 'No replies to review yet. Paste a reply first, then run the digest.';
 }
 
 /**
@@ -25,15 +25,18 @@ const SEEDED_MOCKS = new Set(
   ].map((k) => k.join('\n')),
 );
 
-/** True when the file is a non-empty list of seeded mocks only. Anything else (a pasted reply, or a file the script cannot read) is left to reply-watch.mjs. */
-function onlySeededMocks(file: string): boolean {
+/**
+ * True when the file is a list with no pasted reply in it: empty (paste-reply.mjs always writes the reply it pastes) or
+ * seeded mocks only. Anything else (a pasted reply, or a file the script cannot read) is left to reply-watch.mjs.
+ */
+function holdsNoPastedReply(file: string): boolean {
   let entries: unknown;
   try {
     entries = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return false;
   }
-  if (!Array.isArray(entries) || entries.length === 0) return false;
+  if (!Array.isArray(entries)) return false;
   return entries.every((e) => {
     const c = (e ?? {}) as { message_id?: unknown; from?: unknown; subject?: unknown };
     return SEEDED_MOCKS.has([c.message_id, c.from, c.subject].map(String).join('\n'));

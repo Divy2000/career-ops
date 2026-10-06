@@ -25,6 +25,8 @@ const post = (url: string, payload: Record<string, unknown> = {}) => t.app.injec
 const get = (url: string) => t.app.inject({ method: 'GET', url, headers: t.authed });
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = ['done', 'awaiting_user', 'error', 'cancelled'];
+/** One entry as paste-reply.mjs writes it: a reply-watch session starts only once the replies file holds one. */
+const PASTED_REPLY = { message_id: 'paste-1', from: 'talent@acme.example', subject: 'Next steps', body_snippet: 'Thanks for applying.', signal: null };
 
 async function settle(id: string, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -1278,7 +1280,7 @@ describe('scripts a session runs write only inside its write scope', () => {
     const scenario = scenarioFile({ events: [INIT, { __bash: 'node reply-watch.mjs {{DATA_ROOT}}/modes/from-reply-watch.md' }, result('Checked replies.', 0.01)] });
     // A reply-watch session starts only once a reply has been pasted (SW7-web-a-02).
     const candidates = path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json');
-    fs.writeFileSync(candidates, '[]\n');
+    fs.writeFileSync(candidates, JSON.stringify([PASTED_REPLY], null, 2));
     const { events } = await withScenario(scenario, async () => settle((await post('/api/sessions', { mode: 'reply-watch', prompt: 'Check replies' })).json().id)).finally(() => fs.rmSync(candidates, { force: true }));
     expect(evs(events).filter((e) => e.type === 'permission.denied').map((d) => d.input?.command)).toEqual([`node reply-watch.mjs ${target}`]);
     expect(fs.existsSync(target)).toBe(false);
@@ -1323,8 +1325,19 @@ describe('Reply watch session (SW7-web-a-02)', () => {
     }
   });
 
-  it('starts once a reply is pasted; a later turn or a fork is refused if the replies file is gone by then', async () => {
+  it('is refused while the replies file is an empty list: paste-reply.mjs always writes the reply it pastes, so [] holds none (review fix 2)', async () => {
     fs.writeFileSync(candidates(), '[]\n');
+    try {
+      const res = await post('/api/sessions', { mode: 'reply-watch', prompt: 'Run the reply digest.' });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error).toMatch(/No replies to review yet/);
+    } finally {
+      fs.rmSync(candidates(), { force: true });
+    }
+  });
+
+  it('starts once a reply is pasted; a later turn or a fork is refused if the replies file is gone by then', async () => {
+    fs.writeFileSync(candidates(), JSON.stringify([PASTED_REPLY], null, 2));
     const res = await post('/api/sessions', { mode: 'reply-watch', prompt: 'Run the reply digest.' });
     expect(res.statusCode, res.body).toBe(202);
     const id = res.json().id as string;

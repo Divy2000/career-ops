@@ -110,6 +110,17 @@ describe('Reply watch digest: a file holding only the mock emails is no replies 
     }
   });
 
+  it('refuses the digest when the file is an empty list, which no paste leaves behind (review fix 2)', async () => {
+    fs.writeFileSync(candidates(), '[]\n');
+    try {
+      const res = await post('followups.replyWatch', {});
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/No replies to review yet.*Paste a reply/);
+    } finally {
+      fs.rmSync(candidates(), { force: true });
+    }
+  });
+
   it('runs once a real reply was pasted next to the mocks', async () => {
     seedMocks();
     const seeded = JSON.parse(fs.readFileSync(candidates(), 'utf8')) as unknown[];
