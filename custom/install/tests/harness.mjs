@@ -21,9 +21,12 @@ const DEFAULT_TOOLS = ['git', 'node', 'npm', 'security', 'uname', 'launchctl', '
 // The tools install.sh probes for. A world has one only when its stub is in `tools`: the system copies are left off
 // the world PATH, so a "missing npm" spec means the same on Linux, where npm, git or gh live in /usr/bin, as on macOS.
 const PROBED = new Set(['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']);
+// The system tools that change real state (Keychain, launchd, plists). A world reaches them only through its stubs,
+// so a spec that forgets one fails on a missing command instead of touching the real system.
+const REAL_STATE = new Set(['security', 'launchctl', 'plutil']);
 let systemBin = null;
 
-/** Links every command in `dirs` (earlier folders win) into `into`, except the probed tools. */
+/** Links every command in `dirs` (earlier folders win) into `into`, except the probed and real-state tools. */
 export function linkSystemCommands(dirs, into) {
   // Names already linked, not fs.existsSync: that follows the link, so a dangling one seen again (a command in both
   // /usr/bin and /bin on merged-/usr systems) would be linked twice and throw EEXIST.
@@ -37,7 +40,7 @@ export function linkSystemCommands(dirs, into) {
     }
     for (const name of names) {
       const link = path.join(into, name);
-      if (PROBED.has(name) || linked.has(name)) continue;
+      if (PROBED.has(name) || REAL_STATE.has(name) || linked.has(name)) continue;
       linked.add(name);
       fs.symlinkSync(path.join(dir, name), link);
     }
@@ -205,3 +208,4 @@ export function installLogs(dataRoot) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((n) => /^install-.*\.log$/.test(n)).map((n) => path.join(dir, n));
 }
+

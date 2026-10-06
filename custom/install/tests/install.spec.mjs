@@ -1340,3 +1340,12 @@ test('a launchd install that fails (other than a job running) is a pending actio
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /\d+\. The launchd install failed\. Retry: bash .*custom\/launchd\/install\.sh' --jobs daily/);
 });
+
+test('the test world has no system security, launchctl or plutil, so a world without their stubs never reaches the real Keychain or launchd (SW5-tests-20)', () => {
+  const w = makeWorld({ tools: ['uname'] });
+  for (const tool of ['security', 'launchctl', 'plutil']) {
+    const r = spawnSync('bash', ['-c', `command -v ${tool} || true`], { env: w.env(), encoding: 'utf8' });
+    assert.equal(r.stdout.trim(), '', `${tool} found on the world PATH`);
+  }
+});
+
