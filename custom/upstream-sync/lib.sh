@@ -90,7 +90,7 @@ verify_merge() {
 merge_snapshot() {
   local index snap
   index="$(git ls-files -s)" || return 1
-  snap="$(printf '%s\n' "$index" | awk -F'\t' '{ split($1, m, " "); if (m[3] == 0) print $2 "\t" m[1] " " m[2] }' | LC_ALL=C sort)"
+  snap="$(printf '%s\n' "$index" | awk -F'\t' '$2 != "" { split($1, m, " "); if (m[3] == "0") print $2 "\t" m[1] " " m[2] }' | LC_ALL=C sort)"
   if [ -z "$snap" ]; then echo "merge_snapshot: the index has no resolved paths" >&2; return 1; fi
   printf '%s\n' "$snap"
 }
@@ -105,9 +105,9 @@ changed_since_snapshot() {
   local tree
   if [ -z "${1:-}" ]; then echo "changed_since_snapshot: no merge snapshot to compare with" >&2; return 1; fi
   tree="$(git ls-tree -r HEAD)" || return 1
-  printf '%s\n' "$tree" | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] " " m[3] }' | LC_ALL=C sort |
+  printf '%s\n' "$tree" | awk -F'\t' '$2 != "" { split($1, m, " "); print $2 "\t" m[1] " " m[3] }' | LC_ALL=C sort |
     LC_ALL=C comm -3 <(printf '%s\n' "$1") - | sed -e 's/^\t//' | cut -f1 |
-    awk '!/^custom\// && $0 != ".github/README.md"' | LC_ALL=C sort -u
+    awk '$0 != "" && !/^custom\// && $0 != ".github/README.md"' | LC_ALL=C sort -u
 }
 
 # unexpected_upstream <changed> <conflicts>: the files (one per line) in
