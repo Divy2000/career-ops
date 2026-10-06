@@ -80,7 +80,8 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const n = Number(req.params.n);
     if (!Number.isInteger(n) || n <= 0) return reply.code(400).send({ error: 'row number must be a positive integer' });
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
-    if (tracker.kind !== 'ok') return reply.code(404).send({ error: 'tracker unavailable', tracker });
+    // detail carries the reason, as the other read errors do, so the Application and Apply pages can show it.
+    if (tracker.kind !== 'ok') return reply.code(404).send({ error: 'tracker unavailable', detail: tracker.kind === 'malformed' ? tracker.error : `no tracker at ${tracker.path}`, tracker });
     const row = tracker.rows.find((r) => r.num === n);
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
     const report = row.report !== null ? readReport(cfg.dataRoot, row.report) : { kind: 'none' as const };
