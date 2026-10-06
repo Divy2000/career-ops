@@ -1336,6 +1336,19 @@ describe('Reply watch session (SW7-web-a-02)', () => {
     }
   });
 
+  it('is refused, naming the file, while the replies file is not a JSON list, since paste-reply.mjs cannot add to it either (review fix 3)', async () => {
+    for (const content of ['{}\n', 'not-json\n']) {
+      fs.writeFileSync(candidates(), content);
+      try {
+        const res = await post('/api/sessions', { mode: 'reply-watch', prompt: 'Run the reply digest.' });
+        expect(res.statusCode, content).toBe(422);
+        expect(res.json().error, content).toMatch(/data\/reply-candidates\.json is not a JSON list of replies/);
+      } finally {
+        fs.rmSync(candidates(), { force: true });
+      }
+    }
+  });
+
   it('starts once a reply is pasted; a later turn or a fork is refused if the replies file is gone by then', async () => {
     fs.writeFileSync(candidates(), JSON.stringify([PASTED_REPLY], null, 2));
     const res = await post('/api/sessions', { mode: 'reply-watch', prompt: 'Run the reply digest.' });

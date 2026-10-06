@@ -5,11 +5,14 @@ import { englishModeOf } from '../claude/modes.js';
 /**
  * reply-watch.mjs (upstream) writes a set of mock emails to data/reply-candidates.json when the file is missing, and
  * paste-reply only ever appends to it, so running it before the first pasted reply would make those mocks permanent.
- * The digest action and a reply-watch session both refuse until a reply has been pasted.
+ * The digest action and a reply-watch session both refuse until a reply has been pasted. An empty list holds none
+ * either: paste-reply.mjs always writes the reply it pastes.
  */
 export function replyWatchRefused(dataRoot: string): string | null {
   const file = path.join(dataRoot, 'data', 'reply-candidates.json');
-  return fs.existsSync(file) && !holdsNoPastedReply(file) ? null : 'No replies to review yet. Paste a reply first, then run the digest.';
+  const entries = fs.existsSync(file) ? readEntries(file) : [];
+  if (entries === null) return 'data/reply-candidates.json is not a JSON list of replies, so neither the digest nor Paste reply can use it. Fix or delete the file, then paste a reply.';
+  return entries.some((e) => !isSeededMock(e)) ? null : 'No replies to review yet. Paste a reply first, then run the digest.';
 }
 
 /**
@@ -25,22 +28,19 @@ const SEEDED_MOCKS = new Set(
   ].map((k) => k.join('\n')),
 );
 
-/**
- * True when the file is a list with no pasted reply in it: empty (paste-reply.mjs always writes the reply it pastes) or
- * seeded mocks only. Anything else (a pasted reply, or a file the script cannot read) is left to reply-watch.mjs.
- */
-function holdsNoPastedReply(file: string): boolean {
-  let entries: unknown;
+/** The file's entries, or null when it is not a JSON list (reply-watch.mjs and paste-reply.mjs both fail on it). */
+function readEntries(file: string): unknown[] | null {
   try {
-    entries = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const entries: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(entries) ? entries : null;
   } catch {
-    return false;
+    return null;
   }
-  if (!Array.isArray(entries)) return false;
-  return entries.every((e) => {
-    const c = (e ?? {}) as { message_id?: unknown; from?: unknown; subject?: unknown };
-    return SEEDED_MOCKS.has([c.message_id, c.from, c.subject].map(String).join('\n'));
-  });
+}
+
+function isSeededMock(entry: unknown): boolean {
+  const c = (entry ?? {}) as { message_id?: unknown; from?: unknown; subject?: unknown };
+  return SEEDED_MOCKS.has([c.message_id, c.from, c.subject].map(String).join('\n'));
 }
 
 /** The same refusal for a session turn: only a reply-watch session runs reply-watch.mjs. */
