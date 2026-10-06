@@ -407,3 +407,21 @@ jobTest('a data root that does not exist (an unmounted drive, a moved folder) is
   assert.equal(fs.existsSync(path.join(w.T, 'unmounted')), false);
   assert.equal(r.steps, '');
 });
+
+jobTest('rank calls that all fail (a usage limit, no network) fail the rank step, though rank-pipeline.mjs catches them and exits 0 (SW4-scripts-03)', () => {
+  const w = dailyWorld();
+  const r = w.run({ FAKE_CLAUDE_RANK_EXIT: '1' });
+  assert.match(r.steps, /^rank batch failed$/m, 'the stand-in caught the failed call, as the real script does');
+  assert.match(r.log, /^1 rank call\(s\) failed \(claude exited 1\); the rank step fails$/m);
+  assert.match(r.log, /^!!! step failed: rank top 100$/m);
+  assert.match(r.log, /^=== .* done \(failed=1\)$/m);
+  assert.equal(r.status, 1);
+  assert.match(r.steps, /^watch --ack /m, 'the policy pass before it still succeeded');
+  assert.deepEqual(r.leftovers, []);
+});
+
+jobTest('a rank step whose calls succeed stays green', () => {
+  const r = dailyWorld().run();
+  assert.doesNotMatch(r.log, /rank call\(s\) failed|step failed: rank/);
+  assert.equal(r.status, 0, r.log);
+});
