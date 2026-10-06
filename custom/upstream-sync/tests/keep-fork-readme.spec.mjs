@@ -294,3 +294,45 @@ test('sync-prompt.md tells Claude the fork keeps .github/README.md and that cust
   assert.match(prompt, /always keep (the fork's|ours)/i);
   assert.equal(prompt.includes(String.fromCharCode(0x2014)), false, 'no em dash');
 });
+
+/** sync.sh's own merge lines (from `CONFLICTS=""` through the closing `fi`), run in `repo`; returns the variables they set. */
+function runSyncMerge(repo, state) {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l === 'CONFLICTS=""');
+  const to = lines.findIndex((l, i) => i > from && l === 'fi');
+  assert.ok(from > -1 && to > from, 'the merge block was not found in sync.sh');
+  git(repo, 'update-ref', 'refs/remotes/upstream/main', 'upstream');
+  const live = path.resolve(HERE, '../../..');
+  const script = `LIVE="${live}" STATE_DIR="${state}" TODAY=2026-10-04 KEPT_README=0\nfail() { echo "!!! $1"; exit 1; }\n${lines.slice(from, to + 1).join('\n')}\nprintf 'KEPT_README=%s\\nCONFLICTS=%s\\n' "$KEPT_README" "$CONFLICTS"`;
+  return spawnSync('bash', ['-c', script], { cwd: repo, env: GIT_ENV, encoding: 'utf8' });
+}
+
+test('sync.sh\'s own merge step, on a real README conflict beside another one, sets KEPT_README=1 and leaves only the other conflict (SW3-tests-10)', () => {
+  const repo = makeRepo({
+    forkFiles: { [README]: 'FORK README\n', 'shared.txt': 'fork shared\n' },
+    upstreamFiles: { [README]: 'UPSTREAM README\n', 'shared.txt': 'upstream shared\n' },
+  });
+  const state = mkdtempSync(path.join(tmpdir(), 'keep-readme-state-'));
+  try {
+    const r = runSyncMerge(repo, state);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^KEPT_README=1$/m);
+    assert.match(r.stdout, /^CONFLICTS=shared\.txt$/m);
+    assert.equal(readFileSync(path.join(repo, README), 'utf8'), 'FORK README\n');
+  } finally {
+    cleanup(repo, state);
+  }
+});
+
+test('sync.sh\'s merge step with no README conflict keeps KEPT_README=0 and lists the conflicts as they are (SW3-tests-10)', () => {
+  const repo = makeRepo({ forkFiles: { 'shared.txt': 'fork shared\n' }, upstreamFiles: { 'shared.txt': 'upstream shared\n' } });
+  const state = mkdtempSync(path.join(tmpdir(), 'keep-readme-state-'));
+  try {
+    const r = runSyncMerge(repo, state);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^KEPT_README=0$/m);
+    assert.match(r.stdout, /^CONFLICTS=shared\.txt$/m);
+  } finally {
+    cleanup(repo, state);
+  }
+});

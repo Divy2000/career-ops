@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL } from './harness.mjs';
+import { caseFlippedHome } from '../../test-support/case-home.mjs';
+import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
 const QUIET = ['--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'];
@@ -1192,4 +1193,78 @@ test('pty_run.py exits with the command\'s own status, also on a Python without 
   assert.equal(ptyRun([], ['bash', '-c', 'exit 3']).status, 3);
   const old = ptyRun([], ['bash', '-c', 'exit 3'], { pre: 'import os\ndel os.waitstatus_to_exitcode' });
   assert.equal(old.status, 3, old.stderr);
+});
+
+// ---- a data root the confinement would refuse (SW3-tests-01) ----
+
+test('a data root that is the home directory, a folder containing it, or / is refused with exit 1 before anything changes', () => {
+  const cases = [
+    ['--data-root ~', (w) => ({ args: ['--data-root', w.home] })],
+    ['--data-root /', () => ({ args: ['--data-root', '/'] })],
+    ['--data-root <parent of home>', (w) => ({ args: ['--data-root', path.dirname(w.home)] })],
+    ['CAREER_OPS_ROOT=$HOME', (w) => ({ args: [], env: { CAREER_OPS_ROOT: w.home } })],
+    ['CAREER_OPS_DATA_DIR=$HOME', (w) => ({ args: [], env: { CAREER_OPS_DATA_DIR: w.home } })],
+  ];
+  for (const [name, make] of cases) {
+    const { w, D } = fresh({ keychain: true });
+    const { args, env = {} } = make(w);
+    const before = w.snapshot();
+    const r = w.run(['--dir', D, '--non-interactive', ...QUIET, ...args], { env });
+    assert.equal(r.status, 1, `${name}: ${r.out}`);
+    assert.match(r.out, /error: the data root .* (is your home directory or contains it|is the filesystem root)/, name);
+    assert.deepEqual(w.snapshot(), before, `${name}: nothing created`);
+    assert.equal(w.log().length, 0, `${name}: ${w.log().join('\n')}`);
+  }
+});
+
+test('a data root next to the home directory is fine', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET, '--data-root', path.join(w.home, 'career-data')]);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
+});
+
+test('the test world finds no system copy of a tool the installer probes for, so a missing-tool spec means the same on every OS (SW3-tests-06)', () => {
+  const w = makeWorld({ tools: ['uname'] });
+  for (const tool of ['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']) {
+    const r = spawnSync('bash', ['-c', `command -v ${tool} || true`], { env: w.env(), encoding: 'utf8' });
+    assert.equal(r.stdout.trim(), '', `${tool} found on the world PATH`);
+  }
+  for (const tool of ['bash', 'sed', 'awk', 'mktemp', 'python3']) {
+    const r = spawnSync('bash', ['-c', `command -v ${tool}`], { env: w.env(), encoding: 'utf8' });
+    assert.notEqual(r.stdout.trim(), '', `${tool} is still there for the installer`);
+  }
+});
+
+test('the system command links survive a dangling symlink listed in two folders (merged /usr), keeping the first (review of SW3-tests-06)', () => {
+  const T = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'ci-sysbin-test-')));
+  try {
+    const usrBin = path.join(T, 'usr-bin');
+    const bin = path.join(T, 'bin');
+    const into = path.join(T, 'into');
+    for (const d of [usrBin, bin, into]) fs.mkdirSync(d);
+    fs.symlinkSync(path.join(T, 'gone'), path.join(usrBin, 'dangling'));
+    fs.symlinkSync(path.join(T, 'gone'), path.join(bin, 'dangling'));
+    fs.writeFileSync(path.join(usrBin, 'sed'), '');
+    fs.writeFileSync(path.join(bin, 'sed'), '');
+    fs.writeFileSync(path.join(bin, 'npm'), '');
+    linkSystemCommands([usrBin, bin], into);
+    assert.deepEqual(fs.readdirSync(into).sort(), ['dangling', 'sed']);
+    assert.equal(fs.readlinkSync(path.join(into, 'sed')), path.join(usrBin, 'sed'));
+  } finally {
+    fs.rmSync(T, { recursive: true, force: true });
+  }
+});
+
+test('a data root that is the home directory spelled in another case is refused too, as the confinement resolves it (review of SW3-tests-01)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
+  try {
+    const { w, D } = fresh({ keychain: true });
+    const r = w.run(['--dir', D, '--non-interactive', '--dry-run', ...QUIET, '--data-root', h.flipped], { env: { HOME: h.home } });
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /error: the data root .* is your home directory or contains it/);
+  } finally {
+    h.cleanup();
+  }
 });

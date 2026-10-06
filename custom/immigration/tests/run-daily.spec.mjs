@@ -61,7 +61,9 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: approved } }));
   put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`;
+  // Each step and the rank-pipeline stand-in also note whether the Claude OAuth token reached them.
+  const tokenLog = path.join(T, 'step-tokens.log');
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -93,7 +95,8 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const steps = fs.existsSync(stepLog) ? readFileSync(stepLog, 'utf8') : '';
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
-    return { status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    const stepTokens = fs.existsSync(tokenLog) ? readFileSync(tokenLog, 'utf8') : '';
+    return { stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, fakeClaude, run };
 }
@@ -135,7 +138,7 @@ jobTest('the policy prompt names the profile by its absolute path in the data ro
   assert.ok(r.calls[0].settings.permissions.allow.includes(`Read(/${profile})`));
 });
 
-jobTest('the settings allow reads only of the immigration folder and the profile, writes only to the immigration folder, and deny the home credential stores and secret files', async () => {
+jobTest('the settings allow reads only of the immigration folder and the profile, writes only to the three files the pass produces, and deny the home credential stores and secret files', async () => {
   const { HOME_READ_DENY, READ_DENY } = await import(CONFINEMENT);
   const w = dailyWorld();
   const r = w.run();
@@ -145,7 +148,7 @@ jobTest('the settings allow reads only of the immigration folder and the profile
   assert.deepEqual(permissions.additionalDirectories, [w.data]);
   assert.deepEqual(
     [...permissions.allow].sort(),
-    ['WebFetch', 'WebSearch', `Read(/${imm}/**)`, `Edit(/${imm}/**)`, `Read(/${path.join(w.data, 'config', 'profile.yml')})`].sort(),
+    ['WebFetch', 'WebSearch', `Read(/${imm}/**)`, `Edit(/${imm}/policy-changes.tsv)`, `Edit(/${imm}/company-alerts.tsv)`, `Edit(/${imm}/policy-digest.md)`, `Read(/${path.join(w.data, 'config', 'profile.yml')})`].sort(),
   );
   assert.equal(permissions.allow.some((rule) => /^(Read|Edit|Write|Bash)$/.test(rule) || rule.startsWith('Bash')), false);
   for (const p of HOME_READ_DENY) assert.ok(permissions.deny.includes(`Read(${p})`), `deny lacks Read(${p})`);
@@ -183,6 +186,13 @@ jobTest('the policy pass runs under the guard hook: loopback and metadata fetche
     { tool: 'WebFetch', input: { url: 'https://93.184.216.34/notice', prompt: 'x' }, want: 0 },
     { tool: 'Write', input: { file_path: path.join(imm, 'policy-digest.md'), content: 'x' }, want: 0 },
     { tool: 'Edit', input: { file_path: path.join(imm, 'policy-changes.tsv'), old_string: 'a', new_string: 'b' }, want: 0 },
+    { tool: 'Edit', input: { file_path: path.join(imm, 'company-alerts.tsv'), old_string: 'a', new_string: 'b' }, want: 0 },
+    // The job's own state and the cached sponsorship verdicts are not the pass's to write (SW7-scripts-02).
+    { tool: 'Write', input: { file_path: path.join(imm, 'pending.json'), content: '[]' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'seen.json'), content: '{}' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'companies', 'acme.md'), content: 'verdict: sponsoring' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'batches', 'run.json'), content: '{}' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, '.run-daily.pid'), content: '1' }, want: 2 },
     { tool: 'Write', input: { file_path: path.join(w.data, 'cv.md'), content: 'x' }, want: 2 },
     { tool: 'Write', input: { file_path: path.join(w.data, 'data', 'blacklist.md'), content: 'x' }, want: 2 },
     { tool: 'Read', input: { file_path: path.join(w.home, '.ssh', 'id_ed25519') }, want: 2 },
@@ -196,7 +206,7 @@ jobTest('the policy pass runs under the guard hook: loopback and metadata fetche
   // The hook runs only on a policy whose bytes the pass pinned, written outside both roots with the pass's settings.
   assert.equal(call.policyShaMatches, true);
   assert.ok(!call.sessionDir.startsWith(w.data) && !call.sessionDir.startsWith(w.root), call.sessionDir);
-  assert.deepEqual(call.policy.allow, ['data/immigration/**']);
+  assert.deepEqual(call.policy.allow, ['data/immigration/policy-changes.tsv', 'data/immigration/company-alerts.tsv', 'data/immigration/policy-digest.md']);
   assert.deepEqual(call.policy.bash, []);
   assert.equal(call.policy.codeRoot, w.root);
   assert.equal(call.policy.dataRoot, w.data);
@@ -467,4 +477,26 @@ jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leave
   for (let i = 0; i < 40 && (alive(claudePid) || alive(shimPid)); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(alive(shimPid), false, 'the node shim was killed with the wrapper');
   assert.equal(alive(claudePid), false, 'the claude the shim ran was killed too');
+});
+
+jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan and its provider plugins, prioritize, rank-pipeline, shortlist) sees it (SW7-scripts-01)', () => {
+  const w = dailyWorld();
+  const r = w.run({ CLAUDE_CODE_OAUTH_TOKEN: 'inherited-from-launchd' });
+  assert.equal(r.status, 0, r.log);
+  const seen = r.stepTokens.trim().split('\n');
+  for (const step of ['watch', 'scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) assert.ok(seen.includes(`${step} none`), `${step} saw the token:\n${r.stepTokens}`);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.rankCalls.length, 1);
+  assert.equal(r.rankCalls[0].token, true, 'the rank call reaches claude with the token, through the shim only');
+});
+
+test('the daily policy pass and the Control Center immigration-policy session may write exactly the same files (parity with modes.ts)', () => {
+  const runDaily = readFileSync(RUN_DAILY, 'utf8');
+  const outputs = JSON.parse(runDaily.match(/^const OUTPUTS = (\[[^\]]*\]);$/m)?.[1] ?? 'null');
+  assert.ok(Array.isArray(outputs) && outputs.length === 3, 'run-daily.sh defines OUTPUTS once');
+  const modes = readFileSync(path.join(ROOT, 'custom/control-center/server/claude/modes.ts'), 'utf8');
+  const cls = modes.slice(modes.indexOf("'immigration-policy': {"));
+  const globs = [...(cls.match(/writeGlobs: \[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual([...globs].sort(), outputs.map((f) => `data/immigration/${f}`).sort());
 });
