@@ -22,9 +22,12 @@ export interface RunMeta {
   signal: string | null;
   wrapperPid: number | null;
   childPid: number | null;
-  /** `ps -o lstart` of the wrapper and the child at spawn: a live PID only counts as ours when its start time matches. */
-  wrapperStartedAt?: string | null;
-  childStartedAt?: string | null;
+  /**
+   * When the wrapper and the child started, in seconds since the epoch (processStartTime): a live PID only counts as ours
+   * when its start time matches. A string is the earlier format (ps text in that server's TZ and locale): PID only.
+   */
+  wrapperStartedAt?: number | string | null;
+  childStartedAt?: number | string | null;
   error: string | null;
   /** Input files the app wrote for this run under data/control-center/tmp, removed when it ends (absent on older runs). */
   tmpInputs?: string[];

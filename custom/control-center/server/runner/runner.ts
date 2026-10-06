@@ -31,14 +31,38 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/** `ps -o lstart` of a live process, null when there is none. PIDs are reused (after a reboot especially); start times are not. */
-export function processStartTime(pid: number): string | null {
+/** A process's start in seconds since the epoch; 'unknown' when it runs but its start cannot be read; null when it does not run. */
+export type ProcessStart = number | 'unknown' | null;
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** `ps -o lstart` in the C locale: "Mon Oct  5 17:09:12 2026". */
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+
+/** /bin/ps -o lstart= for one PID, in the C locale and UTC whatever this process's environment is. */
+const runPs = (pid: number): string =>
+  execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } });
+
+/**
+ * When a process started, so a later check can tell a reused PID apart (PIDs are reused, after a reboot especially;
+ * start times are not). ps prints the start in the caller's TZ and locale, so it runs pinned (LC_ALL=C, TZ=UTC) and the
+ * answer is seconds since the epoch: a server restarted under another TZ or LANG reads the same number for a live run.
+ * ps's own "no such process" (exit 1, nothing printed) is null; when ps cannot answer otherwise, kill(pid, 0) decides
+ * between null and 'unknown'; output that does not parse is 'unknown'. Callers treat 'unknown' as running.
+ */
+export function processStartTime(pid: number, ps: (pid: number) => string = runPs): ProcessStart {
+  let out: string;
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
-    return out || null;
-  } catch {
-    return null;
+    out = ps(pid).trim();
+  } catch (err) {
+    const e = err as { status?: number | null; signal?: string | null; stdout?: string };
+    if (e.status === 1 && !e.signal && !String(e.stdout ?? '').trim()) return null;
+    return pidAlive(pid) ? 'unknown' : null;
   }
+  if (!out) return null;
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]!) : -1;
+  if (!m || month === -1) return 'unknown';
+  return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 
 /**
@@ -51,12 +75,12 @@ export class Runner {
   private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout }>();
   private envById = new Map<string, NodeJS.ProcessEnv>();
 
-  private procStart: (pid: number) => string | null;
+  private procStart: (pid: number) => ProcessStart;
 
   constructor(
     private dataRoot: string,
     private bus: EventBus,
-    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => string | null } = {},
+    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart } = {},
   ) {
     this.store = new RunStore(dataRoot, opts.retention);
     this.procStart = opts.procStart ?? processStartTime;
@@ -64,14 +88,23 @@ export class Runner {
 
   /**
    * true: the PID is alive and started when we recorded; false: it is gone, or
-   * it now belongs to another process; null: no start time was recorded (runs
-   * from before start times were kept), so only liveness is known.
+   * it now belongs to another process; null: only liveness is known, because no
+   * start time was recorded, the recorded one is in the earlier format (ps text
+   * in that server's TZ and locale, which cannot be compared), or ps cannot
+   * read the start now.
    */
-  private identity(pid: number | null | undefined, startedAt: string | null | undefined): boolean | null {
+  private identity(pid: number | null | undefined, startedAt: RunMeta['wrapperStartedAt']): boolean | null {
     if (!pid || !pidAlive(pid)) return false;
-    if (!startedAt) return null;
+    if (typeof startedAt !== 'number') return null;
     const now = this.procStart(pid);
-    return now === null ? null : now === startedAt;
+    if (now === null) return false;
+    return now === 'unknown' ? null : now === startedAt;
+  }
+
+  /** The start to record for a new PID: a number, or null when it cannot be read. */
+  private recordStart(pid: number): number | null {
+    const start = this.procStart(pid);
+    return typeof start === 'number' ? start : null;
   }
 
   /**
@@ -195,7 +228,7 @@ export class Runner {
     });
     child.unref();
     const wrapperPid = child.pid ?? null;
-    const running: RunMeta = { ...meta, status: 'running', startedAt: new Date().toISOString(), wrapperPid, wrapperStartedAt: wrapperPid ? this.procStart(wrapperPid) : null };
+    const running: RunMeta = { ...meta, status: 'running', startedAt: new Date().toISOString(), wrapperPid, wrapperStartedAt: wrapperPid ? this.recordStart(wrapperPid) : null };
     this.store.write(running);
     this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
     this.track(running);
@@ -209,7 +242,7 @@ export class Runner {
         const w = this.store.readWrapper(meta.id);
         if (w) {
           current.childPid = w.childPid;
-          current.childStartedAt = this.procStart(w.childPid);
+          current.childStartedAt = this.recordStart(w.childPid);
           this.store.write(current);
         }
       }
