@@ -4,7 +4,7 @@
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
 import { SESSION_LOAD_RETRY, sendTurn, useSessionStream, type Transcript } from '@web/lib/sessions';
@@ -98,6 +98,22 @@ describe('session events over the app event stream', () => {
     status['s-4'] = 'done';
     await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Page, { ids: ['s-4'] }))));
     await until(() => text('s-4') === 'long one' && host.querySelector('output[aria-label="s-4"]')?.getAttribute('data-status') === 'done', 'the long session to load');
+  });
+
+  it('a page that read the session while it ran is refreshed when the stream finds it already ended (Delete stayed disabled)', async () => {
+    // The Sessions detail page read the meta while the turn ran; the turn ended before this panel loaded its history,
+    // so no live end event comes for it, and the page's own meta must still be refreshed.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    qc.setQueryData(['sessions', 's-9'], { meta: { id: 's-9', status: 'running' } });
+    history['s-9'] = [stored(1, { type: 'status', status: 'running', turn: 1 }), stored(2, { type: 'text.done', text: 'done one' }), stored(3, { type: 'status', status: 'awaiting_user', turn: 1 })];
+    status['s-9'] = 'awaiting_user';
+    function Detail() {
+      const q = useQuery({ queryKey: ['sessions', 's-9'], queryFn: async () => (await (await fetch('/api/sessions/s-9')).json()) as { meta: { status: string } } });
+      return createElement('span', { 'aria-label': 'detail status' }, q.data?.meta.status ?? '');
+    }
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(Detail), createElement(Page, { ids: ['s-9'] }))));
+    await until(() => text('s-9') === 'done one', 'the transcript');
+    await until(() => host.querySelector('[aria-label="detail status"]')?.textContent === 'awaiting_user', 'the page meta to refresh');
   });
 
   it('three session panels and the live invalidation share one connection, the app stream', () => {
@@ -370,3 +386,4 @@ describe('one session across its turns', () => {
     expect(live().map((s) => s.url)).toEqual(['/api/events']);
   });
 });
+
