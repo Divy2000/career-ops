@@ -76,13 +76,31 @@ function tidy(spans: DigestSpan[]): DigestSpan[] {
   return out.filter((s) => s.text !== '');
 }
 
+// A period after these ends no sentence: dotted initials (U.S., e.g.) are caught by shape, the rest by name.
+const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec', 'no', 'nos', 'vs', 'etc', 'approx', 'dept', 'gov', 'inc', 'corp', 'co', 'ltd', 'mr', 'mrs', 'ms', 'dr', 'st', 'jr', 'sr', 'est', 'fig']);
+
+/** Where the first sentence of `text` ends (after its . ! or ?), or -1: a period after an abbreviation, or before a lowercase word or a number ("Oct. 15"), is no end. */
+function sentenceEnd(text: string): number {
+  for (const m of text.matchAll(/[.!?](?=\s|$)/g)) {
+    const i = m.index!;
+    if (text[i] === '.') {
+      const word = text.slice(0, i).split(/\s/).pop() ?? '';
+      if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
+      if (ABBREVIATIONS.has(word.toLowerCase())) continue;
+    }
+    const next = /^\s+(\S)/.exec(text.slice(i + 1))?.[1];
+    if (next === undefined || !/[\p{Ll}\d]/u.test(next)) return i + 1;
+  }
+  return -1;
+}
+
 /** Keeps spans up to the first sentence end. */
 function firstSentence(spans: DigestSpan[]): DigestSpan[] {
   const out: DigestSpan[] = [];
   for (const s of spans) {
-    const end = s.href ? null : /[.!?](?=\s|$)/.exec(s.text);
-    if (end) {
-      out.push({ ...s, text: s.text.slice(0, end.index + 1) });
+    const end = s.href ? -1 : sentenceEnd(s.text);
+    if (end !== -1) {
+      out.push({ ...s, text: s.text.slice(0, end) });
       return out;
     }
     out.push(s);
