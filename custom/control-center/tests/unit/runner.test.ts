@@ -832,6 +832,24 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(runner.store.read(run.id)?.status).toBe('cancelled');
   });
 
+  it('a bare-PID claim whose PID now belongs to a process that started after the claim was written counts as gone: the run starts instead of staying queued', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const holder = runner.start(req(['0', '400'], { resources: ['tracker'] }));
+    const waiting = runner.start(req(['0'], { resources: ['tracker'] }));
+    // The PID was reused: the process holding it now started an hour after the claim naming it was written.
+    const reused = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(reused);
+    const claim = path.join(runner.store.dirOf(waiting.id), 'claim');
+    fs.writeFileSync(claim, String(reused.pid));
+    const written = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(claim, written, written);
+    await until(() => runner.store.read(holder.id)?.status === 'done', 15_000);
+    await until(() => runner.store.read(waiting.id)?.status === 'done', 15_000);
+    expect(lineOnes(runner, waiting.id)).toBe(1);
+  });
+
   it('a run claimed by a live process is never taken from it; once that process is gone without starting it, this one starts it', async () => {
     const root = tmpRoot();
     const runner = new Runner(root, new EventBus(), { pollMs: 50 });

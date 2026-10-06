@@ -192,7 +192,18 @@ export class Runner {
       this.self ??= { pid: process.pid, start: this.recordStart(process.pid) };
       return holder.start !== null && this.self.start !== null && holder.start !== this.self.start;
     }
-    return this.identity(holder.pid, holder.start) === false;
+    const live = this.identity(holder.pid, holder.start);
+    if (live !== null) return !live;
+    // No start to compare (a bare PID, or none could be read): a process that started after the file was written
+    // cannot have written it, so its PID was reused.
+    const now = this.procStart(holder.pid);
+    if (typeof now !== 'number') return false;
+    try {
+      return now > fs.statSync(file).mtimeMs / 1000;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
   }
 
   /**
