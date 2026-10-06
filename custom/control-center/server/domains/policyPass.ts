@@ -9,6 +9,7 @@ import path from 'node:path';
 import { cliScriptPath } from '../core/adapter.js';
 import { localDate } from '../../shared/local-date.js';
 import { newsSince } from '../../../immigration/lib.mjs';
+import { ownerLive, readClaim, releaseClaim, retagClaim, tryClaim } from '../../../immigration/policy-claim.mjs';
 import type { Exec } from '../routes/system.js';
 
 const IMM = path.join('data', 'immigration');
@@ -106,4 +107,28 @@ export async function ackPolicyPass(exec: Exec, codeRoot: string, dataRoot: stri
   const r = await exec(process.execPath, [cliScriptPath(codeRoot, 'immigrationWatch'), '--ack', path.join(dataRoot, batch)], { cwd: codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: dataRoot, NO_COLOR: '1' } });
   if (r.code !== 0) return `could not acknowledge the policy items it was given: ${(r.stderr || r.stdout).trim().slice(-200)}`;
   return r.stdout.trim();
+}
+
+/**
+ * One AI policy pass at a time, across this app and the scheduled daily job (custom/immigration/policy-claim.mjs): a
+ * pass holds data/immigration/.policy-pass.claim from its start until its session ends (done, error, cancelled) or is
+ * deleted; a session paused for a reply keeps it.
+ */
+export const policyClaim = {
+  take: (dataRoot: string, owner: string, opts: { batch?: string | null; takeFrom?: string } = {}): { ok: true } | { ok: false; holder: { owner: string } } =>
+    tryClaim(dataRoot, { owner, batch: opts.batch ?? null, takeFrom: opts.takeFrom ?? null }),
+  retag: (dataRoot: string, from: string, to: string): boolean => retagClaim(dataRoot, from, to),
+  release: (dataRoot: string, owner: string): boolean => releaseClaim(dataRoot, owner),
+  /** The live holder of the claim, or null. */
+  holder: (dataRoot: string): { owner: string } | null => {
+    const c = readClaim(dataRoot) as { owner: string } | null;
+    return c && ownerLive(dataRoot, c) ? c : null;
+  },
+};
+
+/** What a 409 says about who holds the pass. */
+export function claimHolderText(owner: string): string {
+  if (owner.startsWith('daily:')) return 'the daily job is running its AI policy pass';
+  if (owner.startsWith('session:')) return `an AI policy pass is already running or waiting for a reply (session ${owner.slice('session:'.length)})`;
+  return 'an AI policy pass is starting';
 }

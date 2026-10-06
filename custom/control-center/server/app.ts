@@ -16,6 +16,7 @@ import { DailyJobWatch, dailyPidfileProbe, maybeFakeDailyProbe } from './system/
 import { execNoShell, type Exec } from './routes/system.js';
 import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
 import { sessionRoutes } from './routes/sessions.js';
+import { policyClaim } from './domains/policyPass.js';
 import { fileRoutes } from './routes/files.js';
 import { projectRoutes } from './routes/projects.js';
 import { sponsorshipRoutes } from './routes/sponsorship.js';
@@ -92,12 +93,12 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const readToken = deps.readToken ?? keychainTokenReader(exec);
   await app.register(systemRoutes, { cfg, readToken, exec });
   await app.register(readRoutes, { cfg, bus, exec, daily });
-  await app.register(actionRoutes, { cfg, runner, bus, exec, daily });
+  const sessions = new SessionManager(cfg, runner, bus, { readToken, exec, pollMs: deps.sessionPollMs, home: deps.homeDir });
+  closers.push(async () => sessions.close());
+  await app.register(actionRoutes, { cfg, runner, bus, exec, daily, policyPass: () => policyClaim.holder(cfg.dataRoot) });
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });
-  const sessions = new SessionManager(cfg, runner, bus, { readToken, exec, pollMs: deps.sessionPollMs, home: deps.homeDir });
-  closers.push(async () => sessions.close());
   let activated = false;
   const activate = () => {
     if (activated) return;
@@ -107,7 +108,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
     sessions.reconcile();
   };
   if (!deps.deferReconcile) activate();
-  await app.register(sessionRoutes, { cfg, manager: sessions, bus });
+  await app.register(sessionRoutes, { cfg, manager: sessions, bus, daily, dailyPending: () => runner.pending('daily.runNow').length > 0 });
   await app.register(fileRoutes, { cfg, bus });
   await app.register(projectRoutes, { cfg, bus });
   await app.register(devchatRoutes, { cfg, manager: sessions, exec });

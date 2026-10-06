@@ -59,7 +59,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   for (const rel of ['custom/immigration/run-daily.sh', 'custom/immigration/daily-prompt.md', 'custom/launchd/pinned-node.sh', 'path-resolver.mjs', 'lib/is-main-module.mjs']) put(rel, readFileSync(path.join(ROOT, rel), 'utf8'), 0o755);
   for (const rel of ['confinement.mjs', 'guard-hook.mjs', 'guard-policy.mjs', 'claude-shim.mjs']) put(`custom/control-center/server/claude/${rel}`, readFileSync(path.join(ROOT, 'custom/control-center/server/claude', rel), 'utf8'));
   put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: approved } }));
-  put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
+  for (const rel of ['lib.mjs', 'policy-claim.mjs']) put(`custom/immigration/${rel}`, readFileSync(path.join(ROOT, 'custom/immigration', rel), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
   // Each step and the rank-pipeline stand-in also note whether the Claude OAuth token reached them.
   const tokenLog = path.join(T, 'step-tokens.log');
@@ -380,6 +380,33 @@ jobTest('a failed policy pass acknowledges nothing: its batch stays pending for 
   for (const step of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) assert.match(r.steps, new RegExp(`^${step} `, 'm'));
   assert.equal(r.status, 1);
   assert.deepEqual(r.leftovers, []);
+});
+
+jobTest('the policy pass is skipped with its reason while a Control Center session holds the policy-pass claim; the other steps still run (SW8-server-01 review)', () => {
+  const w = dailyWorld();
+  const sessionDir = path.join(w.data, 'data', 'control-center', 'sessions', 's-paused');
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify({ id: 's-paused', mode: 'immigration-policy', status: 'awaiting_user' }));
+  const claim = path.join(w.data, 'data', 'immigration', '.policy-pass.claim');
+  fs.mkdirSync(path.dirname(claim), { recursive: true });
+  fs.writeFileSync(claim, JSON.stringify({ owner: 'session:s-paused', batch: null, at: new Date().toISOString() }));
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.match(r.log, /policy pass skipped: another AI policy pass holds the queued items \(session:s-paused/);
+  assert.deepEqual(r.calls, []);
+  assert.match(r.steps, /scan\.mjs/);
+  assert.equal(JSON.parse(readFileSync(claim, 'utf8')).owner, 'session:s-paused');
+});
+
+jobTest('a stale policy-pass claim (its session is gone) is taken over, the pass runs, and the claim is released after it', () => {
+  const w = dailyWorld();
+  const claim = path.join(w.data, 'data', 'immigration', '.policy-pass.claim');
+  fs.mkdirSync(path.dirname(claim), { recursive: true });
+  fs.writeFileSync(claim, JSON.stringify({ owner: 'session:s-deleted', batch: null, at: new Date().toISOString() }));
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.calls.length, 1, r.log);
+  assert.equal(fs.existsSync(claim), false);
 });
 
 jobTest('a run that starts while another holds the lock is skipped: a dated line in skipped.log, exit 0, no step runs', async () => {

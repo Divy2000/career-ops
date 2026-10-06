@@ -8,7 +8,8 @@ import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
-import { PendingUnreadableError, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
+import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
+import crypto from 'node:crypto';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
@@ -41,7 +42,7 @@ export function promptWithTarget(prompt: string, target: { type: string; value: 
   return `${prompt}\n\nTarget: ${what}`;
 }
 
-export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; bus: EventBus }): Promise<void> {
+export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; bus: EventBus; daily?: { runningNow(): Promise<boolean> }; dailyPending?: () => boolean }): Promise<void> {
   const { manager } = opts;
   // Every session event also rides the app's one event stream, so a page follows any number of sessions on the
   // connection it already holds (HTTP/1.1 allows 6 per host; one stream per session stalled the page at five).
@@ -76,6 +77,32 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
         ? 'unlocking data/blacklist.md for a turn needs the X-CC-Explicit: blacklist header on that request'
         : null;
 
+  // The policy-pass claim (see policyClaim): a started session takes over its starting claim (and lets it go at once if
+  // the session already ended, a start that failed before spawning), and a session that ends or is deleted releases it.
+  const FINAL = new Set(['done', 'error', 'cancelled']);
+  const handOver = (starting: string, meta: { id: string; status: string }) => {
+    const owner = `session:${meta.id}`;
+    policyClaim.retag(opts.cfg.dataRoot, starting, owner);
+    if (FINAL.has(manager.read(meta.id)?.status ?? meta.status)) policyClaim.release(opts.cfg.dataRoot, owner);
+  };
+  const offClaims = manager.onEvent((sessionId, { event }) => {
+    if (event.type !== 'status' && event.type !== 'error') return;
+    if (!FINAL.has(manager.read(sessionId)?.status ?? '')) return;
+    try {
+      policyClaim.release(opts.cfg.dataRoot, `session:${sessionId}`);
+    } catch (err) {
+      app.log.warn({ err, sessionId }, 'could not release the AI policy pass claim; a later pass takes it over as stale');
+    }
+  });
+  app.addHook('onClose', async () => offClaims());
+  /** A reply or fork of a policy pass continues it: it must hold the claim. Null when it may go on, else the 409 reason. */
+  const claimForTurn = (id: string, owner: string, takeFrom?: string): string | null => {
+    const meta = manager.read(id);
+    if (meta?.mode !== 'immigration-policy') return null;
+    const claimed = policyClaim.take(opts.cfg.dataRoot, owner, { batch: meta.policyBatch ?? null, takeFrom });
+    return claimed.ok ? null : `Not continued: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.`;
+  };
+
   app.get('/api/sessions', async () => manager.list());
 
   app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listLaunchableModeIds() }));
@@ -108,19 +135,32 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     // The policy pass runs as run-daily.sh runs it: daily-prompt.md filled in with the queued official items (the
     // client's prompt only asks for the pass), and the batch of those items is acknowledged when the pass is done.
     let pass: PolicyPass | null = null;
+    // The pass's claim while its session is being created; the session takes it over once it exists.
+    let starting: string | null = null;
     if (parsed.data.mode === 'immigration-policy') {
+      // One pass at a time: two take the same queued items (acknowledged only when one ends done) and both append the
+      // same rows to policy-changes.tsv and company-alerts.tsv and a digest section. The daily job runs a pass too,
+      // and one the app queued has neither its lock nor the claim yet.
+      if ((await opts.daily?.runningNow()) || opts.dailyPending?.()) return reply.code(409).send({ error: 'The daily job is running or about to, and it runs the AI policy pass itself. Try again once it finishes.' });
+      starting = `starting:${crypto.randomUUID()}`;
+      const claimed = policyClaim.take(opts.cfg.dataRoot, starting);
+      if (!claimed.ok) return reply.code(409).send({ error: `Not started: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.` });
       try {
         pass = preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
       } catch (err) {
+        policyClaim.release(opts.cfg.dataRoot, starting);
         if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
         throw err;
       }
+      policyClaim.take(opts.cfg.dataRoot, starting, { batch: pass.batch });
       userPrompt = pass.prompt;
     }
     try {
       const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: null, policyBatch: pass?.batch ?? null });
+      if (starting) handOver(starting, meta);
       return reply.code(202).send(meta);
     } catch (err) {
+      if (starting) policyClaim.release(opts.cfg.dataRoot, starting);
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
       throw err;
     }
@@ -164,6 +204,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const refused = unlockRefused(meta.mode, req.headers);
       if (refused) return reply.code(403).send({ error: refused });
     }
+    const busy = claimForTurn(req.params.id, `session:${req.params.id}`);
+    if (busy) return reply.code(409).send({ error: busy });
     return mutate(reply, async () => reply.code(202).send(await manager.send(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
   });
 
@@ -177,7 +219,22 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const refused = unlockRefused(meta.mode, req.headers);
       if (refused) return reply.code(403).send({ error: refused });
     }
-    return mutate(reply, async () => reply.code(202).send(await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
+    // A fork continues the pass of the session it forks: it takes the claim from it (and from no other live holder).
+    const starting = `starting:${crypto.randomUUID()}`;
+    const busy = claimForTurn(req.params.id, starting, `session:${req.params.id}`);
+    if (busy) return reply.code(409).send({ error: busy });
+    const isPass = manager.read(req.params.id)?.mode === 'immigration-policy';
+    return mutate(reply, async () => {
+      try {
+        const forked = await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed });
+        if (isPass) handOver(starting, forked);
+        return reply.code(202).send(forked);
+      } catch (err) {
+        // The fork did not start: the claim goes back to the session it was taken from.
+        if (isPass) policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`);
+        throw err;
+      }
+    });
   });
 
   await withEmptyJsonBody(app, (scope) => {
@@ -191,6 +248,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       // Deleted first: a running session refuses, and its upload stays with it.
       manager.delete(req.params.id);
       dropUpload(meta);
+      try {
+        policyClaim.release(opts.cfg.dataRoot, `session:${req.params.id}`);
+      } catch (err) {
+        app.log.warn({ err }, 'could not release the AI policy pass claim; a later pass takes it over as stale');
+      }
       return { ok: true };
     }),
   );

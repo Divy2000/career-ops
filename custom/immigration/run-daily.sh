@@ -106,7 +106,36 @@ CLAUDE_FROM=PATH
 if [ -n "${CC_CLAUDE_BIN:-}" ]; then CLAUDE_FROM=CC_CLAUDE_BIN; fi
 echo "claude: ${CLAUDE_REAL:-none found} (from $CLAUDE_FROM), $CLAUDE_GATE"
 
+# One AI policy pass at a time (custom/immigration/policy-claim.mjs): a Control Center session may be running one,
+# or be paused waiting for a reply, with the same queued items. This job takes the claim for its pass or skips the
+# pass with the reason; the items stay pending either way. $$ is this job's lock holder, the pid in .run-daily.pid.
+policy_claim() {
+  DATA="$DATA" OWNER="daily:$$" ACTION="$1" node --input-type=module -e '
+import path from "node:path";
+const { tryClaim, releaseClaim } = await import(path.resolve("custom/immigration/policy-claim.mjs"));
+const { DATA, OWNER, ACTION } = process.env;
+if (ACTION === "release") {
+  releaseClaim(DATA, OWNER);
+} else {
+  const r = tryClaim(DATA, { owner: OWNER, batch: null });
+  process.stdout.write(r.ok ? "ok" : r.holder.owner);
+}
+'
+}
+
 policy_watch() {
+  local holder rc=0
+  holder="$(policy_claim take)" || return 1
+  if [ "$holder" != ok ]; then
+    echo "policy pass skipped: another AI policy pass holds the queued items ($holder, started from the Control Center); they stay pending for it"
+    return 0
+  fi
+  policy_pass || rc=$?
+  policy_claim release || true
+  return "$rc"
+}
+
+policy_pass() {
   local watch_json prompt batch settings_dir policy_sha rc now
   watch_json="$(node custom/immigration/watch.mjs)" || return 1
   echo "$watch_json"

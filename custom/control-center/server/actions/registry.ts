@@ -34,6 +34,8 @@ export interface ActionContext {
   pluginsLocalDir?: string;
   /** Whether this data root's daily job is running now (however it was started); absent where nothing can tell. */
   dailyRunning?: () => Promise<boolean>;
+  /** The live holder of the AI policy pass claim, if any (the daily job runs the same pass). */
+  policyPassRunning?: () => { owner: string } | null;
 }
 
 /** A check's refusal: a reason (400), or a reason with its own status (409 for a conflict with what is running). */
@@ -602,7 +604,13 @@ export const ACTIONS: ActionDef[] = [
     // A run this app started may still be queued behind a scan, or starting, before run-daily.sh holds its lock: a
     // second one would run the whole job again once the first ends.
     single: (mine) => `Skipped: the daily job is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule.`,
-    check: async (_p, ctx) => ((await ctx.dailyRunning?.()) ? { status: 409, error: 'Skipped: the daily job is already running (its schedule or another start began it). Watch it on Runs & Schedule; it ran nothing new.' } : null),
+    check: async (_p, ctx) => {
+      if (await ctx.dailyRunning?.()) return { status: 409, error: 'Skipped: the daily job is already running (its schedule or another start began it). Watch it on Runs & Schedule; it ran nothing new.' };
+      // The job runs the AI policy pass: with a manual pass running, both would take the same queued items.
+      const pass = ctx.policyPassRunning?.();
+      // The daily job's own claim (its pidfile) is the running-job case above; any other live holder is a session.
+      return pass && !pass.owner.startsWith('daily:') ? { status: 409, error: `Skipped: an AI policy pass is running or waiting for a reply (${pass.owner}), and the daily job would run the same pass. Try again once it finishes.` } : null;
+    },
     // CC_RUN_DAILY_SKIP_EXIT: should the job start in between, run-daily.sh still finds the lock held, and then says
     // it skipped and exits 75, so this run ends failed with that line instead of done with an empty log.
     build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, env: { CC_RUN_DAILY_SKIP_EXIT: '75', ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { CC_CLAUDE_BIN: ctx.claudeBin } : {}), ...(ctx.nodeBin && path.isAbsolute(ctx.nodeBin) ? { CC_NODE_BIN: ctx.nodeBin } : {}) } }),
