@@ -203,49 +203,11 @@ test('suite_failures records a crash when the suite exits non-zero with no failu
   assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 1, /m);
 });
 
-// test-all runs each node:test suite as a child and reports a failing one as a ❌ line, then the last lines of the
-// child's output indented by six spaces (test-all.mjs: "Surface the runner's own summary").
-const NODE_TEST_CHILD = (tests, ms = '3.25') => [
-  '  ✅ tests/providers/private-address-guard.test.mjs — node:test suite passed (8 tests)',
-  '  ❌ tests/providers/proxy-egress.test.mjs — node:test suite failed (exit 1)',
-  ...tests.map((name) => `      ✖ ${name} (${ms}ms)`),
-  '      ℹ tests 9',
-  '      ℹ fail 1',
-  '',
-  'Provider — pythonorg',
-  '  ✅ pythonorg.id is "pythonorg"',
-  '📊 Results: 10 passed, 1 failed, 0 warnings',
-].join('\n');
-
 const failuresOf = (exit, output) => {
   const w = suiteWorld({ exit, output });
   w.run(`suite_failures "${w.dir}/f.txt"`);
   return w.read('f.txt');
 };
-
-test('a failing node:test child suite is recorded with each failing test under it, the same on every run (review of SW3-tests-02)', () => {
-  assert.equal(failuresOf(1, NODE_TEST_CHILD(['upstream known red'])), [
-    '❌ tests/providers/proxy-egress.test.mjs — node:test suite failed (exit 1)',
-    '❌ tests/providers/proxy-egress.test.mjs — node:test ✖ upstream known red',
-    '',
-  ].join('\n'));
-});
-
-test('a known-red node:test test is not a new failure, whatever its timing', () => {
-  const base = failuresOf(1, NODE_TEST_CHILD(['upstream known red'], '3.25'));
-  const w = suiteWorld({ exit: 1, output: NODE_TEST_CHILD(['upstream known red'], '41.7') });
-  w.run(`suite_failures "${w.dir}/after.txt"`);
-  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${w.dir}/after.txt"`], { env: { PATH: '/usr/bin:/bin', B: base }, encoding: 'utf8' });
-  assert.equal(r.stdout, '');
-});
-
-test('a new failing test in a node:test suite that was already red is a new failure', () => {
-  const base = failuresOf(1, NODE_TEST_CHILD(['upstream known red']));
-  const w = suiteWorld({ exit: 1, output: NODE_TEST_CHILD(['upstream known red', 'a regression the merge brought']) });
-  w.run(`suite_failures "${w.dir}/after.txt"`);
-  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${w.dir}/after.txt"`], { env: { PATH: '/usr/bin:/bin', B: base }, encoding: 'utf8' });
-  assert.equal(r.stdout, '❌ tests/providers/proxy-egress.test.mjs — node:test ✖ a regression the merge brought\n');
-});
 
 test('✖ lines under another kind of ❌ entry are not taken as node:test failures', () => {
   const out = '  ❌ tests/agent-inbox-tests.mjs failed:\n      ✖ echoed from a child (2ms)\n📊 Results: 10 passed, 1 failed, 0 warnings';
@@ -260,9 +222,73 @@ test('the in-process node:test suffix with no failing node:test suite listed hol
   assert.notEqual(a, b, 'the line names the run, so it never matches a baseline');
 });
 
-test('the in-process suffix next to a failing node:test suite is accounted for by it', () => {
-  const out = NODE_TEST_CHILD(['upstream known red']).replace('0 warnings', '0 warnings — plus failures in a discovered node:test suite (see above)');
-  assert.doesNotMatch(failuresOf(1, out), /SUITE CRASHED/);
+// ---- names from a real node:test re-run (review of SW3-tests-02) ----
+
+// A real node:test suite: `regression` (declared first) fails only after the merge, `known red` fails in both runs.
+const SUITE = (regressed) => `import { test } from 'node:test';
+import assert from 'node:assert/strict';
+const deep = (n) => (n ? deep(n - 1) : assert.equal(1, 2, 'boom'));
+test('regression the merge brought', () => { ${regressed ? 'deep(8);' : ''} });
+test('known red upstream test', () => deep(8));
+`;
+
+/**
+ * A worktree holding tests/egress.test.mjs, where `node test-all.mjs` (a stub) prints what test-all prints for that
+ * failing suite: the ❌ line, then the last 12 non-empty lines of the child's stderr, else stdout, of a real
+ * `node --test` run, indented six spaces (test-all.mjs). Every other node call is the real node.
+ */
+function realSuiteWorld(regressed) {
+  const dir = tempDir('sync-rerun-');
+  mkdirSync(path.join(dir, 'tests'));
+  writeFileSync(path.join(dir, 'tests', 'egress.test.mjs'), SUITE(regressed));
+  const child = spawnSync(process.execPath, ['--test', 'tests/egress.test.mjs'], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(child.status, 1, child.stdout);
+  const tail = (child.stderr || child.stdout).split('\n').filter(Boolean).slice(-12).map((l) => `      ${l}`);
+  const output = ['  ❌ tests/egress.test.mjs — node:test suite failed (exit 1)', ...tail, '📊 Results: 5 passed, 1 failed, 0 warnings'].join('\n');
+  writeFileSync(path.join(dir, 'test-all.out'), `${output}\n`);
+  stub(path.join(dir, 'bin'), 'node', `if [ "\${1:-}" = test-all.mjs ]; then cat "${path.join(dir, 'test-all.out')}"; exit 1; fi\nexec "${process.execPath}" "$@"`);
+  const run = (script) => spawnSync('bash', ['-c', `source "${LIB}"\n${script}`], { cwd: dir, env: { PATH: `${path.join(dir, 'bin')}:/usr/bin:/bin` }, encoding: 'utf8' });
+  return { dir, run, read: (f) => readFileSync(path.join(dir, f), 'utf8'), tail: tail.join('\n') };
+}
+
+test('a new failing test in an already-red node:test suite is caught, though test-all\'s 12-line tail does not name it', () => {
+  const base = realSuiteWorld(false);
+  const after = realSuiteWorld(true);
+  assert.equal(after.tail.includes('regression the merge brought'), false, 'the fixture is the case the tail cannot show');
+  base.run(`suite_failures "${base.dir}/f.txt"`);
+  after.run(`suite_failures "${after.dir}/f.txt"`);
+  assert.equal(base.read('f.txt'), [
+    '❌ tests/egress.test.mjs — node:test suite failed (exit 1)',
+    '❌ tests/egress.test.mjs — node:test ✖ known red upstream test',
+    '',
+  ].join('\n'));
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${after.dir}/f.txt"`], { env: { PATH: '/usr/bin:/bin', B: base.read('f.txt') }, encoding: 'utf8' });
+  assert.equal(r.stdout, '❌ tests/egress.test.mjs — node:test ✖ regression the merge brought\n');
+});
+
+test('the same known-red suite gives the same lines on every run', () => {
+  const a = realSuiteWorld(false);
+  const b = realSuiteWorld(false);
+  a.run(`suite_failures "${a.dir}/f.txt"`);
+  b.run(`suite_failures "${b.dir}/f.txt"`);
+  assert.equal(a.read('f.txt'), b.read('f.txt'));
+});
+
+test('a failing suite whose re-run names no failing test holds the PR with a line unique to the run', () => {
+  const w = realSuiteWorld(false);
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), "throw new Error('does not load');\n");
+  w.run(`suite_failures "${w.dir}/f.txt"`);
+  assert.match(w.read('f.txt'), /^❌ tests\/egress\.test\.mjs — node:test suite failed, no failing test named on a re-run \(see .*f\.txt\.raw\)$/m);
+});
+
+test('a re-run that hangs is cut off and holds the PR', () => {
+  const w = realSuiteWorld(false);
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), "import { test } from 'node:test';\ntest('hangs', () => new Promise(() => setInterval(() => {}, 1000)));\n");
+  const started = Date.now();
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=1500 suite_failures "${w.dir}/f.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(Date.now() - started < 20_000, `took ${Date.now() - started} ms`);
+  assert.match(w.read('f.txt'), /no failing test named on a re-run/);
 });
 
 test('a clean run of the suite records no failures', () => {
@@ -461,4 +487,12 @@ test('every file the guard code loads from server/core is gated: adapter code as
     if (ref.endsWith('.json')) assert.ok(lib.includes(`local f=${rel}`), `${rel} is checked by contract_gate_edits`);
     else assert.equal(isProtected(rel), rel, `${rel} is a protected path`);
   }
+});
+
+test('the in-process node:test suffix next to a failing node:test suite is accounted for by it', () => {
+  const w = realSuiteWorld(false);
+  writeFileSync(path.join(w.dir, 'test-all.out'), w.read('test-all.out').replace('0 warnings', '0 warnings — plus failures in a discovered node:test suite (see above)'));
+  w.run(`suite_failures "${w.dir}/f.txt"`);
+  assert.doesNotMatch(w.read('f.txt'), /SUITE CRASHED/);
+  assert.match(w.read('f.txt'), /node:test ✖ known red upstream test/);
 });

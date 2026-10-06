@@ -229,25 +229,22 @@ suite_failures() {
   local code=$?
   # Only test-all's own closing line counts as a summary: a failing child suite's stdout, echoed into its failure
   # message, carries an indented "Results:" of its own. test-all runs each node:test suite as a child and reports a
-  # failing one as "❌ <suite> — node:test suite failed (exit N)" followed by the tail of its output indented six
-  # spaces: the failing tests named there (spec "✖ name (12ms)", TAP "not ok N - name") are recorded under that
-  # suite, timing and number dropped, so a new failure in an already-red suite still shows. The "plus failures in a
-  # discovered node:test suite" suffix comes from process.exitCode, which any imported module can set: with no
-  # failing node:test suite listed it is a crash, recorded with this run's path so it never matches a baseline. A
-  # non-zero exit with no failure at all is a crash too.
-  local named
-  named="$(awk '
-    /^[[:space:]]*❌ .* — node:test suite failed \(exit [^)]*\)$/ {
-      suite = $0; sub(/^[[:space:]]*❌ /, "", suite); sub(/ — node:test suite failed \(exit [^)]*\)$/, "", suite); next
-    }
-    suite != "" && /^      / {
-      line = $0; sub(/^[[:space:]]+/, "", line)
-      if (line ~ /^✖ / && line != "✖ failing tests:") { sub(/^✖ /, "", line); sub(/ \([0-9.]+m?s\)$/, "", line); print "❌ " suite " — node:test ✖ " line }
-      else if (line ~ /^not ok [0-9]+ - /) { sub(/^not ok [0-9]+ - /, "", line); sub(/ # .*$/, "", line); print "❌ " suite " — node:test ✖ " line }
-      next
-    }
-    { suite = "" }
-  ' "$out")"
+  # failing one as "❌ <suite> — node:test suite failed (exit N)", echoing only the last 12 lines of its output, which
+  # often name no test. So each such suite is run again here (rerun_failing_tests) and every failing test is recorded
+  # under it, the same way for the baseline and the merged tree, so a new failure in an already-red suite shows. The
+  # "plus failures in a discovered node:test suite" suffix comes from process.exitCode, which any imported module can
+  # set: with no failing node:test suite listed it is a crash, recorded with this run's path so it never matches a
+  # baseline. A non-zero exit with no failure at all is a crash too.
+  local named="" suite names
+  while IFS= read -r suite; do
+    [ -n "$suite" ] || continue
+    names="$(rerun_failing_tests "$suite")"
+    if [ -n "$names" ]; then
+      named="${named:+$named$'\n'}$(printf '%s\n' "$names" | sed "s|^|❌ $suite — node:test ✖ |")"
+    else
+      named="${named:+$named$'\n'}❌ $suite — node:test suite failed, no failing test named on a re-run (see $out)"
+    fi
+  done < <(sed -nE 's/^[[:space:]]*❌ (.*) — node:test suite failed \(exit [^)]*\)$/\1/p' "$out" | LC_ALL=C sort -u)
   {
     grep -E '^\s*❌' "$out" | sed -E 's/^[[:space:]]+//'
     [ -z "$named" ] || printf '%s\n' "$named"
@@ -260,6 +257,30 @@ suite_failures() {
       echo "SUITE CRASHED (exit $code, but no failing test listed; see $out)"
     fi
   } | sort -u > "$1"
+}
+
+# rerun_failing_tests <suite>: the names of the failing tests in one node:test
+# suite, run again from the current directory with the TAP reporter (every
+# `not ok N - name`, nested ones included, numbers and directives dropped),
+# sorted. Bounded by SUITE_RERUN_TIMEOUT_MS (default 300000); nothing when the
+# run names no failing test (a suite that does not load reports only its file),
+# times out or cannot start.
+rerun_failing_tests() {
+  SUITE="$1" node -e '
+const { spawnSync } = require("child_process");
+const env = { ...process.env, NODE_OPTIONS: (process.env.NODE_OPTIONS || "").replace(/--test-reporter(-destination)?[= ]\S+/g, "") };
+const suite = process.env.SUITE;
+delete env.SUITE;
+const r = spawnSync(process.execPath, ["--test", "--test-reporter=tap", suite], { env, encoding: "utf8", timeout: Number(process.env.SUITE_RERUN_TIMEOUT_MS || 300000), maxBuffer: 64 * 1024 * 1024, killSignal: "SIGKILL" });
+if (r.error) process.exit(0);
+const names = new Set();
+for (const line of (r.stdout || "").split("\n")) {
+  const m = /^\s*not ok \d+ - (.*?)(?: # .*)?$/.exec(line);
+  // A suite that does not load is reported as one failing "test" named after its file: that names no test.
+  if (m && m[1] !== suite && m[1] !== require("path").resolve(suite)) names.add(m[1]);
+}
+process.stdout.write([...names].sort().map((n) => n + "\n").join(""));
+' 2>/dev/null | LC_ALL=C sort -u
 }
 
 # new_failures <baseline-text> <after-file>: the lines of <after-file> that are
