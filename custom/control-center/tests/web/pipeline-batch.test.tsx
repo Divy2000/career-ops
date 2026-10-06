@@ -109,6 +109,14 @@ describe('Pipeline > Batch', () => {
     expect(started).toBe(0);
   });
 
+  it('counts the pasted URLs in words that fit the number', async () => {
+    await mount();
+    await type(textarea(), 'https://jobs.example.com/1');
+    expect(host.textContent).toMatch(/1 URL(?!s)/);
+    await type(textarea(), 'https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    expect(host.textContent).toMatch(/2 URLs/);
+  });
+
   it('more URLs than one fan-out takes: the button stays disabled and says the limit', async () => {
     await mount();
     await type(textarea(), Array.from({ length: 51 }, (_, i) => `https://jobs.example.com/${i}`).join('\n'));

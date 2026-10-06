@@ -48,7 +48,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
           Batch evaluate <Pill tone="warn">Uses tokens</Pill>
         </button>
         <span className={tooMany ? 'danger-text' : 'faint'}>
-          {list.length} URLs{tooMany ? `; at most ${BATCH_MAX_URLS} URLs per batch` : ''}
+          {list.length} URL{list.length === 1 ? '' : 's'}{tooMany ? `; at most ${BATCH_MAX_URLS} URLs per batch` : ''}
         </span>
       </div>
       <Message message={message} />
