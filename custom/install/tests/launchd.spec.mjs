@@ -448,3 +448,29 @@ test('an installed plist whose schedule cannot be read gets the default time, no
   assert.equal(r.status, 0, r.stderr);
   assert.ok(plistText(r, DAILY).includes('<dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>'));
 });
+
+test('a turned-off job is read as off from a long print-disabled list that names it first, and from the older "=> true" form', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const T = mkTmp('ci-launchd-print-');
+  const others = Array.from({ length: 200_000 }, (_, i) => `\t\t"com.example.agent-${i}" => enabled`).join('\n');
+  const forms = {
+    'long list, label first': `disabled services = {\n\t\t"${DAILY}" => disabled\n${others}\n\t}\n`,
+    'older => true': `disabled services = {\n\t\t"com.example.other" => false\n\t\t"${DAILY}" => true\n\t}\n`,
+  };
+  for (const [name, text] of Object.entries(forms)) {
+    const file = path.join(T, `${name.replace(/\W+/g, '-')}.txt`);
+    fs.writeFileSync(file, text);
+    const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 7, minute: 5 }) }, env: { STUB_PRINT_DISABLED_OUTPUT: file } });
+    assert.equal(r.status, 0, `${name}: ${r.stderr}`);
+    assert.doesNotMatch(r.log, new RegExp(`^launchctl (enable|bootstrap) .*${DAILY.replaceAll('.', '\\.')}`, 'm'), name);
+    assert.match(r.stdout, /left off, as set in the Control Center/, name);
+  }
+});
+
+test('a job listed as enabled, or not listed, is turned on as usual after a reinstall', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const T = mkTmp('ci-launchd-print-');
+  const file = path.join(T, 'enabled.txt');
+  fs.writeFileSync(file, `disabled services = {\n\t\t"${DAILY}" => enabled\n\t\t"${DAILY}.other" => disabled\n\t}\n`);
+  const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 7, minute: 5 }) }, env: { STUB_PRINT_DISABLED_OUTPUT: file } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.log, new RegExp(`^launchctl bootstrap .*${DAILY.replaceAll('.', '\\.')}\\.plist$`, 'm'));
+});

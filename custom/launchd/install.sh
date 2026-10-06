@@ -107,10 +107,19 @@ installed_schedule() {
   printf '%s %s %s' "$h" "$m" "$w"
 }
 
-# Whether launchd keeps <label> disabled (`launchctl disable`, which the Control Center's off switch uses).
+# Whether launchd keeps <label> disabled (`launchctl disable`, which the Control Center's off switch uses): its line in
+# `launchctl print-disabled` reads `"<label>" => disabled`, or `=> true` on older macOS (parsePrintDisabled in the
+# Control Center's schedule.ts reads it the same way). The list is read whole first: grep -q on a pipe would stop
+# early, launchctl would die of SIGPIPE, and under pipefail a job that is off would read as on.
 label_disabled() {
-  launchctl print-disabled "gui/$(id -u)" 2>/dev/null | grep -Fq "\"$1\" => disabled" ||
-    launchctl print-disabled "gui/$(id -u)" 2>/dev/null | grep -Fq "\"$1\" => true"
+  local out line
+  out="$(launchctl print-disabled "gui/$(id -u)" 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*\"([^\"]*)\"[[:space:]]*=\>[[:space:]]*([A-Za-z]+) ]] || continue
+    [ "${BASH_REMATCH[1]}" = "$1" ] || continue
+    case "${BASH_REMATCH[2]}" in disabled | true) return 0 ;; *) return 1 ;; esac
+  done <<<"$out"
+  return 1
 }
 
 write_plist() { # label script hour minute weekday(or empty) logdir
