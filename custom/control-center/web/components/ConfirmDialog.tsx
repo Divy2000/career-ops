@@ -8,6 +8,8 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** Destructive confirms get the danger button style. */
   danger?: boolean;
+  /** Opens on Cancel without the danger style: for confirms that spend tokens. A destructive confirm always does. */
+  focusCancel?: boolean;
 }
 
 type Ask = (opts: ConfirmOptions) => Promise<boolean>;
@@ -40,10 +42,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             )}
             <div className="row gap dialog__actions">
               {/* A destructive or paid confirm starts on Cancel, so the Enter that opened it (held, or pressed twice) cannot confirm it. */}
-              <button type="button" onClick={() => settle(false)} autoFocus={Boolean(opts?.danger)}>
+              <button type="button" onClick={() => settle(false)} autoFocus={Boolean(opts?.danger || opts?.focusCancel)}>
                 {opts?.cancelLabel ?? 'Cancel'}
               </button>
-              <button type="button" className={opts?.danger ? 'button--danger' : 'button--primary'} onClick={() => settle(true)} autoFocus={!opts?.danger}>
+              <button type="button" className={opts?.danger ? 'button--danger' : 'button--primary'} onClick={() => settle(true)} autoFocus={!(opts?.danger || opts?.focusCancel)}>
                 {opts?.confirmLabel ?? 'Confirm'}
               </button>
             </div>
