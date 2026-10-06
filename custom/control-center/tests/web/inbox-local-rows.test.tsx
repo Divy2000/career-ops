@@ -1,6 +1,7 @@
 // Pipeline > Inbox: a pending row whose posting is a saved JD (local:jds/..., written by archive-posting and the Apify
-// provider) is listed with a link to that file and can be skipped. Evaluate visible takes posting URLs only, so it
-// leaves such rows to Process inbox and says so (SW8-web-a-03).
+// provider) is listed with a link to that file and can be skipped. Evaluate visible and Process inbox take posting URLs
+// only (pipeline mode's liveness sweep hands every row to check-liveness, whose guard refuses a non-http line), so both
+// leave such rows out, and the row's own Evaluate JD runs an evaluation of the saved file (SW8-web-a-03).
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -20,10 +21,12 @@ const READ: PipelineRead = { kind: 'ok', path: 'data/pipeline.md', etag: 'e', ro
 let host: HTMLElement;
 let root: Root;
 let skips: unknown[];
+let starts: unknown[];
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 beforeEach(async () => {
   skips = [];
+  starts = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -32,6 +35,10 @@ beforeEach(async () => {
         return json({ matched: 1, changed: 1, done: true });
       }
       if (url === '/api/pipeline') return json(READ);
+      if (url === '/api/sessions' && init?.method === 'POST') {
+        starts.push(JSON.parse(String(init.body)));
+        return json({ id: 's-jd-1', status: 'queued' });
+      }
       return json([]);
     }),
   );
@@ -64,9 +71,26 @@ describe('Inbox rows that point at a saved JD', () => {
     expect(skips).toEqual([{ url: 'local:jds/2026-10-06_acme_pm.pdf', done: true }]);
   });
 
-  it('leaves it out of Evaluate visible, which needs a posting URL, and says Process inbox reads it', () => {
+  it('leaves it out of Evaluate visible, which needs a posting URL, and points at the row\'s Evaluate JD', () => {
     const evaluate = [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Evaluate visible'))!;
     expect(evaluate.textContent).toContain('Evaluate visible (1)');
-    expect(host.textContent).toContain('1 row with a saved JD is left out: Process inbox reads it.');
+    expect(host.textContent).toContain('1 row with a saved JD is left out of Evaluate visible and Process inbox: use Evaluate JD on its row.');
+  });
+
+  it('keeps it out of Process inbox, whose liveness sweep would hand it to check-liveness', async () => {
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Process inbox'))!.click());
+    const prompt = await until(() => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt for pipeline"]'), 'the Process inbox prompt');
+    expect(prompt.value).toContain('Leave every local:jds/ row out of this run');
+    expect(prompt.value).toContain('not in the liveness sweep');
+  });
+
+  it('evaluates the saved JD from its row as an oferta session on that file, and only on such rows', async () => {
+    expect(rowOf('Open Co').querySelector('button[aria-label^="Evaluate JD"]')).toBeNull();
+    await act(async () => rowOf('Acme').querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]')!.click());
+    await until(() => starts.length > 0, 'the session start');
+    expect(starts).toEqual([
+      expect.objectContaining({ mode: 'oferta', target: { type: 'text', value: 'local:jds/2026-10-06_acme_pm.pdf' }, prompt: expect.stringContaining('jds/2026-10-06_acme_pm.pdf') }),
+    ]);
+    expect((starts[0] as { prompt: string }).prompt).toMatch(/not a posting URL/);
   });
 });

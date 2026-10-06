@@ -10,9 +10,17 @@ import { BATCH_MAX_URLS } from '@shared/fanout';
 export const FANOUT_CONFIRM_ABOVE = 3;
 
 /**
+ * Process inbox runs pipeline mode over data/pipeline.md, whose liveness sweep puts every pending row in the file it
+ * hands check-liveness.mjs; the guard refuses a line that is not an http(s) URL, which fails the sweep. Saved-JD rows
+ * (local:jds/) are left out, and each is evaluated from its own row (Evaluate JD).
+ */
+export const PROCESS_INBOX_PROMPT =
+  'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
+
+/**
  * Pipeline AI entry points: Process inbox (pipeline mode) and Evaluate the visible pending rows as a fan-out (spec 4.2).
- * The fan-out evaluates posting URLs only; `savedJds` counts the visible rows that are a saved JD (local:jds/), which
- * Process inbox reads instead.
+ * Both take posting URLs only; `savedJds` counts the visible rows that are a saved JD (local:jds/), which are evaluated
+ * from their own row instead.
  */
 export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: number }) {
   const navigate = useNavigate();
@@ -51,7 +59,7 @@ export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: num
         </button>
         {savedJds > 0 && (
           <span className="muted small">
-            {savedJds === 1 ? '1 row with a saved JD is left out: Process inbox reads it.' : `${savedJds} rows with a saved JD are left out: Process inbox reads them.`}
+            {savedJds === 1 ? '1 row with a saved JD is left out of Evaluate visible and Process inbox: use Evaluate JD on its row.' : `${savedJds} rows with a saved JD are left out of Evaluate visible and Process inbox: use Evaluate JD on each row.`}
           </span>
         )}
         {tooMany && (
@@ -65,7 +73,7 @@ export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: num
           </span>
         )}
       </div>
-      {open && <SessionPanel mode="pipeline" title="Process inbox" initialPrompt="Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports." />}
+      {open && <SessionPanel mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />}
     </div>
   );
 }

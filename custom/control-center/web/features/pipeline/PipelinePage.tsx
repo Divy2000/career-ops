@@ -10,6 +10,7 @@ import { InboxAi } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
 import { localJdPath } from '@shared/local-jd';
+import { startSavedJdSession } from '../../lib/sessions';
 
 const route = getRouteApi('/pipeline');
 
@@ -230,9 +231,12 @@ function Inbox() {
                     </td>
                     <td>
                       {!r.done ? (
-                        <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
-                          Skip
-                        </button>
+                        <div className="row gap">
+                          {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} />}
+                          <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
+                            Skip
+                          </button>
+                        </div>
                       ) : r.section !== 'done' ? (
                         <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>
                           Back to queue
@@ -246,6 +250,39 @@ function Inbox() {
           </div>
         )}
       </DataState>
+    </>
+  );
+}
+
+/** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
+function EvaluateJd({ reference, label }: { reference: string; label: string }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const go = async () => {
+    const jd = localJdPath(reference);
+    if (jd === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const m = await startSavedJdSession(reference, jd);
+      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+    } catch (err) {
+      setError(`Could not start the evaluation: ${describeError(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" aria-label={`Evaluate JD for ${label}`} disabled={busy} onClick={() => void go()}>
+        Evaluate JD <Pill tone="warn">Uses tokens</Pill>
+      </button>
+      {error && (
+        <span role="alert" className="danger-text small">
+          {error}
+        </span>
+      )}
     </>
   );
 }
