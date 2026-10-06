@@ -202,4 +202,26 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     expect((await settle(res.json().id)).meta.status).toBe('done');
     expect(claim()).toBeNull();
   });
+
+  it('a cancelled pass keeps the claim until its Claude process has really exited (SW8-server-01 review)', async () => {
+    writePending([item(6)]);
+    // A CLI that ignores SIGTERM, sleeping in short steps so the SIGKILL that ends it lands between them.
+    const stubborn = [INIT, { __ignoreSigterm: true }, ...Array.from({ length: 200 }, () => ({ __sleep: 100 })), result('Pass done.')];
+    const res = await withScenario({ events: stubborn }, start);
+    expect(res.statusCode, res.body).toBe(202);
+    const id = res.json().id as string;
+    const runId = () => (t.sessions.read(id)!.turns.at(-1)!.runId);
+    for (let i = 0; i < 100 && !t.runner.store.read(runId())?.childPid; i++) await wait(50);
+    expect((await t.app.inject({ method: 'POST', url: `/api/sessions/${id}/cancel`, headers: t.authedWrite, payload: {} })).statusCode).toBe(200);
+    await wait(500);
+    // The process is still running (the runner sends SIGKILL after 5 s): the pass still holds the queue.
+    expect(t.runner.store.readExit(runId())).toBeNull();
+    expect(claim()?.owner).toBe(`session:${id}`);
+    const other = await start();
+    expect(other.statusCode, other.body).toBe(409);
+    for (let i = 0; i < 300 && !t.runner.store.readExit(runId()); i++) await wait(50);
+    expect(t.runner.store.readExit(runId())).not.toBeNull();
+    for (let i = 0; i < 100 && claim(); i++) await wait(50);
+    expect(claim()).toBeNull();
+  });
 });

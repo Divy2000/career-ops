@@ -107,6 +107,32 @@ test('a stale claim is taken over: its session is gone or final, its daily job p
   assert.deepEqual(tryClaim(r, { owner: 'session:s-taker', batch: null }), { ok: true });
 });
 
+test('a cancelled session keeps the claim until its Claude run has ended (SW8-server-01 review)', () => {
+  const r = root();
+  const runDir = path.join(r, 'data', 'control-center', 'runs', 'run-1');
+  fs.mkdirSync(runDir, { recursive: true });
+  const sessionDir = path.join(r, 'data', 'control-center', 'sessions', 's-cancelled');
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify({ id: 's-cancelled', status: 'cancelled', turns: [{ n: 1, runId: 'run-1' }] }));
+  const held = () => {
+    plant(r, { owner: 'session:s-cancelled', batch: null, at: new Date().toISOString() });
+    return !tryClaim(r, { owner: 'daily:1', batch: null }).ok;
+  };
+  // Cancel asked, the process still running (SIGTERM ignored until the runner's SIGKILL).
+  fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({ id: 'run-1', status: 'running', endedAt: null }));
+  assert.equal(held(), true, 'running');
+  // The wrapper recorded the exit, before the runner finalized the record.
+  fs.writeFileSync(path.join(runDir, 'exit.json'), JSON.stringify({ code: null, signal: 'SIGKILL', endedAt: new Date().toISOString() }));
+  assert.equal(held(), false, 'exit recorded');
+  fs.rmSync(path.join(runDir, 'exit.json'));
+  // Finalized by the runner.
+  fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({ id: 'run-1', status: 'cancelled', endedAt: new Date().toISOString() }));
+  assert.equal(held(), false, 'finalized');
+  // No run record at all: nothing runs.
+  fs.rmSync(runDir, { recursive: true });
+  assert.equal(held(), false, 'no record');
+});
+
 test('a recent start keeps the claim until it is retagged with its session', () => {
   const r = root();
   assert.equal(tryClaim(r, { owner: 'starting:n1', batch: null }).ok, true);

@@ -85,16 +85,38 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     policyClaim.retag(opts.cfg.dataRoot, starting, owner);
     if (FINAL.has(manager.read(meta.id)?.status ?? meta.status)) policyClaim.release(opts.cfg.dataRoot, owner);
   };
-  const offClaims = manager.onEvent((sessionId, { event }) => {
-    if (event.type !== 'status' && event.type !== 'error') return;
-    if (!FINAL.has(manager.read(sessionId)?.status ?? '')) return;
+  const release = (sessionId: string) => {
     try {
       policyClaim.release(opts.cfg.dataRoot, `session:${sessionId}`);
     } catch (err) {
       app.log.warn({ err, sessionId }, 'could not release the AI policy pass claim; a later pass takes it over as stale');
     }
+  };
+  // A session can end (a cancel sets cancelled at once) while its Claude process still runs, for up to the runner's
+  // SIGKILL delay: the claim is released only once that run has ended too.
+  const awaitingExit = new Map<string, string>();
+  const releaseOnceExited = (sessionId: string, runId: string | undefined) => {
+    if (runId && policyClaim.runUnfinished(opts.cfg.dataRoot, runId)) awaitingExit.set(runId, sessionId);
+    else release(sessionId);
+  };
+  const offClaims = manager.onEvent((sessionId, { event }) => {
+    if (event.type !== 'status' && event.type !== 'error') return;
+    const meta = manager.read(sessionId);
+    if (!FINAL.has(meta?.status ?? '')) return;
+    releaseOnceExited(sessionId, meta?.turns.at(-1)?.runId);
   });
-  app.addHook('onClose', async () => offClaims());
+  const offRunEnds = opts.bus.onEvent((ev) => {
+    if (ev.type !== 'run.status') return;
+    const runId = (ev.payload as { runId?: string }).runId;
+    const sessionId = runId ? awaitingExit.get(runId) : undefined;
+    if (!runId || !sessionId || policyClaim.runUnfinished(opts.cfg.dataRoot, runId)) return;
+    awaitingExit.delete(runId);
+    release(sessionId);
+  });
+  app.addHook('onClose', async () => {
+    offClaims();
+    offRunEnds();
+  });
   /** A reply or fork of a policy pass continues it: it must hold the claim. Null when it may go on, else the 409 reason. */
   const claimForTurn = (id: string, owner: string, takeFrom?: string): string | null => {
     const meta = manager.read(id);
@@ -248,11 +270,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       // Deleted first: a running session refuses, and its upload stays with it.
       manager.delete(req.params.id);
       dropUpload(meta);
-      try {
-        policyClaim.release(opts.cfg.dataRoot, `session:${req.params.id}`);
-      } catch (err) {
-        app.log.warn({ err }, 'could not release the AI policy pass claim; a later pass takes it over as stale');
-      }
+      releaseOnceExited(req.params.id, meta.turns.at(-1)?.runId);
       return { ok: true };
     }),
   );

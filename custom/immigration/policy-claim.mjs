@@ -53,7 +53,8 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
     if (!/^[\w-]+$/.test(id)) return false;
     try {
       const meta = JSON.parse(fs.readFileSync(path.join(dataRoot, 'data', 'control-center', 'sessions', id, 'meta.json'), 'utf8'));
-      return LIVE_SESSION.has(meta.status);
+      // A cancelled session's Claude process can outlive its status for seconds (SIGTERM, then SIGKILL): it still holds.
+      return LIVE_SESSION.has(meta.status) || runUnfinished(dataRoot, meta.turns?.at(-1)?.runId);
     } catch {
       return false;
     }
@@ -93,6 +94,29 @@ function isDailyJob(pid) {
     return !(err.status === 1 && !String(err.stdout ?? '').trim());
   }
   return DAILY_JOB_RE.test(out.trim());
+}
+
+/**
+ * Whether a Control Center run has not ended yet: its record has no end time and its wrapper wrote no exit record. A
+ * run with no record has ended (the runner writes it before it spawns); one whose record cannot be read for another
+ * reason is taken to be running still.
+ */
+export function runUnfinished(dataRoot, runId) {
+  if (typeof runId !== 'string' || !/^[\w-]+$/.test(runId)) return false;
+  const dir = path.join(dataRoot, 'data', 'control-center', 'runs', runId);
+  if (fs.existsSync(path.join(dir, 'exit.json'))) return false;
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dir, 'meta.json'), 'utf8');
+  } catch (err) {
+    return !(err.code === 'ENOENT' || err.code === 'ENOTDIR');
+  }
+  try {
+    return !JSON.parse(text).endedAt;
+  } catch {
+    // The runner replaces its record by rename, so text that is not JSON was edited by hand: it holds nothing.
+    return false;
+  }
 }
 
 function sleep(ms) {
