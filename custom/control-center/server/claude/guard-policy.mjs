@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import dns from 'node:dns';
+import { CODE_ROOT_WRITE_GLOBS } from './confinement.mjs';
 
 const NETWORK_BINS = new Set(['curl', 'wget', 'nc', 'ncat', 'ssh', 'scp', 'sftp', 'ftp', 'telnet', 'rsync']);
 
@@ -490,12 +491,40 @@ function readable(policy, value, label) {
   return null;
 }
 
+/** The data root is the code checkout itself (one folder), compared by real path. */
+function oneRoot(policy) {
+  const data = policy.dataRoot || policy.codeRoot;
+  if (data === policy.codeRoot) return true;
+  try {
+    return fs.realpathSync.native(data) === fs.realpathSync.native(policy.codeRoot);
+  } catch {
+    return false; // a root not on disk: no file can be located in it anyway
+  }
+}
+
+/**
+ * Why a write `locate` placed at `found` is outside the write scope, or null when it is inside. With one root every
+ * glob applies. With a separate data root, the code-checkout globs (CODE_ROOT_WRITE_GLOBS) apply in the code root and
+ * every other glob (user files) in the data root, for every policy, the daily job's included; a user file aimed at
+ * the code checkout is told where it belongs.
+ */
+export function writeScopeReason(policy, found, label) {
+  const allow = policy.allow ?? [];
+  const code = allow.filter((g) => CODE_ROOT_WRITE_GLOBS.includes(g));
+  const data = allow.filter((g) => !CODE_ROOT_WRITE_GLOBS.includes(g));
+  const split = !oneRoot(policy);
+  const globs = !split ? allow : found.root === 'code' ? code : data;
+  if (matches(found.rel, globs)) return null;
+  if (split && found.root === 'code' && matches(found.rel, data)) return `${label}: ${found.rel} in the code checkout is outside the write scope; user files live in the data root, so write ${path.join(policy.dataRoot, found.rel)}`;
+  if (split && found.root === 'data' && matches(found.rel, code)) return `${label}: ${found.rel} in the data root is outside the write scope; it belongs in the code checkout, so write ${path.join(policy.codeRoot, found.rel)}`;
+  return `${label}: ${found.rel} is outside the write scope (${globs.join(', ') || 'none'})`;
+}
+
 function writable(policy, value, label) {
   const found = locate(policy, value);
   if (!found) return `${label}: ${value} is outside the repo and data roots`;
   if (matches(found.rel, policy.deny)) return `${label}: ${found.rel} is protected and may not be passed to a command`;
-  if (!matches(found.rel, policy.allow)) return `${label}: ${found.rel} is outside the write scope (${policy.allow.join(', ') || 'none'})`;
-  return null;
+  return writeScopeReason(policy, found, label);
 }
 
 function checkExact(args, label) {

@@ -929,6 +929,31 @@ describe('projects-ingest sessions read the document text the app extracted', ()
 });
 
 
+describe('a separate data root: user files go there, never into the code checkout (SW2-claude-02)', () => {
+  type Ev = { type: string; tool?: string; input?: { file_path?: string; command?: string } };
+  const evs = (events: Settled['events']) => events.map((e) => e.event as unknown as Ev);
+
+  it('an evaluation that writes its report relative to the repo root is refused there, and its data-root report is credited', async () => {
+    // The tests' app runs split: the code root is this checkout, the data root a copy of the fixture.
+    expect(fs.realpathSync(t.cfg.dataRoot)).not.toBe(fs.realpathSync(t.cfg.codeRoot));
+    const report = '# Evaluation: Split Corp\n\n**Date:** 2026-10-05\n**Score:** 4.0/5\n**URL:** https://jobs.example.com/split/1\n\n## A) Role Summary\nx\n';
+    const scenario = scenarioFile({
+      events: [
+        INIT,
+        // Never performed even if the guard let it through: it would land in this checkout.
+        { __write: { path: 'reports/099-split-corp-2026-10-05.md', content: report }, expectDenied: true },
+        { __write: { path: '{{DATA_ROOT}}/reports/099-split-corp-2026-10-05.md', content: report } },
+        result('Wrote report 099.', 0.01),
+      ],
+    });
+    const { meta, events } = await withScenario(scenario, async () => settle((await post('/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/split/1' }, prompt: 'Evaluate https://jobs.example.com/split/1' })).json().id));
+    expect(evs(events).filter((e) => e.type === 'permission.denied').map((e) => e.input?.file_path)).toEqual([path.join(t.cfg.codeRoot, 'reports', '099-split-corp-2026-10-05.md')]);
+    expect(meta).toMatchObject({ status: 'done', lastReason: expect.stringMatching(/099-split-corp-2026-10-05\.md created/) });
+    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', '099-split-corp-2026-10-05.md'))).toBe(true);
+    expect(fs.existsSync(path.join(t.cfg.codeRoot, 'reports', '099-split-corp-2026-10-05.md'))).toBe(false);
+  });
+});
+
 describe('scripts a session runs write only inside its write scope', () => {
   type Ev = { type: string; tool?: string; ok?: boolean; summary?: string; input?: { command?: string } };
   const evs = (events: Settled['events']) => events.map((e) => e.event as unknown as Ev);

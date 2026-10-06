@@ -3,7 +3,7 @@
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
 import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
-import { ALWAYS_DENIED_WRITES } from './confinement.mjs';
+import { ALWAYS_DENIED_WRITES, CODE_ROOT_WRITE_GLOBS } from './confinement.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -231,6 +231,11 @@ export const DEVCHAT_DENIED_WRITES = [
   '**/node_modules/**',
   'writing-samples/README.md',
 ];
+
+/** A class's write globs split by the root their files live in (CODE_ROOT_WRITE_GLOBS, in confinement.mjs). */
+export function writeGlobsByRoot(globs: readonly string[]): { data: string[]; code: string[] } {
+  return { data: globs.filter((g) => !CODE_ROOT_WRITE_GLOBS.includes(g)), code: globs.filter((g) => CODE_ROOT_WRITE_GLOBS.includes(g)) };
+}
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {

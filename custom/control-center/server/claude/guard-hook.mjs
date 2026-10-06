@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, matches, PLAYWRIGHT_TOOL_PREFIX, readUrlList, snapshotKey, unresolvedPathReason, urlListFilesIn } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, matches, PLAYWRIGHT_TOOL_PREFIX, readUrlList, snapshotKey, unresolvedPathReason, urlListFilesIn, writeScopeReason } from './guard-policy.mjs';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -63,7 +63,8 @@ async function main() {
     if (!found) deny(`${tool}: ${target} is outside the repo and data roots; sessions may only write inside them`);
     const { rel, abs } = found;
     if (matches(rel, policy.deny)) deny(`${tool}: ${rel} is always protected (blacklist and tracker are edited only through the app or core CLIs)`);
-    if (!matches(rel, policy.allow)) deny(`${tool}: ${rel} is not in the write scope (${policy.allow.join(', ') || 'none'})`);
+    const outOfScope = writeScopeReason(policy, found, tool);
+    if (outOfScope) deny(outOfScope);
     snapshot(snapDir, abs);
     process.exit(0);
   }
