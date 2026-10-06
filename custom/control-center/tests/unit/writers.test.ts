@@ -4,6 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import YAML from 'yaml';
 import { applyInboxSkip, postingUrl } from '../../server/domains/inboxSkip.js';
+import { appendOffers } from '../../server/domains/writers.js';
+import { tempDir } from '../helpers/tmp.js';
 import { applyFollowupEdit } from '../../server/domains/followups-edit.mjs';
 import { ACTIONS, findAction } from '../../server/actions/registry.js';
 import { tmpInputDir } from '../../server/actions/tmp-inputs.js';
@@ -42,6 +44,29 @@ describe('inbox skip port', () => {
 });
 
 const FOLLOWUPS = `# Follow-up History\n\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 1 | 2026-09-28 | Acme | Eng | Email | hr@acme.example | asked |\n| 2 | 6 | 2026-10-02 | Vandelay | Eng | LinkedIn | HM | thanks |\n- next #1 2026-10-10 (set 2026-10-01) ${String.fromCharCode(0x2014)} waiting\n`;
+
+describe('appendOffers', () => {
+  it('writes the data root\'s pipeline and scan history it checked, not the files a CAREER_OPS_PIPELINE or _SCAN_HISTORY override names', async () => {
+    const root = copyFixtureRoot();
+    const decoy = tempDir('cc-append-decoy-');
+    const saved = { pipeline: process.env.CAREER_OPS_PIPELINE, history: process.env.CAREER_OPS_SCAN_HISTORY };
+    // scan.mjs puts both overrides ahead of the data root; the server's own environment may carry them.
+    process.env.CAREER_OPS_PIPELINE = path.join(decoy, 'pipeline.md');
+    process.env.CAREER_OPS_SCAN_HISTORY = path.join(decoy, 'scan-history.tsv');
+    try {
+      const url = 'https://jobs.example.com/override-check/1';
+      expect(await appendOffers(DEFAULT_CODE_ROOT, root, [{ url, company: 'Override Co', title: 'Platform Engineer' }], true)).toEqual({ added: 1, skipped: 0 });
+      expect(fs.readdirSync(decoy)).toEqual([]);
+      expect(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8')).toContain(url);
+      expect(fs.readFileSync(path.join(root, 'data', 'scan-history.tsv'), 'utf8')).toContain(url);
+    } finally {
+      for (const [k, v] of [['CAREER_OPS_PIPELINE', saved.pipeline], ['CAREER_OPS_SCAN_HISTORY', saved.history]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});
 
 describe('follow-ups edits', () => {
   it('appends a log row with the next num right after the table', () => {
