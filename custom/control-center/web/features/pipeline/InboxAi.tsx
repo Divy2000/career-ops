@@ -6,6 +6,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { fanOut } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
+import { fanoutOutcome } from '../../lib/fanoutOutcome';
 
 /**
  * Process inbox runs pipeline mode over data/pipeline.md, whose liveness sweep puts every pending row in the file it
@@ -24,7 +25,7 @@ export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: num
   const navigate = useNavigate();
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   // One fan-out takes at most BATCH_MAX_URLS. Splitting a bigger set into several requests would leave a partial start
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
   const unique = [...new Set(urls)];
@@ -38,10 +39,12 @@ export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: num
     try {
       if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
       const r = await fanOut('oferta', unique);
-      setNote(`Started ${r.sessions.length} evaluations with report numbers ${r.reserved.join(', ')}.`);
-      await navigate({ to: '/sessions' });
+      const outcome = fanoutOutcome(r);
+      setNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
+      // A session that did not start is reported here; the Sessions page would hide why.
+      if (outcome.failedUrls.length === 0) await navigate({ to: '/sessions' });
     } catch (err) {
-      setNote(`Could not start the evaluations: ${describeError(err)}`);
+      setNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {
       setBusy(false);
     }
@@ -66,8 +69,8 @@ export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: num
           </span>
         )}
         {note && (
-          <span role="status" className="muted small">
-            {note}
+          <span role={note.tone === 'danger' ? 'alert' : 'status'} className={`small ${note.tone === 'danger' ? 'danger-text' : 'muted'}`}>
+            {note.text}
           </span>
         )}
       </div>

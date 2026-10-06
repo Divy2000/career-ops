@@ -268,6 +268,23 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(navigations).toEqual([{ to: '/sessions' }]);
   });
 
+  it('a fan-out whose sessions fail to start is reported, names the postings left pending, and stays on the page (review fix)', async () => {
+    const session = (id: string, url: string, status: string) => ({ id, status, target: { type: 'url', value: url }, reportNum: null, error: status === 'error' ? 'the Claude CLI is not approved' : null });
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return json({ sessions: [session('s1', 'https://jobs.acme.example/1', 'queued'), session('s2', 'https://jobs.acme.example/2', 'error')], reserved: [50, 51] }, 202);
+      }
+      return String(url) === '/api/pipeline' ? json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows }) : json([]);
+    });
+    const item = await runProposal('Acme');
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Started 1 of 2 evaluations with report number 50. 1 could not start: the Claude CLI is not approved');
+    expect(item.textContent).toContain('Not started: https://jobs.acme.example/2');
+    expect(navigations).toEqual([]);
+  });
+
   it('with no pending posting at that company, starts nothing and says so, without asking', async () => {
     await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;

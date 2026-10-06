@@ -160,6 +160,48 @@ describe('Pipeline > Inbox > Evaluate visible', () => {
   });
 });
 
+describe('a fan-out whose sessions fail to start (SW5-tests-07)', () => {
+  // The fan-out answers 202 even when a session fails before its turn runs (no approved CLI, no token); its report
+  // number goes back to the pool and the session carries status error.
+  const session = (id: string, url: string, status: 'queued' | 'error', reportNum: number | null) => ({ id, status, target: { type: 'url', value: url }, reportNum, error: status === 'error' ? 'the Claude CLI is not approved' : null });
+
+  it('Batch evaluate: every session errored, so the URLs stay for a retry and the error shows, with no "Started"', async () => {
+    fanoutResponse = { status: 202, body: { sessions: [session('s1', 'https://jobs.example.com/1', 'error', null), session('s2', 'https://jobs.example.com/2', 'error', null)], reserved: [12, 13] } };
+    await mount();
+    await type(textarea(), 'https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    await click(button('Batch evaluate')!);
+    await click(button('Start them')!);
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the error');
+    expect(alert.textContent).toMatch(/Could not start the evaluations: the Claude CLI is not approved/);
+    expect(host.textContent).not.toMatch(/Started/);
+    expect(textarea().value).toBe('https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    expect(started).toBe(0);
+  });
+
+  it('Batch evaluate: some sessions errored, so only their URLs stay and the message says which started', async () => {
+    fanoutResponse = { status: 202, body: { sessions: [session('s1', 'https://jobs.example.com/1', 'queued', 12), session('s2', 'https://jobs.example.com/2', 'error', null)], reserved: [12, 13] } };
+    await mount();
+    await type(textarea(), 'https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    await click(button('Batch evaluate')!);
+    await click(button('Start them')!);
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the error');
+    expect(alert.textContent).toMatch(/Started 1 of 2 evaluations with report number 12\. 1 could not start: the Claude CLI is not approved/);
+    expect(textarea().value).toBe('https://jobs.example.com/2');
+    // The Pipeline page moves to Sessions on onStarted, which would hide this message and the kept URL.
+    expect(started).toBe(0);
+  });
+
+  it('Evaluate visible: every session errored, so it stays on the Inbox and shows the error', async () => {
+    fanoutResponse = { status: 202, body: { sessions: [session('s1', 'https://jobs.example.com/1', 'error', null)], reserved: [12] } };
+    await mount({ inboxUrls: ['https://jobs.example.com/1'] });
+    await click(button('Evaluate visible (1)')!);
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the error');
+    expect(alert.textContent).toMatch(/Could not start the evaluations: the Claude CLI is not approved/);
+    expect(host.textContent).not.toMatch(/Started/);
+    expect(navigated).toEqual([]);
+  });
+});
+
 describe('paid fan-out confirms open on Cancel (SW6-web-a-03)', () => {
   const focused = () => (document.activeElement as HTMLElement | null)?.textContent?.trim();
 

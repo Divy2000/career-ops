@@ -9,6 +9,7 @@ import { describeError } from '../lib/actions';
 import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
 import { afterFocusSettles } from '../lib/focus';
 import { ASK_ACTION_SPECS, type AskActionName } from '@shared/ask-actions';
+import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import type { PipelineRead } from '@shared/api';
 
@@ -139,10 +140,16 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
-        case 'evaluateCompany':
-          await fanOut('oferta', companyUrls);
+        case 'evaluateCompany': {
+          const outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
+          // A posting that did not start stays pending in the Inbox; the note names it, and the page stays to say why.
+          if (outcome.failedUrls.length > 0) {
+            update(p.id, { state: 'failed', note: `${outcome.text}. Not started: ${outcome.failedUrls.join(', ')}` });
+            return;
+          }
           await router.navigate({ to: '/sessions' });
           break;
+        }
         case 'research': {
           const m = await startSession({ mode: 'research', target: { type: 'text', value: String(p.params.topic ?? p.params.company ?? '') }, prompt: `Research: ${String(p.params.topic ?? p.params.company ?? '')}` });
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
