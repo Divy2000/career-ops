@@ -48,6 +48,8 @@ export function useRememberedSession(key: string) {
   const onStatus = useCallback(
     (s: string) => {
       setStatus(s);
+      // A session started from the panel after a failed start (its own Start, or a reply to one that came back errored) runs now.
+      if (s === 'queued' || s === 'running') setStartFailed(false);
       // Deleted on the Sessions page (or a stale id): let it go, and the button comes back.
       if (s === 'gone') {
         store.write(null);
