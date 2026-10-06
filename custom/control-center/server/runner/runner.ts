@@ -158,6 +158,11 @@ export class Runner {
     return [...this.active.values()].filter((a) => a.meta.claude).length;
   }
 
+  /** Starts what the queue can start now: after a settings change raised the Claude slot cap, say. */
+  reschedule(): void {
+    this.pump();
+  }
+
   /** FIFO: a queued run starts when its resources are free and a Claude slot is free if it needs one. */
   private pump(): void {
     const busy = this.busyResources();

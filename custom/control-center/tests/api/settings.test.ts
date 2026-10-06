@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -461,6 +461,29 @@ describe('app settings and usage meter', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().fiveHour).toMatchObject({ tokens: 60 });
     expect(res.json().budgets).toEqual({ fiveHourTokens: 1000, sevenDayTokens: null });
+  });
+});
+
+describe('raising Claude concurrency (SW2-server-03)', () => {
+  it('starts a Claude run that was waiting for a slot as soon as the cap is raised, with no other run event', async () => {
+    const own = await makeTestApp();
+    try {
+      const put = (claudeConcurrency: number) => own.app.inject({ method: 'PUT', url: '/api/settings/app', headers: own.authedWrite, payload: { claudeConcurrency } });
+      expect((await put(1)).statusCode).toBe(200);
+      const noisy = { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '4000'], cwd: PACKAGE_ROOT };
+      const req = { actionId: 'test.claude', label: 'claude run', cost: 'tokens' as const, resources: [], claude: true, params: {}, cmd: noisy };
+      const first = own.runner.start(req);
+      const second = own.runner.start(req);
+      const status = (id: string) => own.runner.store.read(id)?.status;
+      expect(status(first.id)).toBe('running');
+      expect(status(second.id)).toBe('queued');
+      expect((await put(2)).statusCode).toBe(200);
+      expect(status(second.id)).toBe('running');
+      own.runner.cancel(first.id);
+      own.runner.cancel(second.id);
+    } finally {
+      await own.close();
+    }
   });
 });
 
