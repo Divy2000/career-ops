@@ -120,5 +120,30 @@ describe('Apply: the chosen documents reach the session', () => {
     expect(host.textContent).toContain('Could not send the fill turn: session s1 has a turn running');
     expect(fillButton().disabled).toBe(false);
   });
+
+  it('stays disabled after the fill turn is accepted, until the stream reports how it ended (SW4-web-a-05 review)', async () => {
+    // The server answers with the session as it now is: the fill turn running. Its running event comes later.
+    turnAnswer = () => json({ id: 's1', status: 'running' });
+    const fillButton = await draft();
+    await act(async () => fillButton().click());
+    await act(async () => releaseTurn());
+    await until(() => host.textContent?.includes('Fill turn sent with your edited answers.'), 'the sent note');
+    expect(fillButton().disabled).toBe(true);
+    await act(async () => fillButton().click());
+    expect(turns).toHaveLength(1);
+    expect(host.textContent).toContain('Fill turn sent with your edited answers.');
+  });
+
+  it('a fill turn that ends before its POST is answered leaves Fill enabled: the stream status wins over the late answer (SW4-web-a-05 review 2)', async () => {
+    turnAnswer = () => json({ id: 's1', status: 'running' });
+    const fillButton = await draft();
+    await act(async () => fillButton().click());
+    // The turn starts and dies at once; both statuses reach the page before the POST's answer does.
+    await act(async () => panel.onStatus!('running'));
+    await act(async () => panel.onStatus!('error'));
+    await act(async () => releaseTurn());
+    await until(() => host.textContent?.includes('Fill turn sent with your edited answers.'), 'the sent note');
+    expect(fillButton().disabled).toBe(false);
+  });
 });
 
