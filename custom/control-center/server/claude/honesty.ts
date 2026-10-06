@@ -59,10 +59,10 @@ export function isReportGated(modeId: string): boolean {
  */
 export const ENVELOPE_MODES = new Set(['apply', 'cv-ingest', 'projects-ingest']);
 /**
- * Envelope modes whose contract asks for the envelope only on the turn that opens the conversation: apply drafts its
- * answers first, and the fill turn the user sends after confirming them reports in prose.
+ * Envelope modes whose envelope is owed once per conversation: apply drafts its answers first, and the fill turn the
+ * user sends after confirming them reports in prose. Until answers have been delivered, every turn still owes them.
  */
-const OPENING_TURN_ENVELOPE_MODES = new Set(['apply']);
+const ONCE_PER_CONVERSATION_ENVELOPE_MODES = new Set(['apply']);
 
 export function endsWithQuestion(text: string): boolean {
   const lines = text
@@ -85,6 +85,8 @@ export interface TurnOutcomeInput {
   newReports: NewReport[];
   /** The turn resumed an existing conversation (--resume) instead of opening one. */
   resumed: boolean;
+  /** An earlier turn of this conversation (or of the session it was forked from) delivered a valid answers envelope. */
+  answersSeen: boolean;
 }
 
 export type TurnOutcome = { status: Extract<SessionStatus, 'done' | 'awaiting_user' | 'error' | 'cancelled'>; reason: string };
@@ -100,7 +102,7 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
     return { status: 'done', reason: `report ${i.newReports.map((r) => r.file).join(', ')} created` };
   }
   const mode = englishModeOf(i.modeId);
-  if (ENVELOPE_MODES.has(mode) && !(i.resumed && OPENING_TURN_ENVELOPE_MODES.has(mode))) {
+  if (ENVELOPE_MODES.has(mode) && !(i.resumed && i.answersSeen && ONCE_PER_CONVERSATION_ENVELOPE_MODES.has(mode))) {
     return i.envelopeCount > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
   }
   if (endsWithQuestion(i.finalText)) return { status: 'awaiting_user', reason: 'the turn ended with a question' };

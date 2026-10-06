@@ -6,7 +6,7 @@ import { parseReservedRange, readOutputLanguage } from '../../server/claude/mana
 import { applyRememberedFact, NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 import { copyFixtureRoot } from '../helpers/app.js';
 
-const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false };
+const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false, answersSeen: false };
 
 describe('evaluation honesty gate', () => {
   it('snapshots real reports only and detects new ones with their header score', () => {
@@ -73,15 +73,18 @@ describe('evaluation honesty gate', () => {
     }
   });
 
-  it('apply needs its answers envelope only on the turn that opens the conversation: the fill turn after it reports in prose (SW2-tests-20)', () => {
+  it('apply waives its answers envelope only on a turn that follows delivered answers: the fill turn reports in prose (SW2-tests-20)', () => {
     for (const modeId of ['apply', 'de/bewerben']) {
       const apply = { ...base, modeId, policyClass: 'apply' as const };
-      expect(decideTurnOutcome({ ...apply, resumed: true, finalText: 'Filled 3 fields. Stopped before Submit: you press it.' }), modeId).toMatchObject({ status: 'done', reason: 'clean exit with output' });
-      expect(decideTurnOutcome({ ...apply, resumed: true, finalText: 'The form has a new required field. What should it say?' }).status, modeId).toBe('awaiting_user');
-      expect(decideTurnOutcome({ ...apply, resumed: false, finalText: 'Read the form.' }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+      const filled = 'Filled 3 fields. Stopped before Submit: you press it.';
+      expect(decideTurnOutcome({ ...apply, resumed: true, answersSeen: true, finalText: filled }), modeId).toMatchObject({ status: 'done', reason: 'clean exit with output' });
+      expect(decideTurnOutcome({ ...apply, resumed: true, answersSeen: true, finalText: 'The form has a new required field. What should it say?' }).status, modeId).toBe('awaiting_user');
+      // Review (SW2-tests-20): a resumed turn with no answers delivered yet (a login wall, a failed first turn) still needs them.
+      expect(decideTurnOutcome({ ...apply, resumed: true, answersSeen: false, finalText: filled }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+      expect(decideTurnOutcome({ ...apply, resumed: false, answersSeen: false, finalText: 'Read the form.' }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
     }
     // Modes whose every turn ends in an envelope keep needing one.
-    for (const modeId of ['cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only', resumed: true }).status, modeId).toBe('awaiting_user');
+    for (const modeId of ['cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only', resumed: true, answersSeen: true }).status, modeId).toBe('awaiting_user');
   });
 
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {

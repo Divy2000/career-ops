@@ -58,6 +58,8 @@ export interface SessionMeta {
    * (--session-id) instead of resuming it. Absent on sessions from before this field, which go by their turn count.
    */
   conversationStarted?: boolean;
+  /** A turn delivered a valid answers envelope (apply): later turns of the conversation, forks included, may fill in prose. */
+  answersSeen?: boolean;
 }
 
 /** Whether the CLI has a conversation to resume under the session's claudeSessionId. */
@@ -137,10 +139,21 @@ export class SessionStore {
     return meta;
   }
 
-  /** Fork: a new session id that resumes the same Claude uuid (`--resume <uuid> --fork-session`). */
+  /** Fork: a new session id that resumes the same Claude uuid (`--resume <uuid> --fork-session`), and what it delivered. */
   fork(id: string): SessionMeta {
     const src = this.mustRead(id);
-    return this.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, claudeSessionId: src.claudeSessionId, forkedFrom: src.id, forkPending: true });
+    const forked = this.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, claudeSessionId: src.claudeSessionId, forkedFrom: src.id, forkPending: true });
+    if (src.answersSeen !== true) return forked;
+    this.markAnswersSeen(forked.id);
+    return this.mustRead(forked.id);
+  }
+
+  /** Records that a turn delivered a valid answers envelope (written once). */
+  markAnswersSeen(id: string): void {
+    const meta = this.mustRead(id);
+    if (meta.answersSeen === true) return;
+    meta.answersSeen = true;
+    this.write(meta);
   }
 
   /** Stores the id the CLI minted for a fork's first turn; false when the session is not a pending fork (nothing changes). */
