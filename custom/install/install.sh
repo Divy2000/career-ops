@@ -435,8 +435,10 @@ update_checkout() {
     elif [ "$DRY_RUN" = 1 ]; then
       dry "fetch tags and check out $REF"
     else
-      git -C "$DIR" fetch --tags origin
-      git -C "$DIR" checkout "$REF"
+      # Explicit, not left to set -e: its trap points at the install log, which this early step has not created yet.
+      if ! git -C "$DIR" fetch --tags origin || ! git -C "$DIR" checkout "$REF"; then
+        die 1 "could not check out $REF in $DIR (offline, or no such tag or branch; see the git error above)."
+      fi
       say "  checked out $REF"
     fi
     return 0
@@ -470,8 +472,10 @@ elif [ "$DRY_RUN" = 1 ]; then
   dry "git clone $FORK_URL $DIR${REF:+ and check out $REF}"
   dry "add the upstream remote $UPSTREAM_URL"
 else
-  git clone "$FORK_URL" "$DIR"
-  if [ -n "$REF" ]; then git -C "$DIR" checkout "$REF"; fi
+  git clone "$FORK_URL" "$DIR" || die 1 "git clone of $FORK_URL into $DIR failed (offline? see the git error above). Re-run once the network is back."
+  if [ -n "$REF" ] && ! git -C "$DIR" checkout "$REF"; then
+    die 1 "could not check out $REF in $DIR (no such tag or branch; see the git error above)."
+  fi
   ensure_upstream
 fi
 

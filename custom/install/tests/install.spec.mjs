@@ -234,13 +234,17 @@ test('re-running is idempotent: one clone, one upstream remote, and a fast-forwa
 });
 
 test('a dirty tree or a non-main branch is never pulled', () => {
-  for (const state of [{ file: 'dirty', data: ' M cv.md\n' }, { file: 'branch', data: 'feature/x\n' }]) {
+  const states = [
+    { file: 'dirty', data: ' M cv.md\n', says: /^ {2}Not pulling: the working tree has local changes\.$/m },
+    { file: 'branch', data: 'feature/x\n', says: /^ {2}Not pulling: on branch feature\/x, not main\.$/m },
+  ];
+  for (const state of states) {
     const { w, D, args } = fresh();
     w.makeCheckout(D);
     fs.writeFileSync(path.join(D, '.git', state.file), state.data);
     const r = w.run(args());
     assert.ok(!w.log().some((l) => l.includes('pull')), `${state.file}: ${w.log().join('\n')}`);
-    assert.match(r.out, /not pull|skip/i);
+    assert.match(r.out, state.says);
   }
 });
 
@@ -1034,4 +1038,34 @@ test('the pending text for a dirty checkout and for a failed doctor quotes the d
 
 test('INSTALL_SH exists and is executable bash', () => {
   assert.ok(fs.existsSync(INSTALL_SH));
+});
+
+// ---- git failing: offline, or a pull that cannot fast-forward (SW2-tests-31) ----
+
+test('a clone that fails (offline) stops with exit 1 and says so, never "unexpected failure" pointing at a log that does not exist', () => {
+  const { w, D, args } = fresh();
+  const r = w.run(args(), { env: { FAKE_GIT_FAIL: 'clone' } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /^error: git clone of https:\/\/github\.com\/Divy2000\/career-ops\.git into .* failed/m);
+  assert.doesNotMatch(r.out, /unexpected failure|see the install log/);
+  assert.equal(exists(D, 'package.json'), false);
+});
+
+test('a tag that cannot be fetched or checked out stops with exit 1 and names it', () => {
+  for (const sub of ['fetch', 'checkout']) {
+    const { w, D, args } = fresh();
+    w.makeCheckout(D);
+    const r = w.run(args('--ref', 'fork-install-v9'), { env: { FAKE_GIT_FAIL: sub } });
+    assert.equal(r.status, 1, `${sub}: ${r.out}`);
+    assert.match(r.out, /^error: could not check out fork-install-v9 in /m, sub);
+    assert.doesNotMatch(r.out, /unexpected failure/, sub);
+  }
+});
+
+test('a pull that cannot fast-forward is a pending action, not a failure', () => {
+  const { w, D, args } = fresh({ keychain: true });
+  w.makeCheckout(D);
+  const r = w.run(args(), { env: { FAKE_GIT_FAIL: 'pull' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /git pull --ff-only failed in .*; resolve it by hand\./);
 });

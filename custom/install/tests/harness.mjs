@@ -33,9 +33,12 @@ import { getCareerOpsRoot } from './path-resolver.mjs';
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.STUB_LOG, 'doctor ' + args.join(' ') + '\\n');
 const root = getCareerOpsRoot();
+// Like the real doctor: copies every personalization template that is absent, and never overwrites one.
 if (args.includes('--init-templates')) {
-  const f = path.join(root, 'modes', '_profile.md');
-  if (!fs.existsSync(f)) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'TEMPLATE PROFILE\\n'); }
+  for (const rel of ['modes/_profile.md', 'modes/_custom.md', 'modes/_brief.md', 'voice-dna.md']) {
+    const f = path.join(root, rel);
+    if (!fs.existsSync(f)) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'TEMPLATE ' + rel + '\\n'); }
+  }
 }
 if (args.includes('--json')) {
   const missing = ['cv.md', 'config/profile.yml', 'modes/_profile.md', 'portals.yml'].filter((p) => !fs.existsSync(path.join(root, p)));
