@@ -725,6 +725,24 @@ test('--onboard interactive starts claude without -p, from the checkout, with a 
   assert.ok(w.calls('claude').some((l) => l.includes(`(cwd=${D})`)));
 });
 
+test('--yes at a terminal takes onboarding\'s default answer too: Claude Code starts interactively, as --help documents (SW6-scripts-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--yes', '--no-start', '--no-launchd', '--no-h1b-index', '--resume', resume], { tty: '\n' });
+  const argv = w.claudeArgv();
+  assert.ok(argv, r.out);
+  assert.ok(!argv.includes('-p'), argv.join(' '));
+  assert.match(argv.at(-1), /ONBOARDING\.md/);
+});
+
+test('--yes without a terminal still only prints the onboarding command', () => {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--yes', '--no-start', '--no-launchd', '--no-h1b-index', '--resume', resume]);
+  assert.equal(w.claudeArgv(), null, r.out);
+  assert.match(r.out, /claude '/);
+});
+
 test('--onboard interactive without a usable terminal prints the command and records a pending action instead', () => {
   const { w, D } = fresh({ keychain: true });
   const r = w.run(['--dir', D, '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'interactive']);
@@ -816,10 +834,15 @@ test('a daily job that is already installed is reinstalled for this checkout, wh
   }
 });
 
-test('a data root under Documents or Desktop gets the Full Disk Access note too, though the checkout is elsewhere (SW3-scripts-03)', () => {
-  for (const place of ['Documents', 'Desktop']) {
+test('a data root in a protected place gets the Full Disk Access note naming it, though the checkout is elsewhere (SW3-scripts-03, SW6-scripts-02)', () => {
+  const places = [
+    ['Documents', (home) => path.join(home, 'Documents', 'career-data')],
+    ['Downloads', (home) => path.join(home, 'Downloads', 'career-data')],
+    ['iCloud Drive', (home) => path.join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'career-data')],
+  ];
+  for (const [place, at] of places) {
     const { w, D } = fresh({ keychain: true });
-    const data = path.join(w.home, place, 'career-data');
+    const data = at(w.home);
     w.makeCheckout(D);
     fs.mkdirSync(data, { recursive: true });
     for (const [rel, text] of Object.entries(READY_FILES)) {
@@ -828,9 +851,20 @@ test('a data root under Documents or Desktop gets the Full Disk Access note too,
     }
     const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
     assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
-    assert.match(r.out, /Note: the data root is under Desktop or Documents; give \/bin\/bash Full Disk Access \(System Settings > Privacy & Security\) so launchd can write it\./, place);
-    assert.doesNotMatch(r.out, /this checkout is under Desktop or Documents/, place);
+    assert.ok(r.out.includes(`Note: the data root is under ${place}; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it.`), `${place}:\n${r.out}`);
+    assert.doesNotMatch(r.out, /the checkout is under (Desktop|Documents|Downloads|iCloud Drive)/, place);
   }
+});
+
+test('a checkout reached through a symlink into Documents gets the checkout note (SW6-scripts-02)', () => {
+  const { w } = fresh({ keychain: true });
+  const real = path.join(w.home, 'Documents', 'career-ops');
+  w.makeCheckout(real, { files: READY_FILES });
+  const link = path.join(w.T, 'career-ops-link');
+  fs.symlinkSync(real, link);
+  const r = w.run(['--dir', link, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+  assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
+  assert.match(r.out, /Note: the checkout is under Documents; give \/bin\/bash Full Disk Access \(System Settings > Privacy & Security\) so launchd can read it\./);
 });
 
 test('a job running right now makes the launchd step a pending action to re-run once it finishes, not a failure (SW5-scripts-02)', () => {
