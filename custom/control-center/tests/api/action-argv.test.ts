@@ -195,8 +195,15 @@ describe('Release report numbers', () => {
     const reserved = await post('pipeline.reserveReportNums', { count: 2 });
     expect(reserved.statusCode, reserved.body).toBe(200);
     const range = String(reserved.json().result).match(/(\d+)(?:\s*-\s*(\d+))?/)!;
+    const nums = [Number(range[1]), Number(range[2] ?? range[1])];
+    // The reservation is its reports/NNN-RESERVED.md sentinels; the release must remove exactly those (SW3-tests-18).
+    const sentinels = () => fs.readdirSync(path.join(t.cfg.dataRoot, 'reports')).filter((f) => /^\d+-RESERVED\.md$/.test(f) && nums.includes(parseInt(f, 10)));
+    expect(sentinels()).toHaveLength(2);
     const res = await post('pipeline.releaseReportNums', { range: `${range[1]}-${range[2] ?? range[1]}` });
     expect(res.statusCode, res.body).toBe(200);
+    expect(sentinels()).toEqual([]);
+    // A sentinel outside the released range stays.
+    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', '005-RESERVED.md'))).toBe(true);
     expect((await post('pipeline.releaseReportNums', { range: '8,9' })).statusCode).toBe(400);
   });
 });
