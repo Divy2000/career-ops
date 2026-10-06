@@ -53,10 +53,12 @@ describe('config/profile.yml editor', () => {
     expect(bad.statusCode).toBe(422);
     expect(bad.json().exit).toBe(2);
     expect(fs.existsSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'))).toBe(false);
-    const good = await put('/api/config/profile', { raw: 'language:\n  output: en\nfollowup_cadence:\n  first_followup_days: 7\n' });
+    // A cadence key followup-cadence.mjs reads (applied_first_days), read back by the cadence form's endpoint (SW4-tests-21).
+    const good = await put('/api/config/profile', { raw: 'language:\n  output: en\nfollowup_cadence:\n  applied_first_days: 7\n' });
     expect(good.statusCode, JSON.stringify(good.json())).toBe(200);
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'), 'utf8')).toContain('first_followup_days: 7');
+    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'), 'utf8')).toContain('applied_first_days: 7');
     expect((await get('/api/config/profile')).json().kind).toBe('ok');
+    expect((await get('/api/followups/cadence')).json().cadence).toEqual({ applied_first_days: 7 });
   });
 });
 
