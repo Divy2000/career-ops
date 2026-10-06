@@ -61,7 +61,9 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   put('custom/control-center/server/core/contract.json', JSON.stringify({ claude: { approvedVersions: approved } }));
   put('custom/immigration/lib.mjs', readFileSync(path.join(ROOT, 'custom/immigration/lib.mjs'), 'utf8'));
   const stepLog = path.join(T, 'steps.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`;
+  // Each step and the rank-pipeline stand-in also note whether the Claude OAuth token reached them.
+  const tokenLog = path.join(T, 'step-tokens.log');
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -93,7 +95,8 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const steps = fs.existsSync(stepLog) ? readFileSync(stepLog, 'utf8') : '';
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
-    return { status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    const stepTokens = fs.existsSync(tokenLog) ? readFileSync(tokenLog, 'utf8') : '';
+    return { stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, fakeClaude, run };
 }
@@ -467,4 +470,16 @@ jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leave
   for (let i = 0; i < 40 && (alive(claudePid) || alive(shimPid)); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(alive(shimPid), false, 'the node shim was killed with the wrapper');
   assert.equal(alive(claudePid), false, 'the claude the shim ran was killed too');
+});
+
+jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan and its provider plugins, prioritize, rank-pipeline, shortlist) sees it (SW7-scripts-01)', () => {
+  const w = dailyWorld();
+  const r = w.run({ CLAUDE_CODE_OAUTH_TOKEN: 'inherited-from-launchd' });
+  assert.equal(r.status, 0, r.log);
+  const seen = r.stepTokens.trim().split('\n');
+  for (const step of ['watch', 'scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) assert.ok(seen.includes(`${step} none`), `${step} saw the token:\n${r.stepTokens}`);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.rankCalls.length, 1);
+  assert.equal(r.rankCalls[0].token, true, 'the rank call reaches claude with the token, through the shim only');
 });

@@ -54,12 +54,14 @@ exec >>"$LOG_DIR/$TODAY.log" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
 cd "$ROOT"
 
-if ! CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
+# The subscription token goes only to the claude calls (the policy pass, and the rank through the shim), never into
+# this shell's environment: scan.mjs loads third-party provider plugins into its own process, and every other step is
+# upstream code that has no use for it. An inherited copy is dropped too.
+unset CLAUDE_CODE_OAUTH_TOKEN
+if ! CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
   echo "!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
   exit 1
 fi
-export CLAUDE_CODE_OAUTH_TOKEN
-export ANTHROPIC_API_KEY=""
 FAILED=0
 
 step() {
@@ -181,7 +183,7 @@ process.stdout.write(policy.sha256);
   fi
   rc=0
   DISABLE_AUTOUPDATER=1 CC_POLICY_FILE="$settings_dir/policy.json" CC_POLICY_SHA256="$policy_sha" CC_SESSION_DIR="$settings_dir" \
-  "$CLAUDE_REAL" -p "$prompt" \
+  CLAUDE_CODE_OAUTH_TOKEN="$CC_OAUTH_TOKEN" ANTHROPIC_API_KEY="" "$CLAUDE_REAL" -p "$prompt" \
     --restricted \
     --tools "Read,Edit,Write,WebFetch,WebSearch" \
     --permission-mode dontAsk \
@@ -233,7 +235,7 @@ const failures = shellQuote(path.join(process.env.DIR, "failures"));
 fs.writeFileSync(path.join(process.env.DIR, "claude"), [
   "#!/bin/bash",
   "set -m",
-  `${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
+  `CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shellQuote(path.join(process.env.DIR, "token"))})" ANTHROPIC_API_KEY="" ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
   "child=$!",
   `on_term() { kill -TERM -- "-$child" 2>/dev/null; wait "$child" 2>/dev/null; echo 143 >> ${failures}; exit 143; }`,
   "trap on_term TERM INT",
@@ -247,6 +249,9 @@ fs.writeFileSync(path.join(process.env.DIR, "claude"), [
     rm -rf "$shim_dir"
     return 1
   fi
+  # The token is read by the wrapper above for the shim alone (0600, in the step's private folder, removed after), so
+  # upstream rank-pipeline.mjs never holds it in its environment.
+  (umask 077 && printf '%s' "$CC_OAUTH_TOKEN" > "$shim_dir/token") || { rm -rf "$shim_dir"; return 1; }
   rc=0
   PATH="$shim_dir:$PATH" CC_CLAUDE_BIN="$CLAUDE_REAL" CC_CLAUDE_EXPECT="$CLAUDE_GATE" CC_SHIM_REFUSALS="$shim_dir/refusals" node rank-pipeline.mjs --cli claude --limit "$RANK_LIMIT" --model sonnet || rc=$?
   refused=0
