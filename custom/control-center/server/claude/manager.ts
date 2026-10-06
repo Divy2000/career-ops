@@ -248,7 +248,9 @@ export class SessionManager {
       const turn = meta.turns.at(-1);
       const run = turn ? this.runner.store.read(turn.runId) : null;
       if (!turn || !run) {
-        this.store.setStatus(meta.id, 'error', 'run record missing after a restart');
+        const reason = 'run record missing after a restart';
+        this.store.setStatus(meta.id, 'error', reason);
+        this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
       }
       const policy = this.effectivePolicy(meta.mode);
@@ -314,6 +316,8 @@ export class SessionManager {
       this.store.setReportNum(meta.id, null);
       await this.releaseReportNum(num, false);
     }
+    // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
+    this.emit(meta.id, { type: 'status', status: 'error', reason: message });
     this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
     return this.store.read(meta.id)!;
   }

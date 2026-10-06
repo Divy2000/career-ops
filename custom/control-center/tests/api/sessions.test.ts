@@ -850,6 +850,29 @@ describe('read confinement (BUG-06)', () => {
     expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
   });
 
+  it('a turn that cannot start ends its event stream with a terminal error status, after the error itself', async () => {
+    const dataRoot = copyFixtureRoot();
+    const other = await makeTestApp({ dataRoot }, { homeDir: dataRoot });
+    try {
+      const res = await call(other, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'x' });
+      expect(res.json().status).toBe('error');
+      const events = other.sessions.store.readEvents(res.json().id).map((e) => e.event);
+      expect(events.at(-1)).toEqual({ type: 'status', status: 'error', reason: expect.stringMatching(/is or contains your home directory/) });
+      expect(events.findIndex((e) => e.type === 'error')).toBeLessThan(events.length - 1);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('a session whose run record is gone after a restart ends its event stream with a terminal error status', () => {
+    const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    t.sessions.store.beginTurn(meta.id, { runId: 'r-gone-after-restart', userText: 'x' });
+    t.sessions.store.setStatus(meta.id, 'running');
+    t.sessions.reconcile();
+    expect(t.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
+    expect(t.sessions.store.readEvents(meta.id).map((e) => e.event).at(-1)).toEqual({ type: 'status', status: 'error', reason: 'run record missing after a restart', turn: 1 });
+  });
+
   it('new sessions and forks carry the current policy version', () => {
     expect(SESSION_POLICY_VERSION).toBe(2);
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
