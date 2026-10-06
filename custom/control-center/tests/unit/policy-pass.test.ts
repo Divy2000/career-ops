@@ -13,11 +13,12 @@ const ITEMS = [
   { id: 'uscis:https://www.uscis.gov/news/x', source: 'USCIS news', title: 'USCIS updates H-1B fee guidance', url: 'https://www.uscis.gov/news/x', published: '2026-10-02' },
 ];
 
-function dataRoot(pending?: string): string {
+function dataRoot(pending?: string, seen?: string): string {
   const root = tempDir('cc-policy-pass-');
   const imm = path.join(root, 'data', 'immigration');
   fs.mkdirSync(imm, { recursive: true });
   if (pending !== undefined) fs.writeFileSync(path.join(imm, 'pending.json'), pending);
+  if (seen !== undefined) fs.writeFileSync(path.join(imm, 'seen.json'), seen);
   return root;
 }
 // 19:00 on 2026-10-05 in Los Angeles (vitest's pinned TZ), when UTC is already 2026-10-06: the pass is dated the
@@ -30,7 +31,27 @@ describe('preparePolicyPass', () => {
     const pass = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
     expect(pass.batch).toMatch(/^data\/immigration\/batches\/20261005T190000-cc-[0-9a-f]{8}\.json$/);
     const batch = JSON.parse(fs.readFileSync(path.join(root, pass.batch!), 'utf8')) as { date: string; new_items: unknown[] };
-    expect(batch).toEqual({ date: '2026-10-05', new_items: ITEMS });
+    expect(batch).toEqual({ date: '2026-10-05', news_since: '2026-10-02', new_items: ITEMS });
+  });
+
+  it('given a last successful pass weeks ago in seen.json, when a pass is prepared, then its prompt searches the news back to that day (SW8-scripts-01)', () => {
+    const root = dataRoot(JSON.stringify(ITEMS), JSON.stringify({ ids: [], last_pass: '2026-09-20' }));
+    const { prompt } = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    expect(prompt).toContain('"news_since": "2026-09-20"');
+  });
+
+  it('given no recorded pass (no seen.json, or one without last_pass) or one from yesterday, when a pass is prepared, then its prompt searches at least the last three days', () => {
+    for (const seen of [undefined, JSON.stringify({ ids: [] }), JSON.stringify({ ids: [], last_pass: '2026-10-04' })]) {
+      const { prompt } = preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot(JSON.stringify(ITEMS), seen), EVENING);
+      expect(prompt).toContain('"news_since": "2026-10-02"');
+    }
+  });
+
+  it('given a seen.json that cannot be read for its last pass, when a pass is prepared, then it is refused with the reason', () => {
+    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{ not json'), EVENING)).toThrow(PendingUnreadableError);
+    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{ not json'), EVENING)).toThrow('data/immigration/seen.json is not valid JSON; fix or remove it, then run the pass again');
+    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{"ids": [], "last_pass": "yesterday"}'), EVENING)).toThrow('data/immigration/seen.json has a last_pass that is not a YYYY-MM-DD date; fix or remove it, then run the pass again');
+    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{"ids": [], "last_pass": "2026-02-30"}'), EVENING)).toThrow('data/immigration/seen.json has a last_pass that is not a YYYY-MM-DD date; fix or remove it, then run the pass again');
   });
 
   it('given queued items, when a pass is prepared, then its prompt is daily-prompt.md with today, the data paths and the items filled in', () => {

@@ -10,8 +10,7 @@ import {
   parsePolicyChanges,
   readCheckedAt,
   decideRefresh,
-  noteSkippedPass,
-} from '../lib.mjs';
+  noteSkippedPass, newsSince } from '../lib.mjs';
 
 test('companySlug lowercases, strips punctuation and legal suffixes', () => {
   assert.equal(companySlug('Stripe, Inc.'), 'stripe');
@@ -260,4 +259,17 @@ test('noteSkippedPass puts a dated "pass skipped" section directly under the dig
   assert.equal(noteSkippedPass('## 2026-10-01\n- old\n', '2026-10-05', 'x.'), '# Immigration policy digest\n\n## 2026-10-05\n- AI policy pass skipped: x.\n\n## 2026-10-01\n- old\n');
   // The reason is one bullet: a line break in it cannot start a heading of its own.
   assert.equal(noteSkippedPass('', '2026-10-05', 'a\n## 2099-01-01 b'), '# Immigration policy digest\n\n## 2026-10-05\n- AI policy pass skipped: a ## 2099-01-01 b\n');
+});
+
+test('newsSince reaches back to the last successful pass after a gap, and never covers less than the last 3 days (SW8-scripts-01)', () => {
+  assert.equal(newsSince({ lastPass: '2026-10-01', today: '2026-10-09' }), '2026-10-01');
+  assert.equal(newsSince({ lastPass: '2026-10-08', today: '2026-10-09' }), '2026-10-06');
+  assert.equal(newsSince({ lastPass: null, today: '2026-10-09' }), '2026-10-06');
+  assert.throws(() => newsSince({ lastPass: 'yesterday', today: '2026-10-09' }), /lastPass/);
+});
+
+test('the policy prompt searches the news from the watch output\'s news_since date, not a fixed 3 days (SW8-scripts-01)', () => {
+  const prompt = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'daily-prompt.md'), 'utf8');
+  assert.doesNotMatch(prompt, /last 3 days/);
+  assert.match(prompt, /`news_since`/);
 });

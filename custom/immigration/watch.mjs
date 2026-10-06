@@ -8,7 +8,7 @@
 import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending } from './lib.mjs';
+import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending, newsSince } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { localToday } from '../../lib/local-today.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
@@ -99,6 +99,9 @@ async function ack(file) {
     const pending = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
     const kept = pending.filter((i) => !done.has(i.id));
     await writeAtomic(PENDING, JSON.stringify(kept, null, 2) + '\n');
+    // A successful pass: the next one searches the news from today on, and from here on after any gap.
+    const seen = existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] };
+    await writeAtomic(SEEN, JSON.stringify({ ...seen, last_pass: localToday() }, null, 2) + '\n');
     return { before: pending.length, left: kept.length };
   });
   process.stdout.write(`acknowledged ${before - left} item(s); ${left} still pending\n`);
@@ -165,13 +168,15 @@ async function main() {
     if (toLog.length) {
       await appendFile(FEED, toLog.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
     }
-    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess }, null, 2) + '\n');
+    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess, ...(seen.last_pass ? { last_pass: seen.last_pass } : {}) }, null, 2) + '\n');
     return pending;
   });
 
   const since = Object.fromEntries(names.map((n) => [n, sinceFor(n)]));
   // new_items is everything not yet acknowledged, including leftovers from failed runs.
-  process.stdout.write(JSON.stringify({ date: today, since, new_items: pending, source_errors: errors }, null, 2) + '\n');
+  // The news window for the AI pass (daily-prompt.md): back to the last successful pass, at least the last 3 days.
+  const news_since = newsSince({ lastPass: cursors.last_pass ?? null, today });
+  process.stdout.write(JSON.stringify({ date: today, since, news_since, new_items: pending, source_errors: errors }, null, 2) + '\n');
 }
 
 main().catch((err) => {

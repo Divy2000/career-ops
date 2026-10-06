@@ -153,3 +153,31 @@ test('a Federal Register reply whose next page repeats fails that source instead
   assert.equal(w.seen().last_success['federal-register'], old);
   assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-9', 'uscis:https://www.uscis.gov/news/opt'], 'a failed source contributes nothing, not even its first page');
 });
+
+// ---- the news window follows the last successful pass (SW8-scripts-01) ----
+
+test('acknowledging a pass records it as the last successful one, and a later run keeps that date', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  const batch = w.watch();
+  w.ack(batch);
+  const today = w.now.toISOString().slice(0, 10);
+  assert.equal(w.seen().last_pass, today);
+  w.watch();
+  assert.equal(w.seen().last_pass, today, 'a fetch run does not drop it');
+});
+
+test('after days with no successful pass, the news window reaches back to the last one', () => {
+  const w = watchWorld();
+  const lastPass = dayBefore(w.now, 8);
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: lastPass, last_pass: lastPass }));
+  w.setFeeds({});
+  assert.equal(w.watch().news_since, lastPass);
+});
+
+test('with no successful pass recorded, the news window is the last 3 days', () => {
+  const w = watchWorld();
+  w.setFeeds({});
+  assert.equal(w.watch().news_since, dayBefore(w.now, 3));
+});
