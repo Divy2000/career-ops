@@ -134,7 +134,7 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Pipeline' })).toBeVisible();
     await expect(page.getByText('Soylent Foods')).toBeVisible();
     await expect(page.locator('tbody tr')).toHaveCount(4);
-    await page.getByLabel('Show skipped').check();
+    await page.getByLabel('Show done').check();
     await expect(page.locator('tbody tr')).toHaveCount(6);
     await axeClean(page);
     await page.getByRole('tab', { name: 'Shortlist' }).click();
