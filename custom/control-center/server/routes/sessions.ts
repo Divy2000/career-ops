@@ -246,16 +246,33 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const busy = claimForTurn(req.params.id, starting, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
     const isPass = manager.read(req.params.id)?.mode === 'immigration-policy';
+    const giveBack = () => policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`);
     return mutate(reply, async () => {
+      let forked;
       try {
-        const forked = await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed });
-        if (isPass) handOver(starting, forked);
-        return reply.code(202).send(forked);
+        forked = await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed });
       } catch (err) {
         // The fork did not start: the claim goes back to the session it was taken from.
-        if (isPass) policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`);
+        if (isPass) giveBack();
         throw err;
       }
+      if (!isPass) return reply.code(202).send(forked);
+      // A fork that failed before its Claude process started leaves the pass, its claim and its batch with the source.
+      if (FINAL.has(manager.read(forked.id)?.status ?? forked.status)) {
+        giveBack();
+        return reply.code(202).send(forked);
+      }
+      // The fork continues the pass, so the items it was given are acknowledged when the fork ends done. Both writes
+      // run before this request yields, so the fork's turn cannot end in between; the source is paused and the claim
+      // is the fork's, so it cannot run meanwhile. The fork gets the batch first: a crash between the writes leaves it
+      // with both, and acknowledging a batch twice is harmless, while one with neither would send its items again.
+      const batch = manager.read(req.params.id)?.policyBatch ?? null;
+      if (batch !== null) {
+        manager.store.setPolicyBatch(forked.id, batch);
+        manager.store.setPolicyBatch(req.params.id, null);
+      }
+      handOver(starting, forked);
+      return reply.code(202).send(manager.read(forked.id) ?? forked);
     });
   });
 

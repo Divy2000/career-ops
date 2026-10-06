@@ -4,13 +4,15 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
+import { FAKE_TOKEN, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import type { RunMeta } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
+// A turn that cannot read the Claude token fails before it spawns (a locked Keychain).
+let tokenMissing = false;
 beforeAll(async () => {
-  t = await makeTestApp();
+  t = await makeTestApp({}, { readToken: async () => { if (tokenMissing) throw new Error('Keychain item career-ops-claude-token not found'); return FAKE_TOKEN; } });
 });
 afterAll(async () => {
   await t.close();
@@ -223,5 +225,49 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     expect(t.runner.store.readExit(runId())).not.toBeNull();
     for (let i = 0; i < 100 && claim(); i++) await wait(50);
     expect(claim()).toBeNull();
+  });
+
+  it('a fork of a paused pass takes its batch with it, so the fork that ends done acknowledges the items (SW8-server-01 review)', async () => {
+    writePending([item(11)]);
+    const a = (await withScenario({ events: PAUSE }, start)).json() as { id: string };
+    expect((await settle(a.id)).meta.status).toBe('awaiting_user');
+    const batch = t.sessions.read(a.id)!.policyBatch;
+    expect(batch).toBeTruthy();
+    const forked = await withScenario({ events: [INIT, result('Pass done.')] }, () => fork(a.id));
+    expect(forked.statusCode, forked.body).toBe(202);
+    const forkId = forked.json().id as string;
+    expect(t.sessions.read(a.id)!.policyBatch ?? null).toBeNull();
+    expect((await settle(forkId)).meta.status).toBe('done');
+    expect(readPending()).toEqual([]);
+    expect((await del(a.id)).statusCode).toBe(200);
+  });
+
+  it('a fork of a paused pass that fails before it starts leaves the batch and the claim with the paused pass (SW8-server-01 review)', async () => {
+    writePending([item(12)]);
+    const a = (await withScenario({ events: PAUSE }, start)).json() as { id: string };
+    expect((await settle(a.id)).meta.status).toBe('awaiting_user');
+    const batch = t.sessions.read(a.id)!.policyBatch;
+    expect(batch).toBeTruthy();
+    tokenMissing = true;
+    let forked;
+    try {
+      forked = await fork(a.id);
+    } finally {
+      tokenMissing = false;
+    }
+    expect(forked.statusCode, forked.body).toBe(202);
+    const forkId = forked.json().id as string;
+    expect((await settle(forkId)).meta.status).toBe('error');
+    expect(t.sessions.read(forkId)!.policyBatch ?? null).toBeNull();
+    expect(t.sessions.read(a.id)!.policyBatch).toBe(batch);
+    expect(claim()?.owner).toBe(`session:${a.id}`);
+    // The paused pass goes on with its items, and acknowledges them when it ends done.
+    const later = await withScenario({ events: [INIT, result('Pass done.')] }, () => reply(a.id));
+    expect(later.statusCode, later.body).toBe(202);
+    expect((await settle(a.id)).meta.status).toBe('done');
+    expect(readPending()).toEqual([]);
+    expect(claim()).toBeNull();
+    expect((await del(forkId)).statusCode).toBe(200);
+    expect((await del(a.id)).statusCode).toBe(200);
   });
 });
