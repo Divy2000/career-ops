@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
+import { applyYamlOps, parseYamlDoc, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
 import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, pinnedNodeBin, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
@@ -66,6 +66,41 @@ describe('applyYamlOps (yaml Document API)', () => {
     ]);
     expect(out).toContain('followup_cadence:\n  applied_first_days: 10');
     expect(out).toContain('search_queries:\n  - staff engineer');
+  });
+
+  it('a delete under a missing map, or in an empty file, changes nothing instead of throwing (SW5-server-03)', () => {
+    const profile = 'candidate:\n  full_name: Alex\n# followup_cadence:\n#   applied_first_days: 7\n';
+    expect(applyYamlOps(profile, [{ op: 'delete', path: ['followup_cadence', 'applied_first_days'] }])).toBe(profile);
+    expect(applyYamlOps('', [{ op: 'delete', path: ['followup_cadence', 'applied_first_days'] }])).toBe('');
+    // A cleared field and a set in one save: the set lands, the delete is a no-op.
+    const out = applyYamlOps(profile, [
+      { op: 'delete', path: ['followup_cadence', 'applied_first_days'] },
+      { op: 'set', path: ['followup_cadence', 'applied_subsequent_days'], value: 5 },
+    ]);
+    expect(parseYamlDoc(out).doc).toEqual({ candidate: { full_name: 'Alex' }, followup_cadence: { applied_subsequent_days: 5 } });
+  });
+
+  it('a set or insert under a key whose value is empty (only commented children) fills it in (SW5-server-03)', () => {
+    const empty = 'followup_cadence:\n  # applied_first_days: 7\nsearch:\n';
+    const out = applyYamlOps(empty, [
+      { op: 'set', path: ['followup_cadence', 'applied_first_days'], value: 9 },
+      { op: 'insert', path: ['search', 'queries'], value: 'staff engineer' },
+    ]);
+    expect(parseYamlDoc(out).doc).toEqual({ followup_cadence: { applied_first_days: 9 }, search: { queries: ['staff engineer'] } });
+    expect(applyYamlOps(empty, [{ op: 'delete', path: ['followup_cadence', 'applied_first_days'] }])).toBe(empty);
+  });
+
+  it('a set through a value that is not a map or list is refused as a bad op, not a crash; a delete there has nothing to delete (SW5-server-03)', () => {
+    let err: unknown;
+    try {
+      applyYamlOps('followup_cadence: 3\n', [{ op: 'set', path: ['followup_cadence', 'applied_first_days'], value: 9 }]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(YamlOpsError);
+    expect((err as YamlOpsError).code).toBe('bad-op');
+    expect((err as YamlOpsError).message).toMatch(/followup_cadence\.applied_first_days/);
+    expect(applyYamlOps('followup_cadence: 3\n', [{ op: 'delete', path: ['followup_cadence', 'x', 'y'] }])).toBe('followup_cadence: 3\n');
   });
 
   it('refuses malformed YAML and inserts into something that is not a list', () => {
