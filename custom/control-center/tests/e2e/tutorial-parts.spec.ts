@@ -144,6 +144,8 @@ test.describe('Tutorials in parts', () => {
       await new Promise((r) => setTimeout(r, 2000));
       await route.continue();
     });
+    // The page's timers run on a clock the test can move, so the countdown is ruled out without waiting 9 real seconds.
+    await page.clock.install();
     await open(page, '&part=a');
     await playToEnd(page);
     await expect(upNext(page)).toBeVisible();
@@ -156,7 +158,8 @@ test.describe('Tutorials in parts', () => {
     await expect(page.locator('.tut__freeze')).toHaveAttribute('data-state', 'off');
     await expect.poll(async () => (await state(page)).t).toBeCloseTo(20, 0);
     await expect(upNext(page)).toHaveCount(0);
-    await page.waitForTimeout(9000);
+    // Longer than the 8 s countdown: a countdown still running would have advanced to part b.
+    await page.clock.runFor(9000);
     await expect(page).toHaveURL(/part=a/);
   });
 

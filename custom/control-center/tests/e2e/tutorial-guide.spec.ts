@@ -247,7 +247,8 @@ test.describe('Tutorials guide, documentation style', () => {
       await scrollSub(page, 'navigate');
       await expect(page).toHaveURL(/sub=navigate/);
       const at = await scrollTop(page);
-      await page.waitForTimeout(400);
+      // Two painted frames after the URL write: any scroll the write caused has been applied by then.
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       expect(Math.abs((await scrollTop(page)) - at)).toBeLessThan(2);
     });
 
@@ -508,12 +509,13 @@ test.describe('Tutorials guide, documentation style', () => {
       await list.getByRole('link', { name: /Second tour/ }).click();
       await expect(page).toHaveURL(/t=second-tour/);
       await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(1);
-      await page.waitForTimeout(300);
+      // A seek would be applied on loadedmetadata, which readyState 1 has passed; two frames let its effect run.
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
       await list.getByRole('link', { name: /Docs tour/ }).click();
       await expect(page).toHaveURL(/t=docs-tour/);
       await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(1);
-      await page.waitForTimeout(300);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       expect(await page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(0);
     });
 
@@ -589,7 +591,8 @@ test.describe('Tutorials guide, documentation style', () => {
       expect(await belowViewport(figure(page, 'The sidebar.'))).toBeGreaterThan(LAZY_LOAD_MAX_DISTANCE);
       await expect(figure(page, 'Today, right after sign in.').locator('.doc-media__img--top')).toHaveAttribute('loading', 'lazy');
       await expect.poll(() => requested.some((p) => p.endsWith('launch.dark.png'))).toBe(true);
-      await page.waitForTimeout(400);
+      // The page has stopped loading what it is going to load on its own before the far image is checked.
+      await page.waitForLoadState('networkidle');
       expect(requested.some((p) => p.endsWith('navigate.dark.png'))).toBe(false);
       await scrollSub(page, 'navigate');
       await page.evaluate(() => (document.querySelector('.shell__main') as HTMLElement).scrollBy(0, 300));
@@ -607,7 +610,7 @@ test.describe('Tutorials guide, documentation style', () => {
       await page.emulateMedia({ colorScheme: 'light' });
       await expect(figure(page, 'Today, right after sign in.').locator('.doc-media__img--top')).toHaveAttribute('src', /launch\.light\.png/);
       await expect(nav).toHaveAttribute('src', /navigate\.light\.png/);
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle');
       expect(requested.filter((p) => p.includes('navigate.'))).toEqual([]);
       await scrollSub(page, 'navigate');
       await page.evaluate(() => (document.querySelector('.shell__main') as HTMLElement).scrollBy(0, 300));
@@ -721,10 +724,10 @@ test.describe('Tutorials guide, documentation style', () => {
         await openDocs(page, '&section=tracking&sub=change-status');
         const fig = figure(page, 'Changing a status.');
         await scrollSub(page, 'change-status');
-        await page.waitForTimeout(300);
+        // The play button is the clip's settled state; only then is "not playing" a fact, not an early read.
+        await expect(fig.locator('.doc-media__state')).toBeVisible();
         await expect(fig.locator('.doc-media__img--top')).toHaveAttribute('src', '/api/tutorials/docs-tour/media/status.dark.png');
         await expect(frameOf(fig)).toHaveAttribute('data-playing', 'false');
-        await expect(fig.locator('.doc-media__state')).toBeVisible();
         await fig.getByRole('button', { name: /^Play animation/ }).click();
         await expect(fig.locator('.doc-media__img--top')).toHaveAttribute('src', '/api/tutorials/docs-tour/media/status.dark.gif');
       });
