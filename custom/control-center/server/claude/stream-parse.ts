@@ -81,10 +81,12 @@ export class StreamParser {
       case 'result': {
         const out: SessionEvent[] = [];
         for (const d of (Array.isArray(obj.permission_denials) ? obj.permission_denials : []) as Json[]) out.push({ type: 'permission.denied', tool: String(d.tool_name ?? ''), input: d.tool_input });
-        const finalText = typeof obj.result === 'string' && obj.result ? obj.result : this.text;
+        const result = typeof obj.result === 'string' ? obj.result : '';
+        const finalText = result || this.text;
         this.lastVisibleText = extractEnvelopes(finalText, false).visibleText;
         // What the transcript shows: every message of the turn, not only the last one, so text written before a tool call stays.
-        const messages = this.said.at(-1) === finalText || !finalText ? this.said : [...this.said, finalText];
+        // Without a result, the streamed text is those same messages joined: they are shown once, as said.
+        const messages = !result || this.said.at(-1) === result ? this.said : [...this.said, result];
         const visibleText = (messages.length ? messages : [finalText])
           .map((m) => extractEnvelopes(m, false).visibleText.trim())
           .filter(Boolean)

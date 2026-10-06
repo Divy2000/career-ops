@@ -1601,6 +1601,19 @@ describe('stream parser', () => {
     expect(delta(' Done.')).toEqual([{ type: 'text.delta', text: ' Done.' }]);
   });
 
+  it('a result with no text shows each streamed message once, not the whole stream again after them (review fix)', () => {
+    const p = new StreamParser();
+    const ev = (o: unknown) => p.push(JSON.stringify(o));
+    const delta = (text: string) => ev({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+    delta('a');
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: 'a' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/r/cv.md' } }] } });
+    ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'cv' }] } });
+    delta('b');
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: 'b' }] } });
+    const done = ev({ type: 'result', subtype: 'success', result: '', num_turns: 2, is_error: false, usage: {} });
+    expect(done.find((e) => e.type === 'text.done')).toEqual({ type: 'text.done', text: 'a\n\nb' });
+  });
+
   it('an apply answers envelope written before a later tool call is kept, so the turn has its terminal envelope (SW4-claude-03)', () => {
     const p = new StreamParser();
     const ev = (o: unknown) => p.push(JSON.stringify(o));
