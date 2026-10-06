@@ -2,8 +2,13 @@
 // marks the first one's queued runs lost and tracks its running sessions a second time. The lock is a file in the
 // app's own state folder (no session may write there) naming its holder by PID and process start time, since PIDs
 // are reused and start times are not. Lives under supervisor/ so a broken server cannot break it.
+//
+// Every change is atomic: a lock appears whole (a finished temp file linked into place, which fails if one is
+// there), and one is removed only by renaming it away and then checking it is the lock that was meant (each lock
+// carries a nonce). A lock taken by mistake, because it changed between reading and renaming, is linked back.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 export interface LockHolder {
@@ -13,9 +18,17 @@ export interface LockHolder {
   port: number;
 }
 
-export type LockResult = { ok: true; release: () => void } | { ok: false; holder: LockHolder | null };
+export type LockResult =
+  | {
+      ok: true;
+      /** Removes this lock, and only this lock. */
+      release: () => void;
+      /** Whether the lock on disk is still this one: checked before the instance starts the work only one may do. */
+      verify: () => boolean;
+    }
+  | { ok: false; holder: LockHolder | null };
 
-/** A lock file that cannot be parsed is being written by a starting instance, unless it is older than this. */
+/** A lock file that cannot be parsed is damaged; one younger than this may still be settling and is left alone. */
 export const UNREADABLE_LOCK_GRACE_MS = 5000;
 
 /** `ps -o lstart` of a live process, null when there is none. */
@@ -50,25 +63,67 @@ function readOrNull(file: string): string | null {
   }
 }
 
+const aside = (file: string, why: string) => `${file}.${why}-${process.pid}-${crypto.randomUUID()}`;
+
+/** Creates `file` holding `text`, whole, or returns false when a lock is already there. */
+function createWhole(file: string, text: string): boolean {
+  const tmp = aside(file, 'new');
+  fs.writeFileSync(tmp, text, { flag: 'wx' });
+  try {
+    fs.linkSync(tmp, file);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw err;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * Removes the lock at `file` if it is exactly `expected`, atomically: whatever is there is renamed away first, so no
+ * other process can put a lock in between the check and the removal. A different lock that was renamed away by
+ * mistake is linked back; if yet another lock took its place meanwhile, the displaced one stays out and its owner's
+ * verify() fails before it starts any work.
+ */
+function removeIf(file: string, expected: string): void {
+  const moved = aside(file, 'old');
+  try {
+    fs.renameSync(file, moved);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  try {
+    if (readOrNull(moved) === expected) return;
+    try {
+      fs.linkSync(moved, file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  } finally {
+    fs.rmSync(moved, { force: true });
+  }
+}
+
 /**
  * Takes the data root's lock for this process, or names the live instance that holds it. A lock whose holder is
- * gone (the PID is dead or now another process) is stale and replaced, but only while it still holds what was read.
+ * gone (the PID is dead or now another process) is stale and replaced, but only that lock: see removeIf.
  */
 export function acquireInstanceLock(dataRoot: string, me: { pid: number; port: number }, startTimeOf: (pid: number) => string | null = processStartTime, now: () => number = Date.now): LockResult {
   const file = instanceLockPath(dataRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const text = JSON.stringify({ pid: me.pid, startedAt: startTimeOf(me.pid), port: me.port } satisfies LockHolder);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      fs.writeFileSync(file, text, { flag: 'wx' });
+  const text = JSON.stringify({ pid: me.pid, startedAt: startTimeOf(me.pid), port: me.port, nonce: crypto.randomUUID() } satisfies LockHolder & { nonce: string });
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (createWhole(file, text)) {
       return {
         ok: true,
+        // A quick look first, so an instance whose lock was displaced never even briefly moves the current one.
         release: () => {
-          if (readOrNull(file) === text) fs.rmSync(file, { force: true });
+          if (readOrNull(file) === text) removeIf(file, text);
         },
+        verify: () => readOrNull(file) === text,
       };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
     const seen = readOrNull(file);
     if (seen === null) continue;
@@ -86,7 +141,7 @@ export function acquireInstanceLock(dataRoot: string, me: { pid: number; port: n
       }
       if (now() - mtimeMs < UNREADABLE_LOCK_GRACE_MS) return { ok: false, holder: null };
     }
-    if (readOrNull(file) === seen) fs.rmSync(file, { force: true });
+    removeIf(file, seen);
   }
   return { ok: false, holder: null };
 }

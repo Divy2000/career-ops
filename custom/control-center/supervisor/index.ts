@@ -358,6 +358,12 @@ async function main(): Promise<void> {
   });
 
   proxy.listen(PORT, '127.0.0.1', () => {
+    // Only the instance whose lock is still the one on disk may reconcile; one displaced while starting stops here.
+    if (!lock.verify()) {
+      console.error(`Another Control Center took this data root's lock while this one was starting: ${dataRoot}. This one stops.`);
+      bg.active.kill();
+      process.exit(1);
+    }
     // A reload that already swapped the first child out activates its replacement itself.
     if (bg.active === first) first.activate();
     const url = `http://127.0.0.1:${PORT}/auth?t=${token}`;
