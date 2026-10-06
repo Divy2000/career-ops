@@ -386,6 +386,10 @@ export class Runner {
   }
 
   start(req: StartRequest): RunMeta {
+    // Recorded so another process can start it if this one drains first: the env given, every secret named, never stored.
+    const given = Object.entries(req.env ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string');
+    const secret = ([k, v]: [string, string]) => k === TOKEN_VAR || (v !== '' && SECRET_NAME.test(k));
+    const request: RunRequest = { env: Object.fromEntries(given.filter((e) => !secret(e))), secrets: given.filter(secret).map(([k]) => k) };
     const meta = this.store.create({
       actionId: req.actionId,
       label: req.label,
@@ -396,11 +400,7 @@ export class Runner {
       params: req.params,
       tmpInputs: req.tmpInputs ?? [],
       ...(req.exitMeaning ? { exitMeaning: req.exitMeaning } : {}),
-    });
-    // Recorded so another process can start it if this one drains first: the env given, every secret named, never stored.
-    const given = Object.entries(req.env ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string');
-    const secret = ([k, v]: [string, string]) => k === TOKEN_VAR || (v !== '' && SECRET_NAME.test(k));
-    this.store.writeRequest(meta.id, { env: Object.fromEntries(given.filter((e) => !secret(e))), secrets: given.filter(secret).map(([k]) => k) });
+    }, request);
     const env = childEnv(req.env);
     this.envById.set(meta.id, env);
     this.queue.push({ meta, env });

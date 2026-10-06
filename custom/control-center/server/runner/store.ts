@@ -102,7 +102,8 @@ export class RunStore {
     return path.join(runsDir(this.dataRoot), id);
   }
 
-  create(meta: Omit<RunMeta, 'id' | 'createdAt' | 'status' | 'startedAt' | 'endedAt' | 'exitCode' | 'signal' | 'wrapperPid' | 'childPid' | 'error'>): RunMeta {
+  /** request: written before the run's meta, so no other process ever lists the run as queued without it. */
+  create(meta: Omit<RunMeta, 'id' | 'createdAt' | 'status' | 'startedAt' | 'endedAt' | 'exitCode' | 'signal' | 'wrapperPid' | 'childPid' | 'error'>, request?: RunRequest): RunMeta {
     const full: RunMeta = {
       ...meta,
       id: newRunId(),
@@ -117,6 +118,7 @@ export class RunStore {
       error: null,
     };
     fs.mkdirSync(this.dirOf(full.id), { recursive: true });
+    if (request) this.writeRequest(full.id, request);
     this.write(full);
     this.prune();
     return full;

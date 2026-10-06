@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -851,6 +851,29 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
       await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
     });
   }
+
+  it('a run is never on disk as queued without its start request, so another process reconciling at that moment does not mark it lost', async () => {
+    const root = tmpRoot();
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    const other = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(other);
+    // The other process reconciles right after this one's run first appears on disk.
+    const write = here.store.write.bind(here.store);
+    let reconciled = false;
+    vi.spyOn(here.store, 'write').mockImplementation((meta) => {
+      write(meta);
+      if (meta.status === 'queued' && !reconciled) {
+        reconciled = true;
+        other.reconcile();
+      }
+    });
+    const run = here.start(req(['0']));
+    expect(reconciled).toBe(true);
+    await until(() => !['queued', 'running'].includes(here.store.read(run.id)?.status ?? ''), 15_000);
+    expect(here.store.read(run.id)?.status).toBe('done');
+    expect(lineOnes(here, run.id)).toBe(1);
+  });
 
   it('a bare-PID claim whose PID now belongs to a process that started after the claim was written counts as gone: the run starts instead of staying queued', async () => {
     const root = tmpRoot();
