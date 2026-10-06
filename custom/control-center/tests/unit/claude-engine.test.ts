@@ -628,8 +628,8 @@ describe('guard hook', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-devchat-supervisor-guard-'));
     const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
     const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
-    // Static imports only: a failing one stops the process before it listens. (A dynamic import must have a fallback.)
-    const STATIC = /(?:^|\n)\s*(?:import|export)\s[^;'"]*?\sfrom\s*['"](\.[^'"]+)['"]|(?:^|\n)\s*import\s*['"](\.[^'"]+)['"]/g;
+    // Static and dynamic imports alike: running editable code at all lets it hang or kill the supervisor (SW2-claude-05 review).
+    const STATIC = /(?:^|\n)\s*(?:import|export)\s[^;'"]*?\sfrom\s*['"](\.[^'"]+)['"]|(?:^|\n)\s*import\s*['"](\.[^'"]+)['"]|\bimport\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
     const seen = new Set<string>();
     const stack = ['supervisor/index.ts', 'supervisor/preflight-cli.ts'].map((f) => path.join(PACKAGE_ROOT, f));
     while (stack.length) {
@@ -638,7 +638,7 @@ describe('guard hook', () => {
       seen.add(file);
       if (file.endsWith('.json')) continue;
       for (const m of fs.readFileSync(file, 'utf8').matchAll(STATIC)) {
-        const spec = path.resolve(path.dirname(file), (m[1] ?? m[2])!);
+        const spec = path.resolve(path.dirname(file), (m[1] ?? m[2] ?? m[3])!);
         const found = [spec, spec.replace(/\.js$/, '.ts'), spec.replace(/\.js$/, '.tsx'), `${spec}.ts`].find((f) => fs.existsSync(f));
         expect(found, `${file} imports ${spec}`).toBeDefined();
         stack.push(found!);

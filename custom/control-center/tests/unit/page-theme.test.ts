@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PAGE_THEME_CSS } from '../../shared/page-theme.js';
+import { PAGE_THEME_CSS } from '../../supervisor/page-theme.js';
+import { PAGE_THEME_CSS as SHARED_PAGE_THEME_CSS } from '../../shared/page-theme.js';
 
 const TOKENS = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'styles', 'tokens.css'), 'utf8');
 
@@ -31,5 +32,9 @@ describe('the static pages (locked page, recovery page) share one theme sheet', 
     const names = Object.keys(shared).filter((k) => k !== 'color-scheme');
     expect(names.length).toBeGreaterThanOrEqual(8);
     for (const name of names) expect(shared[name], name).toBe(reference[name]);
+  });
+
+  it('the server\'s locked page uses the same sheet the supervisor owns', () => {
+    expect(SHARED_PAGE_THEME_CSS).toBe(PAGE_THEME_CSS);
   });
 });

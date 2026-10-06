@@ -19,6 +19,7 @@ import { watchCoreGraph } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
+import { PAGE_THEME_CSS } from './page-theme.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -158,30 +159,8 @@ const RECOVERY_SCRIPT = `document.addEventListener('submit', async (e) => {
 });`;
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
 
-/** Plain colors (CSS system colors, light and dark) for the supervisor's pages when the app's page theme does not load. */
-const FALLBACK_PAGE_CSS = ':root{color-scheme:light dark;--bg:Canvas;--surface-1:Canvas;--surface-2:ButtonFace;--border:GrayText;--border-strong:GrayText;--text:CanvasText;--text-muted:GrayText;--accent:LinkText}';
-
-let pageTheme: Promise<string> | null = null;
-
-/**
- * The app's page theme. shared/page-theme.ts stays Dev Chat's to edit (it follows the app's tokens), so it is loaded
- * here, never imported: a broken copy costs the supervisor's pages their colors, not the supervisor itself.
- */
-function pageThemeCss(): Promise<string> {
-  pageTheme ??= import('../shared/page-theme.js').then(
-    (mod: { PAGE_THEME_CSS?: unknown }) => {
-      if (typeof mod.PAGE_THEME_CSS !== 'string') throw new Error('it exports no PAGE_THEME_CSS string');
-      return mod.PAGE_THEME_CSS;
-    },
-  ).catch((err: Error) => {
-    console.error(`[supervisor] the page theme did not load (${err.message}); its pages use plain colors`);
-    return FALLBACK_PAGE_CSS;
-  });
-  return pageTheme;
-}
-
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
-export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown, themeCss: string): string {
+export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown): string {
   const sessions = listDevSessions(sessionsDir);
   const blocks = sessions.map((meta) => {
     const turns = listChanges(guardSessionDir(guardRoot, meta.id), meta);
@@ -201,7 +180,7 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: u
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;
   });
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${themeCss}
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}
 body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:24px;max-width:960px}
 h1{font-size:22px}h2{font-size:16px;margin-top:32px}h3{font-size:14px}a{color:var(--accent)}code,pre{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px}
@@ -325,7 +304,7 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`, location: '/__recovery' }).end();
         return true;
       }
-      const html = renderRecovery(sessionsDir, guardRoot, bg.status, await pageThemeCss());
+      const html = renderRecovery(sessionsDir, guardRoot, bg.status);
       res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(html);
       return true;
     }
@@ -351,11 +330,11 @@ async function main(): Promise<void> {
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' });
       res.end(`supervisor error: ${(err as Error).message}`);
     };
-    handleLocal(req, res).then(async (handled) => {
+    handleLocal(req, res).then((handled) => {
       if (handled) return;
       const active = bg.active;
       if (!active) {
-        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center is not running</title><meta name="color-scheme" content="dark light"><style>${await pageThemeCss()}body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:32px;max-width:640px}a{color:var(--accent)}</style></head><body><h1>The Control Center server could not start</h1><p>The last change to its code broke it. <a href="/__recovery">Open the recovery page</a> to revert the Dev Chat turn that made it; the app comes back by itself once the server starts.</p></body></html>`);
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center is not running</title><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:32px;max-width:640px}a{color:var(--accent)}</style></head><body><h1>The Control Center server could not start</h1><p>The last change to its code broke it. <a href="/__recovery">Open the recovery page</a> to revert the Dev Chat turn that made it; the app comes back by itself once the server starts.</p></body></html>`);
         return;
       }
       const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
