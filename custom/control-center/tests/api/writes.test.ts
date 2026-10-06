@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import type { Exec } from '../../server/routes/system.js';
 import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
@@ -148,6 +149,35 @@ describe('pipeline writes', () => {
     }
     const pipeline = readData('data/pipeline.md');
     expect(postings.filter((p) => !pipeline.includes(`${p.url} `)).map((p) => p.url)).toEqual([]);
+  });
+});
+
+describe('pipeline adds while another writer holds the pipeline lock (SW2-tests-03)', () => {
+  it('answer 409 "pipeline is busy" with retry-after for /add and /urls, write nothing, and add once the lock is free', async () => {
+    const { acquirePipelineLock } = (await import(pathToFileURL(path.join(t.cfg.codeRoot, 'pipeline-lock.mjs')).href)) as { acquirePipelineLock: (p: string, o?: Record<string, number>) => Promise<{ release: () => void }> };
+    const pipeline = path.join(t.cfg.dataRoot, 'data', 'pipeline.md');
+    const before = fs.readFileSync(pipeline, 'utf8');
+    const lock = await acquirePipelineLock(pipeline);
+    // The writer child waits this long for one holder (scan.mjs's own override), so a held lock times out quickly.
+    const saved = process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS;
+    process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS = '300';
+    process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = '600';
+    try {
+      for (const res of [await post('/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/busy/1', company: 'Busy Co', title: 'Engineer' }] }), await post('/api/pipeline/urls', { urls: ['https://jobs.example.com/busy/2'] })]) {
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.headers['retry-after']).toBe('1');
+        expect(res.json()).toEqual({ error: 'pipeline is busy, try again in a moment' });
+      }
+      expect(fs.readFileSync(pipeline, 'utf8')).toBe(before);
+    } finally {
+      lock.release();
+      if (saved === undefined) delete process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS;
+      else process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS = saved;
+      delete process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+    }
+    const after = await post('/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/busy/1', company: 'Busy Co', title: 'Engineer' }] });
+    expect(after.statusCode, after.body).toBe(200);
+    expect(after.json()).toEqual({ added: 1, skipped: 0 });
   });
 });
 

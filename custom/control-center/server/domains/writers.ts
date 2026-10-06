@@ -74,17 +74,31 @@ for (const offer of req.offers) {
   recorded.add(key);
   fresh.push(offer);
 }
-await appendToPipeline(fresh);
+try {
+  await appendToPipeline(fresh);
+} catch (err) {
+  // Another writer (a scan, rank, the CLI) held the pipeline lock past the wait: busy, not broken.
+  if (err && err.name === 'LockTimeoutError') process.exit(75);
+  throw err;
+}
 // The pipeline and history writes are two locked steps, so an add can land in the pipeline and fail before its history
 // row; the retry then skips the URL as listed. Such a URL gets its history row now, so it is still recorded once.
 const historyRows = [...fresh, ...unrecorded];
-if (req.history && historyRows.length) await appendToScanHistory(historyRows, req.date, 'added');
+if (req.history && historyRows.length) {
+  try {
+    await appendToScanHistory(historyRows, req.date, 'added');
+  } catch (err) {
+    if (err && err.name === 'LockTimeoutError') process.exit(75);
+    throw err;
+  }
+}
 process.stdout.write(JSON.stringify({ ok: true, added: fresh.length, skipped: req.offers.length - fresh.length }));
 `;
     // scan.mjs puts CAREER_OPS_PIPELINE and _SCAN_HISTORY ahead of the data root: pinned to the files checked above, so a
     // stray override in the server's environment cannot send the write somewhere else.
     const pinned = { ...env(dataRoot), CAREER_OPS_PIPELINE: pipelineFile, CAREER_OPS_SCAN_HISTORY: historyFile };
     const r = await runModule(code, { cwd: codeRoot, env: pinned, input: { offers: offers.map(scanOffer), history, date: localDate() }, timeoutMs: 30_000 });
+    if (r.code === 75) throw new PipelineBusyError('pipeline is busy, try again in a moment');
     if (r.code !== 0) throw new Error(`pipeline writer exited ${r.code}: ${r.stderr.trim().slice(-600)}`);
     const out = childJson<{ added: number; skipped: number }>(r);
     return { added: out.added, skipped: out.skipped };
@@ -102,6 +116,9 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export class FollowupsBusyError extends Error {}
+
+/** The pipeline or scan-history lock stayed held past the writer's wait (exit 75 from the child). */
+export class PipelineBusyError extends Error {}
 
 export function editFollowups(codeRoot: string, dataRoot: string, edit: FollowupEdit): Promise<FollowupEditResult> {
   return serialized(async () => {

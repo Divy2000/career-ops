@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { importCore } from '../core/adapter.js';
 import { applyInboxSkip, postingUrl } from '../domains/inboxSkip.js';
-import { appendOffers, editFollowups, FollowupsBusyError } from '../domains/writers.js';
+import { appendOffers, editFollowups, FollowupsBusyError, PipelineBusyError } from '../domains/writers.js';
 import { readApplyDocuments, readDocuments } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import type { DailyJobWatch } from '../system/daily.js';
@@ -53,18 +53,28 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
     }
   });
 
+  // Like /skip: a lock another writer holds is a 409 the client retries, never a 500.
+  const pipelineAdd = async (reply: FastifyReply, fn: () => Promise<{ added: number; skipped: number }>) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof PipelineBusyError) return reply.code(409).header('retry-after', '1').send({ error: err.message });
+      throw err;
+    }
+  };
+
   app.post<{ Body: { urls?: unknown } }>('/api/pipeline/urls', async (req, reply) => {
     const parsed = z.object({ urls: z.array(url).min(1).max(200) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     const offers = [...new Set(parsed.data.urls)].map((u) => ({ url: u, company: '', title: '' }));
-    return appendOffers(cfg.codeRoot, cfg.dataRoot, offers, false);
+    return pipelineAdd(reply, () => appendOffers(cfg.codeRoot, cfg.dataRoot, offers, false));
   });
 
   app.post<{ Body: { offers?: unknown } }>('/api/pipeline/add', async (req, reply) => {
     const offer = z.object({ url, company: z.string().max(PIPELINE_OFFER_LIMITS.company), title: z.string().max(PIPELINE_OFFER_LIMITS.title), location: z.string().max(PIPELINE_OFFER_LIMITS.location).optional(), portal: z.string().max(PIPELINE_OFFER_LIMITS.portal).optional(), postedAt: z.string().refine(isIsoDay, 'a YYYY-MM-DD calendar day').optional() });
     const parsed = z.object({ offers: z.array(offer).min(1).max(PIPELINE_ADD_MAX) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return appendOffers(cfg.codeRoot, cfg.dataRoot, parsed.data.offers, true);
+    return pipelineAdd(reply, () => appendOffers(cfg.codeRoot, cfg.dataRoot, parsed.data.offers, true));
   });
 
   const followupsReply = async (reply: { code: (n: number) => { header: (k: string, v: string) => { send: (b: unknown) => unknown }; send: (b: unknown) => unknown } }, fn: () => Promise<Awaited<ReturnType<typeof editFollowups>>>) => {
