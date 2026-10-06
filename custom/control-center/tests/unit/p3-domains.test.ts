@@ -169,7 +169,8 @@ Some intro text about the file.
   it('reads a table whose company column is headed "Company name", so a save keeps its rows', () => {
     const md = '# Blacklist\n\n| Company name | Reason |\n|---|---|\n| Spam Staffing Ltd | body-shop |\n| Acme Recruiting | spam |\n';
     const parsed = parseBlacklist(md);
-    expect(parsed.rows.map((r) => r.company)).toEqual(['Spam Staffing Ltd', 'Acme Recruiting']);
+    // scan.mjs skips a header only when its first cell is exactly Company, so it blocks "Company name" too (SW8 review 3).
+    expect(parsed.rows.map((r) => r.company)).toEqual(['Company name', 'Spam Staffing Ltd', 'Acme Recruiting']);
     expect(parsed.extraColumns).toEqual([]);
     const saved = renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, parsed.extraColumns);
     expect(parseBlacklist(saved).rows).toEqual(parsed.rows);

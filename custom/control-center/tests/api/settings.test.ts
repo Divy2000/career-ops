@@ -243,6 +243,23 @@ describe('the blacklist editor reads the table by position, as the scanner does 
       await app.close();
     }
   });
+  it('a header line the scanner reads as an entry ("Company Name") is listed, and a save keeps the scanner blocking it (SW8 review 3, review)', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      fs.writeFileSync(file, '# Blacklist\n\n| Company Name | Since | Scope | Reason |\n|---|---|---|---|\n| Initech | 2026-02-01 | company | reposts |\n');
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const blocked = scannerEntries(file);
+      expect(blocked.map((e) => e.company)).toEqual(['Company Name', 'Initech']);
+      const current = (await req('GET')).json();
+      expect(fields(current.rows)).toEqual(blocked);
+      const saved = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fields(scannerEntries(file))).toEqual(blocked);
+    } finally {
+      await app.close();
+    }
+  });
   it('a header in the scanner order has no warning', async () => {
     const app = await makeTestApp();
     try {

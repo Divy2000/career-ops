@@ -115,10 +115,10 @@ export function parseBlacklist(md: string): BlacklistParsed {
   const extraColumns = [...(thirdName !== null ? [thirdName] : []), ...headerCells.slice(4)];
   // Every listed row, in the table or not, is read by position: its cells after Reason fill the table's own columns.
   const unkept: string[] = [];
-  const read = (line: string): BlacklistRow | null => {
+  const read = (line: string, isHeader = false): BlacklistRow | null => {
     const cells = splitCells(line);
     const row = scannerRow(line, [...(keepThird ? [cells[2] ?? ''] : []), ...headerCells.slice(4).map((_, i) => cells[4 + i] ?? '')]);
-    if (!row) return null;
+    if (!row || isHeader) return row;
     const lost = cells.filter((c, i) => c !== '' && (i >= Math.max(4, headerCells.length) || (i === 2 && !keepThird && !['company', 'domain'].includes(c.toLowerCase()))));
     if (lost.length) unkept.push(`${row.company} (${lost.join(', ')})`);
     return row;
@@ -126,9 +126,12 @@ export function parseBlacklist(md: string): BlacklistParsed {
   // A markdown table ends at its first line that is not a row (a blank line included).
   let end = headerIdx + 1;
   while (end < lines.length && /^\s*\|/.test(lines[end]!)) end++;
-  const before = outsideTable(lines.slice(0, headerIdx), read);
-  const rows = lines.slice(headerIdx + 1, end).map(read).filter((r): r is BlacklistRow => r !== null);
-  const after = outsideTable(lines.slice(end), read);
+  const before = outsideTable(lines.slice(0, headerIdx), (l) => read(l));
+  // The scanner skips a header only when its first cell is exactly Company: "| Company Name | ... |" is an entry it
+  // blocks, so it is listed (a save writes the column names again above it; its own labels are no data to keep).
+  const headerRow = read(lines[headerIdx]!, true);
+  const rows = [...(headerRow ? [headerRow] : []), ...lines.slice(headerIdx + 1, end).map((l) => read(l))].filter((r): r is BlacklistRow => r !== null);
+  const after = outsideTable(lines.slice(end), (l) => read(l));
   return { rows: [...before.rows, ...rows, ...after.rows], preamble: before.text.trim() ? before.text : null, postamble: after.text, extraColumns, columnWarning, unkept };
 }
 
