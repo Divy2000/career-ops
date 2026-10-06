@@ -247,16 +247,19 @@ new_failures() {
 # sync must never change on its own: the fork's tests and test helpers, the
 # sync's own gates, the guard and the other paths Dev Chat may not write
 # (DEVCHAT_DENIED_WRITES in custom/control-center/server/claude/modes.ts, kept
-# in step by sync-gates.spec), server/core/adapter.ts (the guard reads the
-# contract through it), and the fork README. The sync Claude may fix
+# in step by sync-gates.spec), everything under server/core but contract.json
+# (the guard reads the contract through adapter.ts; contract.json itself is
+# section-gated by contract_gate_edits), and the fork README. The sync Claude may fix
 # other fork code under custom/; those fixes are judged by the protected tests,
 # so an edit to a test, a gate or the guard holds the PR for a human.
 protected_paths() {
   local f
   while IFS= read -r f; do
     case "$f" in
+      # Section-gated by contract_gate_edits instead: its clis, exports and writers follow upstream.
+      custom/control-center/server/core/contract.json) ;;
       custom/control-center/server/claude/* | custom/control-center/supervisor/* | \
-        custom/control-center/server/core/adapter.ts | \
+        custom/control-center/server/core/* | \
         custom/control-center/package.json | custom/control-center/package-lock.json | \
         custom/control-center/vite.config.* | custom/control-center/vitest.config.* | custom/control-center/playwright.config.* | \
         custom/control-center/eslint.config.* | custom/control-center/tsconfig*.json | \

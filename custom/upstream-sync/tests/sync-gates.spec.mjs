@@ -312,16 +312,48 @@ test('sync.sh reads the verdict before it pushes or decides', () => {
 
 const isProtected = (p) => spawnSync('bash', ['-c', `source "${LIB}"\nprotected_paths "$P"`], { env: { PATH: '/usr/bin:/bin', P: p }, encoding: 'utf8' }).stdout.trim();
 
-test('protected_paths keeps every path Dev Chat may not write under custom/, and nothing else', () => {
-  const modes = readFileSync(path.join(HERE, '../../control-center/server/claude/modes.ts'), 'utf8');
-  const list = modes.slice(modes.indexOf('export const DEVCHAT_DENIED_WRITES'), modes.indexOf('];', modes.indexOf('export const DEVCHAT_DENIED_WRITES')));
-  const globs = [...list.matchAll(/'(custom\/[^']+)'/g)].map((m) => m[1]);
-  assert.ok(globs.length > 15, `read ${globs.length} globs from modes.ts`);
+const SECTION_GATED = 'custom/control-center/server/core/contract.json';
+const REPO_ROOT = path.resolve(HERE, '../../..');
+
+/** The paths (one per element) protected_paths keeps, asked in one call. */
+const protectedOf = (paths) => new Set(spawnSync('bash', ['-c', `source "${LIB}"\nprotected_paths "$P"`], { env: { PATH: '/usr/bin:/bin', P: paths.join('\n') }, encoding: 'utf8' }).stdout.split('\n').filter(Boolean));
+
+/**
+ * The Dev Chat deny globs under custom/ that the sync does not hold: a glob counts as covered when a sample path for
+ * it and every tracked file it matches is a protected path or contract.json, which contract_gate_edits gates by its
+ * `claude` and `playwrightMcp` sections.
+ */
+function driftGaps(globs) {
+  assert.ok(readFileSync(LIB, 'utf8').includes(`local f=${SECTION_GATED}`), 'contract_gate_edits gates contract.json');
+  const gaps = [];
   for (const glob of globs) {
     const sample = glob.replaceAll('**/', 'a/b/').replaceAll('**', 'a/b').replaceAll('*', 'x');
-    assert.equal(isProtected(sample), sample, `${glob} (sample ${sample}) is protected`);
+    const tracked = spawnSync('git', ['-C', REPO_ROOT, 'ls-files', '--', `:(glob)${glob}`], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+    const paths = [sample, ...tracked].filter((p) => p !== SECTION_GATED);
+    const kept = protectedOf(paths);
+    const open = paths.filter((p) => !kept.has(p));
+    if (open.length) gaps.push(`${glob}: ${open.slice(0, 3).join(', ')}`);
   }
+  return gaps;
+}
+
+function devChatGlobs() {
+  const modes = readFileSync(path.join(HERE, '../../control-center/server/claude/modes.ts'), 'utf8');
+  const list = modes.slice(modes.indexOf('export const DEVCHAT_DENIED_WRITES'), modes.indexOf('];', modes.indexOf('export const DEVCHAT_DENIED_WRITES')));
+  return [...list.matchAll(/'(custom\/[^']+)'/g)].map((m) => m[1]);
+}
+
+test('protected_paths keeps every path Dev Chat may not write under custom/, and nothing else', () => {
+  const globs = devChatGlobs();
+  assert.ok(globs.length > 15, `read ${globs.length} globs from modes.ts`);
+  assert.deepEqual(driftGaps(globs), []);
   for (const free of ['custom/a.mjs', 'custom/pipeline/shortlist.mjs', 'custom/control-center/server/routes/read.ts', 'custom/control-center/web/App.tsx', 'scan.mjs']) assert.equal(isProtected(free), '', free);
+});
+
+test('a Dev Chat list that denies server/core/** (the guard branch) is covered: every file there is protected but contract.json, which is section-gated', () => {
+  assert.deepEqual(driftGaps([...devChatGlobs(), 'custom/control-center/server/core/**']), []);
+  assert.equal(isProtected(SECTION_GATED), '', 'contract.json is not a whole-file hold: its clis, exports and writers follow upstream');
+  for (const f of ['custom/control-center/server/core/adapter.ts', 'custom/control-center/server/core/child.ts', 'custom/control-center/server/core/new-module.ts']) assert.equal(isProtected(f), f);
 });
 
 test('sync.sh holds on protected edits found in the same snapshot comparison', () => {
