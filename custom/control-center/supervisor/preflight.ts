@@ -231,6 +231,19 @@ export function versionAtLeast(actual: string, floor: string): boolean {
   return true;
 }
 
+/**
+ * Test-only host pins, honoured under NODE_ENV=test like the other CC_FAKE_* switches: the platform the preflight
+ * checks (CC_FAKE_PLATFORM) and the local managed-settings folder it reads, with no MDM profile
+ * (CC_FAKE_MANAGED_SETTINGS_DIR), so a real supervisor in a test does not pass or fail with the machine it runs on.
+ */
+export function testHost(env: NodeJS.ProcessEnv): Pick<PreflightInput, 'platform' | 'managedSettings'> {
+  if (env.NODE_ENV !== 'test') return {};
+  return {
+    ...(env.CC_FAKE_PLATFORM ? { platform: env.CC_FAKE_PLATFORM as NodeJS.Platform } : {}),
+    ...(env.CC_FAKE_MANAGED_SETTINGS_DIR ? { managedSettings: { dir: env.CC_FAKE_MANAGED_SETTINGS_DIR, plists: [] } } : {}),
+  };
+}
+
 export async function preflight(input: PreflightInput): Promise<PreflightResult> {
   const exec = input.exec ?? exitCode;
   const errors: string[] = [];

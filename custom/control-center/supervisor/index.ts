@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
-import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates } from './preflight.js';
+import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates, testHost } from './preflight.js';
 import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
   const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN ?? 'claude');
   // An explicit CC_CLAUDE_BIN is a decision; only an automatic pick warns about the alternatives.
   const alternatives = process.env.CC_CLAUDE_BIN ? [] : claudeCandidates('claude');
-  const pf = await preflight({ claudeBin, nodeVersion: process.version, env: process.env, claudeCandidates: alternatives });
+  const pf = await preflight({ claudeBin, nodeVersion: process.version, env: process.env, claudeCandidates: alternatives, ...testHost(process.env) });
   const report = formatPreflight(pf);
   if (report) console.error(report);
   if (!pf.ok) process.exit(1);

@@ -52,6 +52,9 @@ function startSupervisor(port: number, dataRoot: string, opts: { packageRoot?: s
       CC_CODE_ROOT: path.resolve(PACKAGE_ROOT, '..', '..'),
       ...(opts.reload ? {} : { CC_NO_RELOAD: '1' }),
       CC_FAKE_DAILY: 'idle',
+      // The preflight checks a pinned host, not this machine's platform or its Claude Code MDM settings.
+      CC_FAKE_PLATFORM: 'darwin',
+      CC_FAKE_MANAGED_SETTINGS_DIR: tempDir('cc-sup-managed-'),
       // tsx keeps a cache in TMPDIR; give the processes their own, removed with this file's temp dirs.
       TMPDIR: tempDir('cc-sup-tmp-'),
       ...opts.env,
@@ -139,6 +142,36 @@ async function reap(pids: number[]): Promise<void> {
   while (left.some(alive) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   for (const pid of left.filter(alive)) process.kill(pid, 'SIGKILL');
 }
+
+describe('the supervisor preflight sees the host the test pins, never the machine it runs on (SW3-tests-23)', () => {
+  /** Waits (bounded) for a supervisor that should refuse to start, and returns its exit code. */
+  const refusal = async (s: Started) => {
+    await until(() => s.proc.exitCode !== null, 'the supervisor to refuse to start', 30_000);
+    return s.proc.exitCode;
+  };
+
+  it('managed Claude Code settings in the pinned managed-settings folder are read, so an unconfinable one stops the launch', async () => {
+    const managed = tempDir('cc-sup-managed-unconfinable-');
+    fs.writeFileSync(path.join(managed, 'managed-settings.json'), JSON.stringify({ disableAllHooks: true }));
+    const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_FAKE_MANAGED_SETTINGS_DIR: managed } });
+    try {
+      expect(await refusal(s), s.output()).toBe(1);
+      expect(s.output()).toContain(`managed Claude Code settings in ${path.join(managed, 'managed-settings.json')} set disableAllHooks`);
+    } finally {
+      await stop(s);
+    }
+  });
+
+  it('the pinned platform is the one checked, so a launch pinned to Linux is refused as not macOS', async () => {
+    const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_FAKE_PLATFORM: 'linux' } });
+    try {
+      expect(await refusal(s), s.output()).toBe(1);
+      expect(s.output()).toMatch(/runs on macOS only \(this is linux\)/);
+    } finally {
+      await stop(s);
+    }
+  });
+});
 
 describe('a server child never outlives its supervisor', () => {
   it('killed with SIGKILL, the supervisor leaves no server child running: it stops on its own within 15 s', async () => {
