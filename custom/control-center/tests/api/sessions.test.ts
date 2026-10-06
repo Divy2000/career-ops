@@ -286,6 +286,32 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('an Evaluate JD session on a local:jds/ row moves exactly that row to Processed, keeping the reference as the file writes it', async () => {
+    const other = await makeTestApp();
+    try {
+      const pipelinePath = path.join(other.cfg.dataRoot, 'data', 'pipeline.md');
+      // The file holds the reference escaped as scan.mjs writes it; the Inbox reads and sends it unescaped.
+      const written = 'local:jds/acme-pm\\[2\\].md';
+      const ref = 'local:jds/acme-pm[2].md';
+      const sibling = 'local:jds/acme-pm.md';
+      fs.writeFileSync(pipelinePath, fs.readFileSync(pipelinePath, 'utf8').replace('## Pending\n\n', `## Pending\n\n- [ ] ${written} | Acme Saved | Product Manager\n- [ ] ${sibling} | Acme Other | Designer\n`));
+      const report = '# Evaluation: Acme Saved\n\n**Date:** 2026-10-06\n**Score:** 3.8/5\n**URL:** local:jds/acme-pm[2].md\n\n## A) Role Summary\nx\n';
+      const scenario = scenarioFile({ events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/095-acme-saved-2026-10-06.md', content: report } }, result('Done: the report is written.', 0.01)] });
+      await withScenario(scenario, async () => {
+        const { id } = (await call(other, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'text', value: ref }, prompt: 'Evaluate the job description saved at jds/acme-pm[2].md following the mode file.' })).json();
+        const settled = await settleOn(other, id);
+        expect(settled.meta.status).toBe('done');
+        expect(settled.meta.lastReason).toContain('pipeline row moved to Processed as #095');
+      });
+      const md = fs.readFileSync(pipelinePath, 'utf8');
+      expect(md).not.toContain(`- [ ] ${written}`);
+      expect(md).toContain(`## Processed\n\n- [x] #095 | ${written} | Acme Saved | Product Manager | 3.8/5 | PDF ❌\n`);
+      expect(md).toContain(`- [ ] ${sibling} | Acme Other | Designer`);
+    } finally {
+      await other.close();
+    }
+  });
+
   it('a report written on a turn that did not end done still moves the pipeline row once a later turn ends done (SW2-claude-03 review)', async () => {
     const other = await makeTestApp();
     try {
