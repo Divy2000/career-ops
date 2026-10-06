@@ -146,6 +146,29 @@ describe('Dev Chat', () => {
     expect(JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', plain.id, 'turns', '1', 'policy.json'), 'utf8')).deny).toContain('data/blacklist.md');
   });
 
+  it('a fork of a session whose conversation never started carries the unlock too, into the session it starts', async () => {
+    // The first turn exits before the CLI starts a conversation, so the fork starts its own instead of resuming one.
+    const died = path.join(tempDir('cc-devchat-died-'), 'scenario.json');
+    fs.writeFileSync(died, JSON.stringify({ events: [], exitCode: 1 }));
+    process.env.FAKE_CLAUDE_SCENARIO = died;
+    let id: string;
+    try {
+      id = (await post('/api/sessions', { mode: 'devchat', prompt: 'A turn that never starts' })).json().id;
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCENARIO;
+    }
+    expect((await settle(id)).meta.status).toBe('error');
+    const explicit = { ...t.authedWrite, 'x-cc-explicit': 'blacklist' };
+    const fork = await t.app.inject({ method: 'POST', url: `/api/sessions/${id}/fork`, headers: explicit, payload: { prompt: 'now the blacklist', blacklistAllowed: true } });
+    expect(fork.statusCode, fork.body).toBe(202);
+    const forked = await settle(fork.json().id);
+    const args = (await get(`/api/runs/${forked.meta.turns[0].runId}`)).json().meta.cmd.args as string[];
+    expect(args).toEqual(expect.arrayContaining(['--session-id', forked.meta.claudeSessionId]));
+    const policy = JSON.parse(fs.readFileSync(path.join(t.cfg.guardRoot, 'sessions', fork.json().id, 'turns', '1', 'policy.json'), 'utf8'));
+    expect(policy.allow).toContain('data/blacklist.md');
+    expect(policy.deny).not.toContain('data/blacklist.md');
+  });
+
   it('keeps each turn policy, the settings and the revert bookkeeping outside both roots', async () => {
     const { id } = (await post('/api/sessions', { mode: 'devchat', prompt: 'Add a rule to the house rules' })).json();
     const { meta } = await settle(id);

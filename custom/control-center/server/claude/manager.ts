@@ -190,7 +190,7 @@ export class SessionManager {
     // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
     if (!this.hasConversation(src)) {
       const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
-      return this.runTurn(fresh, policy, prompt, { resume: false, fork: false });
+      return this.runTurn(fresh, policy, prompt, { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
     }
     const forked = this.store.fork(id);
     return this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
