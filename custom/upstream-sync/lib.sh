@@ -126,6 +126,24 @@ refresh_root_deps() {
   return "$rc"
 }
 
+# ensure_playwright_browser: install the Chromium that the installed Playwright
+# expects, the one thing the root postinstall (`npx playwright install
+# chromium`) does that the sync's --ignore-scripts installs skip. Nothing else's
+# lifecycle scripts run: this is Playwright's own CLI, the same package code the
+# PDF specs run anyway, and it downloads only when that revision is missing
+# from the shared browser cache. No-op without Playwright installed; fails when
+# the browser cannot be installed, so a Playwright bump never reads as failing
+# PDF tests that the merge caused.
+ensure_playwright_browser() {
+  local version
+  [ -f node_modules/playwright/package.json ] || return 0
+  version="$(node -p 'require("./node_modules/playwright/package.json").version')" || return 1
+  if ! npx --no-install playwright install chromium; then
+    echo "ensure_playwright_browser: cannot install Chromium for Playwright $version" >&2
+    return 1
+  fi
+}
+
 # control_center_checks <log>: install custom/control-center from its tracked
 # lockfile with npm ci, which deletes any node_modules Claude left (no
 # lifecycle scripts), then run its vitest suite (which holds the contract test

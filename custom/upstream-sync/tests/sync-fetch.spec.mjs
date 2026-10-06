@@ -819,3 +819,55 @@ test('sync.sh updates the live checkout through update_live_checkout and fails t
   assert.match(failed.stdout, /^!!! live checkout could not fast-forward$/m);
   assert.doesNotMatch(failed.stdout, /continued/);
 });
+
+// ---- Playwright's browser after an install without lifecycle scripts (SW3-scripts-04) ----
+
+/** A worktree with an npx stub that logs its calls (or fails), and optionally an installed playwright package. */
+function browserWorld({ playwright = true, npxExit = 0 } = {}) {
+  const w = npmStubWorld();
+  const npxLog = path.join(w.dir, 'npx.log');
+  stub(w.bin, 'npx', `echo "$*" >> "${npxLog}"\nexit ${npxExit}`);
+  if (playwright) {
+    mkdirSync(path.join(w.repo, 'node_modules', 'playwright'), { recursive: true });
+    writeFileSync(path.join(w.repo, 'node_modules', 'playwright', 'package.json'), '{"name":"playwright","version":"1.64.0"}\n');
+  }
+  return { ...w, npx: () => (existsSync(npxLog) ? readFileSync(npxLog, 'utf8') : '') };
+}
+
+test('ensure_playwright_browser installs the installed Playwright\'s Chromium, the one postinstall step --ignore-scripts skips', () => {
+  const w = browserWorld();
+  try {
+    const res = bashLib(w.repo, 'ensure_playwright_browser', w.env);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(w.npx(), '--no-install playwright install chromium\n');
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('ensure_playwright_browser does nothing without Playwright, and fails when the browser cannot be installed', () => {
+  const none = browserWorld({ playwright: false });
+  const failing = browserWorld({ npxExit: 1 });
+  try {
+    assert.equal(bashLib(none.repo, 'ensure_playwright_browser', none.env).status, 0);
+    assert.equal(none.npx(), '');
+    const res = bashLib(failing.repo, 'ensure_playwright_browser', failing.env);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /cannot install Chromium for Playwright 1\.64\.0/);
+  } finally {
+    rmSync(none.dir, { recursive: true, force: true });
+    rmSync(failing.dir, { recursive: true, force: true });
+  }
+});
+
+test('sync.sh provides the browser after the baseline install and after the post-merge reinstall, before any suite runs, and fails the run when it cannot', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  const lines = sync.split('\n');
+  const at = (prefix, from = 0) => lines.findIndex((l, i) => i >= from && l.startsWith(prefix));
+  const baseInstall = at('install_root_deps ignore-scripts');
+  const baseSuite = at('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"');
+  const firstBrowser = at('ensure_playwright_browser || fail ', baseInstall);
+  assert.ok(baseInstall > -1 && firstBrowser > baseInstall && firstBrowser < baseSuite, `baseline install=${baseInstall} browser=${firstBrowser} suite=${baseSuite}`);
+  const refresh = at('refresh_root_deps ');
+  const custom = at('custom_tests ');
+  const secondBrowser = at('ensure_playwright_browser || fail ', refresh);
+  assert.ok(refresh > -1 && secondBrowser > refresh && secondBrowser < custom, `refresh=${refresh} browser=${secondBrowser} custom=${custom}`);
+});
