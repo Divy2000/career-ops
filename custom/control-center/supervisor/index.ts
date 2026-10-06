@@ -349,7 +349,7 @@ async function main(): Promise<void> {
       const active = bg.active;
       if (!active) {
         const signedIn = hostOk(req) && authed(req, new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`));
-        const devChatChanged = signedIn && devChatChangeInEffect(sessionsDir, guardRoot, serverLoads(CODE_ROOT, PACKAGE_ROOT, CORE_ENTRIES));
+        const devChatChanged = signedIn && devChatChangeInEffect(sessionsDir, guardRoot, serverLoads(CODE_ROOT, PACKAGE_ROOT, CORE_ENTRIES), CODE_ROOT);
         const html = renderDownPage(bg.status, signedIn ? { devChatChanged } : null);
         res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(html);
         return;

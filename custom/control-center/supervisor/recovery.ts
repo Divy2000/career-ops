@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
-import { locate, matches, resolveReal } from '../server/claude/guard-policy.mjs';
+import { locate, matches, relativeToRoot, resolveReal } from '../server/claude/guard-policy.mjs';
 
 export interface ChangeRecord {
   path: string;
@@ -373,12 +373,17 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
  * start be blamed on one. Still on disk means the file holds the bytes the turn left (its after.json hash, the check a
  * revert makes), so a reverted or since-rewritten change does not count. A turn with no readable post-turn record for
  * the file (it never finished), or a file that cannot be read, cannot rule the change out, so it counts.
+ * Where a record lives is decided by its real path against the real code root, not by its root label: a data root
+ * that is the code root under another spelling (a symlink, /tmp for /private/tmp) labels code writes 'data'.
  */
-export function devChatChangeInEffect(sessionsDir: string, guardRoot: string, serverLoads: (rel: string) => boolean): boolean {
+export function devChatChangeInEffect(sessionsDir: string, guardRoot: string, serverLoads: (rel: string) => boolean, codeRoot: string): boolean {
   return listDevSessions(sessionsDir).some((meta) => {
     const sessionDir = guardSessionDir(guardRoot, meta.id);
     return changesByTurn(sessionDir, meta).some((t) => {
-      const loaded = t.records.filter((r) => r.root === 'code' && serverLoads(r.path));
+      const loaded = t.records.filter((r) => {
+        const rel = relativeToRoot(codeRoot, r.abs);
+        return rel !== null && serverLoads(rel);
+      });
       if (!loaded.length) return false;
       let after: Record<string, string | null> | undefined;
       try {

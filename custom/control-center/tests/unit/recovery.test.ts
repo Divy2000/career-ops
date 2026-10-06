@@ -333,9 +333,13 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
   const serverTree = (rel: string) => rel.startsWith('custom/control-center/server/');
   const failed = { state: 'failed' as const, at: 't', error: 'server child exited before listening (code 1, signal null)\nError: listen EADDRINUSE <127.0.0.1>', stderrTail: 'Error: listen EADDRINUSE <127.0.0.1>' };
 
-  /** A finished Dev Chat turn that edited `rels` in a scratch code root, recorded the way the guard hook and finalize record it. */
-  function finishedTurn(rels: string[], opts: { finalized?: boolean } = {}) {
+  /**
+   * A finished Dev Chat turn that edited `rels` in a scratch code root, recorded the way the guard hook and finalize record
+   * it: under `recordedUnder` (another spelling of the code root, or a separate data root) and labelled `label` if given.
+   */
+  function finishedTurn(rels: string[], opts: { finalized?: boolean; recordedUnder?: (root: string) => string; label?: 'code' | 'data' } = {}) {
     const root = fs.realpathSync(tempDir('cc-down-root-'));
+    const base = opts.recordedUnder?.(root) ?? root;
     const sessionsDir = tempDir('cc-down-sessions-');
     const guardRoot = tempDir('cc-down-guard-');
     const id = 's20261005000001-abcdef';
@@ -350,13 +354,13 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
     const after: Record<string, string> = {};
     const lines: string[] = [];
     for (const rel of rels) {
-      const abs = path.join(root, rel);
+      const abs = path.join(base, rel);
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, 'before\n');
       fs.copyFileSync(abs, snapshotKey(turnDir, abs));
       fs.writeFileSync(abs, 'after the turn\n');
       after[abs] = sha('after the turn\n');
-      lines.push(JSON.stringify({ path: rel, abs, root: 'code', tool: 'Edit', ts: 't', sha256: after[abs] }));
+      lines.push(JSON.stringify({ path: rel, abs, root: opts.label ?? 'code', tool: 'Edit', ts: 't', sha256: after[abs] }));
     }
     fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), lines.map((l) => `${l}\n`).join(''));
     if (opts.finalized !== false) fs.writeFileSync(path.join(turnDir, 'after.json'), JSON.stringify({ files: after }));
@@ -364,32 +368,50 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
   }
 
   it('counts a change only when a Dev Chat turn recorded one', () => {
-    expect(devChatChangeInEffect(path.join(tempDir('cc-down-none-'), 'missing'), tempDir('cc-down-guard-'), serverTree)).toBe(false);
+    const codeRoot = tempDir('cc-down-code-');
+    expect(devChatChangeInEffect(path.join(tempDir('cc-down-none-'), 'missing'), tempDir('cc-down-guard-'), serverTree, codeRoot)).toBe(false);
     const none = recorded('devchat', []);
-    expect(devChatChangeInEffect(none.sessionsDir, none.guardRoot, serverTree)).toBe(false);
+    expect(devChatChangeInEffect(none.sessionsDir, none.guardRoot, serverTree, codeRoot)).toBe(false);
     const evaluation = recorded('oferta', ['custom/control-center/server/app.ts']);
-    expect(devChatChangeInEffect(evaluation.sessionsDir, evaluation.guardRoot, serverTree)).toBe(false);
+    expect(devChatChangeInEffect(evaluation.sessionsDir, evaluation.guardRoot, serverTree, codeRoot)).toBe(false);
     const t = finishedTurn(['custom/control-center/server/app.ts']);
-    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree)).toBe(true);
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
   });
 
   it('a reverted turn is no longer blamed: the page falls back to the neutral wording (SW2-claude-05 review)', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts', 'cv.md']);
     revertTurn(t.sessionDir, t.meta, 1, { codeRoot: t.root, dataRoot: t.root });
     expect(fs.readFileSync(path.join(t.root, 'custom/control-center/server/app.ts'), 'utf8')).toBe('before\n');
-    const changed = devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree);
+    const changed = devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root);
     expect(changed).toBe(false);
     expect(renderDownPage(failed, { devChatChanged: changed })).not.toMatch(/Dev Chat/);
   });
 
   it('a turn that changed only files the server never loads (cv.md, web/) is not blamed (SW2-claude-05 review)', () => {
     const t = finishedTurn(['cv.md', 'custom/control-center/web/src/main.tsx']);
-    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree)).toBe(false);
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(false);
+  });
+
+  it('a server/ edit recorded as a data-root write, because the data root is the code root under another spelling, is still blamed (SW2-claude-05 review)', () => {
+    const t = finishedTurn(['custom/control-center/server/app.ts'], {
+      recordedUnder: (root) => {
+        const link = path.join(tempDir('cc-down-link-'), 'root');
+        fs.symlinkSync(root, link);
+        return link;
+      },
+      label: 'data',
+    });
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
+  });
+
+  it('a write in a separate data root is never the server\'s, whatever its relative path looks like', () => {
+    const t = finishedTurn(['custom/control-center/server/app.ts'], { recordedUnder: () => fs.realpathSync(tempDir('cc-down-data-')), label: 'data' });
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(false);
   });
 
   it('a turn that never finished (no post-turn record) cannot be ruled out, so it is still blamed', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts'], { finalized: false });
-    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree)).toBe(true);
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
   });
 
   it('without a Dev Chat change, a signed-in viewer sees the startup error (escaped, once) and no blame on a change', () => {
