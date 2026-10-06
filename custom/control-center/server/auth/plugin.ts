@@ -42,12 +42,14 @@ export function hasSession(req: FastifyRequest, cfg: ServerConfig): boolean {
 }
 
 function cspFor(cfg: ServerConfig): string {
-  // Vite's dev client injects an inline React refresh preamble and style tags;
-  // the built client needs neither, so production stays at default-src 'self'.
+  // Vite's dev client injects an inline React refresh preamble and style tags.
   if (cfg.client === 'vite') {
     return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'";
   }
-  return "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'";
+  // The built client runs no inline script, but its libraries add <style> elements at runtime (sonner's toast styles,
+  // the dialogs' scroll lock) and the bundle inlines its smallest font files as data: URIs; without these the toasts
+  // render as a bare list in the page and text falls back to another font.
+  return "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'none'";
 }
 
 export async function authPlugin(app: FastifyInstance, cfg: ServerConfig): Promise<void> {

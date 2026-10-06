@@ -121,14 +121,20 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   }
 
   if (cfg.client === 'dist') {
-    const dist = path.join(PACKAGE_ROOT, 'dist');
+    const dist = cfg.distDir ?? path.join(PACKAGE_ROOT, 'dist');
     if (!fs.existsSync(path.join(dist, 'index.html'))) {
       throw new Error(`dist/index.html missing at ${dist}: run \`npm --prefix custom/control-center run build\` first`);
     }
     const fastifyStatic = (await import('@fastify/static')).default;
-    await app.register(fastifyStatic, { root: dist, wildcard: false, index: false });
+    // wildcard: files are looked up per request, so a rebuild while the server runs (new hashed assets, the old ones
+    // deleted) is served as it is now, not as dist/ was at startup.
+    // Only file paths (with an extension) are files: a page route or / falls through to the app below.
+    await app.register(fastifyStatic, { root: dist, wildcard: true, index: false, allowedPath: (pathName) => /\.[a-z0-9]+$/i.test(pathName) });
     app.setNotFoundHandler(async (req, reply) => {
-      if (req.method !== 'GET' || (req.raw.url ?? '').startsWith('/api/')) {
+      const pathname = (req.raw.url ?? '/').split(/[?#]/)[0]!;
+      // An asset that is not there is a 404: index.html in its place is refused as a module script and blanks the page.
+      const asset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(pathname.slice(pathname.lastIndexOf('/') + 1));
+      if (req.method !== 'GET' || pathname.startsWith('/api/') || asset) {
         return reply.code(404).send({ error: 'not found' });
       }
       return reply.type('text/html').send(fs.readFileSync(path.join(dist, 'index.html')));

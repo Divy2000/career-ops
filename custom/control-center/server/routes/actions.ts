@@ -32,7 +32,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });
     const cmd = action.build(parsed.data, ctx);
     if (!action.sync) {
-      const meta = runner.start({
+      const startRequest = {
         actionId: action.id,
         label: action.label,
         cost: action.cost,
@@ -42,7 +42,16 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
         cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
         env: { ...coreEnv, ...cmd.env },
         tmpInputs: ctx.tmpInputs,
-      });
+      };
+      if (action.single) {
+        const started = runner.startUnlessPending(startRequest);
+        if ('pending' in started) {
+          removeTmpInputs(cfg.dataRoot, ctx.tmpInputs);
+          return reply.code(409).send({ error: action.single(started.pending) });
+        }
+        return reply.code(202).send({ runId: started.id });
+      }
+      const meta = runner.start(startRequest);
       return reply.code(202).send({ runId: meta.id });
     }
     let r: Awaited<ReturnType<Exec>>;
