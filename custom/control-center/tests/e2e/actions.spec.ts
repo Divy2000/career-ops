@@ -127,12 +127,12 @@ test.describe('Command palette confirm gate (SW2-tests-06)', () => {
     await expect(confirm).toContainText('Rolls back the last applied update. Continue?');
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     await expect(confirm).toHaveCount(0);
-    await page.waitForTimeout(300);
-    expect(sent).toEqual([]);
     await pick();
     await confirm.getByRole('button', { name: 'Run' }).click();
+    // The run's own answer (it opens Runs) comes after any request Cancel could have made, so one request here means
+    // Cancel posted nothing and Run posted once (SW3-tests-15).
+    await expect(page).toHaveURL(/\/runs$/);
     await expect.poll(() => sent.length).toBe(1);
-    await page.waitForTimeout(300);
     expect(sent).toEqual([{ params: {}, confirmed: true }]);
     await page.unrouteAll();
   });

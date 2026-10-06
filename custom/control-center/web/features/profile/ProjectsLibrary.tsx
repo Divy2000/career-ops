@@ -388,6 +388,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const [text, setText] = useState('');
   // A preview remembers the source it was made for, so Append never pairs it with a newer one.
   const [previewed, setPreviewed] = useState<{ result: ConvertResult; source: string | null } | null>(null);
+  useUnsaved('the projects import', text.trim() !== '' || previewed !== null);
   const preview = previewed?.result ?? null;
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);

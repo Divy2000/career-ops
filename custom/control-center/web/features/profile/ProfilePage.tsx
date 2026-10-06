@@ -127,6 +127,9 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [draft, setDraft] = useState('');
+  // What Save as cv.md last wrote: that draft is saved, so leaving with it asks nothing.
+  const [savedText, setSavedText] = useState<string | null>(null);
+  useUnsaved('the CV import', draft.trim() !== '' && draft !== savedText);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -192,6 +195,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       return;
     }
     setConflict(null);
+    setSavedText(draft);
     setNote('cv.md saved. Run a network scan from Discover to find matches.');
     await qc.invalidateQueries({ queryKey: ['config'] });
     onImported?.();

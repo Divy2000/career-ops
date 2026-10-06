@@ -7,6 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, StatusPill, Tabs, TableScroll } from '../../components/ui';
 import { ModeLauncher } from '../../components/ModeLauncher';
+import { useConfirm } from '../../components/ConfirmDialog';
 import type { ContactsRead, FollowupCadenceEntry, FollowupEntry } from '@shared/api';
 import { localDate, localDatePlusDays } from '@shared/local-date';
 
@@ -82,8 +83,11 @@ function CadenceTab() {
   const [logging, setLogging] = useState<number | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const confirm = useConfirm();
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['followups'] }), qc.invalidateQueries({ queryKey: ['tracker'] })]);
   const pin = async (appNum: number, date: string | null) => {
+    // Clearing removes a date the user chose: it asks first, as a delete does.
+    if (!date && !(await confirm({ title: 'Clear the pinned follow-up date?', body: 'The next follow-up goes back to the cadence date. data/follow-ups.md is rewritten.', confirmLabel: 'Clear pin', danger: true }))) return;
     try {
       if (date) await apiSend('POST', '/api/followups/override', { appNum, date });
       else await apiSend('DELETE', '/api/followups/override', { appNum });
@@ -94,6 +98,7 @@ function CadenceTab() {
     }
   };
   const remove = async (num: number) => {
+    if (!(await confirm({ title: `Delete follow-up #${num}?`, body: 'The entry is removed from data/follow-ups.md.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await apiSend('DELETE', '/api/followups/log', { num });
       setMessage(`Deleted follow-up #${num}`);

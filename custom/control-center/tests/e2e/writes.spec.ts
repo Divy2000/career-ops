@@ -95,6 +95,50 @@ test.describe('deterministic writes from the pages', () => {
     expect(detail.timeline.followups.find((f: { num: number | null }) => f.num === logged)).toMatchObject({ appNum: 1, notes: 'e2e note' });
   });
 
+  test('Delete follow-up and Clear pin ask first: Cancel changes nothing, confirming removes only that entry and the pin (SW3-tests-09)', async ({ page }) => {
+    const file = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'follow-ups.md');
+    await page.goto('/followups');
+    // Two follow-ups for Acme and a pin, so the delete can be seen to remove only its own entry.
+    const logged: number[] = [];
+    for (const note of ['first of two', 'second of two']) {
+      await page.getByRole('button', { name: 'Log follow-up for Acme Robotics' }).click();
+      await page.getByLabel('Notes').fill(note);
+      await page.getByRole('button', { name: 'Save follow-up' }).click();
+      // A number not read before: the second save's message replaces the first one's.
+      await expect(page.getByRole('status')).toHaveText(new RegExp(`^Logged follow-up #(?!${logged.join('|') || 'x'}\\b)\\d+ for Acme Robotics$`));
+      logged.push(Number((await page.getByRole('status').textContent())!.match(/#(\d+)/)![1]));
+    }
+    expect(new Set(logged).size).toBe(2);
+    await page.getByRole('button', { name: 'Pin next follow-up for Acme Robotics in 7 days' }).click();
+    await expect(page.getByRole('status')).toHaveText(/pinned to/);
+    const before = fs.readFileSync(file, 'utf8');
+    const [keep, drop] = logged as [number, number];
+    await page.getByRole('button', { name: 'Show history for Acme Robotics' }).click();
+    const del = page.getByRole('button', { name: `Delete follow-up ${drop}` });
+    await del.click();
+    const ask = page.getByRole('dialog', { name: `Delete follow-up #${drop}?` });
+    await ask.getByRole('button', { name: 'Cancel' }).click();
+    await expect(ask).toHaveCount(0);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    await del.click();
+    await ask.getByRole('button', { name: 'Delete' }).click();
+    await expect(page.getByRole('status')).toHaveText(`Deleted follow-up #${drop}`);
+    const after = (await (await page.request.get('/api/tracker/1')).json()).timeline;
+    const nums = after.followups.map((f: { num: number | null }) => f.num);
+    expect(nums).toContain(keep);
+    expect(nums).not.toContain(drop);
+    // Clear pin asks too.
+    const pinned = fs.readFileSync(file, 'utf8');
+    await page.getByRole('button', { name: 'Clear pinned date for Acme Robotics' }).click();
+    const askPin = page.getByRole('dialog', { name: 'Clear the pinned follow-up date?' });
+    await askPin.getByRole('button', { name: 'Cancel' }).click();
+    expect(fs.readFileSync(file, 'utf8')).toBe(pinned);
+    await page.getByRole('button', { name: 'Clear pinned date for Acme Robotics' }).click();
+    await askPin.getByRole('button', { name: 'Clear pin' }).click();
+    await expect(page.getByRole('status')).toHaveText('Pin cleared');
+    expect((await (await page.request.get('/api/tracker/1')).json()).timeline.pin).toBeNull();
+  });
+
   test('Application Documents tab lists PDFs with Re-render and the danger zone previews a delete', async ({ page }) => {
     await page.goto('/tracker/1');
     await page.getByRole('tab', { name: 'Documents' }).click();

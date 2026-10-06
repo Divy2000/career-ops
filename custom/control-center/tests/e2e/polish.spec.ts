@@ -189,6 +189,12 @@ test.describe('P3 editors and P6 polish', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Interviews' })).toBeVisible();
     await expect(page.locator('#story-heading')).toHaveText('Story bank');
     await expect(page.getByText('interview-prep/acme-robotics-prep.md')).toBeVisible();
+    // The story bank in the checker's shape gives the provenance tab a claim cv.md backs and one marked cannot-confirm (SW3-tests-11).
+    const provenance = page.locator('.card', { has: page.getByRole('heading', { name: 'Story provenance (story-provenance-check.mjs)' }) });
+    await expect(provenance.getByText('existing: 2', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(provenance.getByText('userCannotConfirm: 1', { exact: true })).toBeVisible();
+    await expect(provenance.getByRole('cell', { name: 'Moved a batch pipeline to streaming' })).toBeVisible();
+    await expect(provenance.getByRole('cell', { name: '15-person' })).toBeVisible();
     await axeClean(page);
     await page.goto('/followups?tab=contacts');
     await expect(page.getByRole('cell', { name: 'Pat Example' })).toBeVisible();

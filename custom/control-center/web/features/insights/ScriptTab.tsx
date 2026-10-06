@@ -6,6 +6,7 @@ import { DataState, Empty, Pill } from '../../components/ui';
 import { emptyReason, failedEmptyReason } from '../../lib/insightEmpty';
 import type { InsightRead } from '@shared/api';
 import { formatLocalMinute } from '../../lib/time';
+import { describeError } from '../../lib/actions';
 
 export const useInsight = (script: string) => useQuery({ queryKey: ['insights', 'script', script], queryFn: () => apiGet<InsightRead>(`/api/insights/${script}`) });
 
@@ -76,12 +77,17 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
   const qc = useQueryClient();
   const q = useInsight(script);
   const [busy, setBusy] = useState(false);
+  // A failed Recompute (a server reload, an unwritable cache) is said in the card; the last result stays.
+  const [failure, setFailure] = useState<string | null>(null);
   const empty = !q.data ? null : q.data.kind === 'ok' ? emptyReason(q.data.json) : failedEmptyReason(q.data.json);
   const recompute = async () => {
     setBusy(true);
+    setFailure(null);
     try {
       const fresh = await apiGet<InsightRead>(`/api/insights/${script}?recompute=1`);
       qc.setQueryData(['insights', 'script', script], fresh);
+    } catch (err) {
+      setFailure(`Could not recompute: ${describeError(err)}`);
     } finally {
       setBusy(false);
     }
@@ -103,6 +109,11 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
           </button>
         </div>
       </div>
+      {failure && (
+        <p role="alert" className="danger-text small">
+          {failure}
+        </p>
+      )}
       <DataState query={q}>
         {q.data?.kind === 'failed' && empty !== null && <Empty>{empty}</Empty>}
         {q.data?.kind === 'failed' && empty === null && (
