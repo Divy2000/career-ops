@@ -44,6 +44,9 @@ test.describe('AI sessions through the fake Claude', () => {
       const url = new URL(req.url());
       if (url.pathname === '/api/events' || /^\/api\/sessions\/[^/]+\/events$/.test(url.pathname)) streams.push(url.pathname);
     });
+    // The app stream opened at login, before this listener: load the page again so its one stream is seen opening.
+    await page.reload();
+    await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
     await page.getByLabel('Posting URL to evaluate').fill('https://jobs.example.com/synthetic/9');
     await page.getByRole('button', { name: 'Evaluate URL' }).click();
     await expect(page).toHaveURL(/\/sessions\/s/);
