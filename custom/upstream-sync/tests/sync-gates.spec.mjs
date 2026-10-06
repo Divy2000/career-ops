@@ -179,7 +179,7 @@ function suiteWorld({ exit = 0, output }) {
 }
 
 test('suite_failures records each failing test once, sorted, from a run that finished', () => {
-  const w = suiteWorld({ exit: 1, output: '  ✅ ok one\n  ❌ zeta broke\n  ❌ alpha broke\n  ❌ zeta broke\nResults: 1 passed, 3 failed' });
+  const w = suiteWorld({ exit: 1, output: '  ✅ ok one\n  ❌ zeta broke\n  ❌ alpha broke\n  ❌ zeta broke\n📊 Results: 1 passed, 3 failed, 0 warnings' });
   assert.equal(w.run(`suite_failures "${w.dir}/f.txt"`).status, 0);
   assert.equal(w.read('f.txt'), '❌ alpha broke\n❌ zeta broke\n');
 });
@@ -188,6 +188,25 @@ test('suite_failures records a run with no Results summary as a crash, never as 
   const w = suiteWorld({ exit: 3, output: 'TypeError: boom' });
   w.run(`suite_failures "${w.dir}/f.txt"`);
   assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 3, no Results summary; see .*f\.txt\.raw\)$/m);
+});
+
+test('suite_failures records a crash after a failing child suite, though the child\'s own Results line was echoed (SW3-tests-02)', () => {
+  // test-all copies a failing child suite's stdout into its failure message, child summary line included.
+  const w = suiteWorld({ exit: 1, output: '  ❌ tests/agent-inbox-tests.mjs failed:\n      Results: 30 passed, 1 failed\nnode:internal/process: TypeError: boom' });
+  w.run(`suite_failures "${w.dir}/f.txt"`);
+  assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 1, no Results summary; see .*\)$/m);
+});
+
+test('suite_failures records a crash when the suite exits non-zero with no failure line, summary or not (SW3-tests-02)', () => {
+  const w = suiteWorld({ exit: 1, output: '  ✅ ok one\n📊 Results: 1 passed, 0 failed, 0 warnings' });
+  w.run(`suite_failures "${w.dir}/f.txt"`);
+  assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 1, /m);
+});
+
+test('a clean run of the suite records no failures', () => {
+  const w = suiteWorld({ exit: 0, output: '  ✅ ok one\n📊 Results: 1 passed, 0 failed, 0 warnings' });
+  assert.equal(w.run(`suite_failures "${w.dir}/f.txt"`).status, 0);
+  assert.equal(w.read('f.txt'), '');
 });
 
 test('new_failures counts only failures that are not in the baseline text, and a crash after the merge is one', () => {
@@ -242,8 +261,8 @@ function baselineGate({ before, after, between }) {
 }
 
 test('a baseline file deleted or edited after it was read cannot hide a new upstream-suite failure', () => {
-  const before = '  ❌ alpha broke\nResults: 1 failed';
-  const after = '  ❌ alpha broke\n  ❌ beta broke\nResults: 2 failed';
+  const before = '  ❌ alpha broke\n📊 Results: 9 passed, 1 failed, 0 warnings';
+  const after = '  ❌ alpha broke\n  ❌ beta broke\n📊 Results: 9 passed, 2 failed, 0 warnings';
   const deleted = baselineGate({ before, after, between: (file) => rmSync(file) });
   assert.equal(deleted.status, 0, deleted.stderr);
   assert.equal(deleted.stdout, '❌ beta broke');

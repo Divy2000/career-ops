@@ -227,9 +227,15 @@ suite_failures() {
   local out="$1.raw"
   node test-all.mjs --quick > "$out" 2>&1
   local code=$?
+  # Only test-all's own closing line counts as a summary: a failing child suite's stdout, echoed into its failure
+  # message, carries an indented "Results:" of its own. A non-zero exit with no failure line is a crash too.
   {
     grep -E '^\s*❌' "$out" | sed -E 's/^[[:space:]]+//'
-    grep -q 'Results:' "$out" || echo "SUITE CRASHED (exit $code, no Results summary; see $out)"
+    if ! grep -qE '^📊 Results: [0-9]+ passed' "$out"; then
+      echo "SUITE CRASHED (exit $code, no Results summary; see $out)"
+    elif [ "$code" != 0 ] && ! grep -qE '^\s*❌' "$out"; then
+      echo "SUITE CRASHED (exit $code, but no failing test listed; see $out)"
+    fi
   } | sort -u > "$1"
 }
 
