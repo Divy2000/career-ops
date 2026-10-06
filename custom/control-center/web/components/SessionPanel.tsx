@@ -111,7 +111,7 @@ export interface SessionPanelProps {
   sessionId?: string | null;
   /** Called with every envelope the session emits (kind, payload). */
   onEnvelope?: (kind: string, payload: unknown, turn: number) => void;
-  /** Called on every status change, running included, so a host can tell a later turn is live. */
+  /** Called on every status change, running included, so a host can tell a later turn is live; 'gone' once the server has no such session. */
   onStatus?: (status: string, reason: string | null) => void;
   /** Called when the panel starts or forks a session. */
   onSessionId?: (id: string) => void;
@@ -123,6 +123,8 @@ export interface SessionPanelProps {
   blacklistAllowed?: boolean;
   /** Called once the server accepted a start, a turn or a fork sent with this panel's props (blacklistAllowed included). */
   onSent?: () => void;
+  /** Called when a start is refused or the session fails to start, so a host waiting for its id stops waiting. */
+  onStartFailed?: () => void;
 }
 
 /** Prompt box plus live session for one mode. Host pages embed it; the Sessions page shows the same thing standalone. */
@@ -145,8 +147,9 @@ export function SessionPanel(props: SessionPanelProps) {
     seen.current = transcript.envelopes.length;
   }, [transcript.envelopes, onEnvelope]);
   useEffect(() => {
-    onStatus?.(transcript.status, transcript.reason);
-  }, [transcript.status, transcript.reason, onStatus]);
+    // A session the server no longer has reports 'gone', so a host waiting on it does not wait forever.
+    onStatus?.(gone ? 'gone' : transcript.status, gone ? null : transcript.reason);
+  }, [gone, transcript.status, transcript.reason, onStatus]);
   const start = async (text: string) => {
     setBusy(true);
     setError(null);
@@ -156,9 +159,13 @@ export function SessionPanel(props: SessionPanelProps) {
       seen.current = 0;
       setSessionId(m.id);
       props.onSessionId?.(m.id);
-      if (m.status === 'error') setError(m.error ?? 'session failed to start');
+      if (m.status === 'error') {
+        setError(m.error ?? 'session failed to start');
+        props.onStartFailed?.();
+      }
     } catch (err) {
       setError(describeError(err));
+      props.onStartFailed?.();
     } finally {
       setBusy(false);
     }

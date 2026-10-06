@@ -6,6 +6,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { until } from '../helpers/until';
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const navigations = vi.hoisted(() => [] as unknown[]);
@@ -84,4 +86,31 @@ describe('Danger zone delete', () => {
     expect(navigations).toEqual([]);
     expect(host.querySelector('[role="alert"]')!.textContent).toBe('tracker is locked by another writer');
   });
+
+  it('leaves for the tracker at once and never refetches the deleted row, which would 404 and stall on retries (SW5-web-a-04)', async () => {
+    const { DangerZone } = await import('@web/features/tracker/DangerZone');
+    const { useQuery } = await import('@tanstack/react-query');
+    // The application page around the danger zone: the row's detail and its documents, as the real page holds them.
+    const reads: string[] = [];
+    const read = (key: string) => async () => {
+      reads.push(key);
+      return { ok: true };
+    };
+    function Page() {
+      useQuery({ queryKey: ['tracker', 'row', '4'], queryFn: read('row') });
+      useQuery({ queryKey: ['tracker', 'documents', 4], queryFn: read('documents') });
+      return createElement(DangerZone, { n: 4 });
+    }
+    // Real retry timing (main.tsx): a refetch of the deleted row that fails would wait a second before giving up.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(Page))));
+    await until(() => reads.length === 2, 'the page queries');
+    await click('Preview delete (dry run)');
+    reads.length = 0;
+    await click('Confirm delete #4');
+    expect(navigations).toEqual([{ to: '/tracker' }]);
+    expect(reads).toEqual([]);
+    expect(qc.getQueryState(['tracker', 'row', '4'])).toBeUndefined();
+  });
 });
+

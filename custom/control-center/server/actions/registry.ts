@@ -339,7 +339,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: false,
     // generate-pdf.mjs files the PDF in pdf-index.tsv under --report, so it must be the row's report, never the row number.
-    params: z.object({ row: positive, report: positive, html: outputPath(/\.html$/i, 'an .html file'), pdf: outputPath(/\.pdf$/i, 'a .pdf file'), format: z.enum(['letter', 'a4']).default('letter') }),
+    params: z.object({ row: positive, report: positive, html: outputPath(/\.html$/i, 'an .html file'), pdf: outputPath(/\.pdf$/i, 'a .pdf file'), format: z.enum(['letter', 'a4']).optional() }),
     check: async (p, ctx) => {
       const tracker = await readTracker(ctx.codeRoot, ctx.dataRoot);
       const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === p.row) : undefined;
@@ -348,7 +348,8 @@ export const ACTIONS: ActionDef[] = [
       if (row.report !== p.report) return `Row #${p.row} is filed under report ${row.report}, not report ${p.report}. Reload the Documents tab and try again.`;
       return rerenderProblem(readPdfIndex(ctx.dataRoot), p.report, p.html, p.pdf);
     },
-    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), `--format=${p.format}`, `--report=${p.report}`]),
+    // No format: generate-pdf.mjs takes the profile's page_format, which an explicit --format would override.
+    build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), ...(p.format ? [`--format=${p.format}`] : []), `--report=${p.report}`]),
   }),
   define({
     id: 'projects.rank',

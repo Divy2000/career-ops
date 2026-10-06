@@ -70,6 +70,19 @@ for (const [name, viewport] of [
       for (const c of gaps.columns) for (const g of c) expect(g).toBe(SPACE_4);
     });
 
+    test('Sponsorship: the AI policy pass card and the tab row below it are one spacing step apart', async ({ page }) => {
+      await page.goto('/sponsorship');
+      await page.getByRole('button', { name: /Run AI policy pass/ }).click();
+      await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
+      await waitForAnimations(page);
+      const gap = await page.evaluate(() => {
+        const tabs = document.querySelector('.shell__main section > .tabs')!;
+        const card = tabs.previousElementSibling!;
+        return tabs.getBoundingClientRect().top - card.getBoundingClientRect().bottom;
+      });
+      expect(gap).toBe(SPACE_4);
+    });
+
     test('no page stacks boxed blocks edge to edge', async ({ page }) => {
       const touching: Record<string, string[]> = {};
       for (const url of ROUTES) {

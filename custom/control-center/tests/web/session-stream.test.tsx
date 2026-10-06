@@ -91,6 +91,15 @@ describe('session events over the app event stream', () => {
   const text = (id: string) => host.querySelector(`output[aria-label="${id}"]`)?.textContent ?? '';
   const stream = () => FakeEventSource.all[0]!;
 
+  it('a session with a very long event log still opens (SW5-web-a-02)', async () => {
+    // Past the engine's argument limit, spreading every stored seq into Math.max throws, so the history never loaded.
+    const many = Array.from({ length: 250_000 }, (_, i) => stored(i + 3, { type: 'session.init', model: 'fake-model' }));
+    history['s-4'] = [stored(1, { type: 'status', status: 'running', turn: 1 }), stored(2, { type: 'text.done', text: 'long one' }), ...many];
+    status['s-4'] = 'done';
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Page, { ids: ['s-4'] }))));
+    await until(() => text('s-4') === 'long one' && host.querySelector('output[aria-label="s-4"]')?.getAttribute('data-status') === 'done', 'the long session to load');
+  });
+
   it('three session panels and the live invalidation share one connection, the app stream', () => {
     expect(FakeEventSource.all.map((es) => es.url)).toEqual(['/api/events']);
   });

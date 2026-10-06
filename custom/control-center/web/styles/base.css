@@ -251,6 +251,10 @@ input[type='checkbox'] {
 .shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) + :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) {
   margin-top: var(--space-4);
 }
+/* A tab row after a card (a session panel above the page tabs) keeps the same step. */
+.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) + .tabs {
+  margin-top: var(--space-4);
+}
 .row {
   display: flex;
   align-items: center;

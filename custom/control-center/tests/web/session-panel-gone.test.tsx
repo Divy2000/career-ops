@@ -52,4 +52,21 @@ describe('a session panel on a session that no longer exists', () => {
     expect(host.querySelector('input[aria-label="Reply to the session"]')).toBeNull();
     expect(host.textContent).not.toMatch(/queued/i);
   });
+
+  it('tells its host the session is gone, so a host waiting on it stops waiting (SW5-web-b-01)', async () => {
+    const statuses: string[] = [];
+    const { SessionPanel } = await import('@web/components/SessionPanel');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(SessionPanel, { mode: 'immigration-policy', sessionId: 'gone-1', onStatus: (s: string) => void statuses.push(s) }))));
+    await until(() => statuses.includes('gone'), 'the gone status');
+  });
+
+  it('tells its host when a start is refused, so the host does not wait for a session that never comes (SW5-web-b-01)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"Claude is not available"}', { status: 503, headers: { 'content-type': 'application/json' } })));
+    let failed = 0;
+    const { SessionPanel } = await import('@web/components/SessionPanel');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(SessionPanel, { mode: 'immigration-policy', autoStart: true, initialPrompt: 'Run the pass.', onStartFailed: () => void failed++ }))));
+    await until(() => failed === 1, 'the start failure');
+    expect(host.textContent).toContain('Claude is not available');
+  });
 });
+

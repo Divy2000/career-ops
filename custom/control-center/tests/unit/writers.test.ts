@@ -198,6 +198,9 @@ describe('action registry covers section 3.3', () => {
     expect(findAction('followups.replyPaste')!.build({ subject: 's', from: 'f', body: 'b' }, ctx).args).toContain('--file');
     const render = findAction('docs.renderPdf')!.build({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf', format: 'a4' }, ctx);
     expect(render.args.slice(1)).toEqual([path.join(ctx.dataRoot, 'output/a.html'), path.join(ctx.dataRoot, 'output/a.pdf'), '--format=a4', '--report=1']);
+    // With no format, generate-pdf.mjs takes the profile's page_format; an explicit --format would override it (SW5-web-a-01).
+    const unformatted = findAction('docs.renderPdf')!;
+    expect(unformatted.build(unformatted.params.parse({ row: 9, report: 1, html: 'output/a.html', pdf: 'output/a.pdf' }), ctx).args.slice(1)).toEqual([path.join(ctx.dataRoot, 'output/a.html'), path.join(ctx.dataRoot, 'output/a.pdf'), '--report=1']);
     const bundle = 'output/001-acme-robotics-backend/cv/tailored/v002/cv';
     expect(findAction('docs.renderPdf')!.params.safeParse({ row: 1, report: 1, html: `${bundle}.html`, pdf: `${bundle}.pdf` }).success).toBe(true);
     expect(findAction('docs.renderPdf')!.params.safeParse({ row: 1, report: 1, html: 'output/../cv.html', pdf: `${bundle}.pdf` }).success).toBe(false);

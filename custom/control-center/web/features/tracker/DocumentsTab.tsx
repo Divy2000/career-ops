@@ -61,7 +61,7 @@ export function DocumentsTab({ n }: { n: number }) {
                               {f.html && f.rerenderBlock && <span className="faint small">{f.rerenderBlock}</span>}
                               {f.html && !f.rerenderBlock && !nameAccepted && <span className="faint small">Re-render can't take {f.html}: {nameProblem}. Rename it and its PDF in output/.</span>}
                               {f.html && !f.rerenderBlock && nameAccepted && (
-                                <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
+                                <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, ...(f.format === 'a4' || f.format === 'letter' ? { format: f.format } : {}) }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
                                   Re-render from HTML
                                 </ActionButton>
                               )}

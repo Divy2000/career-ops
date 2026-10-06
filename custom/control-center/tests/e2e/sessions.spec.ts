@@ -205,6 +205,17 @@ test.describe('AI sessions through the fake Claude', () => {
     expect(pipeline.rows.some((r: { url: string }) => r.url === 'https://jobs.example.com/synthetic/900')).toBe(true);
   });
 
+  test('leaving Sponsorship and coming back shows the AI policy pass again (SW5-web-b-01)', async ({ page }) => {
+    await page.goto('/sponsorship');
+    await page.getByRole('button', { name: /Run AI policy pass/ }).click();
+    await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Runs & Schedule' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: /Runs/ })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Sponsorship' }).click();
+    await expect(page.getByText('Policy pass complete')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Run AI policy pass/ })).toBeEnabled();
+  });
+
   test('Sponsorship AI policy pass writes inside its scope and the digest refreshes', async ({ page }) => {
     await page.goto('/sponsorship');
     await page.getByRole('button', { name: /Run AI policy pass/ }).click();
