@@ -1118,6 +1118,100 @@ describe('read confinement (BUG-06)', () => {
     expect(t.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
   });
 
+  /** A server of its own on a fresh data root, and how to wait for one of its sessions to settle. */
+  async function ownApp() {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const settleOn2 = async (id: string) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const meta = (await call(app, 'GET', `/api/sessions/${id}`)).json().meta as { status: string; error?: string | null };
+        if (TERMINAL.includes(meta.status)) return meta;
+        if (Date.now() > deadline) throw new Error(`session ${id} still ${meta.status}`);
+        await wait(100);
+      }
+    };
+    return { app, settle: settleOn2 };
+  }
+
+  it('a turn that leaves a directory named like a report (reports/099-acme.md/jd.txt) settles, and the server keeps running (SW6-claude-02)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    try {
+      const scenario = scenarioFile({ events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/099-acme.md/jd.txt', content: 'Senior Engineer at Acme.\n' } }, result('Saved a copy of the JD.', 0.02)] });
+      const { id } = await withScenario(scenario, async () => (await call(app, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate https://acme.example/1' })).json());
+      const meta = await settleThere(id);
+      expect(meta.status).toBe('awaiting_user');
+      expect(app.sessions.store.readEvents(id).some((e) => e.event.type === 'evaluation')).toBe(false);
+      expect((await call(app, 'GET', '/healthz')).statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // chmod does not stop root, so as root there is no EACCES to provoke (SW4-tests-25).
+  it.skipIf(process.getuid?.() === 0)('a turn whose finalize fails (the reports folder unreadable when it ends) ends in error saying why, and the server keeps running (SW6-claude-02)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    const reports = path.join(app.cfg.dataRoot, 'reports');
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      // After the turn took its snapshot of reports/, before it ends.
+      await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      fs.chmodSync(reports, 0o000);
+      const meta = await settleThere(id);
+      fs.chmodSync(reports, 0o755);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/the turn could not be finalized: EACCES/) });
+      expect(app.sessions.read(id)!.turns[0]!.endedAt).not.toBeNull();
+      // The usage the turn reported was parsed before finalize failed: it is recorded all the same (SW6-claude-02 review).
+      expect(app.sessions.read(id)!.turns[0]).toMatchObject({ costUsd: 0.07, tokens: 15 });
+      expect(app.sessions.read(id)!.totals).toEqual({ costUsd: 0.07, tokens: 15 });
+      expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'error', turn: 1 });
+      expect((await call(app, 'GET', '/healthz')).statusCode).toBe(200);
+    } finally {
+      fs.chmodSync(reports, 0o755);
+      await app.close();
+    }
+  });
+
+  /** Makes the session's turn 1 post-turn record unwritable (a folder where after.json goes), so its finalize throws. */
+  const breakFinalize = (app: TestApp, id: string) => {
+    const afterJson = path.join(app.sessions.store.guardDirOf(id), 'turns', '1', 'after.json');
+    fs.mkdirSync(path.join(afterJson, 'in-the-way'), { recursive: true });
+  };
+
+  it('a turn holding a reserved report number whose finalize fails releases the reservation: the number and its RESERVED file go (SW6-claude-02 review)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    try {
+      const sentinel = path.join(app.cfg.dataRoot, 'reports', '061-RESERVED.md');
+      fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
+      const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 61 }));
+      breakFinalize(app, id);
+      const meta = await settleThere(id);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/the turn could not be finalized/) });
+      expect(app.sessions.read(id)!.reportNum).toBeNull();
+      expect(fs.existsSync(sentinel)).toBe(false);
+      expect(app.sessions.read(id)!.turns[0]).toMatchObject({ costUsd: 0.07, tokens: 15 });
+      expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'error', reason: expect.stringMatching(/reservation for report number 61 was released/) });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a cancelled turn whose finalize fails stays cancelled, with why it could not be finalized (SW6-claude-02 review)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      breakFinalize(app, id);
+      await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      expect((await call(app, 'POST', `/api/sessions/${id}/cancel`, {})).statusCode).toBe(200);
+      await until(() => app.sessions.read(id)!.turns[0]!.endedAt !== null);
+      const meta = await settleThere(id);
+      expect(meta.status).toBe('cancelled');
+      const last = app.sessions.store.readEvents(id).map((e) => e.event).at(-1);
+      expect(last).toMatchObject({ type: 'status', status: 'cancelled', turn: 1, reason: expect.stringMatching(/cancelled by the user; the turn could not be finalized/) });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('new sessions and forks carry the current policy version', () => {
     expect(SESSION_POLICY_VERSION).toBe(2);
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
