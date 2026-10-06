@@ -49,3 +49,32 @@ export function lastSession(key: string): LastSession {
   };
   return { read, write, forget: (id) => void (read() === id && write(null)), starting, setStarting };
 }
+
+const MODE_ID = /^[\w/-]{1,100}$/;
+
+export interface Launch {
+  mode: string;
+  id: string;
+}
+
+/** Every session a mode launcher started in this browser tab, newest first, so coming back shows each one again. */
+export function rememberedLaunches(key: string): { read(): Launch[]; write(launches: Launch[]): void } {
+  const read = (): Launch[] => {
+    try {
+      const parsed: unknown = JSON.parse(sessionStorage.getItem(key) ?? '[]');
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((l): l is Launch => typeof l?.mode === 'string' && MODE_ID.test(l.mode) && typeof l?.id === 'string' && SESSION_ID.test(l.id));
+    } catch {
+      return [];
+    }
+  };
+  const write = (launches: Launch[]): void => {
+    try {
+      if (launches.length) sessionStorage.setItem(key, JSON.stringify(launches));
+      else sessionStorage.removeItem(key);
+    } catch {
+      // storage refused: only the re-attaching is lost
+    }
+  };
+  return { read, write };
+}
