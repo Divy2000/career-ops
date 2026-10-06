@@ -1,6 +1,7 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useReducer } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend } from './api';
+import { onAppStreamOpen, subscribeAppEvents } from './sse';
 import type { SessionEvent, SessionMeta, StoredEvent } from '@shared/api';
 
 export interface ToolView {
@@ -112,106 +113,108 @@ export function reduceAll(events: StoredEvent[]): Transcript {
   return events.reduce((acc, e) => reduceEvent(acc, e.event), EMPTY_TRANSCRIPT);
 }
 
-const EVENT_TYPES = ['status', 'session.init', 'text.delta', 'text.done', 'tool.use', 'tool.result', 'envelope', 'envelope.invalid', 'permission.denied', 'files.changed', 'evaluation', 'turn.done', 'stderr', 'error'];
-
 interface StreamState {
   id: string | null;
   transcript: Transcript;
   meta: SessionMeta | null;
 }
-type StreamAction = { type: 'event'; id: string; event: SessionEvent } | { type: 'meta'; id: string; meta: SessionMeta };
+type StreamAction = { type: 'events'; id: string; events: SessionEvent[] } | { type: 'meta'; id: string; meta: SessionMeta };
 
 /** State is keyed by session id, so switching sessions resets without a setState inside the effect. */
 function streamReducer(state: StreamState, action: StreamAction): StreamState {
   const base: StreamState = state.id === action.id ? state : { id: action.id, transcript: EMPTY_TRANSCRIPT, meta: null };
   if (action.type === 'meta') return { ...base, meta: action.meta };
-  return { ...base, transcript: reduceEvent(base.transcript, action.event) };
+  return { ...base, transcript: action.events.reduce(reduceEvent, base.transcript) };
 }
 
-// Who to tell when a session starts another turn: its stream closed when the last turn ended (SW3-web-a-01).
-const turnListeners = new Map<string, Set<() => void>>();
-
-/** A new turn of `id` is running: a closed stream for it reopens. Called by sendTurn and by the live event bus. */
-export function sessionTurnStarted(id: string): void {
-  for (const fn of turnListeners.get(id) ?? []) fn();
-}
-
-function onSessionTurn(id: string, fn: () => void): () => void {
-  const set = turnListeners.get(id) ?? new Set();
-  set.add(fn);
-  turnListeners.set(id, set);
-  return () => {
-    set.delete(fn);
-    if (set.size === 0) turnListeners.delete(id);
-  };
-}
+/** A status that ends the turn, or an error event (a session can fail before its turn spawns: an error and no status). */
+const ends = (e: StoredEvent) => (e.event.type === 'status' && isTerminal(e.event.status)) || e.event.type === 'error';
 
 /**
- * Replays stored events, then follows the live SSE stream for one session. The stream closes once the session is over
- * and every stored event has arrived: each open stream holds one of the browser's 6 HTTP/1.1 connections to the app, so
- * finished sessions left open froze every fetch. A new turn reopens it; the replayed history is skipped by its seq.
+ * Replays a session's stored events, then follows it on the app's one event stream (session.event frames), applying
+ * each event once, in seq order. No session holds a connection of its own, so finished and running sessions alike cost
+ * nothing beyond the page's one stream. Frames that arrive while the stored events load wait for them; after the stream
+ * reconnects the stored events are read again, since the stream keeps no replay of what it sent while it was down.
+ * The meta decides how the session stands (one marked failed after a restart can end on a running event), but only a
+ * meta answer that counts the last turn start the stream delivered: an older one was asked before that turn started.
  */
 export function useSessionStream(id: string | null): { transcript: Transcript; meta: SessionMeta | null } {
   const [state, dispatch] = useReducer(streamReducer, { id: null, transcript: EMPTY_TRANSCRIPT, meta: null });
   const qc = useQueryClient();
-  const [opening, setOpening] = useState(0);
-  // What this stream delivered (its last seq, and the seq of the last turn start), and the last event a finished-session
-  // meta answer counted that the stream had not delivered yet: reaching it asks for the meta again.
-  const seen = useRef<{ id: string | null; seq: number; lastRunning: number; closeAt: number | null; open: boolean }>({ id: null, seq: 0, lastRunning: 0, closeAt: null, open: false });
   useEffect(() => {
     if (!id) return;
-    return onSessionTurn(id, () => {
-      if (!seen.current.open) setOpening((n) => n + 1);
-    });
-  }, [id]);
-  useEffect(() => {
-    if (!id) return;
-    if (seen.current.id !== id) seen.current = { id, seq: 0, lastRunning: 0, closeAt: null, open: false };
     let closed = false;
-    const es = new EventSource(`/api/sessions/${id}/events`);
-    seen.current.open = true;
-    const close = () => {
-      closed = true;
-      es.close();
-      if (seen.current.id === id) seen.current.open = false;
+    let last = 0;
+    let lastStart = 0;
+    let loading = true;
+    let pending: StoredEvent[] = [];
+    const apply = (events: StoredEvent[]) => {
+      const fresh = events.filter((e) => e.seq > last).sort((a, b) => a.seq - b.seq);
+      if (fresh.length === 0) return false;
+      last = fresh.at(-1)!.seq;
+      for (const e of fresh) if (e.event.type === 'status' && e.event.status === 'running') lastStart = e.seq;
+      dispatch({ type: 'events', id, events: fresh.map((e) => e.event) });
+      return fresh.some(ends);
     };
-    // A session that cannot be read (deleted, or never there) leaves meta null: the page that names the session says why.
-    // A session can end without a finished status event (an error before the turn spawned, or a restart that marked a
-    // running turn failed), so the meta decides, and only once the stream has every event it counted. A turn start
-    // (running) after those events is a new turn the meta did not know about: the stream stays open for it.
-    const loadMeta = () =>
-      void apiGet<{ meta?: SessionMeta; events?: StoredEvent[] }>(`/api/sessions/${id}`).then((r) => {
-        // No meta: not a session at all (another route under /api/sessions/, such as engine).
-        if (closed || !r.meta) return;
-        dispatch({ type: 'meta', id, meta: r.meta });
-        const c = seen.current;
-        const last = Math.max(0, ...(r.events ?? []).map((e) => e.seq));
-        c.closeAt = null;
-        if (!isTerminal(r.meta.status) || c.lastRunning > last) return;
-        if (c.seq >= last) close();
-        else c.closeAt = last;
-      }, () => undefined);
-    const onEvent = (raw: Event) => {
-      // The EventSource "error" event (connection drop) shares a name with our error event and carries no data.
-      if (!(raw instanceof MessageEvent) || typeof raw.data !== 'string') return;
-      const stored = JSON.parse(raw.data) as StoredEvent;
-      if (stored.seq <= seen.current.seq) return;
-      seen.current.seq = stored.seq;
-      if (stored.event.type === 'status' && stored.event.status === 'running') seen.current.lastRunning = stored.seq;
-      dispatch({ type: 'event', id, event: stored.event });
-      const ended = (stored.event.type === 'status' && isTerminal(stored.event.status)) || stored.event.type === 'error';
-      const caughtUp = seen.current.closeAt !== null && seen.current.seq >= seen.current.closeAt;
-      if (ended || caughtUp) {
-        seen.current.closeAt = null;
-        loadMeta();
+    const load = (): void =>
+      void apiGet<{ meta?: SessionMeta; events: StoredEvent[] }>(`/api/sessions/${id}`).then(
+        (r) => {
+          if (closed) return;
+          if (!r.meta) {
+            // Not a session at all (another route under /api/sessions/, such as engine): nothing to follow, and meta
+            // stays null, so the page that names the session says why.
+            closed = true;
+            return;
+          }
+          const meta = r.meta;
+          const counted = Math.max(0, ...r.events.map((e) => e.seq));
+          const waiting = pending;
+          pending = [];
+          const ended = apply([...r.events, ...waiting]);
+          if (lastStart > counted) {
+            // Asked before the stream delivered later events (a next turn started): its meta is stale, ask again.
+            load();
+            return;
+          }
+          dispatch({ type: 'meta', id, meta });
+          loading = false;
+          if (ended && waiting.length > 0) void qc.invalidateQueries({ queryKey: ['sessions'] });
+        },
+        () => {
+          loading = false;
+        },
+      );
+    const offEvents = subscribeAppEvents('session.event', (raw) => {
+      let frame: { sessionId?: string; stored?: StoredEvent };
+      try {
+        frame = JSON.parse(raw.data) as typeof frame;
+      } catch {
+        return;
       }
-      if (ended) void qc.invalidateQueries({ queryKey: ['sessions'] });
+      if (frame.sessionId !== id || !frame.stored) return;
+      if (loading) {
+        pending.push(frame.stored);
+        return;
+      }
+      if (apply([frame.stored])) {
+        // The turn ended: the meta says how (and its totals); the Sessions list moves on.
+        loading = true;
+        load();
+        void qc.invalidateQueries({ queryKey: ['sessions'] });
+      }
+    });
+    const offOpen = onAppStreamOpen((reconnect) => {
+      if (!reconnect || closed) return;
+      loading = true;
+      load();
+    });
+    load();
+    return () => {
+      closed = true;
+      offEvents();
+      offOpen();
     };
-    for (const type of EVENT_TYPES) es.addEventListener(type, onEvent);
-    es.onerror = () => undefined;
-    loadMeta();
-    return close;
-  }, [id, qc, opening]);
+  }, [id, qc]);
   return state.id === id ? { transcript: state.transcript, meta: state.meta } : { transcript: EMPTY_TRANSCRIPT, meta: null };
 }
 
@@ -238,9 +241,7 @@ export function startTailoredCvSession(n: string): Promise<SessionMeta> {
 }
 export async function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
-  const meta = await apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
-  sessionTurnStarted(id);
-  return meta;
+  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function forkSession(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);

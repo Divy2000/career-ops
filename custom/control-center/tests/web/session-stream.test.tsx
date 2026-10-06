@@ -1,191 +1,283 @@
-// A session's event stream holds one of the browser's 6 HTTP/1.1 connections to the app. Streams of finished sessions
-// (every ModeLauncher panel, the hidden Ask drawer) used to stay open, so a handful of them froze every fetch in every
-// tab. A stream now closes once its turn is over and reopens when a new turn starts (SW3-web-a-01).
+// Every session a page follows rides the app's one event stream: no EventSource per session, so five running
+// sessions plus the app stream no longer reach the browser's 6-per-host limit and stall every request (seed from
+// SW3-web-a-01). A panel replays the stored events, then applies session.event frames by seq, once each.
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendTurn, useSessionStream, type Transcript } from '@web/lib/sessions';
-import { useLiveInvalidation } from '@web/lib/sse';
 import { until } from '../helpers/until';
+import { sendTurn, useSessionStream, type Transcript } from '@web/lib/sessions';
+import type { SessionMeta } from '@shared/api';
+import { useLiveInvalidation } from '@web/lib/sse';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 class FakeEventSource {
   static all: FakeEventSource[] = [];
   closed = false;
-  private listeners = new Map<string, Array<(ev: MessageEvent) => void>>();
-  onerror: (() => void) | null = null;
+  private listeners = new Map<string, Set<(ev: MessageEvent | Event) => void>>();
   constructor(public url: string) {
     FakeEventSource.all.push(this);
   }
-  addEventListener(type: string, fn: (ev: MessageEvent) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  addEventListener(type: string, fn: (ev: MessageEvent | Event) => void) {
+    this.listeners.set(type, new Set([...(this.listeners.get(type) ?? []), fn]));
   }
-  emit(type: string, data: unknown) {
-    if (this.closed) return;
-    for (const fn of this.listeners.get(type) ?? []) fn(new MessageEvent(type, { data: JSON.stringify(data) }));
+  removeEventListener(type: string, fn: (ev: MessageEvent | Event) => void) {
+    this.listeners.get(type)?.delete(fn);
   }
   close() {
     this.closed = true;
   }
+  open() {
+    for (const fn of this.listeners.get('open') ?? []) fn(new Event('open'));
+  }
+  frame(sessionId: string, seq: number, event: Record<string, unknown>) {
+    if (this.closed) return;
+    const data = JSON.stringify({ sessionId, stored: { seq, ts: '2026-10-05T12:00:00.000Z', event }, ts: '2026-10-05T12:00:00.000Z' });
+    for (const fn of this.listeners.get('session.event') ?? []) fn(new MessageEvent('session.event', { data }));
+  }
 }
 
-type Stored = { seq: number; ts: string; event: Record<string, unknown> & { type: string } };
-const ev = (seq: number, event: Stored['event']): Stored => ({ seq, ts: '2026-10-05T12:00:00.000Z', event });
-const TURN_1: Stored[] = [ev(1, { type: 'status', status: 'running', turn: 1 }), ev(2, { type: 'text.done', text: 'first answer' }), ev(3, { type: 'status', status: 'done', turn: 1 })];
-const TURN_2: Stored[] = [ev(4, { type: 'status', status: 'running', turn: 2 }), ev(5, { type: 'text.done', text: 'second answer' }), ev(6, { type: 'status', status: 'done', turn: 2 })];
-
+const stored = (seq: number, event: Record<string, unknown>) => ({ seq, ts: '2026-10-05T12:00:00.000Z', event });
+let history: Record<string, Array<ReturnType<typeof stored>>>;
+let status: Record<string, string>;
+let reads: string[];
 let host: HTMLElement;
 let root: Root;
-let stored: Stored[];
-let status: string;
-let latest: Transcript;
-let holdMeta: boolean;
-let heldMeta: Array<() => void>;
 
-function Probe() {
+function Panel({ id }: { id: string }) {
+  const { transcript, meta } = useSessionStream(id);
+  return createElement('output', { 'aria-label': id, 'data-status': meta?.status ?? '' }, transcript.turns.map((t) => t.text).join('|'));
+}
+function Page({ ids }: { ids: string[] }) {
   useLiveInvalidation();
-  latest = useSessionStream('s1').transcript;
-  return null;
+  return createElement('div', null, ...ids.map((id) => createElement(Panel, { key: id, id })));
 }
 
-const streams = () => FakeEventSource.all.filter((s) => s.url === '/api/sessions/s1/events');
-const live = () => streams().filter((s) => !s.closed);
-const bus = () => FakeEventSource.all.find((s) => s.url === '/api/events')!;
-/** Opens the page again, so its first meta request sees the session as the test has just set it up. */
-async function remount() {
-  await act(async () => root.unmount());
-  FakeEventSource.all = [];
-  root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Probe))));
-}
-async function replay(s: FakeEventSource, events: Stored[]) {
-  for (const e of events) await act(async () => s.emit(e.event.type, e));
-}
+describe('session events over the app event stream', () => {
+  beforeEach(async () => {
+    FakeEventSource.all = [];
+    reads = [];
+    history = {};
+    status = {};
+    for (const n of [1, 2, 3]) {
+      history[`s-${n}`] = [stored(1, { type: 'status', status: 'running', turn: 1 }), stored(2, { type: 'text.done', text: `hello ${n}` })];
+      status[`s-${n}`] = 'running';
+    }
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const id = url.match(/^\/api\/sessions\/(s-\d+)$/)?.[1];
+        if (!id) return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+        reads.push(id);
+        return new Response(JSON.stringify({ meta: { id, status: status[id] }, events: history[id] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(Page, { ids: ['s-1', 's-2', 's-3'] }))));
+    await until(() => ['s-1', 's-2', 's-3'].every((id) => text(id).startsWith('hello')), 'the replayed transcripts');
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  });
 
-beforeEach(async () => {
-  FakeEventSource.all = [];
-  stored = [...TURN_1];
-  status = 'done';
-  holdMeta = false;
-  heldMeta = [];
-  vi.stubGlobal('EventSource', FakeEventSource);
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string) => {
-      const body = url === '/api/sessions/s1' ? { meta: { id: 's1', status, turns: [] }, events: stored } : { id: 's1' };
-      const response = new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-      if (url !== '/api/sessions/s1' || !holdMeta) return response;
-      // A held meta GET answers with the state as it was when it was asked, whenever the test lets it.
-      return new Promise<Response>((resolve) => heldMeta.push(() => resolve(response)));
-    }),
-  );
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Probe))));
+  const text = (id: string) => host.querySelector(`output[aria-label="${id}"]`)?.textContent ?? '';
+  const stream = () => FakeEventSource.all[0]!;
+
+  it('three session panels and the live invalidation share one connection, the app stream', () => {
+    expect(FakeEventSource.all.map((es) => es.url)).toEqual(['/api/events']);
+  });
+
+  it('applies a session\'s frames once each, in seq order, and ignores another session\'s', async () => {
+    await act(async () => {
+      stream().frame('s-1', 2, { type: 'text.done', text: 'hello 1' });
+      stream().frame('s-1', 3, { type: 'text.delta', text: ' more' });
+      stream().frame('s-9', 3, { type: 'text.delta', text: ' stray' });
+    });
+    expect(text('s-1')).toBe('hello 1 more');
+    expect(text('s-2')).toBe('hello 2');
+  });
+
+  it('after the stream reconnects, catches up from the stored events instead of losing what was sent while it was down', async () => {
+    await act(async () => stream().open());
+    history['s-2'] = [...history['s-2']!, stored(3, { type: 'text.delta', text: ' while down' })];
+    await act(async () => stream().open());
+    await until(() => text('s-2') === 'hello 2 while down', 'the caught-up transcript');
+    expect(text('s-1')).toBe('hello 1');
+  });
+
+  it('a terminal status frame reloads the session\'s meta', async () => {
+    status['s-3'] = 'done';
+    await act(async () => stream().frame('s-3', 3, { type: 'status', status: 'done' }));
+    await until(() => host.querySelector('output[aria-label="s-3"]')?.getAttribute('data-status') === 'done', 'the reloaded meta');
+  });
+
+  it('closes the shared stream once nothing follows it any more', async () => {
+    await act(async () => root.render(createElement('div')));
+    expect(stream().closed).toBe(true);
+  });
 });
-afterEach(async () => {
-  await act(async () => root.unmount());
-  host.remove();
-  vi.unstubAllGlobals();
-});
 
-describe('session event stream', () => {
-  it('closes once the session is over, so a finished session holds no connection', async () => {
-    await replay(streams()[0]!, TURN_1);
-    await until(() => live().length === 0, 'the finished stream to close');
-    expect(latest.status).toBe('done');
-    expect(latest.turns.map((t) => t.text)).toEqual(['first answer']);
-  });
+// One session across its turns (rewritten from SW3-web-a-01's per-session stream tests for the shared stream): no
+// session ever holds a connection of its own, a stale meta never ends a later turn, and a later turn clears an error.
+describe('one session across its turns', () => {
+  type Stored = ReturnType<typeof stored>;
+  const TURN_1: Stored[] = [stored(1, { type: 'status', status: 'running', turn: 1 }), stored(2, { type: 'text.done', text: 'first answer' }), stored(3, { type: 'status', status: 'done', turn: 1 })];
+  const TURN_2: Stored[] = [stored(4, { type: 'status', status: 'running', turn: 2 }), stored(5, { type: 'text.done', text: 'second answer' }), stored(6, { type: 'status', status: 'done', turn: 2 })];
+  let events: Stored[];
+  let state: string;
+  let latest: { transcript: Transcript; meta: SessionMeta | null };
+  let holdMeta: boolean;
+  let heldMeta: Array<() => void>;
 
-  it('stays open while a turn is still running', async () => {
-    status = 'running';
-    stored = [TURN_1[0]!];
-    await replay(streams()[0]!, [TURN_1[0]!]);
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(live()).toHaveLength(1);
-  });
+  function Probe() {
+    useLiveInvalidation();
+    latest = useSessionStream('s1');
+    return null;
+  }
+  const appStream = () => FakeEventSource.all.find((s) => s.url === '/api/events')!;
+  const live = () => FakeEventSource.all.filter((s) => !s.closed);
+  async function frames(list: Stored[], sessionId = 's1') {
+    for (const e of list) await act(async () => appStream().frame(sessionId, e.seq, e.event));
+  }
+  async function mount() {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Probe))));
+  }
+  const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
 
-  it('a history with several turns is read to its end before the stream closes', async () => {
-    stored = [...TURN_1, ...TURN_2];
-    await replay(streams()[0]!, [...TURN_1, ...TURN_2]);
-    await until(() => live().length === 0, 'the finished stream to close');
-    expect(latest.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
-  });
-
-  it('sending a turn reopens the stream, and the replayed history is not applied twice', async () => {
-    await replay(streams()[0]!, TURN_1);
-    await until(() => live().length === 0, 'the finished stream to close');
-    // As the server does: the turn is running (and has its first event) once the POST is answered.
-    status = 'running';
-    stored = [...TURN_1, TURN_2[0]!];
-    await act(async () => void (await sendTurn('s1', 'and then?')));
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(live()).toHaveLength(1);
-    status = 'done';
-    stored = [...TURN_1, ...TURN_2];
-    await replay(live()[0]!, [...TURN_1, ...TURN_2]);
-    await until(() => live().length === 0, 'the second turn to end the stream');
-    expect(latest.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
-  });
-
-  it('a turn started elsewhere (another tab, the Apply fill) reopens it through the live event bus', async () => {
-    await replay(streams()[0]!, TURN_1);
-    await until(() => live().length === 0, 'the finished stream to close');
-    status = 'running';
-    stored = [...TURN_1, TURN_2[0]!];
-    await act(async () => bus().emit('session.status', { sessionId: 's1', status: 'running', mode: 'advisor', turn: 2 }));
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(live()).toHaveLength(1);
-    await act(async () => bus().emit('session.status', { sessionId: 'other', status: 'running', mode: 'advisor', turn: 1 }));
-    expect(live()).toHaveLength(1);
-  });
-
-  it('a meta answer asked for before the next turn started does not close that turn\'s stream (SW3-web-a-01 review)', async () => {
-    holdMeta = true;
-    await replay(streams()[0]!, TURN_1);
-    // The terminal status asked for the meta, which is still in flight (done, events up to seq 3) when the next turn starts.
-    expect(heldMeta.length).toBeGreaterThan(0);
-    await act(async () => void (await sendTurn('s1', 'and then?')));
-    await replay(streams()[0]!, [TURN_2[0]!]);
-    for (const answer of heldMeta.splice(0)) await act(async () => answer());
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(live()).toHaveLength(1);
+  beforeEach(() => {
+    FakeEventSource.all = [];
+    events = [...TURN_1];
+    state = 'done';
     holdMeta = false;
-    stored = [...TURN_1, ...TURN_2];
-    await replay(live()[0]!, TURN_2.slice(1));
-    await until(() => live().length === 0, 'the second turn to end the stream');
-    expect(latest.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
+    heldMeta = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const body = url === '/api/sessions/s1' ? { meta: { id: 's1', status: state, turns: [] }, events } : { id: 's1' };
+        const response = new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+        if (url !== '/api/sessions/s1' || !holdMeta) return response;
+        // A held GET answers with the session as it was when it was asked, whenever the test lets it.
+        return new Promise<Response>((resolve) => heldMeta.push(() => resolve(response)));
+      }),
+    );
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
   });
 
-  it('a session that failed before its turn could start (only an error event) closes (SW3-web-a-01 review 2)', async () => {
-    status = 'error';
-    stored = [ev(1, { type: 'error', message: 'Keychain item not found' })];
-    await remount();
-    await replay(streams()[0]!, stored);
-    await until(() => live().length === 0, 'the failed stream to close');
-    expect(latest.error).toBe('Keychain item not found');
+  it('a finished session is read from its stored events and holds no connection of its own', async () => {
+    await mount();
+    await until(() => latest.meta?.status === 'done', 'the loaded session');
+    expect(latest.transcript.status).toBe('done');
+    expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer']);
+    expect(FakeEventSource.all.map((s) => s.url)).toEqual(['/api/events']);
   });
 
-  it('a session the server marked failed after a restart, whose last event is running, closes (SW3-web-a-01 review 2)', async () => {
-    status = 'error';
-    stored = [TURN_1[0]!];
-    await remount();
-    await replay(streams()[0]!, stored);
-    await until(() => live().length === 0, 'the reconciled stream to close');
+  it('a running session keeps following its turn on the app stream', async () => {
+    state = 'running';
+    events = [TURN_1[0]!];
+    await mount();
+    await until(() => latest.meta?.status === 'running', 'the loaded session');
+    await frames(TURN_1.slice(1, 2));
+    expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer']);
+    expect(latest.transcript.status).toBe('running');
+    expect(live().map((s) => s.url)).toEqual(['/api/events']);
   });
 
-  it('the same, when the meta answer arrives before the stream has replayed the running event', async () => {
-    status = 'error';
-    stored = [TURN_1[0]!];
-    await remount();
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(live()).toHaveLength(1);
-    await replay(streams()[0]!, stored);
-    await until(() => live().length === 0, 'the reconciled stream to close');
+  it('a history with several turns is read to its end', async () => {
+    events = [...TURN_1, ...TURN_2];
+    await mount();
+    await until(() => latest.transcript.turns.length === 2, 'both turns');
+    expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
+    expect(latest.transcript.status).toBe('done');
+  });
+
+  it('a turn sent from this page arrives on the app stream, and events it already has are not applied twice', async () => {
+    await mount();
+    await until(() => latest.meta?.status === 'done', 'the loaded session');
+    state = 'running';
+    events = [...TURN_1, TURN_2[0]!];
+    await act(async () => void (await sendTurn('s1', 'and then?')));
+    state = 'done';
+    events = [...TURN_1, ...TURN_2];
+    // The stream may deliver an event the panel already read again (a replay after a reconnect): its seq skips it.
+    await frames([TURN_1[1]!, ...TURN_2]);
+    await until(() => latest.meta?.status === 'done' && latest.transcript.status === 'done', 'the second turn to end');
+    expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
+    expect(FakeEventSource.all.map((s) => s.url)).toEqual(['/api/events']);
+  });
+
+  it('a turn started elsewhere (another tab, the Apply fill) arrives too, and another session\'s frames are ignored', async () => {
+    await mount();
+    await until(() => latest.meta?.status === 'done', 'the loaded session');
+    await frames([TURN_2[0]!]);
+    await frames([stored(5, { type: 'text.done', text: 'not this session' })], 'other');
+    expect(latest.transcript.status).toBe('running');
+    expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer', '']);
+  });
+
+  it('a meta answer asked for before the next turn started does not end that turn (SW3-web-a-01 review)', async () => {
+    holdMeta = true;
+    events = [TURN_1[0]!, TURN_1[1]!];
+    state = 'running';
+    await mount();
+    for (const answer of heldMeta.splice(0)) await act(async () => answer());
+    await until(() => latest.meta?.status === 'running', 'the loaded session');
+    // The terminal status asks for the meta, still in flight (done, events up to seq 3) when the next turn starts.
+    events = [...TURN_1];
+    state = 'done';
+    await frames([TURN_1[2]!]);
+    expect(heldMeta.length).toBeGreaterThan(0);
+    await frames([TURN_2[0]!]);
+    events = [...TURN_1, TURN_2[0]!];
+    state = 'running';
+    for (const answer of heldMeta.splice(0)) await act(async () => answer());
+    await settle();
+    for (const answer of heldMeta.splice(0)) await act(async () => answer());
+    await until(() => latest.meta?.status === 'running', 'the meta asked again');
+    expect(latest.transcript.status).toBe('running');
+    holdMeta = false;
+    events = [...TURN_1, ...TURN_2];
+    state = 'done';
+    await frames(TURN_2.slice(1));
+    await until(() => latest.meta?.status === 'done' && latest.transcript.status === 'done', 'the second turn to end');
+    expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
+  });
+
+  it('a session that failed before its turn could start (only an error event) shows the error, and a later turn clears it (SW3-web-a-01 review 2)', async () => {
+    state = 'error';
+    events = [stored(1, { type: 'error', message: 'Keychain item not found' })];
+    await mount();
+    await until(() => latest.meta?.status === 'error', 'the loaded session');
+    expect(latest.transcript.error).toBe('Keychain item not found');
+    expect(live().map((s) => s.url)).toEqual(['/api/events']);
+    await frames([stored(2, { type: 'status', status: 'running', turn: 2 })]);
+    expect(latest.transcript.error).toBeNull();
+    expect(latest.transcript.status).toBe('running');
+  });
+
+  it('a session the server marked failed after a restart, whose last event is running, is ended by its meta (SW3-web-a-01 review 2)', async () => {
+    state = 'error';
+    events = [TURN_1[0]!];
+    await mount();
+    await until(() => latest.meta?.status === 'error', 'the reconciled session');
+    // The stream delivering the same running event again (a replay) changes nothing.
+    await frames([TURN_1[0]!]);
+    expect(latest.meta?.status).toBe('error');
+    expect(live().map((s) => s.url)).toEqual(['/api/events']);
   });
 });
-

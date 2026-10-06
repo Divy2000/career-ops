@@ -40,6 +40,10 @@ export function promptWithTarget(prompt: string, target: { type: string; value: 
 
 export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; bus: EventBus }): Promise<void> {
   const { manager } = opts;
+  // Every session event also rides the app's one event stream, so a page follows any number of sessions on the
+  // connection it already holds (HTTP/1.1 allows 6 per host; one stream per session stalled the page at five).
+  const offBus = manager.onEvent((sessionId, stored) => opts.bus.publish('session.event', { sessionId, stored }));
+  app.addHook('onClose', async () => offBus());
   // Unlocking data/blacklist.md for a turn is the same explicit gate as PUT /api/blacklist: Dev Chat only, and the header on that request.
   const unlockRefused = (mode: string, headers: Record<string, unknown>) =>
     manager.effectivePolicy(mode)?.policyClass !== 'devchat'
