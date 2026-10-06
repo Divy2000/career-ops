@@ -57,11 +57,12 @@ describe('Recompute that fails (SW4-web-b-02)', () => {
   it('says why in the card instead of failing silently, and keeps the last result', async () => {
     await mount({ exit: 0, json: { rows: 3 }, text: '{"rows":3}' });
     const ok = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (input, init) => (String(input).includes('recompute=1') ? new Response(JSON.stringify({ error: 'server child unavailable' }), { status: 502, headers: { 'content-type': 'application/json' } }) : ok(input, init)));
+    // What the supervisor's proxy answers while the server child is down (supervisor/index.ts): plain text, not JSON.
+    vi.mocked(fetch).mockImplementation(async (input, init) => (String(input).includes('recompute=1') ? new Response('server child unavailable: connect ECONNREFUSED 127.0.0.1:4318', { status: 502, headers: { 'content-type': 'text/plain' } }) : ok(input, init)));
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Recompute')!;
     await act(async () => button.click());
     await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Could not recompute: server child unavailable');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Could not recompute: server child unavailable: connect ECONNREFUSED 127.0.0.1:4318');
     expect(button.disabled).toBe(false);
     expect(host.textContent).toContain('rows');
   });
