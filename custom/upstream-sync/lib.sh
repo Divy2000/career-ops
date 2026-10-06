@@ -228,12 +228,24 @@ suite_failures() {
   node test-all.mjs --quick > "$out" 2>&1
   local code=$?
   # Only test-all's own closing line counts as a summary: a failing child suite's stdout, echoed into its failure
-  # message, carries an indented "Results:" of its own. A non-zero exit with no failure line is a crash too.
+  # message, carries an indented "Results:" of its own. A discovered node:test suite reports through node's runner,
+  # not as ❌ lines: its failing tests are recorded by name (spec "✖ name (12ms)" or TAP "not ok N - name", the timing
+  # and number dropped so the line is the same on every run), or as one fixed line when no name can be read. A
+  # non-zero exit with neither is a crash.
+  local node_test=""
+  if grep -qE '^📊 Results: .* plus failures in a discovered node:test suite' "$out"; then
+    node_test="$({
+      grep -E '^[[:space:]]*✖ ' "$out" | grep -v '✖ failing tests:' | sed -E 's/^[[:space:]]*✖ //; s/ \([0-9.]+m?s\)$//'
+      grep -E '^[[:space:]]*not ok [0-9]+ - ' "$out" | sed -E 's/^[[:space:]]*not ok [0-9]+ - //; s/ # .*$//'
+    } | sed 's/^/node:test ✖ /' | sort -u)"
+    [ -n "$node_test" ] || node_test="node:test suite failed (no test names in the output)"
+  fi
   {
     grep -E '^\s*❌' "$out" | sed -E 's/^[[:space:]]+//'
+    [ -z "$node_test" ] || printf '%s\n' "$node_test"
     if ! grep -qE '^📊 Results: [0-9]+ passed' "$out"; then
       echo "SUITE CRASHED (exit $code, no Results summary; see $out)"
-    elif [ "$code" != 0 ] && ! grep -qE '^\s*❌' "$out"; then
+    elif [ "$code" != 0 ] && ! grep -qE '^\s*❌' "$out" && [ -z "$node_test" ]; then
       echo "SUITE CRASHED (exit $code, but no failing test listed; see $out)"
     fi
   } | sort -u > "$1"

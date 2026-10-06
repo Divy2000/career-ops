@@ -203,6 +203,40 @@ test('suite_failures records a crash when the suite exits non-zero with no failu
   assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 1, /m);
 });
 
+const NODE_TEST_RED = (ms) => `  ✔ inline check\n✔ upstream fine (1.2ms)\n✖ upstream known red (${ms}ms)\n✖ failing tests:\n\ntest at tests/url-identity.test.mjs:12:1\n✖ upstream known red (${ms}ms)\n  AssertionError: x\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)`;
+
+test('a node:test suite failing inside test-all is recorded by test name, stable across runs, never as a crash (review of SW3-tests-02)', () => {
+  const w = suiteWorld({ exit: 1, output: NODE_TEST_RED('3.25') });
+  w.run(`suite_failures "${w.dir}/f.txt"`);
+  assert.equal(w.read('f.txt'), 'node:test ✖ upstream known red\n');
+});
+
+test('a node:test failure already in the baseline is not a new failure, whatever its timing or output path', () => {
+  const base = suiteWorld({ exit: 1, output: NODE_TEST_RED('3.25') });
+  base.run(`suite_failures "${base.dir}/base.txt"`);
+  const after = suiteWorld({ exit: 1, output: NODE_TEST_RED('41.7') });
+  after.run(`suite_failures "${after.dir}/after.txt"`);
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${after.dir}/after.txt"`], { env: { PATH: '/usr/bin:/bin', B: base.read('base.txt') }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '');
+});
+
+test('node:test failures printed as TAP (Node 22) are recorded by name too', () => {
+  const w = suiteWorld({ exit: 1, output: 'ok 1 - upstream fine\nnot ok 2 - upstream known red\n  ---\n  duration_ms: 3.2\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)' });
+  w.run(`suite_failures "${w.dir}/f.txt"`);
+  assert.equal(w.read('f.txt'), 'node:test ✖ upstream known red\n');
+});
+
+test('node:test failures whose names cannot be read still give one line that is the same on every run', () => {
+  const lines = ['a', 'b'].map((tag) => {
+    const w = suiteWorld({ exit: 1, output: `noise ${tag}\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)` });
+    w.run(`suite_failures "${w.dir}/f.txt"`);
+    return w.read('f.txt');
+  });
+  assert.equal(lines[0], lines[1]);
+  assert.match(lines[0], /^node:test suite failed \(no test names in the output\)\n$/);
+});
+
 test('a clean run of the suite records no failures', () => {
   const w = suiteWorld({ exit: 0, output: '  ✅ ok one\n📊 Results: 1 passed, 0 failed, 0 warnings' });
   assert.equal(w.run(`suite_failures "${w.dir}/f.txt"`).status, 0);
