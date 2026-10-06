@@ -198,14 +198,14 @@ test('install_root_deps fails when npm fails and rejects an unknown mode', () =>
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });
 
-test('deps_fingerprint falls back to package.json when the root has no tracked lockfile, and changes with it', () => {
+test('deps_fingerprint falls back to package.json when the root has no tracked lockfile, and changes with its dependencies', () => {
   const w = npmStubWorld();
   try {
     const before = bashLib(w.repo, 'deps_fingerprint HEAD', w.env);
     assert.equal(before.status, 0, before.stderr);
     assert.equal(before.stderr, '', 'no git error noise');
     assert.match(before.stdout.trim(), /^[0-9a-f]{40}$/);
-    commitFile(w.repo, 'package.json', '{"name":"x","version":"2.0.0"}\n', 'bump');
+    commitFile(w.repo, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"leftish":"^1.0.0"}}\n', 'add a dependency');
     const after = bashLib(w.repo, 'deps_fingerprint HEAD', w.env);
     assert.notEqual(after.stdout, before.stdout);
     commitFile(w.repo, 'package-lock.json', '{"a":1}\n', 'lock');
@@ -516,7 +516,10 @@ test('sync.sh keeps the baseline dependency tree in memory before Claude, then c
   const claude = sync.indexOf('claude -p');
   const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")"');
   const clean = sync.indexOf('clean_sync_worktree "$WT" || fail ');
-  const refresh = sync.indexOf('refresh_root_deps origin/main "$BASE_DEPS_TREE" || fail ');
+  const refresh = sync.indexOf('refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail ');
+  const added = sync.indexOf('git worktree add -q -B "$BRANCH" "$WT" origin/main');
+  const baseRev = sync.indexOf('BASE_REV="$(git rev-parse HEAD)" || fail ');
+  assert.ok(added > -1 && baseRev > sync.indexOf('cd "$WT"', added) && baseRev < claude, `worktree=${added} BASE_REV=${baseRev} claude=${claude}`);
   const custom = sync.indexOf('custom_tests "$STATE_DIR/$TODAY.custom-tests.txt"');
   assert.ok(install > -1 && tree > install && claude > tree, `install=${install} tree=${tree} claude=${claude}`);
   assert.ok(gate > claude && clean > gate && refresh > clean && custom > refresh, `verify=${gate} clean=${clean} refresh=${refresh} custom=${custom}`);
@@ -529,13 +532,15 @@ test('sync.sh keeps the baseline dependency tree in memory before Claude, then c
  */
 function syncDepsStep(w, env = {}) {
   if (!refExists(w.repo, 'refs/remotes/origin/main')) git(w.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  // The base sync.sh recorded before Claude ran: origin/main as it was then, unless a test says otherwise.
+  const baseRev = env.BASE_REV ?? git(w.repo, 'rev-parse', 'refs/remotes/origin/main').trim();
   stub(w.bin, 'npm', `echo "$*" >> "${w.log}"\n[ -e .npmrc ] && echo "saw .npmrc" >> "${w.log}"\n[ -e package-lock.json ] && cp package-lock.json "${w.dir}/lock-seen.json"\n${env.NPM_EXIT ? `exit ${env.NPM_EXIT}` : 'exit 0'}`);
   const lines = readFileSync(SYNC, 'utf8').split('\n');
   const from = lines.findIndex((l) => l.startsWith('GATE="$(verify_merge'));
   const to = lines.findIndex((l, i) => i > from && l.startsWith('refresh_root_deps '));
   assert.ok(from > -1 && to > from, 'no verify_merge .. refresh_root_deps block in sync.sh');
   const script = `WT="${w.repo}"\nfail() { echo "!!! $1" >&2; exit 1; }\n${lines.slice(from + 1, to + 1).join('\n')}`;
-  return bashLib(w.repo, script, { ...w.env, BASE_DEPS_TREE: '{"lockfileVersion":3,"packages":{"node_modules/leftish":{"version":"1.0.0"}}}', ...env });
+  return bashLib(w.repo, script, { ...w.env, BASE_DEPS_TREE: '{"lockfileVersion":3,"packages":{"node_modules/leftish":{"version":"1.0.0"}}}', ...env, BASE_REV: baseRev });
 }
 
 const npmCalls = (w) => readFileSync(w.log, 'utf8').trim().split('\n');
@@ -687,13 +692,62 @@ test('with the dependencies unchanged, a registry that moved on since the baseli
     const before = await bash(`${take('install_root_deps ignore-scripts')}\n${take('BASE_DEPS_TREE=')}\nprintf '%s' "$BASE_DEPS_TREE"`);
     assert.equal(installed(), '1.0.0');
     registry.release();
-    await bash(take('refresh_root_deps '), { BASE_DEPS_TREE: before.stdout });
+    const baseRev = git(repo, 'rev-parse', 'HEAD').trim();
+    const refresh = () => bash(take('refresh_root_deps '), { BASE_DEPS_TREE: before.stdout, BASE_REV: baseRev });
+    await refresh();
     assert.equal(installed(), '1.0.0', 'the baseline tree, not the newer 1.1.0 the range now resolves to');
-    commitFile(repo, 'package.json', '{"name":"x","version":"1.0.1","dependencies":{"leftish":"^1.0.0"}}\n', 'upstream bumps the package');
-    await bash(take('refresh_root_deps '), { BASE_DEPS_TREE: before.stdout });
-    assert.equal(installed(), '1.1.0', 'a merge that changed the dependencies resolves them fresh');
+    commitFile(repo, 'package.json', '{"name":"x","version":"1.0.1","scripts":{"test":"node --test"},"engines":{"node":">=22"},"dependencies":{"leftish":"^1.0.0"}}\n', 'upstream release bot bumps the version; a PR edits scripts and engines');
+    await refresh();
+    assert.equal(installed(), '1.0.0', 'a version, scripts or engines edit is not a dependency change');
+    commitFile(repo, 'package.json', '{"name":"x","version":"1.0.1","scripts":{"test":"node --test"},"engines":{"node":">=22"},"dependencies":{"leftish":">=1.0.0"}}\n', 'upstream widens the range');
+    await refresh();
+    assert.equal(installed(), '1.1.0', 'a merge that changed a range resolves fresh');
   } finally {
     await registry.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('deps_fingerprint ignores everything but how dependencies resolve, in any key order', () => {
+  const w = npmStubWorld();
+  try {
+    const fp = (pkg) => {
+      commitFile(w.repo, 'package.json', `${JSON.stringify(pkg)}\n`, 'edit');
+      const r = bashLib(w.repo, 'deps_fingerprint HEAD', w.env);
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    const base = { name: 'x', version: '1.0.0', dependencies: { a: '^1.0.0', b: '^2.0.0' } };
+    const first = fp(base);
+    assert.equal(fp({ ...base, version: '1.0.1', description: 'new', scripts: { t: 'x' }, engines: { node: '>=22' }, bin: { x: 'x.js' } }), first);
+    assert.equal(fp({ version: '9', dependencies: { b: '^2.0.0', a: '^1.0.0' }, name: 'x' }), first, 'key order does not matter');
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides', 'bundleDependencies', 'bundledDependencies', 'workspaces']) {
+      const value = field === 'dependencies' ? { a: '^1.1.0', b: '^2.0.0' } : field.startsWith('bundle') || field === 'workspaces' ? ['a'] : { c: '1.0.0' };
+      assert.notEqual(fp({ ...base, [field]: value }), first, `${field} changes the fingerprint`);
+    }
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('deps_fingerprint fails on a package.json it cannot parse, rather than hashing nothing', () => {
+  const w = npmStubWorld();
+  try {
+    commitFile(w.repo, 'package.json', '{ not json\n', 'broken');
+    const r = bashLib(w.repo, 'deps_fingerprint HEAD', w.env);
+    assert.notEqual(r.status, 0);
+    assert.equal(r.stdout, '');
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('a fetch that moves origin/main while Claude runs does not change the base the reinstall compares with', () => {
+  const w = npmStubWorld();
+  try {
+    const base = git(w.repo, 'rev-parse', 'HEAD').trim();
+    git(w.repo, 'checkout', '-q', '-b', 'later');
+    commitFile(w.repo, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"leftish":"^2.0.0"}}\n', 'a later origin/main with other dependencies');
+    git(w.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git(w.repo, 'checkout', '-q', 'main');
+    const res = syncDepsStep(w, { BASE_REV: base });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(npmCalls(w)[0], /^ci\b/, 'compared with the recorded base, so the baseline tree is reinstalled');
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });

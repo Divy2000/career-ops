@@ -77,6 +77,8 @@ rm -rf "$WT"
 git worktree prune
 git worktree add -q -B "$BRANCH" "$WT" origin/main || fail "git worktree add failed"
 cd "$WT" || fail "worktree missing"
+# The base the merge is compared with, fixed now: a fetch from any checkout while Claude runs moves origin/main.
+BASE_REV="$(git rev-parse HEAD)" || fail "cannot read the sync worktree's base commit"
 install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"
 # The tree the baseline runs on, kept in memory: after Claude the same tree is reinstalled unless the merge changed it.
 BASE_DEPS_TREE="$(root_deps_tree)" || fail "cannot read the baseline's installed dependency tree"
@@ -128,7 +130,7 @@ echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
 clean_sync_worktree "$WT" || fail "cannot clean untracked and ignored files from the sync worktree"
-refresh_root_deps origin/main "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
+refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
 
 CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then

@@ -44,9 +44,25 @@ install_root_deps() {
 }
 
 # deps_fingerprint <rev>: what decides whether the root dependencies changed
-# between two revisions: the tracked lockfile's blob, else package.json's.
+# between two revisions: the tracked lockfile's blob, else a hash of only the
+# package.json fields that decide how dependencies resolve, as JSON with sorted
+# keys. Upstream's release bot bumps "version" every release and PRs edit
+# scripts or engines; none of that changes what npm installs. Fails when
+# package.json is missing or not JSON.
 deps_fingerprint() {
-  git rev-parse --verify --quiet "$1:package-lock.json" 2>/dev/null || git rev-parse --verify "$1:package.json"
+  local pkg fields
+  if git rev-parse --verify --quiet "$1:package-lock.json" 2>/dev/null; then return 0; fi
+  pkg="$(git show "$1:package.json")" || return 1
+  fields="$(printf '%s' "$pkg" | node -e '
+let text = "";
+process.stdin.on("data", (d) => (text += d)).on("end", () => {
+  const pkg = JSON.parse(text);
+  const sorted = (v) => (Array.isArray(v) ? v.map(sorted) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])])) : v);
+  const keys = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides", "bundleDependencies", "bundledDependencies", "workspaces"];
+  process.stdout.write(JSON.stringify(keys.map((k) => [k, sorted(pkg[k] ?? null)])));
+});
+')" || return 1
+  printf '%s' "$fields" | git hash-object --stdin
 }
 
 # root_deps_tree: the root dependency tree npm installed, as npm recorded it
