@@ -99,6 +99,16 @@ function isCodeRoot(policy, cwd) {
 }
 
 /**
+ * Whether the session's working directory is the code root: 'missing' when the hook payload has none (fails closed:
+ * relative paths and searches resolve against it), 'elsewhere' when it is another directory, null when it is the root.
+ */
+function cwdProblem(policy, cwd) {
+  if (typeof cwd !== 'string' || cwd === '') return 'missing';
+  return isCodeRoot(policy, cwd) ? null : 'elsewhere';
+}
+const NO_CWD = "the hook did not say the session's working directory";
+
+/**
  * Where a read lands, by its real path: inside the data root, the code root or a read-only root (the
  * session's own oversized tool results), the root itself included. Relative paths resolve against the
  * code root (the session cwd). A symlink that leads outside every root is null.
@@ -128,7 +138,10 @@ export function checkRead(policy, input, cwd, label = 'Read') {
   if (typeof target !== 'string' || !target) return `${label}: no file path`;
   const unresolved = unresolvedPathReason(target, label);
   if (unresolved) return unresolved;
-  if (!path.isAbsolute(target) && cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${label}: ${target} is a relative path, it resolves against the repo root and the session is not running from it; use the absolute path`;
+  if (!path.isAbsolute(target)) {
+    const why = cwdProblem(policy, cwd);
+    if (why) return `${label}: ${target} is a relative path, it resolves against the repo root and ${why === 'missing' ? NO_CWD : 'the session is not running from it'}; use the absolute path`;
+  }
   const found = locateRead(policy, target);
   if (!found) return `${label}: ${target} is outside the repo and data roots; sessions read only inside them`;
   if (matches(found.rel, policy.readDeny)) return `${label}: ${found.rel} is a protected secret file (.env, keys, credentials) and sessions never read it`;
@@ -163,7 +176,8 @@ export function checkSearch(policy, tool, input, cwd) {
     if (why) return why;
   } else {
     if (!Array.isArray(policy.readDeny)) return `${tool}: the session policy predates read confinement, so every search is refused`;
-    if (cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${tool}: the session must run from the repo root`;
+    const why = cwdProblem(policy, cwd);
+    if (why) return why === 'missing' ? `${tool}: a search with no path runs in the session's working directory, and ${NO_CWD}` : `${tool}: the session must run from the repo root`;
   }
   const key = tool === 'Glob' ? 'pattern' : 'glob';
   const value = input?.[key];
@@ -801,7 +815,8 @@ export function checkBash(command, policy, cwd) {
   const first = tokens[0];
   if (!first) return 'Bash: empty command';
   if (NETWORK_BINS.has(first)) return `Bash: ${first} is not allowed (network tools are denied)`;
-  if (cwd !== undefined && cwd !== null && resolveReal(path.resolve(String(cwd))) !== fs.realpathSync.native(policy.codeRoot)) return 'Bash: the session must run from the repo root';
+  const cwdWhy = cwdProblem(policy, cwd);
+  if (cwdWhy) return cwdWhy === 'missing' ? `Bash: ${NO_CWD}; no command runs without it` : 'Bash: the session must run from the repo root';
   const spawner = agentSpawningScript(tokens);
   if (spawner) return `Bash: ${spawner} starts agent CLIs outside the session guard, so no session may run it`;
   const candidates = allowed.filter((prefix) => prefix.every((p, i) => tokens[i] === p));

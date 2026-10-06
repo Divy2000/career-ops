@@ -301,6 +301,25 @@ describe('guard hook', () => {
     expect(path.basename(snapshotKey(dir, file)).length).toBeLessThanOrEqual(255);
   });
 
+  it('a payload with no cwd fails closed: a relative Read, a Glob or Grep with no path and any Bash command are refused (SW4-tests-24)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-nocwd-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
+    const pre = (tool: string, input: Record<string, unknown>, cwd?: unknown) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, ...(cwd === undefined ? {} : { cwd }), session_id: 's' });
+    for (const cwd of [undefined, null, '']) {
+      const label = JSON.stringify(cwd) ?? 'missing';
+      const read = pre('Read', { file_path: 'cv.md' }, cwd);
+      expect(read.status, `Read ${label}`).toBe(2);
+      expect(read.stderr, `Read ${label}`).toMatch(/working directory/);
+      expect(pre('Bash', { command: 'node merge-tracker.mjs' }, cwd).status, `Bash ${label}`).toBe(2);
+      expect(pre('Glob', { pattern: '**/*.md' }, cwd).status, `Glob ${label}`).toBe(2);
+      expect(pre('Grep', { pattern: 'Acme' }, cwd).status, `Grep ${label}`).toBe(2);
+    }
+    // The same calls from the repo root pass, and an absolute Read needs no cwd at all.
+    expect(pre('Read', { file_path: 'reports/001-existing.md' }, realRoot).status).toBe(0);
+    expect(pre('Bash', { command: 'node merge-tracker.mjs' }, realRoot).status).toBe(0);
+    expect(pre('Read', { file_path: path.join(realRoot, 'reports', '001-existing.md') }).status).toBe(0);
+  });
+
   it('resolves writes against a separate data root and records which root a changed file belongs to', () => {
     const dataRoot = fs.mkdtempSync(path.join(realRoot, 'data-root-'));
     fs.mkdirSync(path.join(dataRoot, 'reports'));
