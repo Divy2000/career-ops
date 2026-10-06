@@ -233,15 +233,16 @@ const shim = path.resolve("custom/control-center/server/claude/claude-shim.mjs")
 // Not exec: each call that exits non-zero (the shim refusing it, or the real claude failing: a usage limit, no
 // network) is recorded, since rank-pipeline.mjs catches every failed call and still exits 0. Its own timeout kills this
 // wrapper with SIGTERM: the trap then kills the shim and the claude it runs (their own process group, set -m), records
-// the failure and exits 143, so nothing is orphaned and the timed-out call still fails the step.
+// the failure and exits 143, so nothing is orphaned and the timed-out call still fails the step. The trap is set before
+// the shim starts, and finds it by $!, so a signal at any point (before the start, or before child=$!) is handled.
 const failures = shellQuote(path.join(process.env.DIR, "failures"));
 fs.writeFileSync(path.join(process.env.DIR, "claude"), [
   "#!/bin/bash",
   "set -m",
+  `on_term() { [ -z "$!" ] || { kill -TERM -- "-$!" 2>/dev/null; wait "$!" 2>/dev/null; }; echo 143 >> ${failures}; exit 143; }`,
+  "trap on_term TERM INT",
   `CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shellQuote(path.join(process.env.DIR, "token"))})" ANTHROPIC_API_KEY="" ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
   "child=$!",
-  `on_term() { kill -TERM -- "-$child" 2>/dev/null; wait "$child" 2>/dev/null; echo 143 >> ${failures}; exit 143; }`,
-  "trap on_term TERM INT",
   "wait \"$child\"",
   "rc=$?",
   `[ "$rc" -eq 0 ] || echo "$rc" >> ${failures}`,
