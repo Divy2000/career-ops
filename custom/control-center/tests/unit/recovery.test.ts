@@ -489,6 +489,15 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
     expect(renderStatus({ state: 'failed', at: 't', error: 'healthz did not return 200 in time', stderrTail: 'warning: slow disk' })).toContain('<pre>healthz did not return 200 in time\nwarning: slow disk</pre>');
   });
 
+  it('a server that stopped after it started is described as stopped, not as a start that failed (SW3-claude-01)', () => {
+    const stopped = { ...failed, at: '2026-10-06T09:00:00.000Z', error: 'server child exited (code 1, signal null) after it started', stderrTail: 'TypeError: runner.reconcil is not a function', crashed: true as const };
+    expect(renderStatus(stopped)).toBe('<p>The server stopped at 2026-10-06T09:00:00.000Z.</p><pre>server child exited (code 1, signal null) after it started\nTypeError: runner.reconcil is not a function</pre>');
+    const page = renderDownPage(stopped, { devChatChanged: false });
+    expect(page).toContain('<h2>The server stopped</h2>');
+    expect(page).not.toContain('could not start');
+    expect(renderDownPage(failed, { devChatChanged: false })).toContain('<h2>The server could not start</h2>');
+  });
+
   it('strips terminal escape sequences (colours, a hyperlink, a two-byte escape) and keeps the text and its line breaks', () => {
     const E = '\u001b';
     const coloured = `${E}[90m    at listenInCluster (node:net:2224:12)${E}[39m\n  code: ${E}[32m'EADDRINUSE'${E}[39m, ${E}[1;31mbold red${E}[0m`;
@@ -733,6 +742,26 @@ describe('blue/green reload', () => {
     expect(a).toEqual({ state: 'ok', at: 'T', pid: 12 });
     expect(b).toMatchObject({ state: 'failed', error: 'tsx crashed' });
     expect(bg.active).toBe(second);
+  });
+
+  it('an active child that exits on its own is dropped: no child serves, the status says it stopped, and the next reload takes over at once (SW3-claude-01)', async () => {
+    const log: string[] = [];
+    const first = handle(5001, 11, log);
+    const next = handle(5002, 12, log);
+    const bg = new BlueGreen(first, async () => next, async () => undefined, { now: () => 'T' });
+    const seen: Array<[string, ChildHandle | null]> = [];
+    bg.onStatus((st, active) => seen.push([st.state, active]));
+    bg.lost(handle(5009, 19), 'not the active child');
+    expect(bg.active).toBe(first);
+    expect(seen).toEqual([]);
+    bg.lost(first, 'server child exited (code 1, signal null) after it started');
+    expect(bg.active).toBeNull();
+    expect(bg.status).toEqual({ state: 'failed', at: 'T', error: 'server child exited (code 1, signal null) after it started', stderrTail: 'stderr of 11', crashed: true });
+    expect(seen).toEqual([['failed', null]]);
+    expect((await bg.reload()).state).toBe('ok');
+    expect(bg.active).toBe(next);
+    await flush();
+    expect(log).toEqual(['activate 12']);
   });
 
   it('coalesces a burst of reload requests into one in-flight run plus one follow-up', async () => {
