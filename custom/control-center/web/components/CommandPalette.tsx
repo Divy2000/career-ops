@@ -241,7 +241,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   };
   const execute = async (a: ActionMeta, params: Record<string, unknown>) => {
     if (a.confirm && !(await confirm({ title: a.label, body: a.confirm, confirmLabel: 'Run', danger: true }))) return;
-    const out = await run(a.id, params);
+    const out = await run(a.id, params, undefined, { confirmed: Boolean(a.confirm) });
     setWithParams(null);
     if (out && 'runId' in out) void navigate({ to: '/runs' });
     else setOutputOf(a.label);

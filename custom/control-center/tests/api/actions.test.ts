@@ -219,11 +219,34 @@ describe('action registry', () => {
       return { id: '20261005000000-abcdef' } as RunMeta;
     });
     try {
-      const res = await post('/api/actions/daily.runNow', { params: {} });
+      const res = await post('/api/actions/daily.runNow', { params: {}, confirmed: true });
       expect(res.statusCode, res.body).toBe(202);
       expect(path.isAbsolute(t.cfg.claudeBin)).toBe(true);
       expect(started[0]!.cmd.args).toEqual([path.join(t.cfg.codeRoot, 'custom/immigration/run-daily.sh')]);
       expect(started[0]!.env).toMatchObject({ CC_CLAUDE_BIN: t.cfg.claudeBin, CAREER_OPS_ROOT: t.cfg.dataRoot });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('an action marked confirm runs only with the explicit confirmation, and a dry-run preview needs none (seed: server-side confirm)', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      for (const [id, params] of [['daily.runNow', {}], ['system.rollback', {}], ['system.updateApply', {}], ['devchat.installDeps', {}], ['portals.fixSlugs', { apply: true }]] as const) {
+        const res = await post(`/api/actions/${id}`, { params });
+        expect(res.statusCode, `${id}: ${res.body}`).toBe(428);
+        expect(res.json().confirm, id).toBeTypeOf('string');
+        expect((await post(`/api/actions/${id}`, { params, confirmed: 'yes' })).statusCode, `${id} with a non-boolean flag`).toBe(428);
+      }
+      expect(started).toEqual([]);
+      // The fix-slugs dry run only previews: no confirmation.
+      expect((await post('/api/actions/portals.fixSlugs', { params: { apply: false } })).statusCode).toBe(202);
+      expect((await post('/api/actions/daily.runNow', { params: {}, confirmed: true })).statusCode).toBe(202);
+      expect(started.map((r) => r.actionId)).toEqual(['portals.fixSlugs', 'daily.runNow']);
     } finally {
       spy.mockRestore();
     }
@@ -237,7 +260,7 @@ describe('action registry', () => {
       return { id: '20261005000000-abcdef' } as RunMeta;
     });
     try {
-      const res = await bare.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: bare.authedWrite, payload: { params: {} } });
+      const res = await bare.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: bare.authedWrite, payload: { params: {}, confirmed: true } });
       expect(res.statusCode, res.body).toBe(202);
       expect(started[0]!.env).not.toHaveProperty('CC_CLAUDE_BIN');
     } finally {

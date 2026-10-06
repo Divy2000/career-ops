@@ -277,7 +277,12 @@ describe('tracker delete', () => {
     // tracker.mjs narrates the preview on stderr; the body carries both streams.
     expect(preview.body).toMatch(/dry|would/i);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(true);
-    const real = await post('/api/actions/tracker.delete', { params: { n: 4, dryRun: false } });
+    // The real delete is a confirm action: refused without the page's explicit confirmation, done with it.
+    const unconfirmed = await post('/api/actions/tracker.delete', { params: { n: 4, dryRun: false } });
+    expect(unconfirmed.statusCode, unconfirmed.body).toBe(428);
+    expect(unconfirmed.json()).toMatchObject({ error: expect.stringMatching(/Delete tracker row needs confirmation/), confirm: expect.stringMatching(/Removes the row/) });
+    expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(true);
+    const real = await post('/api/actions/tracker.delete', { params: { n: 4, dryRun: false }, confirmed: true });
     expect(real.statusCode, real.body).toBe(200);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(false);
   });

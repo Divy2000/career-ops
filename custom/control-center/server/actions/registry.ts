@@ -39,8 +39,13 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   id: string;
   label: string;
   cost: Cost;
-  /** Confirmation text shown before running; undefined means no confirm. */
+  /**
+   * Confirmation text shown before running; undefined means no confirm. The route refuses such an action (428) unless
+   * the request says `confirmed: true`, so the browser dialog is not the only gate.
+   */
   confirm?: string;
+  /** Params that only preview (a dry run), which run without the confirmation. */
+  preview?: (params: z.infer<S>) => boolean;
   resources: Resource[];
   claude: boolean;
   /** Sync actions run inline under a 30 s timeout and return their output. */
@@ -146,6 +151,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: true,
     params: z.object({ n: positive, dryRun: z.boolean().default(false) }),
+    preview: (p) => p.dryRun,
     build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),
   }),
   define({ id: 'tracker.verify', label: 'Verify tracker and pipeline', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'verifyPipeline', []) }),
@@ -302,6 +308,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: false,
     params: z.object({ apply: z.boolean().default(false) }),
+    preview: (p) => !p.apply,
     build: (p, ctx) => node(ctx, 'fixSlugs', p.apply ? ['--apply'] : ['--dry-run']),
   }),
   // ---- immigration ----

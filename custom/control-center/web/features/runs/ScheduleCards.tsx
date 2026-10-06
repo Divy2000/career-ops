@@ -99,7 +99,7 @@ function JobCard({ job }: { job: ScheduleState }) {
         <button type="button" disabled={job.plist === 'missing' || (!job.loaded && job.disabled)} onClick={() => void put(false)}>
           Disable
         </button>
-        {job.kind === 'daily' && <ActionButton meta={actions.data?.find((a) => a.id === 'daily.runNow')} onRun={() => void run('daily.runNow', {})} />}
+        {job.kind === 'daily' && <ActionButton meta={actions.data?.find((a) => a.id === 'daily.runNow')} onRun={(_p, o) => void run('daily.runNow', {}, undefined, o)} />}
       </div>
       <Message message={message} />
       {error && (

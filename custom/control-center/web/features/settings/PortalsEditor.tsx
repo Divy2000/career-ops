@@ -162,10 +162,10 @@ function PortalsHealth() {
         {['portals.validate', 'portals.verify', 'portals.audit'].map((id) => (
           <ActionButton key={id} meta={actions.data?.find((a) => a.id === id)} disabled={busy !== null} params={id === 'portals.audit' ? { smallThreshold: 3 } : {}} onRun={(p) => void run(id, p)} />
         ))}
-        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: false }} onRun={(p) => void run('portals.fixSlugs', p)}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: false }} onRun={(p, o) => void run('portals.fixSlugs', p, undefined, o)}>
           Fix slugs (dry run)
         </ActionButton>
-        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: true }} onRun={(p) => void run('portals.fixSlugs', p)}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: true }} onRun={(p, o) => void run('portals.fixSlugs', p, undefined, o)}>
           Fix slugs (apply)
         </ActionButton>
       </div>

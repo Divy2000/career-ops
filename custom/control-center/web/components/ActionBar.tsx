@@ -8,8 +8,11 @@ export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
   return <Pill tone={cost === 'tokens' ? 'warn' : cost === 'network' ? 'info' : 'neutral'}>{label}</Pill>;
 }
 
-/** Button for a registry action: shows the cost badge and asks (Radix dialog) when the action declares a confirm text. */
-export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>) => void; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
+/**
+ * Button for a registry action: shows the cost badge and asks (Radix dialog) when the action declares a confirm text.
+ * onRun gets `confirmed: true` once the user confirmed, which the request must carry (the server refuses otherwise).
+ */
+export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>, opts: { confirmed: boolean }) => void; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
   const confirm = useConfirm();
   if (!meta) return null;
   return (
@@ -20,7 +23,7 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
       onClick={() => {
         void (async () => {
           if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
-          onRun(params ?? {});
+          onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
         })();
       }}
     >
