@@ -149,6 +149,26 @@ test('the shortlist refuses an empty --min-rank= or --top= instead of reading it
   }
 });
 
+test('the shortlist refuses a stray operand, such as a rank given without --min-rank, before any lookup or write (SW7-libs-02)', () => {
+  for (const args of [['4'], ['--top', '10', 'extra']]) {
+    const root = rankedRoot();
+    const r = spawnSync(process.execPath, [SHORTLIST, ...args], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 1, args.join(' '));
+    assert.match(r.stderr, new RegExp(`unexpected argument\\(s\\): ${args[args.length - 1]}`));
+    assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+  }
+});
+
+test('the shortlist refuses a --top that is not a positive whole number and a --min-rank outside 0 to 5, before any lookup or write (SW7-libs-02)', () => {
+  for (const args of [['--top', '-5'], ['--top=0'], ['--top=2.5'], ['--min-rank', '-1'], ['--min-rank=6']]) {
+    const root = rankedRoot();
+    const r = spawnSync(process.execPath, [SHORTLIST, ...args], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 1, args.join(' '));
+    assert.match(r.stderr, args[0].startsWith('--top') ? /--top needs a positive whole number/ : /--min-rank needs a number from 0 to 5/, args.join(' '));
+    assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+  }
+});
+
 /** A root with two companies ranked above the cut, and nothing cached, so the run must look both up. */
 function rankedRoot() {
   const root = tempDir('shortlist-');

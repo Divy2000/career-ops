@@ -142,3 +142,11 @@ export function buildShortlist(rows, { tiers, alerts, minRank = 3, keep = () => 
   const byScore = (a, b) => b.score - a.score || b.rank - a.rank;
   return { shortlist: shortlist.sort(byScore), excluded: excluded.sort(byScore) };
 }
+
+/**
+ * The bare operands in `args`: tokens that are neither a flag nor the spaced value of one of `valueFlags` (as
+ * validateFlags in lib/cli-flags.mjs consumes it). The pipeline scripts take none, so any is a usage error.
+ */
+export function strayOperands(args, valueFlags) {
+  return args.filter((a, i) => !a.startsWith('-') && !valueFlags.includes(args[i - 1]));
+}
