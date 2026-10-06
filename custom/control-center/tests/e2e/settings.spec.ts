@@ -139,6 +139,25 @@ test.describe('Settings', () => {
     }
   });
 
+  test('browser Back and a sidebar link ask before dropping unsaved blacklist rows (SW4-web-b-01)', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/settings?tab=portals');
+    await page.getByRole('tab', { name: 'Blacklist' }).click();
+    await expect(page).toHaveURL(/tab=blacklist/);
+    await page.getByLabel('Blacklist company or domain').fill('Spam Co');
+    await page.getByRole('button', { name: 'Add row' }).click();
+    const ask = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await page.goBack();
+    await expect(ask).toContainText('data/blacklist.md');
+    await ask.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page).toHaveURL(/tab=blacklist/);
+    await expect(page.getByRole('cell', { name: 'Spam Co', exact: true })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Runs & Schedule' }).click();
+    await expect(ask).toBeVisible();
+    await ask.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page).toHaveURL(/\/runs/);
+  });
+
   test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');
