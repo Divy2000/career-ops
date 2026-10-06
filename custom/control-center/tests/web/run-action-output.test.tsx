@@ -56,4 +56,13 @@ describe('Health output after a later action', () => {
     expect(host.textContent).toContain('Could not run portals.validate');
     expect(output()).toBeNull();
   });
+
+  it('a check that ran and found problems says so, with its output, never "Could not run" (server-7 minor: tracker.syncCheck)', async () => {
+    answers['tracker.syncCheck'] = json(200, { result: '', stderr: 'Corruption detected in data/applications.md\n(--check, no index written)', findings: 'The tracker sync check found problems; see its output.' });
+    await act(async () => void (await runAction('tracker.syncCheck')));
+    expect(host.textContent).toContain('The tracker sync check found problems; see its output.');
+    expect(host.textContent).not.toContain('Could not run');
+    expect(output()).toContain('Corruption detected');
+  });
 });
+

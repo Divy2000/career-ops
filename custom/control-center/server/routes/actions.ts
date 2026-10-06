@@ -6,6 +6,8 @@ import type { EventBus } from '../watch/bus.js';
 import { execNoShell, type Exec } from './system.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
+import { pinnedNodeBin } from '../system/schedule.js';
+import { importCore } from '../core/adapter.js';
 
 const SYNC_TIMEOUT_MS = 30_000;
 
@@ -13,6 +15,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
   const { cfg, runner } = opts;
   const exec = opts.exec ?? execNoShell;
   const coreEnv = { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1' };
+  // The daily job runs on the node the schedule pins (run-daily.sh's PATH would otherwise find an older one first).
+  const nodeBin = pinnedNodeBin();
 
   app.get('/api/actions', async () => actionMetadata());
 
@@ -27,7 +31,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       return reply.code(428).send({ error: `${action.label} needs confirmation: ${action.confirm}`, confirm: action.confirm });
     }
     const daily = opts.daily;
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined };
+    const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined };
     const problem = await action.check?.(parsed.data, ctx);
     if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });
     const cmd = action.build(parsed.data, ctx);
@@ -42,6 +47,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
         cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
         env: { ...coreEnv, ...cmd.env },
         tmpInputs: ctx.tmpInputs,
+        ...(action.exitMeaning ? { exitMeaning: action.exitMeaning } : {}),
       };
       if (action.single) {
         const started = runner.startUnlessPending(startRequest);
@@ -67,6 +73,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       /* plain text output */
     }
     if (r.code !== 0) {
+      const findings = action.findings?.(r);
+      if (findings) return { result, stderr: r.stderr.slice(-4000), findings };
       const explained = action.explainFailure?.(r);
       if (explained) return reply.code(explained.status).send({ error: explained.error, exit: r.code, result });
       const status = action.exitMap?.[r.code] ?? 500;

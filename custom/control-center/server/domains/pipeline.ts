@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { pipelineUrlKey, unescapeMarkdownUrl } from './inboxSkip.js';
+import { pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
 import { parseTsv, readText } from './files.js';
 
 export interface PipelineRow {
@@ -114,19 +114,19 @@ export function parsePipeline(md: string): PipelineRow[] {
     const posted = labels.get('posted');
     rows.push({
       url: unescapeMarkdownUrl(positional[0]!),
-      company: positional[1] ?? '',
-      role: positional[2] ?? '',
-      location: positional[3] || null,
-      compensation: positional[4] || null,
+      company: unescapeMarkdownCell(positional[1] ?? ''),
+      role: unescapeMarkdownCell(positional[2] ?? ''),
+      location: positional[3] ? unescapeMarkdownCell(positional[3]) : null,
+      compensation: positional[4] ? unescapeMarkdownCell(positional[4]) : null,
       done: m[1]!.toLowerCase() === 'x',
       section,
       postedAt: posted && /^\d{4}-\d{2}-\d{2}$/.test(posted) ? posted : null,
       rank,
-      rankReason: reason,
-      note: labels.get('note') ?? null,
+      rankReason: reason === null ? null : unescapeMarkdownCell(reason),
+      note: labels.has('note') ? unescapeMarkdownCell(labels.get('note')!) : null,
       firstSeen: null,
       source: 'other',
-      seniority: seniorityOf(positional[2] ?? ''),
+      seniority: seniorityOf(unescapeMarkdownCell(positional[2] ?? '')),
       line: i + 1,
     });
   });

@@ -558,15 +558,21 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('a session start over HTTP cannot name a report number: only a fan-out reserves one, and a session releases it with force (SW4-tests-19)', async () => {
+    const res = await post('/api/sessions', { mode: 'oferta', prompt: 'Evaluate', reportNum: 50 });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toMatch(/report number/);
+  });
+
   it('the honesty gate never credits a session with a report another session wrote while it ran', async () => {
     const h = await makeTestApp();
     try {
       expect((await call(h, 'PUT', '/api/settings/app', { claudeConcurrency: 4 })).statusCode).toBe(200);
       // A runs until both of B's reports exist, however slow B is: the gate must see them land during A's turn.
       const silent = scenarioFile({ events: [INIT, { __waitFor: { dir: path.join(h.cfg.dataRoot, 'reports'), pattern: '-synthetic-corp\\.md$', count: 2 } }, result('Evaluation complete.', 0.02)] });
-      const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A2', reportNum: 50 })).json()]);
+      const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), await h.sessions.start({ mode: 'oferta', target: { type: 'none', value: null }, prompt: 'Evaluate A2', reportNum: 50 })]);
       const b = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B' })).json();
-      const bReserved = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B2', reportNum: 51 })).json();
+      const bReserved = await h.sessions.start({ mode: 'oferta', target: { type: 'none', value: null }, prompt: 'Evaluate B2', reportNum: 51 });
       const [ra, raReserved, rb, rbReserved] = (await Promise.all([a, aReserved, b, bReserved].map((x) => settleOn(h, x.id)))) as [Settled, Settled, Settled, Settled];
       expect(rb.meta.status).toBe('done');
       expect(rbReserved.meta.status).toBe('done');
@@ -621,7 +627,9 @@ describe('Claude sessions', () => {
       await a.close();
       b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
       const seen = b.sessions.store.readEvents(id).length;
-      await wait(400);
+      // The run went on writing (its last delta is in the raw log) while b, not yet active, recorded none of it.
+      const runId = b.sessions.read(id)!.turns[0]!.runId;
+      await until(() => b!.runner.store.readRaw(runId).lines.some((l) => l.line.includes('"after"')));
       expect(b.sessions.store.readEvents(id)).toHaveLength(seen);
       b.activate();
       const { meta, events } = await settleOn(b, id);
@@ -648,12 +656,14 @@ describe('Claude sessions', () => {
     const a = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
     let b: TestApp | null = null;
     try {
-      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research', reportNum: 60 })).json());
+      // A report number as only a fan-out reserves it: in process, since a session start over HTTP cannot name one.
+      const { id } = await withScenario(scenarioFile(SLOW), async () => a.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 60 }));
       await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
       // The overlap the handover prevents, forced: a second server reconciles while the first still tracks.
       b = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
       await settleOn(b, id);
-      await wait(600);
+      // A is closed and done with the turn before the count: a late finalize there would have released again by now.
+      await a.close();
       const meta = b.sessions.read(id)!;
       expect(meta.totals).toEqual({ costUsd: 0.07, tokens: 15 });
       expect(meta.reportNum).toBeNull();
@@ -843,7 +853,8 @@ describe('read confinement (BUG-06)', () => {
         const uploaded = await upload(noToken, '%PDF-1.4 retry me');
         const res = await noToken.app.inject({ method: 'POST', url: '/api/sessions', headers: noToken.authedWrite, payload: { mode: 'cv-ingest', target: { type: 'text', value: uploaded }, prompt: `Read the CV at ${uploaded}` } });
         expect(res.json()).toMatchObject({ status: 'error' });
-        await wait(200);
+        // The failed start is settled in the answer; only deleting the session could remove the upload now.
+        expect(noToken.sessions.read(res.json().id)!.status).toBe('error');
         expect(fs.existsSync(uploaded)).toBe(true);
       } finally {
         await noToken.close();
@@ -1033,9 +1044,10 @@ describe('read confinement (BUG-06)', () => {
     expect(fs.existsSync(path.join(t.sessions.store.guardDirOf(meta.id), 'turns', '1', 'after.json'))).toBe(true);
     const statuses = () => t.sessions.store.readEvents(meta.id).map((e) => e.event).filter((e) => e.type === 'status');
     expect(statuses()).toEqual([{ type: 'status', status: 'cancelled', reason: expect.any(String), turn: 1 }]);
-    // Settled now: a later reconcile leaves it alone.
+    // Settled now: a later reconcile leaves it alone. Reconcile decides synchronously; one that took the session up again
+    // would be tracking it now, and nothing records an event for a session that is not tracked.
     t.sessions.reconcile();
-    await wait(400);
+    expect((t.sessions as unknown as { active: Map<string, unknown> }).active.has(meta.id)).toBe(false);
     expect(statuses()).toHaveLength(1);
   });
 

@@ -53,10 +53,12 @@ describe('config/profile.yml editor', () => {
     expect(bad.statusCode).toBe(422);
     expect(bad.json().exit).toBe(2);
     expect(fs.existsSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'))).toBe(false);
-    const good = await put('/api/config/profile', { raw: 'language:\n  output: en\nfollowup_cadence:\n  first_followup_days: 7\n' });
+    // A cadence key followup-cadence.mjs reads (applied_first_days), read back by the cadence form's endpoint (SW4-tests-21).
+    const good = await put('/api/config/profile', { raw: 'language:\n  output: en\nfollowup_cadence:\n  applied_first_days: 7\n' });
     expect(good.statusCode, JSON.stringify(good.json())).toBe(200);
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'), 'utf8')).toContain('first_followup_days: 7');
+    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'config', 'profile.yml'), 'utf8')).toContain('applied_first_days: 7');
     expect((await get('/api/config/profile')).json().kind).toBe('ok');
+    expect((await get('/api/followups/cadence')).json().cadence).toEqual({ applied_first_days: 7 });
   });
 });
 
@@ -161,4 +163,31 @@ describe('Follow-up cadence save on a profile with no cadence map (SW5-server-03
       fs.writeFileSync(file, before);
     }
   });
+});
+
+describe('If-Match is required once the file exists (SW4-tests-04)', () => {
+  const cases: Array<{ name: string; rel: string; text: string; url: string; payload: Record<string, unknown>; headers?: Record<string, string> }> = [
+    { name: 'portals', rel: 'portals.yml', text: 'title_filter:\n  positive: [backend]\n', url: '/api/config/portals', payload: { raw: 'title_filter:\n  positive: [frontend]\n' } },
+    { name: 'profile', rel: 'config/profile.yml', text: 'language:\n  output: en\n', url: '/api/config/profile', payload: { raw: 'language:\n  output: es\n' } },
+    { name: 'cadence', rel: 'config/profile.yml', text: 'followup_cadence:\n  applied_first_days: 7\n', url: '/api/followups/cadence', payload: { cadence: { applied_first_days: 9 } } },
+    { name: 'plugins', rel: 'config/plugins.yml', text: 'plugins:\n  gmail:\n    enabled: true\n', url: '/api/config/plugins/gmail', payload: { enabled: false } },
+    { name: 'blacklist', rel: 'data/blacklist.md', text: '# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Old Corp | reposts | 2025-09-01 |\n', url: '/api/blacklist', payload: { confirm: true, rows: [] }, headers: { 'x-cc-explicit': 'blacklist' } },
+  ];
+  for (const c of cases) {
+    it(`a ${c.name} write with no If-Match against an existing file is refused with 409 and the current file, and writes nothing`, async () => {
+      const file = path.join(t.cfg.dataRoot, c.rel);
+      const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, c.text);
+        const res = await t.app.inject({ method: 'PUT', url: c.url, headers: { ...t.authedWrite, ...(c.headers ?? {}) }, payload: c.payload });
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().current).toBeTruthy();
+        expect(fs.readFileSync(file, 'utf8')).toBe(c.text);
+      } finally {
+        if (before === null) fs.rmSync(file, { force: true });
+        else fs.writeFileSync(file, before);
+      }
+    });
+  }
 });

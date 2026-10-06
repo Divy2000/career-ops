@@ -228,6 +228,45 @@ describe('Runner', () => {
     expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).not.toContain('line three');
   });
 
+  it('a wrapper that cannot be spawned (node gone after an upgrade) fails its run with the reason, and the next queued run still starts (SW7-server-03)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50, nodePath: '/nonexistent/node-removed-by-brew-upgrade' });
+    runners.push(runner);
+    const meta = runner.start(req(['0'], { resources: ['pipeline'] }));
+    await until(() => runner.store.read(meta.id)?.status === 'failed');
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/could not start.*ENOENT/i), endedAt: expect.any(String) });
+    expect(runner.pending('test.noisy')).toEqual([]);
+  });
+
+  it('a spawn that throws at once (an argument node refuses) fails its run instead of leaving it claimed and queued forever (SW7-server-03)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const bad = runner.start(req(['bad\u0000arg'], { resources: ['pipeline'] }));
+    expect(runner.store.read(bad.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/could not start/i) });
+    // The resource it would have held is free: the next run starts and finishes.
+    const next = runner.start(req(['0'], { resources: ['pipeline'] }));
+    await until(() => runner.store.read(next.id)?.status === 'done');
+  });
+
+  it('a run whose exit code means "found something" ends done when it wrote nothing to stderr, and failed otherwise (check-liveness.mjs found an expired posting)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meaning = { code: 1, status: 'done' as const, onlyWithoutStderr: true };
+    const found = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', 'console.log("Results: 0 active  1 expired"); process.exitCode = 1'], cwd: PACKAGE_ROOT }, exitMeaning: meaning });
+    await until(() => ['done', 'failed'].includes(runner.store.read(found.id)?.status ?? ''));
+    expect(runner.store.read(found.id)).toMatchObject({ status: 'done', exitCode: 1 });
+    const fatal = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', 'console.error("Fatal: no browser"); process.exitCode = 1'], cwd: PACKAGE_ROOT }, exitMeaning: meaning });
+    await until(() => ['done', 'failed'].includes(runner.store.read(fatal.id)?.status ?? ''));
+    expect(runner.store.read(fatal.id)).toMatchObject({ status: 'failed', exitCode: 1 });
+  });
+
+  it('a run whose exit code has a known meaning and printed nothing fails with that meaning as its error (fetch-jd.mjs on a host no ATS API covers)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const silent = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', 'process.exitCode = 1'], cwd: PACKAGE_ROOT }, exitMeaning: { code: 1, status: 'failed', error: 'no known job-board API covers this URL' } });
+    await until(() => runner.store.read(silent.id)?.status === 'failed');
+    expect(runner.store.read(silent.id)!.error).toBe('no known job-board API covers this URL');
+  });
+
   it('orders runs that share a resource and drops a queued run on cancel', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);

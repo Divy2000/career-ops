@@ -240,6 +240,24 @@ describe('pipeline.md rows (scan.mjs formatPipelineOffer)', () => {
     expect(parseShortlist(md).rows[0]!.url).toBe('https://jobs.example.com/apply?ids[]=7&team=a%7Cb');
   });
 
+  it('company, role, location and rank reason that the writers escaped read back as written: brackets and backslashes, no escapes (SW5-libs-01)', () => {
+    const [line] = format([{ url: 'https://x.example/9', company: 'Acme [EU]', title: 'Senior Engineer [Platform]', location: 'Berlin \\ Remote' }]);
+    expect(line).toContain('Acme \\[EU\\]');
+    // rank-pipeline.mjs appends the rank segment with the reason escaped the same way.
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'rank-pipeline.mjs')).href)}); process.stdout.write(m.appendRankAnnotation(${JSON.stringify(line)}, 4.2, 'strong [backend] fit'));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, env: { ...process.env, CAREER_OPS_ROOT: tempDir('cc-rank-format-'), NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const [row] = parsePipeline(`## Pending\n\n${r.stdout}\n`);
+    expect(row).toMatchObject({ company: 'Acme [EU]', role: 'Senior Engineer [Platform]', location: 'Berlin \\ Remote', rank: 4.2, rankReason: 'strong [backend] fit' });
+  });
+
+  it('a shortlist row and an excluded bullet copied from escaped pipeline cells read back unescaped (SW5-libs-01)', () => {
+    const md = '# Shortlist - 2026-10-05\n\n| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |\n|---|---|---|---|---|---|---|---|---|\n| 1 | 4.5 | 4.0 | strong | Acme \\[EU\\] | [Senior Engineer \\[Platform\\]](https://x.example/9) | Berlin \\\\ Remote | - | strong \\[backend\\] fit |\n\n## Excluded\n\n- Globex \\[US\\] - [Staff \\[Infra\\]](https://x.example/10) - paused (2026-10-01): pauses \\[all\\] sponsorship\n';
+    const read = parseShortlist(md);
+    expect(read.rows[0]).toMatchObject({ company: 'Acme [EU]', role: 'Senior Engineer [Platform]', location: 'Berlin \\ Remote', why: 'strong [backend] fit' });
+    expect(read.excluded[0]).toMatchObject({ company: 'Globex [US]', role: 'Staff [Infra]', headline: 'pauses [all] sponsorship' });
+  });
+
   it('a location with a colon stays the location, and the compensation after it stays the compensation (R8-16)', () => {
     const lines = format([
       { url: 'https://x.example/1', company: 'Acme', title: 'SWE', location: 'Remote: US', salary: { min: 120000, max: 160000, currency: 'USD' } },

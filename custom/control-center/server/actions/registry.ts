@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
-import type { Cost } from '../runner/store.js';
+import type { Cost, ExitMeaning } from '../runner/store.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { listReportFiles } from '../domains/reports.js';
+import { companyHistoryInputs } from '../domains/insightsCache.js';
 import { containedTarget, OutsideRootsError } from '../lib/atomic-write.js';
 import { RunStore } from '../runner/store.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
@@ -23,6 +24,10 @@ export interface ActionContext {
   dataRoot: string;
   /** The claude the app runs (CC_CLAUDE_BIN or the resolved one); the daily job gets it when it is absolute, as the plist does. */
   claudeBin?: string;
+  /** The node the scheduled jobs are pinned to (pinnedNodeBin); the daily job gets it when it is absolute, as the plist does. */
+  nodeBin?: string;
+  /** The data root's tracker as path-resolver.mjs rawTrackerPath resolves it (CAREER_OPS_TRACKER first). */
+  trackerPath?: string;
   /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
   tmpInputs: string[];
   /** The community plugins folder (default <codeRoot>/plugins.local). */
@@ -66,6 +71,13 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
   check?: (params: z.infer<S>, ctx: ActionContext) => CheckProblem | null | Promise<CheckProblem | null>;
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
+  /** A background run's exit code that means more than "failed" (a check that found something, a silent refusal). */
+  exitMeaning?: ExitMeaning;
+  /**
+   * A sync check's non-zero exit that means it ran and found problems: the reason to show with its output, answered as
+   * 200 instead of a failure. null: a real failure.
+   */
+  findings?: (r: { code: number; stdout: string; stderr: string }) => string | null;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
   /** A readable status and message for a failed sync run, replacing the generic "exited N" and the raw stderr. */
@@ -181,7 +193,19 @@ export const ACTIONS: ActionDef[] = [
   // merge-tracker.mjs --backfill-urls fills the URL column and exits before any merge or --verify, so it is its own action.
   define({ id: 'tracker.backfillUrls', label: 'Backfill tracker URLs from reports', cost: 'free', resources: ['tracker'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'mergeTracker', ['--backfill-urls', ...flag(p.dryRun, '--dry-run')]) }),
   define({ id: 'tracker.reconcile', label: 'Reconcile pipeline with tracker', cost: 'free', resources: ['tracker', 'pipeline'], claude: false, sync: false, params: dryRun, build: (p, ctx) => node(ctx, 'reconcilePipeline', flag(p.dryRun, '--dry-run')) }),
-  define({ id: 'tracker.syncCheck', label: 'Tracker sync check', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']) }),
+  define({
+    id: 'tracker.syncCheck',
+    label: 'Tracker sync check',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: true,
+    params: none,
+    build: (_p, ctx) => node(ctx, 'tracker', ['sync', '--check']),
+    // tracker.mjs sync --check exits 1 when its diagnosis found issues, after its closing "(--check" line; any other
+    // exit 1 (no tracker, no node:sqlite) is a failure.
+    findings: (r) => (r.code === 1 && r.stderr.includes('(--check') ? 'The tracker sync check found problems; see its output.' : null),
+  }),
   define({
     id: 'tracker.hiredShare',
     label: 'Draft Hired Wall story',
@@ -381,8 +405,30 @@ export const ACTIONS: ActionDef[] = [
     check: (p, ctx) => (listReportFiles(ctx.dataRoot).has(p.report) ? null : `There is no file for report ${p.report} under reports/.`),
     build: (p, ctx) => node(ctx, 'archivePosting', [p.url, '--report', String(p.report)]),
   }),
-  define({ id: 'docs.liveness', label: 'Check posting liveness', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ urls: z.array(httpUrl).min(1).max(200) }), build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]) }),
-  define({ id: 'docs.fetchJd', label: 'Fetch job description', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ url: httpUrl }), build: (p, ctx) => node(ctx, 'fetchJd', [p.url]) }),
+  define({
+    id: 'docs.liveness',
+    label: 'Check posting liveness',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ urls: z.array(httpUrl).min(1).max(200) }),
+    build: (p, ctx) => node(ctx, 'checkLiveness', ['--file', tmpFile(ctx, 'txt', p.urls.join('\n') + '\n')]),
+    // check-liveness.mjs exits 1 when a posting is expired or uncertain: the check is done, its log says which.
+    exitMeaning: { code: 1, status: 'done', onlyWithoutStderr: true },
+  }),
+  define({
+    id: 'docs.fetchJd',
+    label: 'Fetch job description',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ url: httpUrl }),
+    build: (p, ctx) => node(ctx, 'fetchJd', [p.url]),
+    // fetch-jd.mjs exits 1 without a word when no job-board API it knows covers the URL (by design: callers fall back).
+    exitMeaning: { code: 1, status: 'failed', onlyWithoutStderr: true, error: 'No job-board API that fetch-jd.mjs knows covers this URL. Open the posting in the browser and copy the description instead.' },
+  }),
   define({
     id: 'docs.prepareApplication',
     label: 'Prepare application (zero-token prefill)',
@@ -447,7 +493,19 @@ export const ACTIONS: ActionDef[] = [
       ['insights.contacts', 'Contacts summary', 'contacts'],
     ] as Array<[string, string, CliId]>
   ).map(([id, label, cli]) => define({ id, label, cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, cli, ['--summary']) })),
-  define({ id: 'insights.companyHistory', label: 'Company history', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company')]) }),
+  define({
+    id: 'insights.companyHistory',
+    label: 'Company history',
+    cost: 'free',
+    resources: [],
+    claude: false,
+    sync: false,
+    params: z.object({ company: company.optional() }),
+    build: (p, ctx) => {
+      const inputs = companyHistoryInputs(ctx.dataRoot, ctx.trackerPath ?? path.join(ctx.dataRoot, 'data', 'applications.md'));
+      return node(ctx, 'companyHistory', ['--summary', ...opt(p.company, '--company'), ...inputs.args], inputs.env);
+    },
+  }),
   define({
     id: 'insights.keywordMatch',
     label: 'Keyword match',
@@ -528,7 +586,7 @@ export const ACTIONS: ActionDef[] = [
   define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),
   define({ id: 'system.updateCheck', label: 'Check for updates', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ force: z.boolean().default(false) }), build: (p, ctx) => node(ctx, 'updateSystem', ['check', ...flag(p.force, '--force')]) }),
   define({ id: 'system.updateApply', label: 'Apply update', cost: 'network', confirm: 'This fork takes updates through the weekly sync PR. Applying directly can conflict with it. Continue anyway?', resources: ['tracker', 'pipeline', 'portals', 'profile'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['apply', '--confirm']) }),
-  define({ id: 'system.updateDismiss', label: 'Dismiss update', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ version: z.string().regex(/^[\w.+-]+$/) }), build: (p, ctx) => node(ctx, 'updateSystem', ['dismiss', '--version', p.version]) }),
+  define({ id: 'system.updateDismiss', label: 'Dismiss update', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ version: z.string().regex(/^v?\d+\.\d+\.\d+$/i, 'a release version, X.Y.Z, as update-system.mjs dismiss takes') }), build: (p, ctx) => node(ctx, 'updateSystem', ['dismiss', '--version', p.version]) }),
   define({ id: 'system.rollback', label: 'Roll back update', cost: 'free', confirm: 'Rolls back the last applied update. Continue?', resources: ['tracker', 'pipeline', 'portals', 'profile'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['rollback']) }),
   // ---- daily job, dev chat ----
   define({
@@ -547,7 +605,7 @@ export const ACTIONS: ActionDef[] = [
     check: async (_p, ctx) => ((await ctx.dailyRunning?.()) ? { status: 409, error: 'Skipped: the daily job is already running (its schedule or another start began it). Watch it on Runs & Schedule; it ran nothing new.' } : null),
     // CC_RUN_DAILY_SKIP_EXIT: should the job start in between, run-daily.sh still finds the lock held, and then says
     // it skipped and exits 75, so this run ends failed with that line instead of done with an empty log.
-    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, env: { CC_RUN_DAILY_SKIP_EXIT: '75', ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { CC_CLAUDE_BIN: ctx.claudeBin } : {}) } }),
+    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, env: { CC_RUN_DAILY_SKIP_EXIT: '75', ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { CC_CLAUDE_BIN: ctx.claudeBin } : {}), ...(ctx.nodeBin && path.isAbsolute(ctx.nodeBin) ? { CC_NODE_BIN: ctx.nodeBin } : {}) } }),
   }),
   define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
 ];

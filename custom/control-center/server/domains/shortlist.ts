@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { readText } from './files.js';
-import { unescapeMarkdownUrl } from './inboxSkip.js';
+import { unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
 
 export interface ShortlistRow {
   rank: number;
@@ -56,12 +56,14 @@ function dash(v: string | undefined): string | null {
 const EXCLUDED_BULLET = /^- (.+?) - \[(.*)\]\((\S*)\) - (.*)$/;
 const ALERT_LABEL = /^(\S+) \((\d{4}-\d{2}-\d{2})\): (.*)$/;
 
+const unescapeOrNull = (v: string | null) => (v === null ? null : unescapeMarkdownCell(v));
+
 function excludedRow(line: string): ExcludedRow | null {
   const m = line.match(EXCLUDED_BULLET);
   if (!m) return null;
   const label = m[4]!.trim();
   const alert = label.match(ALERT_LABEL);
-  return { company: m[1]!.trim(), role: m[2]!, url: m[3] ? unescapeMarkdownUrl(m[3]) : null, alert: alert ? alert[1]! : label, date: alert ? alert[2]! : null, headline: alert ? alert[3]! : '' };
+  return { company: unescapeMarkdownCell(m[1]!.trim()), role: unescapeMarkdownCell(m[2]!), url: m[3] ? unescapeMarkdownUrl(m[3]) : null, alert: alert ? alert[1]! : label, date: alert ? alert[2]! : null, headline: alert ? unescapeMarkdownCell(alert[3]!) : '' };
 }
 
 // custom/pipeline/lib.mjs sponsorAdjustment labels a kept row `<tier>` or `<tier>; <status> <date>`.
@@ -109,12 +111,12 @@ export function parseShortlist(md: string): Omit<Extract<ShortlistRead, { kind: 
         relevance: num(c[2]),
         sponsor: c[3] ?? '',
         ...sponsorParts(c[3] ?? ''),
-        company: c[4] ?? '',
-        role: link ? link[1]! : roleCell,
+        company: unescapeMarkdownCell(c[4] ?? ''),
+        role: unescapeMarkdownCell(link ? link[1]! : roleCell),
         url: link ? unescapeMarkdownUrl(link[2]!) : null,
-        location: dash(c[6]),
+        location: unescapeOrNull(dash(c[6])),
         posted: dash(c[7]),
-        why: dash(c[8]),
+        why: unescapeOrNull(dash(c[8])),
       });
     }
   }
