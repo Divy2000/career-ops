@@ -272,6 +272,48 @@ test.describe('server-rendered pages follow the system theme', () => {
   }
 });
 
+/** What a theme token resolves to on this page, as a computed color: a probe element painted with it. */
+const tokenColor = (page: Page, token: string, prop: 'backgroundColor' | 'color' = 'backgroundColor') =>
+  page.evaluate(
+    ([t, p]) => {
+      const probe = document.createElement('div');
+      probe.style[p as 'color'] = `var(${t})`;
+      document.body.append(probe);
+      const value = getComputedStyle(probe)[p as 'color'];
+      probe.remove();
+      return value;
+    },
+    [token, prop] as const,
+  );
+
+test.describe('toasts are themed from the tokens', () => {
+  for (const scheme of ['dark', 'light'] as const) {
+    test(`an error toast in ${scheme} sits on the overlay surface with the theme's text, border and danger accent`, async ({ browser }) => {
+      const ctx = await browser.newContext({ colorScheme: scheme });
+      const page = await ctx.newPage();
+      await login(page);
+      await page.goto('/settings');
+      await page.getByRole('tab', { name: 'Raw YAML' }).click();
+      const editor = page.getByLabel('portals.yml YAML');
+      await expect(editor).toContainText('title_filter');
+      // A broken file is refused before anything is written, and says so in an error toast.
+      await editor.fill('title_filter: [broken');
+      await page.getByRole('button', { name: 'Validate and save' }).click();
+      const toast = page.locator('[data-sonner-toast][data-type="error"]').first();
+      await expect(toast).toBeVisible();
+      const style = await toast.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { bg: cs.backgroundColor, color: cs.color, border: cs.borderTopColor, accent: cs.borderLeftColor };
+      });
+      expect(style.bg).toBe(await tokenColor(page, '--surface-overlay'));
+      expect(style.color).toBe(await tokenColor(page, '--text', 'color'));
+      expect(style.border).toBe(await tokenColor(page, '--border-strong'));
+      expect(style.accent).toBe(await tokenColor(page, '--danger'));
+      await ctx.close();
+    });
+  }
+});
+
 const AXE_PAGES = ['/', '/pipeline', '/tracker', '/tracker/1', '/insights', '/sponsorship?tab=lookup&q=Acme%20Robotics', '/followups', '/runs', '/sessions', '/dev', '/settings?tab=app', '/tutorials'];
 
 test.describe('accessibility in both themes (serious and critical axe violations)', () => {
