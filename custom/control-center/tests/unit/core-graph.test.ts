@@ -85,6 +85,40 @@ describe('a change anywhere in that graph restarts the server child, whose fresh
     expect(changes).toEqual([]);
   });
 
+  it('watches a file a module imports before it exists, so creating it and editing it later restart the child (SW5-claude-01)', async () => {
+    const root = scratchRoot();
+    // lib.mjs now imports slug.mjs, which is written a moment later (Dev Chat edits the importer first).
+    put(root, 'custom/projects/lib.mjs', "import { normalize } from '../../tracker-parse.mjs';\nimport { slug } from './slug.mjs';\nexport const key = (s) => slug(normalize(s));\n");
+    const changes: string[] = [];
+    const watcher = await watchCoreGraph(root, ['custom/projects/lib.mjs'], (file) => changes.push(file));
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    put(root, 'custom/projects/slug.mjs', "import { trim } from '../../lib/text.mjs';\nexport const slug = (s) => trim(s).replace(/ /g, '-');\n");
+    for (let i = 0; i < 100 && !changes.length; i++) await wait(50);
+    expect(changes).toEqual([path.join(root, 'custom/projects/slug.mjs')]);
+    // No reload settled in between: the new file is watched for its own later edits all the same.
+    await wait(SETTLE);
+    changes.length = 0;
+    put(root, 'custom/projects/slug.mjs', "import { trim } from '../../lib/text.mjs';\nexport const slug = (s) => trim(s).replace(/ /g, '_');\n");
+    for (let i = 0; i < 100 && !changes.length; i++) await wait(50);
+    expect(changes).toEqual([path.join(root, 'custom/projects/slug.mjs')]);
+  });
+
+  it('an import added to a watched module and its file written right after, with no reload in between, still signals the new file (SW5-claude-01 review)', async () => {
+    const root = scratchRoot();
+    const changes: string[] = [];
+    const watcher = await watchCoreGraph(root, ['custom/projects/lib.mjs'], (file) => changes.push(file));
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    // Back to back, before anything reacts to the first write: the importer gains the import, then the file appears.
+    put(root, 'custom/projects/lib.mjs', "import { normalize } from '../../tracker-parse.mjs';\nimport { slug } from './slug.mjs';\nexport const key = (s) => slug(normalize(s));\n");
+    put(root, 'custom/projects/slug.mjs', 'export const slug = (s) => s.replace(/ /g, "-");\n');
+    const slug = path.join(root, 'custom/projects/slug.mjs');
+    for (let i = 0; i < 100 && !changes.includes(slug); i++) await wait(50);
+    expect(changes).toContain(path.join(root, 'custom/projects/lib.mjs'));
+    expect(changes).toContain(slug);
+  });
+
   it('watches a file the graph gains after a reload (an upstream module started importing a new one)', async () => {
     const root = scratchRoot();
     const changes: string[] = [];
