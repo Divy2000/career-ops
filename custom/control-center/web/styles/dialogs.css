@@ -253,3 +253,49 @@ button.button--danger:active {
 [data-sonner-toaster] {
   font-family: var(--font-sans);
 }
+/*
+ * Toasts in the theme's own colors. Sonner sets its palette per theme on [data-sonner-toaster][data-sonner-theme=...];
+ * :root lifts these above it whichever stylesheet loads last. The type shows as a left accent, not a tinted card.
+ */
+:root [data-sonner-toaster][data-sonner-theme] {
+  --normal-bg: var(--surface-overlay);
+  --normal-bg-hover: var(--surface-3);
+  --normal-border: var(--border-strong);
+  --normal-border-hover: var(--border-input);
+  --normal-text: var(--text);
+  --border-radius: var(--radius-md);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-styled='true'] {
+  box-shadow: var(--shadow-popover);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-description] {
+  color: var(--text-muted);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-close-button]:hover {
+  background: var(--normal-bg-hover);
+  border-color: var(--normal-border-hover);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='success'] {
+  border-left: 3px solid var(--success);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='info'] {
+  border-left: 3px solid var(--info);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='warning'] {
+  border-left: 3px solid var(--warning);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='error'] {
+  border-left: 3px solid var(--danger);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='success'] [data-icon] {
+  color: var(--success);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='info'] [data-icon] {
+  color: var(--info);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='warning'] [data-icon] {
+  color: var(--warning);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-type='error'] [data-icon] {
+  color: var(--danger);
+}
