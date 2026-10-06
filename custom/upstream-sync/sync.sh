@@ -78,6 +78,8 @@ git worktree prune
 git worktree add -q -B "$BRANCH" "$WT" origin/main || fail "git worktree add failed"
 cd "$WT" || fail "worktree missing"
 install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"
+# The tree the baseline runs on, kept in memory: after Claude the same tree is reinstalled unless the merge changed it.
+BASE_DEPS_TREE="$(root_deps_tree)" || fail "cannot read the baseline's installed dependency tree"
 
 echo "--- baseline suite on origin/main"
 suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"
@@ -125,7 +127,8 @@ CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_AP
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
-refresh_root_deps || fail "reinstalling the merged root dependencies failed"
+clean_sync_worktree "$WT" || fail "cannot clean untracked and ignored files from the sync worktree"
+refresh_root_deps origin/main "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
 
 CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then

@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -506,44 +509,38 @@ test('merge_snapshot and changed_since_snapshot fail, not print nothing, when th
 
 // ---- the merged tree is tested with the dependencies it will merge ----
 
-test('refresh_root_deps reinstalls from HEAD every time, a dependency change in the merge included', () => {
-  const w = npmStubWorld();
-  try {
-    commitFile(w.repo, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}\n', 'upstream adds a dependency');
-    const res = bashLib(w.repo, 'refresh_root_deps', w.env);
-    assert.equal(res.status, 0, res.stderr);
-    assert.match(res.stdout, /reinstalling the root dependencies from the merged tree/);
-    const calls = readFileSync(w.log, 'utf8').trim().split('\n');
-    assert.equal(calls.length, 1);
-    assert.match(calls[0], /^install\b.*--ignore-scripts/);
-  } finally { rmSync(w.dir, { recursive: true, force: true }); }
-});
-
-test('refresh_root_deps fails when the reinstall fails, never testing stale modules', () => {
-  const w = npmStubWorld();
-  try {
-    stub(w.bin, 'npm', 'exit 7');
-    assert.notEqual(bashLib(w.repo, 'refresh_root_deps', w.env).status, 0);
-  } finally { rmSync(w.dir, { recursive: true, force: true }); }
-});
-
-test('sync.sh reinstalls the root dependencies after the merge is verified and before any post-merge test', () => {
+test('sync.sh keeps the baseline dependency tree in memory before Claude, then cleans the worktree and reinstalls after verify_merge, before any post-merge test', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  const refresh = sync.indexOf('refresh_root_deps || fail ');
+  const install = sync.indexOf('install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"');
+  const tree = sync.indexOf('BASE_DEPS_TREE="$(root_deps_tree)" || fail ');
+  const claude = sync.indexOf('claude -p');
   const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")"');
+  const clean = sync.indexOf('clean_sync_worktree "$WT" || fail ');
+  const refresh = sync.indexOf('refresh_root_deps origin/main "$BASE_DEPS_TREE" || fail ');
   const custom = sync.indexOf('custom_tests "$STATE_DIR/$TODAY.custom-tests.txt"');
-  assert.ok(gate > -1 && refresh > gate && custom > refresh, `order was verify=${gate} refresh=${refresh} custom=${custom}`);
+  assert.ok(install > -1 && tree > install && claude > tree, `install=${install} tree=${tree} claude=${claude}`);
+  assert.ok(gate > claude && clean > gate && refresh > clean && custom > refresh, `verify=${gate} clean=${clean} refresh=${refresh} custom=${custom}`);
 });
 
-/** Runs sync.sh's own post-verify dependency line in a repo whose origin/main is HEAD (fingerprints match). */
-function syncDepsStep(w) {
-  git(w.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
-  const line = readFileSync(SYNC, 'utf8').split('\n').find((l) => l.startsWith('refresh_root_deps'));
-  assert.ok(line, 'no refresh_root_deps line in sync.sh');
-  return bashLib(w.repo, `fail() { echo "!!! $1" >&2; exit 1; }\n${line}`, w.env);
+/**
+ * Runs sync.sh's own lines from just after verify_merge through the dependency reinstall, in the sync worktree `w.repo`
+ * whose origin/main is HEAD unless a test moves it. The npm stub records each call and whether it saw a project .npmrc
+ * and a package-lock.json (copied aside).
+ */
+function syncDepsStep(w, env = {}) {
+  if (!refExists(w.repo, 'refs/remotes/origin/main')) git(w.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  stub(w.bin, 'npm', `echo "$*" >> "${w.log}"\n[ -e .npmrc ] && echo "saw .npmrc" >> "${w.log}"\n[ -e package-lock.json ] && cp package-lock.json "${w.dir}/lock-seen.json"\n${env.NPM_EXIT ? `exit ${env.NPM_EXIT}` : 'exit 0'}`);
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('GATE="$(verify_merge'));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith('refresh_root_deps '));
+  assert.ok(from > -1 && to > from, 'no verify_merge .. refresh_root_deps block in sync.sh');
+  const script = `WT="${w.repo}"\nfail() { echo "!!! $1" >&2; exit 1; }\n${lines.slice(from + 1, to + 1).join('\n')}`;
+  return bashLib(w.repo, script, { ...w.env, BASE_DEPS_TREE: '{"lockfileVersion":3,"packages":{"node_modules/leftish":{"version":"1.0.0"}}}', ...env });
 }
 
-test('a node_modules the sync Claude changed is thrown away and reinstalled from HEAD, though package.json did not change', () => {
+const npmCalls = (w) => readFileSync(w.log, 'utf8').trim().split('\n');
+
+test('a node_modules the sync Claude changed is thrown away and reinstalled, though package.json did not change', () => {
   const w = npmStubWorld();
   try {
     const tampered = path.join(w.repo, 'node_modules', 'js-yaml', 'index.js');
@@ -551,19 +548,152 @@ test('a node_modules the sync Claude changed is thrown away and reinstalled from
     writeFileSync(tampered, 'module.exports = "patched by the pass";\n');
     const res = syncDepsStep(w);
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(existsSync(path.join(w.repo, 'node_modules')), false, 'the old tree is gone (the npm stub installs nothing)');
-    const calls = readFileSync(w.log, 'utf8').trim().split('\n');
-    assert.equal(calls.length, 1);
-    assert.match(calls[0], /^install\b.*--ignore-scripts/);
+    assert.equal(existsSync(tampered), false, 'the old tree is gone (the npm stub installs nothing)');
+    assert.equal(npmCalls(w).filter((c) => /^(ci|install)\b/.test(c)).length, 1);
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });
 
-test('a failed reinstall after Claude fails the run', () => {
+test('with the dependencies unchanged by the merge, the reinstall is npm ci of the baseline tree, and the temporary lockfile is removed', () => {
   const w = npmStubWorld();
   try {
-    stub(w.bin, 'npm', 'exit 7');
     const res = syncDepsStep(w);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(npmCalls(w)[0], /^ci\b.*--ignore-scripts/);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(w.dir, 'lock-seen.json'), 'utf8')), { lockfileVersion: 3, packages: { 'node_modules/leftish': { version: '1.0.0' } } });
+    assert.equal(existsSync(path.join(w.repo, 'package-lock.json')), false);
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('with the dependencies changed by the merge, they are resolved fresh', () => {
+  const w = npmStubWorld();
+  try {
+    git(w.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    commitFile(w.repo, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"leftish":"^1.0.0"}}\n', 'upstream adds a dependency');
+    const res = syncDepsStep(w);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(npmCalls(w)[0], /^install\b.*--no-package-lock.*--ignore-scripts/);
+    assert.equal(existsSync(path.join(w.dir, 'lock-seen.json')), false);
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('an unchanged-dependencies reinstall with no baseline tree fails the run instead of resolving fresh', () => {
+  const w = npmStubWorld();
+  try {
+    const res = syncDepsStep(w, { BASE_DEPS_TREE: '' });
     assert.equal(res.status, 1);
     assert.match(res.stderr, /^!!! /m);
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('a failed reinstall after Claude fails the run, and leaves no temporary lockfile', () => {
+  const w = npmStubWorld();
+  try {
+    const res = syncDepsStep(w, { NPM_EXIT: '7' });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /^!!! /m);
+    assert.equal(existsSync(path.join(w.repo, 'package-lock.json')), false);
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('files the sync Claude left untracked or ignored are gone before the reinstall and the tests: a project .npmrc, a stray spec', () => {
+  const w = npmStubWorld();
+  try {
+    writeFileSync(path.join(w.repo, '.gitignore'), 'node_modules\n.npmrc\n');
+    git(w.repo, 'add', '.gitignore');
+    git(w.repo, 'commit', '-q', '-m', 'ignore');
+    writeFileSync(path.join(w.repo, '.npmrc'), 'registry=http://attacker.invalid/\n');
+    mkdirSync(path.join(w.repo, 'custom', 'evil', 'tests'), { recursive: true });
+    writeFileSync(path.join(w.repo, 'custom', 'evil', 'tests', 'pass.spec.mjs'), "import { test } from 'node:test';\ntest('always passes', () => {});\n");
+    const res = syncDepsStep(w);
+    assert.equal(res.status, 0, res.stderr);
+    assert.doesNotMatch(readFileSync(w.log, 'utf8'), /saw \.npmrc/);
+    assert.equal(existsSync(path.join(w.repo, '.npmrc')), false);
+    assert.equal(existsSync(path.join(w.repo, 'custom', 'evil')), false);
+    assert.equal(existsSync(path.join(w.repo, '.gitignore')), true, 'tracked files stay');
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('clean_sync_worktree refuses to clean anything but the sync worktree it is given', () => {
+  const w = npmStubWorld();
+  try {
+    writeFileSync(path.join(w.repo, 'untracked.txt'), 'keep\n');
+    const res = bashLib(w.repo, `clean_sync_worktree "${w.dir}"`, w.env);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /not the sync worktree/);
+    assert.equal(existsSync(path.join(w.repo, 'untracked.txt')), true);
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+// ---- the reinstall against a real npm and a local registry whose range moves on ----
+
+const execFileP = promisify(execFile);
+
+/** A registry on a free loopback port serving `leftish`: 1.0.0, and 1.1.0 too once release() is called. */
+async function fakeRegistry(dir) {
+  const tarballs = {};
+  for (const v of ['1.0.0', '1.1.0']) {
+    const src = path.join(dir, `src-${v}`, 'package');
+    mkdirSync(src, { recursive: true });
+    writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'leftish', version: v, main: 'index.js' }));
+    writeFileSync(path.join(src, 'index.js'), `module.exports = ${JSON.stringify(v)};\n`);
+    const tgz = path.join(dir, `leftish-${v}.tgz`);
+    execFileSync('tar', ['-czf', tgz, '-C', path.dirname(src), 'package']);
+    tarballs[v] = readFileSync(tgz);
+  }
+  let versions = ['1.0.0'];
+  const server = createServer((req, res) => {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    if (req.url === '/leftish') {
+      const doc = { name: 'leftish', 'dist-tags': { latest: versions.at(-1) }, versions: {} };
+      for (const v of versions) {
+        doc.versions[v] = { name: 'leftish', version: v, main: 'index.js', dist: { tarball: `${base}/leftish/-/leftish-${v}.tgz`, shasum: createHash('sha1').update(tarballs[v]).digest('hex'), integrity: `sha512-${createHash('sha512').update(tarballs[v]).digest('base64')}` } };
+      }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+      return res.end(JSON.stringify(doc));
+    }
+    const m = /^\/leftish\/-\/leftish-(.+)\.tgz$/.exec(req.url);
+    if (m && versions.includes(m[1])) {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      return res.end(tarballs[m[1]]);
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: `http://127.0.0.1:${server.address().port}/`, release: () => { versions = ['1.0.0', '1.1.0']; }, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+test('with the dependencies unchanged, a registry that moved on since the baseline does not change what the merged tree is tested with', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-registry-'));
+  const registry = await fakeRegistry(dir);
+  try {
+    const repo = path.join(dir, 'repo');
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(path.join(repo, '.gitignore'), 'node_modules\npackage-lock.json\n');
+    commitFile(repo, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"leftish":"^1.0.0"}}\n', 'pkg');
+    git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    // npm keeps a compile cache in TMPDIR: it gets its own, inside this test's folder.
+    mkdirSync(path.join(dir, 'tmp'));
+    const env = { ...GIT_ENV, HOME: dir, TMPDIR: path.join(dir, 'tmp'), npm_config_registry: registry.url, npm_config_cache: path.join(dir, 'npm-cache'), npm_config_prefer_online: 'true', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' };
+    const lines = readFileSync(SYNC, 'utf8').split('\n');
+    const take = (prefix) => {
+      const line = lines.find((l) => l.startsWith(prefix));
+      assert.ok(line, `no line starting ${prefix} in sync.sh`);
+      return line;
+    };
+    const bash = (script, extra = {}) => execFileP('bash', ['-c', `source "${LIB}"\nWT="${repo}"\nfail() { echo "!!! $1" >&2; exit 1; }\n${script}`], { cwd: repo, env: { ...env, ...extra }, encoding: 'utf8' });
+    const installed = () => JSON.parse(readFileSync(path.join(repo, 'node_modules', 'leftish', 'package.json'), 'utf8')).version;
+    const before = await bash(`${take('install_root_deps ignore-scripts')}\n${take('BASE_DEPS_TREE=')}\nprintf '%s' "$BASE_DEPS_TREE"`);
+    assert.equal(installed(), '1.0.0');
+    registry.release();
+    await bash(take('refresh_root_deps '), { BASE_DEPS_TREE: before.stdout });
+    assert.equal(installed(), '1.0.0', 'the baseline tree, not the newer 1.1.0 the range now resolves to');
+    commitFile(repo, 'package.json', '{"name":"x","version":"1.0.1","dependencies":{"leftish":"^1.0.0"}}\n', 'upstream bumps the package');
+    await bash(take('refresh_root_deps '), { BASE_DEPS_TREE: before.stdout });
+    assert.equal(installed(), '1.1.0', 'a merge that changed the dependencies resolves them fresh');
+  } finally {
+    await registry.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
