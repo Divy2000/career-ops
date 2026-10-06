@@ -175,9 +175,11 @@ Some intro text about the file.
     expect(parseBlacklist(saved).rows).toEqual(parsed.rows);
   });
 
-  it('maps the legacy three-column table (Company, Reason, Added) to company scope', () => {
+  it('reads the legacy three-column table (Company, Reason, Added) by position as scan.mjs does, keeps Added as a column, and warns (SW8 review 3)', () => {
     const parsed = parseBlacklist('# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Spam Staffing Ltd | body-shop | 2026-09-01 |\n');
-    expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop' }]);
+    expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: 'body-shop', scope: 'company', reason: '', extra: ['2026-09-01'] }]);
+    expect(parsed.extraColumns).toEqual(['Added']);
+    expect(parsed.columnWarning).toContain('Company | Reason | Added');
   });
   it('keeps the notes after the table verbatim', () => {
     const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme Corp | 2026-01-15 | company | x |\n';
@@ -208,17 +210,19 @@ Some intro text about the file.
   it('carries columns it does not manage through every row, in order, and leaves them empty on new rows', () => {
     const md = '# Blacklist\n\n| Company | Reason | Added | Contact | Ticket |\n|---|---|---|---|---|\n| Old Corp | reposts | 2025-09-01 | jane@old.example | T-1 |\n| Short Row | spam | 2025-10-01 |\n';
     const parsed = parseBlacklist(md);
-    expect(parsed.extraColumns).toEqual(['Contact', 'Ticket']);
+    // By position, as scan.mjs reads it: Reason is the Since column, Added the Scope column (kept as its own column),
+    // Contact the Reason column (SW8 review 3).
+    expect(parsed.extraColumns).toEqual(['Added', 'Ticket']);
     expect(parsed.rows).toEqual([
-      { company: 'Old Corp', since: '2025-09-01', scope: 'company', reason: 'reposts', extra: ['jane@old.example', 'T-1'] },
-      { company: 'Short Row', since: '2025-10-01', scope: 'company', reason: 'spam', extra: ['', ''] },
+      { company: 'Old Corp', since: 'reposts', scope: 'company', reason: 'jane@old.example', extra: ['2025-09-01', 'T-1'] },
+      { company: 'Short Row', since: 'spam', scope: 'company', reason: '', extra: ['2025-10-01', ''] },
     ]);
     const rendered = renderBlacklist([...parsed.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'y' }], parsed.preamble, parsed.postamble, parsed.extraColumns);
-    expect(rendered).toContain('| Company | Since | Scope | Reason | Contact | Ticket |\n|---------|-------|-------|--------|---|---|\n');
-    expect(rendered).toContain('| Old Corp | 2025-09-01 | company | reposts | jane@old.example | T-1 |\n');
+    expect(rendered).toContain('| Company | Since | Scope | Reason | Added | Ticket |\n|---------|-------|-------|--------|---|---|\n');
+    expect(rendered).toContain('| Old Corp | reposts | company | jane@old.example | 2025-09-01 | T-1 |\n');
     expect(rendered).toContain('| Initech | 2026-10-03 | company | y |  |  |\n');
-    expect(parseBlacklist(rendered).extraColumns).toEqual(['Contact', 'Ticket']);
-    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, [])).not.toContain('Contact');
+    expect(parseBlacklist(rendered).extraColumns).toEqual(['Added', 'Ticket']);
+    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, [])).not.toContain('Ticket');
   });
 
   it('renders the template format and round-trips its own output', () => {
