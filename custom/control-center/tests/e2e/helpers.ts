@@ -6,8 +6,9 @@ import type { Page } from '@playwright/test';
  * Resolves once every finite CSS animation and transition has finished. Axe samples colors, so running it
  * while a page-enter fade or a theme reveal is mid-flight can report a contrast failure that no user sees.
  * Infinite animations (the skeleton shimmer) never finish and are not waited for.
+ * It polls on a timer, not on animation frames: a frame loop that stalls under load would otherwise stop the check itself.
  */
-export async function waitForAnimations(page: Page): Promise<void> {
+export async function waitForAnimations(page: Page, { timeout = 10_000 }: { timeout?: number } = {}): Promise<void> {
   await page.waitForFunction(
     () =>
       document.getAnimations().every((a) => {
@@ -15,7 +16,7 @@ export async function waitForAnimations(page: Page): Promise<void> {
         return timing?.iterations === Infinity || a.playState === 'finished' || a.playState === 'idle';
       }),
     undefined,
-    { timeout: 10_000 },
+    { timeout, polling: 100 },
   );
 }
 
