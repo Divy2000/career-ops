@@ -289,6 +289,11 @@ describe('pipeline', () => {
     expect(parsePipeline('## Pending\n- [ ] https://jobs.example.com/a | A\n- [x] https://jobs.example.com/b | B\n').map((r) => r.needsJd)).toEqual([false, false]);
   });
 
+  it('reads the error after the -- that localized pipeline modes write on a [!] row (modes/es/pipeline.md)', () => {
+    const rows = parsePipeline('## Pending\n- [!] https://private.example/job -- Error: requiere inicio de sesión\n');
+    expect(rows[0]).toMatchObject({ url: 'https://private.example/job', needsJd: true, note: 'Error: requiere inicio de sesión' });
+  });
+
   it('keeps a bare pasted URL row and a URL row with only labeled segments, with company and role empty', () => {
     const rows = parsePipeline('## Pending\n\n- [ ] https://jobs.example.com/posting/123\n- [ ] https://jobs.example.com/posting/124 | posted: 2026-06-18 | note: from a friend\n- [ ] https://jobs.example.com/posting/125 | Acme\n- [ ] not a url\n');
     expect(rows.map((r) => r.url)).toEqual(['https://jobs.example.com/posting/123', 'https://jobs.example.com/posting/124', 'https://jobs.example.com/posting/125']);

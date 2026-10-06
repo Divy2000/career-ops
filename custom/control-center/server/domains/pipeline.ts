@@ -32,8 +32,8 @@ const EN_DASH = String.fromCharCode(0x2013);
 const RANK_DASH = `(?:[-:]|${EN_DASH}|${EM_DASH})`;
 // `rank: 3.2/5 <dash> reason`; the dash written by rank-pipeline is U+2014, hand edits use - or :.
 const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*${RANK_DASH}?\\s*(.*)$`);
-// The URL cell of a `- [!]` row: the URL, then the error pipeline mode noted after a dash.
-const FLAGGED_URL_RE = new RegExp(`^(\\S+)\\s+${RANK_DASH}?\\s*(.*)$`);
+// The URL cell of a `- [!]` row: the URL, then the error pipeline mode noted after a dash (`--` in some localized modes).
+const FLAGGED_URL_RE = new RegExp(`^(\\S+)\\s+(?:--|${RANK_DASH})?\\s*(.*)$`);
 // Labeled segments ride on any row shape, so on a bare URL row they sit where company and title go. There a cell is a
 // label only in the exact form a writer emits it: scan.mjs formatPipelineOffer (`posted: YYYY-MM-DD`,
 // `trust: <score>[ flag,flag]`, `note: <text>`) and rank-pipeline.mjs formatRankSegment (`rank: <n>/5 <dash> <reason>`).
