@@ -4,7 +4,11 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { JsonView } from '@web/features/insights/ScriptTab';
+import { DEFAULT_CODE_ROOT } from '../../server/config';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -49,23 +53,30 @@ describe('JsonView tables with nested values', () => {
   });
 
   it('given company-history cards, when rendered, then each company shows its responsiveness, posting churn and explanations', async () => {
-    // The card shape company-history.mjs pushes: { company, key, responsiveness, postingChurn, explanations }.
+    // The card shape company-history.mjs builds: real responsiveness labels, and postingChurn from its own
+    // computePostingChurn, whose clusters are a list of objects (SW3-tests-12).
+    // Run in node: the web project's module graph does not reach the upstream scripts.
+    const cluster = { company: 'Hooli', role: 'Backend Engineer', repostCount: 3, daysSpan: 40, lastSeen: '2026-09-20', firstSeen: '2026-08-11', appearances: [] };
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `const { computePostingChurn } = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'company-history.mjs')).href)}); process.stdout.write(JSON.stringify(computePostingChurn([${JSON.stringify(cluster)}], true)));`], { encoding: 'utf8' });
+    expect(run.status, run.stderr).toBe(0);
+    const postingChurn = JSON.parse(run.stdout) as unknown;
     await render({
       companies: [
         {
           company: 'Hooli',
           key: 'hooli',
-          responsiveness: { label: 'silent', facts: [{ num: 7, silentDays: 41 }] },
-          postingChurn: { label: 'high', clusters: 3 },
+          responsiveness: { label: 'silent-on-you', facts: [{ num: 7, silentDays: 41 }], medianResponseDays: null },
+          postingChurn,
           explanations: ['No reply 28+ days after applying.'],
         },
       ],
     });
     expect(headers()).toEqual(['company', 'key', 'responsiveness', 'postingChurn', 'explanations']);
     const row = host.querySelector('table > tbody > tr');
-    expect(row?.textContent).toContain('silent');
+    expect(row?.textContent).toContain('silent-on-you');
     expect(row?.textContent).toContain('41');
-    expect(row?.textContent).toContain('high');
+    expect(row?.textContent).toContain('reposts-detected');
+    expect(row?.textContent).toContain('Backend Engineer');
     expect(row?.textContent).toContain('No reply 28+ days after applying.');
   });
 
