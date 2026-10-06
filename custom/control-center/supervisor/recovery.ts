@@ -374,16 +374,23 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
  * revert makes), so a reverted or since-rewritten change does not count. A turn with no readable post-turn record for
  * the file (it never finished), or a file that cannot be read, cannot rule the change out, so it counts.
  * Where a record lives is decided by its real path against the real code root, not by its root label: a data root
- * that is the code root under another spelling (a symlink, /tmp for /private/tmp) labels code writes 'data'.
+ * that is the code root under another spelling (a symlink, /tmp for /private/tmp) labels code writes 'data'. A record
+ * whose path cannot be resolved (ELOOP, EACCES, EIO) cannot be ruled out either, so it counts too.
  */
 export function devChatChangeInEffect(sessionsDir: string, guardRoot: string, serverLoads: (rel: string) => boolean, codeRoot: string): boolean {
   return listDevSessions(sessionsDir).some((meta) => {
     const sessionDir = guardSessionDir(guardRoot, meta.id);
     return changesByTurn(sessionDir, meta).some((t) => {
-      const loaded = t.records.filter((r) => {
-        const rel = relativeToRoot(codeRoot, r.abs);
-        return rel !== null && serverLoads(rel);
-      });
+      const loaded: ChangeRecord[] = [];
+      for (const r of t.records) {
+        let rel: string | null;
+        try {
+          rel = relativeToRoot(codeRoot, r.abs);
+        } catch {
+          return true;
+        }
+        if (rel !== null && serverLoads(rel)) loaded.push(r);
+      }
       if (!loaded.length) return false;
       let after: Record<string, string | null> | undefined;
       try {

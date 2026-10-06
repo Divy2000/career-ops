@@ -409,6 +409,40 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(false);
   });
 
+  /** Appends a turn-1 record for `rel` (made unresolvable by `prepare`) to a finished turn's change log. */
+  const unresolvableRecord = (t: ReturnType<typeof finishedTurn>, rel: string, prepare: (abs: string) => void) => {
+    const abs = path.join(t.root, rel);
+    prepare(abs);
+    fs.appendFileSync(path.join(t.sessionDir, 'files.ndjson'), `${JSON.stringify({ path: rel, abs, root: 'code', tool: 'Write', ts: 't', sha256: null })}\n`);
+  };
+
+  it('a record whose path loops through links (ELOOP) cannot be ruled out, so it counts, and the check answers instead of throwing', () => {
+    const t = finishedTurn(['custom/control-center/server/app.ts']);
+    revertTurn(t.sessionDir, t.meta, 1, { codeRoot: t.root, dataRoot: t.root });
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(false);
+    unresolvableRecord(t, 'custom/control-center/server/loop/app.ts', (abs) => {
+      fs.symlinkSync('loop', path.dirname(abs));
+      expect(() => fs.realpathSync(path.dirname(abs))).toThrow(/ELOOP/);
+    });
+    expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
+  });
+
+  it('a record under a directory that cannot be read (EACCES) cannot be ruled out either, so it counts', () => {
+    const t = finishedTurn(['custom/control-center/server/app.ts']);
+    revertTurn(t.sessionDir, t.meta, 1, { codeRoot: t.root, dataRoot: t.root });
+    const locked = path.join(t.root, 'custom', 'control-center', 'server', 'locked');
+    unresolvableRecord(t, 'custom/control-center/server/locked/inner/app.ts', () => {
+      fs.mkdirSync(path.join(locked, 'inner'), { recursive: true });
+      fs.chmodSync(locked, 0o000);
+    });
+    try {
+      expect(() => fs.lstatSync(path.join(locked, 'inner'))).toThrow(/EACCES/);
+      expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  });
+
   it('a turn that never finished (no post-turn record) cannot be ruled out, so it is still blamed', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts'], { finalized: false });
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
