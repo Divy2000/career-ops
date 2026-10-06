@@ -86,10 +86,10 @@ describe('GET /api/sponsorship/lookup', () => {
   });
 
   it('Given a saved company file but no DOL record, Then the local data still comes back', async () => {
-    fs.writeFileSync(path.join(t.cfg.dataRoot, 'data', 'immigration', 'companies', 'initech-cloud.md'), '# Initech Cloud\n\nchecked_at: 2026-09-01\nverdict: weak\n');
+    // The fixture is in the shape the sponsorship mode writes (_custom-sponsorship.md): verdict is one of its words.
     const body = (await lookup('Initech Cloud')).json();
     expect(body.state).toBe('not_found');
-    expect(body.companyFile).toMatchObject({ slug: 'initech-cloud', verdict: 'weak' });
+    expect(body.companyFile).toMatchObject({ slug: 'initech-cloud', verdict: 'paused', dolTier: 'weak (3 LCAs FY2025)' });
     expect(body.alerts).toHaveLength(1);
     expect(body.alerts[0].status).toBe('paused');
   });
