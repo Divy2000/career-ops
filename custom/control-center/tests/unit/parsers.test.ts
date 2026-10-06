@@ -50,7 +50,26 @@ describe('reports', () => {
     });
     expect(r.report.tldr).toMatch(/^Senior backend role/);
     expect(r.report.via).toBeNull();
-    expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'G']);
+    expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'E', 'F', 'G', null, null, null, null, null]);
+  });
+
+  it('keeps an archived JD whose text has its own ## headings as one section, after every section of the report template (SW5-tests-12)', () => {
+    const r = readReport(root, 1);
+    expect(r.kind).toBe('ok');
+    if (r.kind !== 'ok') return;
+    expect(r.report.sections.map((s) => s.heading)).toEqual([
+      'Machine Summary', 'A) Role Summary', 'B) Match with CV', 'C) Level and Strategy', 'D) Comp and Demand', 'E) Customization Plan', 'F) Interview Plan', 'G) Posting Legitimacy',
+      'Risk Summary', 'Score Evidence', 'Keywords extracted', 'Keyword Coverage', 'Job Description (archived verbatim)',
+    ]);
+    const jd = r.report.sections.at(-1)!.content;
+    expect(jd.startsWith('Posted: 2026-09-15')).toBe(true);
+    expect(jd).toContain('## Responsibilities');
+    expect(jd).toContain('## Requirements');
+    expect(jd.endsWith('Reports to the Director of Platform Engineering.')).toBe(true);
+    // A report section after the JD still starts its own section.
+    const after = splitSections('## Job Description (archived verbatim)\nPosted: today\n\n## About us\nWe build.\n\n## Cover Letter Draft\nDear team');
+    expect(after.sections.map((s) => s.heading)).toEqual(['Job Description (archived verbatim)', 'Cover Letter Draft']);
+    expect(after.sections[0]!.content).toBe('Posted: today\n\n## About us\nWe build.');
   });
 
   it('keeps a report\'s **URL:** only when it is a real http(s) URL, cleaned the way merge-tracker.mjs cleans it (SW2-server-06)', () => {

@@ -104,6 +104,12 @@ export function authorLetter(heading: string): string | null {
   return m ? m[1]! : null;
 }
 
+// The archived JD (`## Job Description (archived verbatim)`) is the posting's text pasted as is, and its own `##`
+// headings ("## Responsibilities") belong to it: only a report template section ends it, the rule
+// check-jd-archive.mjs reads the section by (NEXT_REPORT_SECTION_RE).
+const JD_HEADING = /^Job Description\b/;
+const REPORT_SECTION = /^(?:Machine Summary|Keywords extracted|Keyword Coverage|Score Evidence|[A-Z]\)|Block\s[A-Z]\b|Risk Summary|Cover Letter Draft|Post-evaluation|Liveness gate|Blacklist gate|Bounded Research Budget|Step 0\b)/i;
+
 export function splitSections(body: string): { intro: string; sections: ReportSection[] } {
   const intro: string[] = [];
   const sections: ReportSection[] = [];
@@ -111,7 +117,8 @@ export function splitSections(body: string): { intro: string; sections: ReportSe
   let inFence = false;
   for (const line of body.split('\n')) {
     if (/^```/.test(line)) inFence = !inFence;
-    const h = !inFence ? line.match(/^##\s+(.*)$/) : null;
+    let h = !inFence ? line.match(/^##\s+(.*)$/) : null;
+    if (h && cur && JD_HEADING.test(cur.heading) && !REPORT_SECTION.test(h[1]!.trim())) h = null;
     if (h) {
       if (cur) sections.push({ heading: cur.heading, letter: cur.letter, content: cur.lines.join('\n').trim() });
       const heading = h[1]!.trim();

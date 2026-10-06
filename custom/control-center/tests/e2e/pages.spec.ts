@@ -107,6 +107,11 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByText('At or above the 4.0 apply line')).toBeVisible();
     await expect(page.getByText('Recommendation: Apply')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'A) Role Summary' })).toBeVisible();
+    // The archived JD is one card, its own "## Responsibilities" heading inside it (SW5-tests-12).
+    await expect(page.locator('details.card.section > summary', { hasText: 'Job Description (archived verbatim)' })).toHaveCount(1);
+    await expect(page.locator('details.card.section > summary', { hasText: 'Responsibilities' })).toHaveCount(0);
+    await expect(page.locator('details.card.section > summary', { hasText: 'Risk Summary' })).toHaveCount(1);
+    await expect(page.locator('details.card.section > summary', { hasText: 'Score Evidence' })).toHaveCount(1);
     await expect(page.getByText('sponsor: sponsoring')).toBeVisible();
     await axeClean(page);
     await page.getByRole('tab', { name: 'Timeline' }).click();
