@@ -130,8 +130,20 @@ describe('a ps that cannot be started never blocks restarts (SW-claude-02 review
     const missing = path.join(tempDir('cc-no-ps-'), 'ps');
     expect(processStartTime(deadPid(), missing)).toBeNull();
     expect(processStartTime(process.pid, missing)).toBe('unknown');
-    // PID 1 belongs to root: the kernel answers EPERM, which still means it runs.
-    expect(processStartTime(1, missing)).toBe('unknown');
+  });
+
+  it('the kernel\'s answer decides: EPERM (another user\'s process) and success are running, ESRCH is not', () => {
+    const missing = path.join(tempDir('cc-no-ps-'), 'ps');
+    // The kill function is injected, so this holds as root or as PID 1 in a container too.
+    const answering = (code: string | null) => (pid: number, signal: 0) => {
+      expect(signal).toBe(0);
+      if (code) throw Object.assign(new Error(`kill ${pid}: ${code}`), { code });
+    };
+    expect(processStartTime(deadPid(), missing, answering('EPERM'))).toBe('unknown');
+    expect(processStartTime(deadPid(), missing, answering(null))).toBe('unknown');
+    expect(processStartTime(process.pid, missing, answering('ESRCH'))).toBeNull();
+    // Any other error cannot show the process is gone, so it is still running.
+    expect(processStartTime(process.pid, missing, answering('EINVAL'))).toBe('unknown');
   });
 });
 
