@@ -1,6 +1,6 @@
 import { useEffect, useReducer } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiSend } from './api';
+import { ApiError, apiGet, apiSend } from './api';
 import { onAppStreamOpen, subscribeAppEvents } from './sse';
 import type { SessionEvent, SessionMeta, StoredEvent } from '@shared/api';
 
@@ -117,13 +117,15 @@ interface StreamState {
   id: string | null;
   transcript: Transcript;
   meta: SessionMeta | null;
+  gone: boolean;
 }
-type StreamAction = { type: 'events'; id: string; events: SessionEvent[] } | { type: 'meta'; id: string; meta: SessionMeta };
+type StreamAction = { type: 'events'; id: string; events: SessionEvent[] } | { type: 'meta'; id: string; meta: SessionMeta } | { type: 'gone'; id: string };
 
 /** State is keyed by session id, so switching sessions resets without a setState inside the effect. */
 function streamReducer(state: StreamState, action: StreamAction): StreamState {
-  const base: StreamState = state.id === action.id ? state : { id: action.id, transcript: EMPTY_TRANSCRIPT, meta: null };
+  const base: StreamState = state.id === action.id ? state : { id: action.id, transcript: EMPTY_TRANSCRIPT, meta: null, gone: false };
   if (action.type === 'meta') return { ...base, meta: action.meta };
+  if (action.type === 'gone') return { ...base, gone: true };
   return { ...base, transcript: action.events.reduce(reduceEvent, base.transcript) };
 }
 
@@ -138,12 +140,13 @@ const ends = (e: StoredEvent) => (e.event.type === 'status' && isTerminal(e.even
  * each event once, in seq order. No session holds a connection of its own, so finished and running sessions alike cost
  * nothing beyond the page's one stream. Frames that arrive while the stored events load wait for them; each time the
  * stream opens, and whenever a frame skips a seq, the stored events are read again, since the stream keeps no replay of
- * what it sent while it was not attached. A read that fails is retried until it answers, and frames wait for it.
+ * what it sent while it was not attached. A read that fails is retried until it answers, and frames wait for it; a 404
+ * is an answer: the session is gone and nothing more is read.
  * The meta decides how the session stands (one marked failed after a restart can end on a running event), but only a
  * meta answer that counts the last turn start the stream delivered: an older one was asked before that turn started.
  */
-export function useSessionStream(id: string | null): { transcript: Transcript; meta: SessionMeta | null } {
-  const [state, dispatch] = useReducer(streamReducer, { id: null, transcript: EMPTY_TRANSCRIPT, meta: null });
+export function useSessionStream(id: string | null): { transcript: Transcript; meta: SessionMeta | null; gone: boolean } {
+  const [state, dispatch] = useReducer(streamReducer, { id: null, transcript: EMPTY_TRANSCRIPT, meta: null, gone: false });
   const qc = useQueryClient();
   useEffect(() => {
     if (!id) return;
@@ -189,9 +192,15 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
           loading = false;
           if (ended && waiting.length > 0) void qc.invalidateQueries({ queryKey: ['sessions'] });
         },
-        () => {
-          // Still loading: live frames keep waiting, since applying them first would move past the history it filters.
+        (err: unknown) => {
           if (closed) return;
+          if (err instanceof ApiError && err.status === 404) {
+            // The server does not have it (deleted, or a stale id): an answer, not an outage. Nothing more to follow.
+            closed = true;
+            dispatch({ type: 'gone', id });
+            return;
+          }
+          // Still loading: live frames keep waiting, since applying them first would move past the history it filters.
           retry = setTimeout(load, Math.min(SESSION_LOAD_RETRY.baseMs * 2 ** failures, SESSION_LOAD_RETRY.maxMs));
           failures += 1;
         },
@@ -204,7 +213,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       } catch {
         return;
       }
-      if (frame.sessionId !== id || !frame.stored) return;
+      if (closed || frame.sessionId !== id || !frame.stored) return;
       if (loading) {
         pending.push(frame.stored);
         return;
@@ -238,7 +247,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       offOpen();
     };
   }, [id, qc]);
-  return state.id === id ? { transcript: state.transcript, meta: state.meta } : { transcript: EMPTY_TRANSCRIPT, meta: null };
+  return state.id === id ? { transcript: state.transcript, meta: state.meta, gone: state.gone } : { transcript: EMPTY_TRANSCRIPT, meta: null, gone: false };
 }
 
 export const useSessions = () => useQuery({ queryKey: ['sessions'], queryFn: () => apiGet<SessionMeta[]>('/api/sessions'), refetchInterval: 5000 });

@@ -133,10 +133,11 @@ describe('one session across its turns', () => {
   const TURN_2: Stored[] = [stored(4, { type: 'status', status: 'running', turn: 2 }), stored(5, { type: 'text.done', text: 'second answer' }), stored(6, { type: 'status', status: 'done', turn: 2 })];
   let events: Stored[];
   let state: string;
-  let latest: { transcript: Transcript; meta: SessionMeta | null };
+  let latest: { transcript: Transcript; meta: SessionMeta | null; gone: boolean };
   let holdMeta: boolean;
   let heldMeta: Array<() => void>;
   let failing: number;
+  let missing: boolean;
   const retry = { ...SESSION_LOAD_RETRY };
 
   function Probe() {
@@ -164,12 +165,14 @@ describe('one session across its turns', () => {
     holdMeta = false;
     heldMeta = [];
     failing = 0;
+    missing = false;
     // The load's retry backoff in milliseconds instead of seconds, so the outage test does not wait on real delays.
     Object.assign(SESSION_LOAD_RETRY, { baseMs: 5, maxMs: 20 });
     vi.stubGlobal('EventSource', FakeEventSource);
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
+        if (url === '/api/sessions/s1' && missing) return new Response('{"error":"session not found"}', { status: 404, headers: { 'content-type': 'application/json' } });
         if (url === '/api/sessions/s1' && failing > 0) {
           failing -= 1;
           return new Response('{"error":"server restarting"}', { status: 503, headers: { 'content-type': 'application/json' } });
@@ -305,6 +308,17 @@ describe('one session across its turns', () => {
     await frames([events[2]!]);
     await until(() => latest.transcript.turns[0]?.text === 'ab' && latest.meta?.status === 'running', 'the whole history');
     expect(failing).toBe(0);
+  });
+
+  it('a session the server does not have (deleted, or a stale id) is reported gone, and is not asked for again', async () => {
+    missing = true;
+    await mount();
+    await until(() => latest.gone, 'the session to be reported gone');
+    await act(async () => appStream().open());
+    await settle();
+    const reads = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === '/api/sessions/s1');
+    expect(reads).toHaveLength(1);
+    expect(latest.transcript.turns).toEqual([]);
   });
 
   it('a session that failed before its turn could start (only an error event) shows the error, and a later turn clears it (SW3-web-a-01 review 2)', async () => {

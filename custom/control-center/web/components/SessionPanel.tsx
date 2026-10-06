@@ -136,7 +136,7 @@ export function SessionPanel(props: SessionPanelProps) {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { transcript, meta } = useSessionStream(sessionId);
+  const { transcript, meta, gone } = useSessionStream(sessionId);
   const seen = useRef(0);
   const { onEnvelope, onStatus } = props;
   useEffect(() => {
@@ -213,15 +213,17 @@ export function SessionPanel(props: SessionPanelProps) {
           {props.title ?? props.mode} <Pill tone="warn">Uses tokens</Pill>
         </h2>
         <div className="row gap">
-          {sessionId && <StatusLabel status={transcript.status} />}
-          {sessionId && (
+          {sessionId && !gone && <StatusLabel status={transcript.status} />}
+          {sessionId && !gone && (
             <Link to="/sessions/$id" params={{ id: sessionId }} className="small">
               Open session
             </Link>
           )}
         </div>
       </div>
-      {!sessionId ? (
+      {gone ? (
+        <p className="muted">This session no longer exists.</p>
+      ) : !sessionId ? (
         <form
           className="stack"
           onSubmit={(e) => {
