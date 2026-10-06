@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { changesByTurn, devChatChangeInEffect, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
-import { renderDownPage, renderStatus, stripAnsi } from '../../supervisor/down-page.js';
+import { plainTail, renderDownPage, renderStatus, stripAnsi } from '../../supervisor/down-page.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
@@ -446,6 +446,37 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
   it('a turn that never finished (no post-turn record) cannot be ruled out, so it is still blamed', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts'], { finalized: false });
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
+  });
+
+  it('a stderr tail longer than its limit, cut inside an escape sequence that also spans two chunks, keeps no fragment of it', () => {
+    const E = '\u001b';
+    const head = 'Error: listen EADDRINUSE\n';
+    const rest = 'y'.repeat(3997);
+    // The raw tail is longer than 4000 and its last 4000 characters start right after "ESC[", on "90m".
+    const tail = plainTail(4000);
+    tail.push(`${head}${E}[9`);
+    tail.push(`0m${rest}`);
+    expect(`${head}${E}[90m${rest}`.slice(-4000).startsWith('90m')).toBe(true);
+    expect(tail.text()).toBe(`${head}${rest}`.slice(-4000));
+    expect(tail.text()).not.toContain('90m');
+    expect(tail.text()).not.toContain(E);
+  });
+
+  it('a stderr tail strips escapes split anywhere across chunks, an unfinished one at the end shows nothing, and the limit counts plain text', () => {
+    const E = '\u001b';
+    const tail = plainTail(10);
+    for (const chunk of [`ab${E}`, '[3', '2mcd', `${E}]8;;https://x.example`, `/y${E}`, '\\ef', `${E}[1`]) tail.push(chunk);
+    expect(tail.text()).toBe('abcdef');
+    tail.push(';31mghijklmnop');
+    expect(tail.text()).toBe('ghijklmnop');
+  });
+
+  it('a stderr tail does not hold back forever a sequence that never ends: past 1 KB it shows as text, without the escape', () => {
+    const tail = plainTail(4000);
+    tail.push(`before \u001b]${'z'.repeat(2000)}`);
+    expect(tail.text()).toBe(`before ${'z'.repeat(2000)}`);
+    tail.push(' after');
+    expect(tail.text().endsWith('z after')).toBe(true);
   });
 
   it('the recovery page\'s status block says what the last start or reload did in words, with a failure\'s error as escaped text', () => {

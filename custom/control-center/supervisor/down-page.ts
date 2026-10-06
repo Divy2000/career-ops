@@ -14,6 +14,31 @@ export function stripAnsi(s: string): string {
   return s.replace(ANSI, '');
 }
 
+// An escape sequence a chunk ends in the middle of: ESC, then a CSI, OSC or short escape that is not finished yet.
+const UNFINISHED = new RegExp(`${ESC}(?:\\[[0-?]*[ -/]*|\\][^\\u0007${ESC}]*${ESC}?|[ -/]*)$`);
+/** Past this, a "sequence" that never ends is no escape: it is let through as text instead of held back forever. */
+const MAX_HELD = 1024;
+
+/**
+ * The last `limit` characters a child wrote to stderr, as plain text for the pages. Each chunk is stripped as it
+ * arrives (see stripAnsi), so the cut to `limit` falls on plain text; an escape sequence split across chunks is held
+ * back until its end arrives.
+ */
+export function plainTail(limit = 4000): { push(chunk: string): void; text(): string } {
+  let plain = '';
+  let held = '';
+  return {
+    push: (chunk) => {
+      let raw = held + chunk;
+      const open = UNFINISHED.exec(raw);
+      held = open && raw.length - open.index <= MAX_HELD ? raw.slice(open.index) : '';
+      if (held) raw = raw.slice(0, open!.index);
+      plain = (plain + stripAnsi(raw)).slice(-limit);
+    },
+    text: () => plain,
+  };
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 }
