@@ -352,11 +352,36 @@ describe('guard hook', () => {
       ['browser_tabs', { action: 'new', url: 'http://10.0.0.1/' }],
       ['browser_run_code_unsafe', { code: 'async (page) => page.title()' }],
       ['browser_mouse_click_xy', { element: 'Submit', x: 10, y: 10 }],
+      // Space activates a focused button as Enter does (SW-claude-10 review): press_key takes only keys that activate nothing.
+      ['browser_press_key', { key: ' ' }],
+      ['browser_press_key', { key: 'Space' }],
+      ['browser_press_key', { key: 'Spacebar' }],
+      ['browser_press_key', { key: 'Shift+Space' }],
+      ['browser_press_key', { key: 'Meta+Enter' }],
+      ['browser_press_key', { key: 'Alt+s' }],
+      ['browser_press_key', { key: 'F5' }],
+      ['browser_press_key', { key: '' }],
+      ['browser_press_key', {}],
+      // Typed slowly, each character is a key press on the focused element: a space (or a tab that moves to a button, then
+      // a space) submits; the guard cannot see which element a ref names, so slow typing takes no whitespace at all.
+      ['browser_type', { element: 'Email', ref: 'e3', text: ' ', slowly: true }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'two words', slowly: true }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'a\t ', slowly: true }],
+      // A drag that starts and ends on the submit button is a click on it.
+      ['browser_drag', { startElement: 'Submit application button', startRef: 'e9', endElement: 'Submit application button', endRef: 'e9' }],
+      ['browser_drag', { startElement: 'Name field', startRef: 'e2', endElement: 'Apply now', endRef: 'e9' }],
+      ['browser_drag', { startRef: 'e9', endRef: 'e9' }],
     ];
     for (const [name, input] of refused) expect(pw(name, input).status, `${name} ${JSON.stringify(input)}`).toBe(2);
     const allowed: Array<[string, Record<string, unknown>]> = [
       ['browser_snapshot', {}],
       ['browser_press_key', { key: 'Tab' }],
+      ['browser_press_key', { key: 'Shift+Tab' }],
+      ...['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'a', 'Z', '7', '@', 'é'].map((key): [string, Record<string, unknown>] => ['browser_press_key', { key }]),
+      // fill (not slowly) sends no key presses, and Playwright refuses to fill a button or a submit input.
+      ['browser_type', { element: 'Why us', ref: 'e4', text: 'two words' }],
+      ['browser_type', { element: 'Email', ref: 'e3', text: 'acme', slowly: true }],
+      ['browser_drag', { startElement: 'Card A', startRef: 'e5', endElement: 'Card B', endRef: 'e6' }],
       ['browser_type', { element: 'Email', ref: 'e3', text: 'me@example.com' }],
       ['browser_type', { element: 'Why us', ref: 'e4', text: 'First line\nSecond line' }],
       ['browser_fill_form', { fields: [{ name: 'Name', type: 'textbox', ref: 'e2', value: 'Ada' }] }],

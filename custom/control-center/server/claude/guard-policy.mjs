@@ -776,7 +776,27 @@ export function checkBash(command, policy, cwd) {
 const SUBMIT_RE = /submit|send application|apply now|confirm and submit|finish application/i;
 export const PLAYWRIGHT_TOOL_PREFIX = 'mcp__playwright__';
 /** Tools that only read the page, fill or pick values, or move within it; every other tool has a check below or is refused. */
-const PLAYWRIGHT_PLAIN = new Set(['browser_snapshot', 'browser_console_messages', 'browser_network_requests', 'browser_wait_for', 'browser_hover', 'browser_drag', 'browser_resize', 'browser_select_option', 'browser_fill_form', 'browser_handle_dialog', 'browser_navigate_back', 'browser_close', 'browser_install', 'browser_take_screenshot']);
+// fill_form sends no key presses: Playwright's fill and setChecked refuse buttons and submit inputs, and selectOption a non-select.
+const PLAYWRIGHT_PLAIN = new Set(['browser_snapshot', 'browser_console_messages', 'browser_network_requests', 'browser_wait_for', 'browser_hover', 'browser_resize', 'browser_select_option', 'browser_fill_form', 'browser_handle_dialog', 'browser_navigate_back', 'browser_close', 'browser_install', 'browser_take_screenshot']);
+/**
+ * Keys press_key may send: none activates a focused control (Enter and Space press a button, so does any key a page
+ * binds through a modifier), so an allowlist rather than a list of the dangerous ones. Plus any single printable
+ * character except whitespace.
+ */
+const PLAYWRIGHT_SAFE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab', 'Shift+Tab', 'Escape', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown']);
+
+function safeKey(key) {
+  if (typeof key !== 'string') return false;
+  if (PLAYWRIGHT_SAFE_KEYS.has(key)) return true;
+  const chars = [...key];
+  return chars.length === 1 && !/[\s\p{C}]/u.test(key);
+}
+
+/** A click-like target: described (so it can be judged) and not described as a submit control. */
+function clickTargetReason(description, label, submit) {
+  if (typeof description !== 'string' || !description.trim()) return `${label}: describe the element so the guard can tell it is not a submit control`;
+  return SUBMIT_RE.test(description) ? submit : null;
+}
 
 /**
  * Null when a Playwright MCP call may run, else the reason. The session never submits (a submit-looking click, Enter,
@@ -792,13 +812,19 @@ export async function checkPlaywright(policy, tool, input, cwd, lookup = lookupA
   const submit = `${label}: this would submit the form. The user presses Submit, never the session.`;
   switch (name) {
     case 'browser_click':
-      if (typeof i.element !== 'string' || !i.element.trim()) return `${label}: describe the element (element) so the guard can tell it is not a submit control`;
-      return SUBMIT_RE.test(i.element) ? submit : null;
+      return clickTargetReason(i.element, label, submit);
+    case 'browser_drag':
+      // dragTo presses the mouse on the start and releases it on the end: inside one button, that is a click on it.
+      return clickTargetReason(i.startElement, label, submit) ?? clickTargetReason(i.endElement, label, submit);
     case 'browser_press_key':
-      return /enter/i.test(String(i.key ?? '')) ? submit : null;
+      return safeKey(i.key) ? null : `${label}: only keys that activate nothing may be pressed (arrows, Tab, Shift+Tab, Escape, Backspace, Delete, Home, End, PageUp, PageDown, or one printable character other than a space); ${JSON.stringify(i.key ?? null)} can submit the form`;
     case 'browser_type':
-      // Typed one character at a time, a line break is an Enter key press.
-      return i.submit === true || (i.slowly === true && /[\r\n]/.test(String(i.text ?? ''))) ? submit : null;
+      if (i.submit === true) return submit;
+      // Typed slowly, every character is a key press on the focused element, and the ref may name a button (the guard
+      // cannot see the page): a space presses it, a tab can move to it, a line break is Enter. Without slowly the text
+      // is filled, which sends no key presses, and Playwright refuses to fill a button or a submit input.
+      if (i.slowly === true && /\s/.test(String(i.text ?? ''))) return `${label}: typed slowly, whitespace is a key press that can submit the form; type the text without slowly`;
+      return null;
     case 'browser_navigate':
       return checkFetchUrl(String(i.url ?? ''), lookup, { label });
     case 'browser_tabs':
