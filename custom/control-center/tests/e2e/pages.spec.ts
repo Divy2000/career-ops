@@ -114,7 +114,8 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByText('asked about timeline')).toBeVisible();
     await expect(page.getByText('Next pinned to')).toBeVisible();
     await page.goto('/tracker/4');
-    await expect(page.getByText('Discard reasons: comp below floor, staffing agency')).toBeVisible();
+    // The report holds codes (salary_too_low), shown as words (SW4-tests-16).
+    await expect(page.getByText('Discard reasons: salary too low, staffing agency')).toBeVisible();
     await page.goto('/tracker/5');
     await expect(page.getByText('This row has no report linked.')).toBeVisible();
   });
@@ -187,11 +188,22 @@ test.describe('read-only pages render fixture data', () => {
     await page.goto('/insights');
     await expect(page.getByRole('heading', { level: 1, name: 'Insights' })).toBeVisible();
     await expect(page.getByText('Average score').locator('..').getByText('3.9')).toBeVisible();
+    // The figures the page shows are the dashboard's, not just its labels (SW4-tests-17): a page stuck at 0 or n/a fails.
+    const { dashboard } = (await (await page.request.get('/api/insights/dashboard')).json()) as {
+      dashboard: { funnel: Array<{ stage: string; count: number }>; rates: { appliedToInterview: number | null }; archetypes: Array<{ archetype: string; count: number; averageScore: number | null }> };
+    };
+    const interview = dashboard.funnel.find((f) => f.stage === 'Interview')!;
+    expect(interview.count).toBeGreaterThan(0);
+    expect(dashboard.rates.appliedToInterview).not.toBeNull();
+    expect(dashboard.archetypes.length).toBeGreaterThan(0);
     await page.getByRole('tab', { name: 'Progress' }).click();
     await expect(page.getByRole('heading', { name: 'Funnel' })).toBeVisible();
-    await expect(page.getByText('Applied to interview')).toBeVisible();
+    await expect(page.getByRole('img', { name: `Interview: ${interview.count}`, exact: true })).toBeVisible();
+    await expect(page.locator('dt', { hasText: 'Applied to interview' }).locator('xpath=following-sibling::dd[1]')).toHaveText(`${dashboard.rates.appliedToInterview}%`);
     await page.getByRole('tab', { name: 'Breakdown' }).click();
     await expect(page.getByRole('heading', { name: 'Archetypes' })).toBeVisible();
+    const top = dashboard.archetypes[0]!;
+    await expect(page.getByRole('img', { name: `${top.archetype} (avg ${top.averageScore ?? 'n/a'}): ${top.count}`, exact: true })).toBeVisible();
     await axeClean(page);
   });
 

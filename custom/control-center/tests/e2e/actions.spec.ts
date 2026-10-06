@@ -23,12 +23,12 @@ test.describe('deterministic writes through the action registry', () => {
     await page.goto('/tracker');
     await page.getByRole('row', { name: /Vandelay Systems/ }).click();
     await page.getByLabel('Change status').selectOption('Discarded');
-    await page.getByLabel('Discard reason', { exact: true }).selectOption('level mismatch');
+    await page.getByLabel('Discard reason', { exact: true }).selectOption({ label: 'seniority mismatch' });
     await page.getByRole('button', { name: 'Confirm Discarded' }).click();
     await expect(page.getByRole('status')).toHaveText('Status set to Discarded');
     const detail = await (await page.request.get('/api/tracker/6')).json();
     expect(detail.row.status).toBe('Discarded');
-    expect(detail.row.notes).toContain('DISCARD: level mismatch');
+    expect(detail.row.notes).toContain('DISCARD: seniority_mismatch');
   });
 
   test('an Other reason typed key by key is saved whole as the DISCARD note', async ({ page }) => {
@@ -207,12 +207,12 @@ test.describe('Today: shortlist and decisions act on the row', () => {
       const picker = page.getByRole('dialog', { name: 'Discard reason picker' });
       await expect(picker).toContainText('Why skip this one?');
       await expect(picker.getByRole('button', { name: 'Confirm SKIP' })).toBeDisabled();
-      await picker.getByLabel('Discard reason', { exact: true }).selectOption('location mismatch');
+      await picker.getByLabel('Discard reason', { exact: true }).selectOption({ label: 'geo restriction' });
       await picker.getByRole('button', { name: 'Confirm SKIP' }).click();
       await expect(page.getByRole('status').filter({ hasText: 'Vandelay Systems: status set to SKIP' })).toBeVisible();
       const detail = await (await page.request.get('/api/tracker/6')).json();
       expect(detail.row.status).toBe('SKIP');
-      expect(detail.row.notes).toContain('DISCARD: location mismatch');
+      expect(detail.row.notes).toContain('DISCARD: geo_restriction');
     } finally {
       expect((await setStatus(page, 6, 'Discarded')).status()).toBe(200);
     }

@@ -52,6 +52,13 @@ describe('describeError', () => {
     expect(describeError(refused({ error: 'no tracker row #9' }))).toBe('no tracker row #9');
   });
 
+  it('a plain-text body (the supervisor\'s 502 while the server child is down) is the reason; an HTML page is not (SW4-tests-10)', () => {
+    expect(describeError(new ApiError(502, '502 Bad Gateway', 'server child unavailable: connect ECONNREFUSED 127.0.0.1:4318'))).toBe('server child unavailable: connect ECONNREFUSED 127.0.0.1:4318');
+    expect(describeError(new ApiError(502, '502 Bad Gateway', '<!doctype html><html><body>Bad Gateway</body></html>'))).toBe('502 Bad Gateway');
+    expect(describeError(new ApiError(502, '502 Bad Gateway', '   '))).toBe('502 Bad Gateway');
+    expect(describeError(new ApiError(502, '502 Bad Gateway', 'x'.repeat(400)))).toBe(`${'x'.repeat(200)}...`);
+  });
+
   it('keeps the plain error, the stderr tail and the fallbacks as they were', () => {
     expect(describeError(new ApiError(500, '500 Internal Server Error', { error: 'exited 2', stderr: 'boom\n' }))).toBe('exited 2 (boom)');
     expect(describeError(new ApiError(502, '502 Bad Gateway', null))).toBe('502 Bad Gateway');

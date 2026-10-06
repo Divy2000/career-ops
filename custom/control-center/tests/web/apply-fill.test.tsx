@@ -39,7 +39,8 @@ beforeEach(async () => {
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/sessions/engine') return json({ playwrightAvailable: true, modes: ['apply'] });
-      if (url === '/api/apply/documents') return json({ pdfs: ['output/cv-acme-v1.pdf', 'output/cv-acme-v2.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme-v1.pdf', suggestedCover: null });
+      // /apply with no tracker row: readApplyDocuments suggests nothing (documents.ts).
+      if (url === '/api/apply/documents') return json({ pdfs: ['output/cv-acme-v1.pdf', 'output/cv-acme-v2.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: null, suggestedCover: null });
       if (url === '/api/sessions/s1/turns') {
         turns.push(JSON.parse(String(init!.body)));
         if (turnAnswer) return new Promise<Response>((resolve) => (releaseTurn = () => resolve(turnAnswer!())));

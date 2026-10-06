@@ -13,6 +13,8 @@ afterAll(async () => {
 });
 
 const get = (url: string) => t.app.inject({ method: 'GET', url, headers: t.authed });
+// The fixture root holds an example profile; a test of the first save starts from none.
+const removeProfile = (dataRoot: string) => fs.rmSync(path.join(dataRoot, 'config', 'profile.yml'), { force: true });
 const put = (url: string, payload: Record<string, unknown>, ifMatch?: string) => t.app.inject({ method: 'PUT', url, headers: { ...t.authedWrite, ...(ifMatch ? { 'if-match': ifMatch } : {}) }, payload });
 
 describe('portals.yml editor', () => {
@@ -48,6 +50,7 @@ describe('portals.yml editor', () => {
 
 describe('config/profile.yml editor', () => {
   it('reports a missing profile, refuses an unparseable one with 422, and creates a valid one', async () => {
+    removeProfile(t.cfg.dataRoot);
     expect((await get('/api/config/profile')).json()).toMatchObject({ kind: 'missing', etag: null });
     const bad = await put('/api/config/profile', { raw: 'language: [\n  : :' });
     expect(bad.statusCode).toBe(422);
@@ -115,6 +118,7 @@ describe('config/profile.yml is written only when validate-profile exits 0', () 
       const exec: Exec = async (cmd, args, opts) => (args.some((a) => a.endsWith('validate-profile.mjs')) ? { ...result } : execNoShell(cmd, args, opts));
       const app = await makeTestApp({}, { exec });
       try {
+        removeProfile(app.cfg.dataRoot);
         const res = await app.app.inject({ method: 'PUT', url: '/api/config/profile', headers: app.authedWrite, payload: { raw: 'language:\n  output: en\n' } });
         expect(res.statusCode).toBe(422);
         expect(res.json()).toMatchObject({ exit: result.code, error: expect.stringMatching(/nothing was written/) });
@@ -130,6 +134,7 @@ describe('config/profile.yml is written only when validate-profile exits 0', () 
     const exec: Exec = async (cmd, args, opts) => (args.some((a) => a.endsWith('validate-profile.mjs')) ? { code: 0, stdout: JSON.stringify(findings), stderr: '' } : execNoShell(cmd, args, opts));
     const app = await makeTestApp({}, { exec });
     try {
+      removeProfile(app.cfg.dataRoot);
       const res = await app.app.inject({ method: 'PUT', url: '/api/config/profile', headers: app.authedWrite, payload: { raw: 'styel:\n  x: 1\n' } });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ ok: true, validatorExit: 0, warnings: findings });

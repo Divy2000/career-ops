@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
@@ -67,18 +69,36 @@ test.describe('P3 editors and P6 polish', () => {
     expect(merged.raw.startsWith('# Synthetic portals config for tests')).toBe(true);
   });
 
-  test('profile form adds a section and the cadence form writes followup_cadence', async ({ page }) => {
-    await page.goto('/settings?tab=profile');
-    await page.getByRole('button', { name: 'Add language' }).click();
-    await page.getByRole('button', { name: 'Validate and save profile' }).click();
-    await expect(page.getByRole('status')).toContainText('Saved config/profile.yml');
-    await page.getByRole('tab', { name: 'Follow-up cadence' }).click();
-    await page.getByLabel('applied_first_days').fill('9');
-    await page.getByRole('button', { name: 'Save cadence' }).click();
-    await expect(page.getByRole('status')).toContainText('Follow-up cadence saved');
-    const profile = await (await page.request.get('/api/config/profile')).json();
-    expect(profile.doc.followup_cadence.applied_first_days).toBe(9);
-    expect(profile.doc.language.output).toBe('en');
+  test('profile form edits a section of the example profile and the cadence form writes followup_cadence, keeping the comments', async ({ page }) => {
+    const file = path.join(process.env.CC_E2E_TMP!, 'root', 'config', 'profile.yml');
+    const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    try {
+      const before = await (await page.request.get('/api/config/profile')).json();
+      expect(before.kind).toBe('ok');
+      expect(before.raw).toContain('# followup_cadence:\n#   applied_first_days: 7');
+      await page.goto('/settings?tab=profile');
+      const name = page.getByLabel('candidate.full_name', { exact: true });
+      await expect(name).toHaveValue('Jane Smith');
+      await name.fill('Jane Q. Smith');
+      await name.press('Enter');
+      await page.getByRole('button', { name: 'Validate and save profile' }).click();
+      await expect(page.getByRole('status')).toContainText('Saved config/profile.yml');
+      await page.getByRole('tab', { name: 'Follow-up cadence' }).click();
+      await page.getByLabel('applied_first_days').fill('9');
+      await page.getByRole('button', { name: 'Save cadence' }).click();
+      await expect(page.getByRole('status')).toContainText('Follow-up cadence saved');
+      const profile = await (await page.request.get('/api/config/profile')).json();
+      expect(profile.doc.candidate.full_name).toBe('Jane Q. Smith');
+      expect(profile.doc.followup_cadence.applied_first_days).toBe(9);
+      expect(profile.doc.language.output).toBe('en');
+      // Every comment line of the example survives both writes, in order, including the commented cadence block.
+      const comments = (raw: string) => raw.split('\n').filter((l) => l.trim().startsWith('#'));
+      expect(comments(profile.raw)).toEqual(comments(before.raw));
+      expect(profile.raw).toContain('  # Optional profile photo for the PDF CV');
+    } finally {
+      if (original === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, original);
+    }
   });
 
   test('blacklist editor writes only through the explicit confirm dialog and the API refuses bare writes', async ({ page }) => {

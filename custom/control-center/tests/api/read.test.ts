@@ -277,6 +277,18 @@ describe('GET /api/followups on an empty tracker', () => {
     await t2.close();
   });
 
+  it('an application read from an unreadable tracker says why, in detail, as the cadence route does (SW4-tests-01)', async () => {
+    const t2 = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), '# Applications Tracker\n\nno table here\n');
+      const res = await t2.app.inject({ method: 'GET', url: '/api/tracker/1', headers: t2.authed });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ error: 'tracker unavailable', detail: 'no markdown table found', tracker: { kind: 'malformed', error: 'no markdown table found' } });
+    } finally {
+      await t2.close();
+    }
+  });
+
   it('does not hide a tracker whose rows all fail to parse behind an empty cadence', async () => {
     const t2 = await makeTestApp();
     fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), `${HEADER_ONLY}| x | y |\n`);

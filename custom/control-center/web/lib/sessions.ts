@@ -191,7 +191,11 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
           }
           dispatch({ type: 'meta', id, meta });
           loading = false;
-          if (ended && waiting.length > 0) void qc.invalidateQueries({ queryKey: ['sessions'] });
+          // A page that read this session while its turn ran (the Sessions detail page, the list) still holds that
+          // status when the turn ended before this load: no live end event came to refresh it.
+          const held = qc.getQueryData<{ meta?: SessionMeta }>(['sessions', id])?.meta;
+          const stale = isTerminal(meta.status) && held !== undefined && !isTerminal(held.status);
+          if ((ended && waiting.length > 0) || stale) void qc.invalidateQueries({ queryKey: ['sessions'] });
         },
         (err: unknown) => {
           if (closed) return;

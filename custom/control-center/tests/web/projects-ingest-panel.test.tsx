@@ -10,6 +10,10 @@ import type { SessionPanelProps } from '@web/components/SessionPanel';
 
 // Each mounted parser panel, by the upload it was started for, with the envelope callback it was given.
 const panels = vi.hoisted(() => ({ mounts: [] as string[], unmounts: [] as string[], onEnvelope: new Map<string, SessionPanelProps['onEnvelope']>() }));
+const toasts = vi.hoisted(() => [] as Array<{ kind: string; text: string }>);
+vi.mock('sonner', () => ({
+  toast: { success: (text: string) => void toasts.push({ kind: 'success', text }), warning: (text: string) => void toasts.push({ kind: 'warning', text }), error: (text: string) => void toasts.push({ kind: 'error', text }) },
+}));
 vi.mock('@web/components/SessionPanel', () => ({
   SessionPanel: (props: SessionPanelProps) => {
     const value = String((props.target as { value?: string } | undefined)?.value ?? '');
@@ -24,7 +28,10 @@ vi.mock('@web/components/SessionPanel', () => ({
 
 let host: HTMLElement;
 let root: Root;
-let sent: Array<{ url: string; body: unknown }>;
+let sent: Array<{ url: string; body: unknown; headers: Record<string, string> }>;
+// The library on disk as the server holds it: an append whose If-Match is not its ETag gets the real 409.
+let diskEtag: string;
+let recordOutcome: { recorded: boolean; warning?: string };
 // Held responses: while `hold[kind]` is set, that kind of request waits until its release() is called.
 let hold: { upload?: boolean; convert?: boolean };
 let held: Array<{ kind: string; url: string; release: () => void }>;
@@ -40,13 +47,20 @@ async function mount() {
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (typeof init?.body === 'string') sent.push({ url, body: JSON.parse(init.body) });
+      if (typeof init?.body === 'string') sent.push({ url, body: JSON.parse(init.body), headers: (init.headers ?? {}) as Record<string, string> });
       if (url === '/api/projects/convert') {
         const body = JSON.parse(String(init?.body)) as { text: string; source?: string };
         const respond = () => json(200, { markdown: `${body.text}\n<!-- ${body.source ?? 'no source'} -->\n`, entries: [{ title: 'X' }], duplicates: [], warnings: [], errors: [] });
         return hold.convert ? waitFor('convert', url, respond) : respond();
       }
-      if (url === '/api/projects/append') return json(200, { ok: true, etag: 'e2', recorded: true });
+      // As server/routes/projects.ts: save() answers 409 for a stale If-Match, else ok with the new ETag; a documents/
+      // source then adds intake's record outcome (recordSource).
+      if (url === '/api/projects/append') {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        if (headers['If-Match'] !== diskEtag) return json(409, { error: 'the file changed since you loaded it', current: { etag: diskEtag } });
+        const body = JSON.parse(String(init?.body)) as { source?: string };
+        return json(200, { ok: true, etag: `${diskEtag}-saved`, warnings: [], ...(body.source ? recordOutcome : {}) });
+      }
       if (url === '/api/projects' && (init?.method ?? 'GET') === 'GET') return json(200, { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [] });
       const upload = url.match(/^\/api\/projects\/upload\?name=(.+)$/);
       if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'intake reads PDF, Markdown and text: export to PDF or .md/.txt first' });
@@ -96,6 +110,9 @@ beforeEach(() => {
   panels.unmounts.length = 0;
   panels.onEnvelope.clear();
   sent = [];
+  diskEtag = 'e1';
+  recordOutcome = { recorded: true };
+  toasts.length = 0;
   hold = {};
   held = [];
 });
@@ -227,4 +244,43 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
     expect(host.querySelector('[aria-label="Import preview"]')).toBeNull();
   });
+
+  async function previewUpload() {
+    await mount();
+    await choose('second.pdf', 'application/pdf');
+    await act(async () => panels.onEnvelope.get('projects/second.pdf')!('projects', { markdown: '## From Second\n- fresh.' }, 1));
+    await act(async () => appendButton('Preview').click());
+    await until(() => appendButton('Append'), 'the preview and its Append button');
+  }
+  const appendButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(label))!;
+
+  it('appends on the ETag the library was loaded with (SW4-tests-05)', async () => {
+    await previewUpload();
+    await act(async () => appendButton('Append').click());
+    await until(() => toasts.length > 0, 'the result');
+    expect(sent.find((c) => c.url === '/api/projects/append')!.headers['If-Match']).toBe('e1');
+    expect(toasts).toEqual([{ kind: 'success', text: 'Imported into article-digest.md; documents/projects/second.pdf is recorded as ingested' }]);
+  });
+
+  it('a library that changed on disk refuses the append: the reason shows and the draft stays to try again', async () => {
+    await previewUpload();
+    diskEtag = 'e9';
+    await act(async () => appendButton('Append').click());
+    await until(() => host.querySelector('[role="alert"]')?.textContent?.includes('the file changed since you loaded it'), 'the conflict');
+    expect(importText()).toBe('## From Second\n- fresh.');
+    expect(appendButton('Append')).toBeDefined();
+    expect(toasts).toEqual([]);
+  });
+
+  it('an append intake could not record still imports, and says the document was not recorded', async () => {
+    recordOutcome = { recorded: false, warning: 'documents/projects/second.pdf was not recorded as ingested: it was already recorded, or intake extracted no text from it' };
+    await previewUpload();
+    await act(async () => appendButton('Append').click());
+    await until(() => toasts.length === 2, 'both toasts');
+    expect(toasts).toEqual([
+      { kind: 'success', text: 'Imported into article-digest.md' },
+      { kind: 'warning', text: 'documents/projects/second.pdf was not recorded as ingested: it was already recorded, or intake extracted no text from it' },
+    ]);
+  });
 });
+

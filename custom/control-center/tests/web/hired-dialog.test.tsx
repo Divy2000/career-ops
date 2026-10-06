@@ -36,9 +36,15 @@ beforeEach(async () => {
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) });
-      if (url === '/api/actions/tracker.setStatus' && statusFails) return json(409, { error: 'tracker is locked by another writer' });
+      // set-status.mjs --json on a busy tracker lock: exit 4 (mapped to 503), its error object on stdout, "❌ ..." on stderr.
+      if (url === '/api/actions/tracker.setStatus' && statusFails) return json(503, { error: 'tracker.setStatus exited 4', exit: 4, result: { error: 'Timed out waiting for tracker lock at /data/applications.md.lock', code: 'lock-timeout' }, stderr: '❌ Timed out waiting for tracker lock at /data/applications.md.lock\n' });
       if (url === '/api/actions/tracker.hiredShare') return json(200, { result: shareOutput });
-      if (url === '/api/actions/tracker.hiredMark') return markStatus === 200 ? json(200, { result: 'marked' }) : json(markStatus, { error: 'No tracker row with state Hired' });
+      // hired-share.mjs --mark: a line on stdout when it records the answer; exit 1 and the reason on stderr when the row is
+      // not Hired (no exit map, so a 500 carrying stderr).
+      if (url === '/api/actions/tracker.hiredMark')
+        return markStatus === 200
+          ? json(200, { result: 'report #012 marked "later".\n', stderr: '' })
+          : json(markStatus, { error: 'tracker.hiredMark exited 1', exit: 1, result: '', stderr: 'No tracker row with state Hired and report #012. Record the outcome first: node outcome.mjs 012 hired\n' });
       return json(200, { result: 'ok' });
     }),
   );
@@ -90,7 +96,7 @@ describe('Hired Wall dialog', () => {
       select.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await until(() => host.querySelector('[role="status"]'), 'the status message');
-    expect(host.querySelector('[role="status"]')?.textContent).toBe('Could not set status: tracker is locked by another writer');
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Could not set status: tracker.setStatus exited 4 (❌ Timed out waiting for tracker lock at /data/applications.md.lock)');
     expect(dialog()).toBeNull();
     expect(posts.some((p) => p.url === '/api/actions/tracker.hiredMark')).toBe(false);
   });

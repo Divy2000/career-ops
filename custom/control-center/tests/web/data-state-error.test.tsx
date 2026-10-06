@@ -1,5 +1,5 @@
 // A page that cannot load says why in the server's words ("no tracker row #9999", "tracker unavailable" and its
-// detail), not just the HTTP status line (SW5-web-a-03).
+// detail), not just the HTTP status line (SW5-web-a-03). Every stubbed body is one a real route sends.
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -39,10 +39,15 @@ describe('DataState load errors', () => {
     expect(await show(new ApiError(404, '404 Not Found', { error: 'no tracker row #9999' }))).toContain('Could not load. no tracker row #9999');
   });
 
-  it('adds the detail the server sent with it', async () => {
-    const text = await show(new ApiError(502, '502 Bad Gateway', { error: 'followup-cadence failed', detail: 'it reported no applications but the tracker has rows' }));
-    expect(text).toContain('followup-cadence failed');
-    expect(text).toContain('it reported no applications but the tracker has rows');
+  // The bodies below are what the routes send (server/routes/read.ts; the shapes are pinned in tests/api/read.test.ts).
+  it('adds the detail the server sent with it: a malformed tracker behind the follow-up cadence', async () => {
+    const text = await show(new ApiError(502, '502 Bad Gateway', { error: 'followup-cadence: tracker is malformed', detail: 'table has a header but no parseable rows', path: 'data/applications.md' }));
+    expect(text).toContain('Could not load. followup-cadence: tracker is malformed: table has a header but no parseable rows');
+  });
+
+  it('says why an application cannot load from an unreadable tracker (SW4-tests-01)', async () => {
+    const text = await show(new ApiError(404, '404 Not Found', { error: 'tracker unavailable', detail: 'no markdown table found', tracker: { kind: 'malformed', path: 'data/applications.md', error: 'no markdown table found' } }));
+    expect(text).toContain('Could not load. tracker unavailable: no markdown table found');
   });
 
   it('falls back to the status line when the body says nothing, and to the message of a plain error', async () => {

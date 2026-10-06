@@ -149,10 +149,11 @@ describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25
   it('says it was already remembered instead of done', async () => {
     await act(async () => emitEnvelope!('act', { action: 'remember', params: { fact: 'Prefers remote roles' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
-    const run = () => [...document.body.querySelectorAll('button')].find((b) => ['Run', 'Review and run'].includes(b.textContent?.trim() ?? ''))!;
-    await act(async () => run().click());
-    const confirmButton = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Do it');
-    if (confirmButton) await act(async () => confirmButton.click());
+    // remember writes the profile, so it always goes through the write confirm (ASK_ACTIONS: confirm true).
+    const button = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name)!;
+    await act(async () => button('Review and run').click());
+    expect(document.body.querySelector('.dialog__title')?.textContent).toBe('The advisor proposes a write');
+    await act(async () => button('Do it').click());
     expect(item.dataset.proposalState).toBe('done');
     expect(item.textContent).toContain('Already remembered');
   });

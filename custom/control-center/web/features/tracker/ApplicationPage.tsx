@@ -10,6 +10,7 @@ import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
 import { useSessions } from '../../lib/sessions';
 import type { ReportFull } from '@shared/api';
 import { formatLocalMinute } from '../../lib/time';
+import { reasonLabel } from '../../lib/format';
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -69,7 +70,7 @@ function Verdict({ report }: { report: ReportFull }) {
       {report.tldr && <p style={{ marginBottom: 0 }}>{report.tldr}</p>}
       {report.discardReasons.length > 0 && (
         <p className="muted" style={{ marginBottom: 0 }}>
-          Discard reasons: {report.discardReasons.join(', ')}
+          Discard reasons: {report.discardReasons.map(reasonLabel).join(', ')}
         </p>
       )}
     </div>

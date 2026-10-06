@@ -1,6 +1,6 @@
 // Structured edits to user YAML files through the yaml Document API, so
 // comments, key order and unknown keys survive every save (spec 3.4).
-import { parseDocument, isScalar, isSeq, type Document } from 'yaml';
+import { Composer, Parser, parseDocument, isScalar, isSeq, type CST, type Document } from 'yaml';
 import { z } from 'zod';
 
 export const yamlPathSchema = z.array(z.union([z.string().min(1).max(100), z.number().int().nonnegative()])).min(1).max(12);
@@ -31,11 +31,12 @@ export function applyYamlOps(raw: string, ops: YamlOp[]): string {
     throw new YamlOpsError(`current file is not valid YAML: ${first.message.split('\n')[0]}`, 'malformed');
   }
   if (ops.length === 0) return raw;
+  const edited = keepCommentIndents(raw);
   let changed = false;
   for (const op of ops) {
     const label = op.path.join('.');
     try {
-      if (applyOne(doc, op, label)) changed = true;
+      if (applyOne(edited, op, label)) changed = true;
     } catch (err) {
       if (err instanceof YamlOpsError) throw err;
       // A path through a value that is not a map or list (yaml's own "Expected YAML collection"): a 400 with the reason.
@@ -43,7 +44,57 @@ export function applyYamlOps(raw: string, ops: YamlOp[]): string {
     }
   }
   // Only no-op deletes: the file is left exactly as it was, comments and layout included.
-  return changed ? doc.toString() : raw;
+  return changed ? edited.toString() : raw;
+}
+
+type BlockCollection = CST.BlockMap | CST.BlockSequence;
+const isBlockCollection = (t: CST.Token | null | undefined): t is BlockCollection => t?.type === 'block-map' || t?.type === 'block-seq';
+const isBlank = (t: CST.SourceToken) => t.type === 'newline' || t.type === 'space';
+
+/**
+ * The yaml composer gives every comment after a nested block's last entry to that block when the block ends in a
+ * comment of its own, and prints them all at its indent. A commented-out top-level section after it would then move
+ * under the section above, and uncommenting it later would nest it there. So before composing, the comments written
+ * at an outer indent move out of the block to the entry that follows it, where they print at the indent they had.
+ * Only a valid document gets here, so the composed one has no errors.
+ */
+function keepCommentIndents(raw: string): Document {
+  const column = (offset: number) => offset - (raw.lastIndexOf('\n', offset - 1) + 1);
+  // `atEnd` takes the outer comments of the block's last entry: a nested block keeps them as its own trailing entry
+  // (for its parent to move on), the document root hands them to the document's end, where they print at column 0.
+  const hoist = (block: BlockCollection, atEnd: (outer: CST.SourceToken[]) => void) => {
+    for (let i = 0; i < block.items.length; i++) {
+      const child = block.items[i]!.value;
+      if (!isBlockCollection(child)) continue;
+      hoist(child, (outer) => child.items.push({ start: outer }));
+      const outer = takeOuterTail(child, column);
+      if (outer.length === 0) continue;
+      const next = block.items[i + 1];
+      if (next) next.start.unshift(...outer);
+      else atEnd(outer);
+    }
+  };
+  const tokens = [...new Parser().parse(raw)];
+  for (const t of tokens) {
+    if (t.type === 'document' && isBlockCollection(t.value)) hoist(t.value, (outer) => (t.end = [...outer, ...(t.end ?? [])]));
+  }
+  return new Composer().compose(tokens, true, raw.length).next().value as Document;
+}
+
+/** Removes and returns the comment lines (with the blank lines before them) that close `block` at a smaller indent. */
+function takeOuterTail(block: BlockCollection, column: (offset: number) => number): CST.SourceToken[] {
+  const last = block.items.at(-1);
+  if (!last || last.key !== undefined || last.sep || last.value || !last.start.every((t) => t.type === 'comment' || isBlank(t))) return [];
+  const start = last.start;
+  const first = start.findIndex((t) => t.type === 'comment' && column(t.offset) < block.indent);
+  if (first < 0) return [];
+  let from = first;
+  while (from > 0 && isBlank(start[from - 1]!)) from--;
+  // The newline right after the block's own last comment ends that comment's line; it stays with it.
+  if (from > 0 && start[from]!.type === 'newline') from++;
+  const outer = start.splice(from);
+  if (start.length === 0) block.items.pop();
+  return outer;
 }
 
 /**

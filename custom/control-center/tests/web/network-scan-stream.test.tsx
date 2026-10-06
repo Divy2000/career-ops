@@ -55,15 +55,14 @@ afterEach(async () => {
 describe('Network scan run stream', () => {
   it('opens one stream for the run, and its lines reach both the log and the results', async () => {
     await act(async () => host.querySelector<HTMLFormElement>('form[aria-label="Network scan filters"]')!.requestSubmit());
-    await until(() => FakeEventSource.all.length > 0, 'the run stream');
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
-    const streams = FakeEventSource.all.filter((s) => s.url === '/api/runs/r1/events');
-    expect(streams).toHaveLength(1);
+    const stream = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events'), 'the run stream');
     // The summary scan-ats-full.mjs --json prints: its offers, the cap and the outage flags (not a `postings` list).
     const offers = [{ company: 'One Co', title: 'Platform Engineer', url: 'https://boards.example.com/one/1', location: 'Remote', postedAt: null, dateStatus: 'unknown', blacklisted: false, note: null, source: 'greenhouse' }];
-    await act(async () => streams[0]!.emit('line', { line: 'scanning greenhouse', stream: 'stderr', seq: 1, ts: 't' }));
-    await act(async () => streams[0]!.emit('line', { line: JSON.stringify({ companiesScanned: 1, capHit: false, stoppedByOutage: false, offers }), stream: 'stdout', seq: 2, ts: 't' }));
+    await act(async () => stream.emit('line', { line: 'scanning greenhouse', stream: 'stderr', seq: 1, ts: 't' }));
+    await act(async () => stream.emit('line', { line: JSON.stringify({ companiesScanned: 1, capHit: false, stoppedByOutage: false, offers }), stream: 'stdout', seq: 2, ts: 't' }));
+    await until(() => host.textContent?.includes('One Co'), 'the results');
     expect(host.querySelector('[aria-label="Scan log"]')!.textContent).toContain('scanning greenhouse');
-    expect(host.textContent).toContain('One Co');
+    // Counted once the results and the log have both mounted: either one opening its own stream shows here.
+    expect(FakeEventSource.all.filter((s) => s.url === '/api/runs/r1/events')).toHaveLength(1);
   });
 });

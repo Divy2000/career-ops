@@ -30,7 +30,9 @@ beforeEach(async () => {
   navigations.length = 0;
   posts = [];
   confirmations = [];
-  realDelete = () => json(200, { result: { deleted: 4 } });
+  // What POST /api/actions/tracker.delete answers: tracker.mjs delete prints only to stderr, so result is '' and the
+  // run's words are in stderr (server/routes/actions.ts, tracker.mjs deleteApp).
+  realDelete = () => json(200, { result: '', stderr: 'Removed application 4 (1 row) from /data/applications.md and reindexed.\n' });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -38,7 +40,7 @@ beforeEach(async () => {
       const { params, confirmed } = JSON.parse(String(init.body)) as { params: { n: number; dryRun: boolean }; confirmed?: unknown };
       posts.push(params);
       confirmations.push(confirmed);
-      return params.dryRun ? json(200, { result: 'Would delete row #4 (Initech Cloud) and renumber 5 to 6', stderr: '' }) : realDelete();
+      return params.dryRun ? json(200, { result: '', stderr: 'Would remove application 4 (1 row) from /data/applications.md.\n(report file would be orphaned: reports/004-initech-cloud.md)\n' }) : realDelete();
     }),
   );
   const { DangerZone } = await import('@web/features/tracker/DangerZone');
@@ -62,7 +64,7 @@ describe('Danger zone delete', () => {
     expect(button('Confirm delete #4')).toBeUndefined();
     await click('Preview delete (dry run)');
     expect(posts).toEqual([{ n: 4, dryRun: true }]);
-    expect(host.querySelector('[aria-label="Delete preview"]')!.textContent).toBe('Would delete row #4 (Initech Cloud) and renumber 5 to 6');
+    expect(host.querySelector('[aria-label="Delete preview"]')!.textContent).toBe('Would remove application 4 (1 row) from /data/applications.md.\n(report file would be orphaned: reports/004-initech-cloud.md)');
     expect(button('Confirm delete #4')).toBeDefined();
     expect(navigations).toEqual([]);
   });
@@ -80,11 +82,12 @@ describe('Danger zone delete', () => {
   });
 
   it('a failed delete stays on the page and says why', async () => {
-    realDelete = () => json(409, { error: 'tracker is locked by another writer' });
+    // A tracker lock that stays busy: tracker.mjs exits 1 with "Fatal: ...", and the action has no exit map, so a 500.
+    realDelete = () => json(500, { error: 'tracker.delete exited 1', exit: 1, result: '', stderr: 'Fatal: Timed out waiting for tracker lock at /data/applications.md.lock\n' });
     await click('Preview delete (dry run)');
     await click('Confirm delete #4');
     expect(navigations).toEqual([]);
-    expect(host.querySelector('[role="alert"]')!.textContent).toBe('tracker is locked by another writer');
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe('tracker.delete exited 1 (Fatal: Timed out waiting for tracker lock at /data/applications.md.lock)');
   });
 
   it('leaves for the tracker at once and never refetches the deleted row, which would 404 and stall on retries (SW5-web-a-04)', async () => {

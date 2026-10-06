@@ -205,7 +205,19 @@ test.describe('AI sessions through the fake Claude', () => {
     expect(pipeline.rows.some((r: { url: string }) => r.url === 'https://jobs.example.com/synthetic/900')).toBe(true);
   });
 
-  test('leaving Sponsorship and coming back shows the AI policy pass again (SW5-web-b-01)', async ({ page }) => {
+  // The policy pass writes the digest and the CV import writes cv.md, both shared fixture files other specs read: each
+  // test puts back the file it changed (SW4-tests-15).
+  const digest = () => path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'immigration', 'policy-digest.md');
+  async function restoring(file: string, run: () => Promise<void>) {
+    const original = fs.readFileSync(file, 'utf8');
+    try {
+      await run();
+    } finally {
+      fs.writeFileSync(file, original);
+    }
+  }
+
+  test('leaving Sponsorship and coming back shows the AI policy pass again (SW5-web-b-01)', async ({ page }) => restoring(digest(), async () => {
     await page.goto('/sponsorship');
     await page.getByRole('button', { name: /Run AI policy pass/ }).click();
     await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
@@ -214,17 +226,20 @@ test.describe('AI sessions through the fake Claude', () => {
     await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Sponsorship' }).click();
     await expect(page.getByText('Policy pass complete')).toBeVisible();
     await expect(page.getByRole('button', { name: /Run AI policy pass/ })).toBeEnabled();
-  });
+  }));
 
-  test('Sponsorship AI policy pass writes inside its scope and the digest refreshes', async ({ page }) => {
+  test('Sponsorship AI policy pass writes inside its scope and the digest refreshes', async ({ page }) => restoring(digest(), async () => {
+    // The fixture digest has no 2026-10-03 section: only this pass can write it.
+    expect(fs.readFileSync(digest(), 'utf8')).not.toContain('2026-10-03');
     await page.goto('/sponsorship');
+    await expect(page.getByRole('heading', { name: '2026-10-03' })).toHaveCount(0);
     await page.getByRole('button', { name: /Run AI policy pass/ }).click();
     await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
     await page.reload();
     await expect(page.getByRole('heading', { name: '2026-10-03' })).toBeVisible();
-  });
+  }));
 
-  test('Profile imports a pasted CV and saves it as cv.md', async ({ page }) => {
+  test('Profile imports a pasted CV and saves it as cv.md', async ({ page }) => restoring(path.join(process.env.CC_E2E_TMP!, 'root', 'cv.md'), async () => {
     await page.goto('/profile');
     await page.getByLabel('CV markdown').fill('# Jane Candidate\n\nPlatform engineer.');
     await page.getByRole('button', { name: 'Save as cv.md' }).click();
@@ -236,7 +251,7 @@ test.describe('AI sessions through the fake Claude', () => {
     const cv = await (await page.request.get('/api/files/user/cv')).json();
     expect(cv.text).toContain('Jane Candidate');
     await axeClean(page);
-  });
+  }));
 });
 
 test.describe('Fork on a session page', () => {

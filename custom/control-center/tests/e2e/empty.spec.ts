@@ -40,11 +40,28 @@ for (const [name, arrange] of [
       await (await axeBuilder(page)).analyze().then((axe) => expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]));
     });
 
-    test('Today points a new user at the first step and its Follow-ups card says nothing is due', async ({ page }) => {
+    test('Today points a new user with a CV at the next step, not at importing one, and its Follow-ups card says nothing is due (SW4-tests-09)', async ({ page }) => {
+      // Onboarding writes cv.md, and this root has it: the next step is finding postings.
+      expect(fs.existsSync(path.join(EMPTY_ROOT, 'cv.md'))).toBe(true);
       await settled(page);
-      await expect(page.getByRole('heading', { name: 'Start with your CV' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Find your first matches' })).toBeVisible();
+      await expect(page.getByText(/Import your CV/)).toHaveCount(0);
       await expect(page.getByText('Nothing due.')).toBeVisible();
       await noErrorBanners(page);
+    });
+
+    test('Today asks for a CV first when there is no cv.md', async ({ page }) => {
+      const cv = path.join(EMPTY_ROOT, 'cv.md');
+      const original = fs.readFileSync(cv, 'utf8');
+      fs.rmSync(cv);
+      try {
+        await page.reload();
+        await settled(page);
+        await expect(page.getByRole('heading', { name: 'Start with your CV' })).toBeVisible();
+        await expect(page.getByText(/Import your CV/)).toBeVisible();
+      } finally {
+        fs.writeFileSync(cv, original);
+      }
     });
 
     test('Tracker shows "No applications yet" with a next action', async ({ page }) => {

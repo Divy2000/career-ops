@@ -30,7 +30,8 @@ beforeEach(async () => {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') posts.push(url);
       const body =
-        url === '/api/actions' ? [PREFILL_META] : url === '/api/sessions/engine' ? { playwrightAvailable: false, modes: [] } : url === '/api/apply/documents' ? { pdfs: [ODD, 'output/Acme Resume.pdf', 'output/cv-acme.pdf'], covers: [], suggestedPdf: ODD, suggestedCover: null } : {};
+        // /apply with no tracker row: readApplyDocuments suggests nothing (documents.ts), so the test picks the file.
+        url === '/api/actions' ? [PREFILL_META] : url === '/api/sessions/engine' ? { playwrightAvailable: false, modes: [] } : url === '/api/apply/documents' ? { pdfs: [ODD, 'output/Acme Resume.pdf', 'output/cv-acme.pdf'], covers: [], suggestedPdf: null, suggestedCover: null } : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
     }),
   );
@@ -62,6 +63,7 @@ async function setValue(label: string, value: string) {
 describe('Apply: a PDF whose name the prefill action refuses', () => {
   it('blocks the prefill with a reason that says to rename the file, and sends nothing', async () => {
     await setValue('Posting URL', 'https://boards.greenhouse.io/acme/jobs/1');
+    await setValue('CV PDF to attach', ODD);
     await until(() => prefill().disabled, 'the prefill to be blocked');
     expect(host.textContent).toContain(`Prefill can't take ${ODD}: a file name with a control character. Rename it in output/.`);
     expect(posts).toEqual([]);

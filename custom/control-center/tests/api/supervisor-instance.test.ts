@@ -286,6 +286,8 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     const pkg = path.join(tempDir('cc-sup-pkg-activate-'), 'control-center');
     for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
     fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    // The server imports custom/immigration (the policy pass reads its news), a sibling of the package.
+    fs.symlinkSync(path.join(PACKAGE_ROOT, '..', 'immigration'), path.join(pkg, '..', 'immigration'));
     const app = path.join(pkg, 'server', 'app.ts');
     const text = fs.readFileSync(app, 'utf8');
     expect(text).toContain('    runner.reconcile();\n');
@@ -299,6 +301,8 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     const pkg = path.join(tempDir('cc-sup-pkg-hang-'), 'control-center');
     for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
     fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    // The server imports custom/immigration (the policy pass reads its news), a sibling of the package.
+    fs.symlinkSync(path.join(PACKAGE_ROOT, '..', 'immigration'), path.join(pkg, '..', 'immigration'));
     const app = path.join(pkg, 'server', 'app.ts');
     const text = fs.readFileSync(app, 'utf8');
     const healthz = "  app.get('/healthz', async () => ({ ok: true, pid: process.pid }));\n";
@@ -409,6 +413,8 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     const pkg = path.join(tempDir('cc-sup-pkg-'), 'control-center');
     for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
     fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    // The server imports custom/immigration (the policy pass reads its news), a sibling of the package.
+    fs.symlinkSync(path.join(PACKAGE_ROOT, '..', 'immigration'), path.join(pkg, '..', 'immigration'));
     const theme = path.join(pkg, 'shared', 'page-theme.ts');
     const good = fs.readFileSync(theme, 'utf8');
     fs.writeFileSync(theme, 'export const PAGE_THEME_CSS = ;\n');

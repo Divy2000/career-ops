@@ -23,8 +23,20 @@ function describeIssues(issues: unknown): string {
   return `: ${shown.join('; ')}`;
 }
 
+const MAX_TEXT = 200;
+
+/** A plain-text error body (the supervisor's proxy answers 502 in text while the server child is down); never an HTML page. */
+function plainText(body: unknown): string | null {
+  if (typeof body !== 'string') return null;
+  const text = body.trim();
+  if (!text || text.startsWith('<')) return null;
+  return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}...` : text;
+}
+
 export function describeError(err: unknown): string {
   const e = err as ApiError;
+  const text = plainText(e?.body);
+  if (text) return text;
   const body = e?.body as { error?: string; message?: unknown; stderr?: string; issues?: unknown } | null | undefined;
   // A schema label ("invalid body", or one with a hint: "invalid rows: company, since ...") says what was refused, not
   // where. A route that wrote the issues into its error in its own words (the projects routes: "bullet 2 must be one

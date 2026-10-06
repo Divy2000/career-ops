@@ -26,7 +26,7 @@ risk_level: "High"
 confidence: "Medium"
 next_action: "Skip"
 work_auth: "no_sponsorship"
-discard_reasons: ["comp below floor", "staffing agency"]
+discard_reasons: ["salary_too_low", "staffing_agency"]
 via: "TPS Staffing"
 company_confidential: false
 advertised_comp: "$95k-$110k"
