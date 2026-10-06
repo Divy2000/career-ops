@@ -24,10 +24,11 @@ function watchWorld({ daysAhead = 0 } = {}) {
   const offset = daysAhead * DAY_MS;
   const now = new Date(Date.now() + offset);
   const clock = offset ? `const RealDate = Date;\nglobalThis.Date = class extends RealDate {\n  constructor(...a) { super(...(a.length ? a : [RealDate.now() + ${offset}])); }\n  static now() { return RealDate.now() + ${offset}; }\n};\n` : '';
-  fs.writeFileSync(preload, `import fs from 'node:fs';\n${clock}globalThis.fetch = async (url) => {\n  const f = JSON.parse(fs.readFileSync(${JSON.stringify(feeds)}, 'utf8'));\n  return new Response(String(url).includes('federalregister') ? JSON.stringify({ results: f.fr }) : \`<rss><channel>\${f.rss.join('')}</channel></rss>\`, { status: 200 });\n};\n`);
+  fs.writeFileSync(preload, `import fs from 'node:fs';\n${clock}globalThis.fetch = async (url) => {\n  const f = JSON.parse(fs.readFileSync(${JSON.stringify(feeds)}, 'utf8'));\n  const u = String(url);\n  if (u.includes('federalregister')) {\n    if (f.frStatus) return new Response('unavailable', { status: f.frStatus });\n    if (f.frPages) {\n      const page = Number(new URL(u).searchParams.get('page') ?? 0);\n      const next = f.frRepeat ? u : page + 1 < f.frPages.length ? \`https://www.federalregister.gov/api/v1/documents.json?page=\${page + 1}\` : null;\n      return new Response(JSON.stringify({ results: f.frPages[page], next_page_url: next }), { status: 200 });\n    }\n    return new Response(JSON.stringify({ results: f.fr }), { status: 200 });\n  }\n  if (f.rssStatus) return new Response('unavailable', { status: f.rssStatus });\n  return new Response(\`<rss><channel>\${f.rss.join('')}</channel></rss>\`, { status: 200 });\n};\n`);
   const imm = path.join(root, 'data', 'immigration');
+  const runRaw = (...args) => spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
   const run = (...args) => {
-    const r = spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+    const r = runRaw(...args);
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   };
@@ -35,8 +36,11 @@ function watchWorld({ daysAhead = 0 } = {}) {
     imm,
     doc: (n, title) => ({ document_number: n, title, publication_date: now.toISOString().slice(0, 10), html_url: `https://www.federalregister.gov/d/${n}`, type: 'Rule', agencies: [{ name: 'USCIS' }] }),
     rssItem: (slug, title) => `<item><title>${title}</title><link>https://www.uscis.gov/news/${slug}</link><pubDate>${now.toUTCString()}</pubDate></item>`,
-    setFeeds: ({ fr = [], rss = [] }) => fs.writeFileSync(feeds, JSON.stringify({ fr, rss })),
+    setFeeds: ({ fr = [], rss = [], ...failures }) => fs.writeFileSync(feeds, JSON.stringify({ fr, rss, ...failures })),
     watch: () => JSON.parse(run()),
+    watchRaw: () => runRaw(),
+    now,
+    seen: () => JSON.parse(fs.readFileSync(path.join(imm, 'seen.json'), 'utf8')),
     ack: (batch) => {
       const file = path.join(root, `batch-${Date.now()}-${Math.random()}.json`);
       fs.writeFileSync(file, JSON.stringify(batch));
@@ -93,4 +97,59 @@ test('the feed items stay inside the watch window whatever the day: a run 40 day
   const w = watchWorld({ daysAhead: 40 });
   w.setFeeds({ fr: [w.doc('2026-1', 'Modernizing H-1B Requirements')], rss: [w.rssItem('opt', 'USCIS updates Optional Practical Training guidance')] });
   assert.deepEqual(w.watch().new_items.map((i) => i.id), ['fr:2026-1', 'uscis:https://www.uscis.gov/news/opt']);
+});
+
+// ---- a source that fails, and paging ----
+
+const dayBefore = (at, days) => new Date(at.getTime() - days * DAY_MS).toISOString().slice(0, 10);
+const H1B = 'Modernizing H-1B Requirements';
+const OPT = 'USCIS updates Optional Practical Training guidance';
+
+/** A world whose sources both last succeeded 20 days ago, so a cursor that moved is visible, with one item queued. */
+function afterOutage() {
+  const w = watchWorld();
+  const old = dayBefore(w.now, 20);
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: old, last_success: { 'federal-register': old, uscis: old } }));
+  w.setFeeds({ fr: [w.doc('2026-9', 'Labor Certification for Permanent Employment')] });
+  w.watch();
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ...w.seen(), last_success: { 'federal-register': old, uscis: old } }));
+  return { w, old };
+}
+
+test('when one source fails, only the healthy source\'s cursor moves, and its items are still queued', () => {
+  const { w, old } = afterOutage();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)], rss: [w.rssItem('opt', OPT)], frStatus: 503 });
+  const out = w.watch();
+  assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-9', 'uscis:https://www.uscis.gov/news/opt']);
+  assert.match(out.source_errors.join('\n'), /^federal-register: .*HTTP 503/);
+  const { last_success: cursors } = w.seen();
+  assert.equal(cursors['federal-register'], old, 'the failed source resumes from its last success next time');
+  assert.notEqual(cursors.uscis, old);
+});
+
+test('when every source fails, the run exits 1 and changes nothing', () => {
+  const { w } = afterOutage();
+  const snapshot = () => Object.fromEntries(fs.readdirSync(w.imm).sort().map((f) => [f, fs.readFileSync(path.join(w.imm, f), 'utf8')]));
+  const before = snapshot();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)], rss: [w.rssItem('opt', OPT)], frStatus: 503, rssStatus: 500 });
+  const r = w.watchRaw();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /every source failed: federal-register: .*HTTP 503; uscis: .*HTTP 500/);
+  assert.deepEqual(snapshot(), before);
+});
+
+test('every page of a Federal Register reply is read before the source counts as successful', () => {
+  const w = watchWorld();
+  w.setFeeds({ frPages: [[w.doc('2026-1', H1B)], [w.doc('2026-3', 'Labor Certification for Permanent Employment')]] });
+  assert.deepEqual(w.watch().new_items.map((i) => i.id), ['fr:2026-1', 'fr:2026-3']);
+});
+
+test('a Federal Register reply whose next page repeats fails that source instead of looping, and its cursor stays put', () => {
+  const { w, old } = afterOutage();
+  w.setFeeds({ frPages: [[w.doc('2026-1', H1B)]], frRepeat: true, rss: [w.rssItem('opt', OPT)] });
+  const out = w.watch();
+  assert.match(out.source_errors.join('\n'), /^federal-register: Federal Register returned a repeating next_page_url/);
+  assert.equal(w.seen().last_success['federal-register'], old);
+  assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-9', 'uscis:https://www.uscis.gov/news/opt'], 'a failed source contributes nothing, not even its first page');
 });
