@@ -4,10 +4,11 @@
 // and a digest section. A pass takes the queue by holding data/immigration/.policy-pass.claim:
 //   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created.
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
-// (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead or no longer the one
-// .run-daily.pid names, or a start that never became a session within a few minutes. Every read-decide-write of the
+// (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
+// .run-daily.pid names or no longer bash running run-daily.sh, or a start that never became a session within a few minutes. Every read-decide-write of the
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 const IMM = path.join('data', 'immigration');
@@ -60,18 +61,38 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
   if (kind === 'daily') {
     const pid = Number(id);
     if (!Number.isSafeInteger(pid) || pid <= 0 || !pidAlive(pid)) return false;
-    // A reused pid is not the job: the job's lock holder writes its own pid to .run-daily.pid.
+    // A reused pid is not the job: the job's lock holder writes its own pid to .run-daily.pid, and its command is bash
+    // running run-daily.sh (the pattern the Control Center's daily probe uses, server/system/daily.ts).
     try {
-      return fs.readFileSync(path.join(dataRoot, IMM, '.run-daily.pid'), 'utf8').trim() === String(pid);
+      if (fs.readFileSync(path.join(dataRoot, IMM, '.run-daily.pid'), 'utf8').trim() !== String(pid)) return false;
     } catch {
       return false;
     }
+    return isDailyJob(pid);
   }
   if (kind === 'starting') {
     const at = Date.parse(claim.at);
     return Number.isFinite(at) && now - at < STARTING_MS;
   }
   return false;
+}
+
+const DAILY_JOB_RE = /^([^ ]*\/)?bash ([^-].*\/)?run-daily\.sh( |$)/;
+
+/**
+ * Whether pid's command is bash running run-daily.sh. Only ps describing another command, or no process at all, is
+ * proof the job is gone; a ps that cannot run says nothing, so the job is taken to hold its claim (a skipped pass is
+ * retried, two passes at once append the same rows twice).
+ */
+function isDailyJob(pid) {
+  let out;
+  try {
+    out = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+  } catch (err) {
+    // ps exits 1 with no output when no process has the pid (it ended after the liveness check).
+    return !(err.status === 1 && !String(err.stdout ?? '').trim());
+  }
+  return DAILY_JOB_RE.test(out.trim());
 }
 
 function sleep(ms) {

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { claimFile, readClaim, releaseClaim, retagClaim, tryClaim } from '../policy-claim.mjs';
 
@@ -49,11 +49,42 @@ test('a live owner keeps the claim: a running, queued or paused session, or the 
     assert.equal(refused.ok, false, status);
     assert.equal(refused.holder.owner, `session:s-${status}`);
   }
+  // The owner itself may claim again (a reply to a paused pass).
+  assert.deepEqual(tryClaim(r, { owner: 'session:s-awaiting_user', batch: null }), { ok: true });
+});
+
+/** A bash running a script named run-daily.sh, as launchd starts the job; stopped by the returned function. */
+function fakeDailyJob() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-claim-job-'));
+  const script = path.join(dir, 'run-daily.sh');
+  fs.writeFileSync(script, 'sleep 30\n');
+  const job = spawn('/bin/bash', [script], { stdio: 'ignore' });
+  return { pid: job.pid, stop: () => job.kill('SIGKILL') };
+}
+
+test('the running daily job keeps the claim; its pid reused by another process does not (SW8-server-01 review)', () => {
+  const r = root();
+  const job = fakeDailyJob();
+  try {
+    for (let i = 0; i < 100 && !/run-daily\.sh/.test(spawnSync('ps', ['-o', 'command=', '-p', String(job.pid)], { encoding: 'utf8' }).stdout); i++) spawnSync('sleep', ['0.02']);
+    daily(r, job.pid);
+    plant(r, { owner: `daily:${job.pid}`, batch: null, at: new Date().toISOString() });
+    assert.equal(tryClaim(r, { owner: 'session:s-new', batch: null }).ok, false);
+    // ps that cannot run proves nothing about the job: it keeps the claim.
+    const savedPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      assert.equal(tryClaim(r, { owner: 'session:s-new', batch: null }).ok, false);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  } finally {
+    job.stop();
+  }
+  // A live pid that .run-daily.pid names but that is not the job (the pid was reused): stale.
   daily(r, process.pid);
   plant(r, { owner: `daily:${process.pid}`, batch: null, at: new Date().toISOString() });
-  assert.equal(tryClaim(r, { owner: 'session:s-new', batch: null }).ok, false);
-  // The owner itself may claim again (a reply to a paused pass).
-  assert.deepEqual(tryClaim(r, { owner: `daily:${process.pid}`, batch: null }), { ok: true });
+  assert.deepEqual(tryClaim(r, { owner: 'session:s-new', batch: null }), { ok: true });
 });
 
 test('a stale claim is taken over: its session is gone or final, its daily job pid is dead or not the job, or a start never finished', () => {
