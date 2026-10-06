@@ -411,6 +411,23 @@ test('given a nested item or a lazy continuation right after the last bullet, wh
   assert.throws(() => replaceEntry(md, 'beta', { ...entryInput(beta), bullets: ['Two.', 'One.'] }), /cannot be edited here/);
 });
 
+test('given an indented nested item or paragraph after a blank line following the last bullet, when parsed, then the entry cannot be edited, since Markdown keeps it with that bullet (SW7-libs-01)', () => {
+  const md = '## Alpha\n- Built the classifier.\n- Wrote the API.\n\n  - Used FastAPI and Postgres.\n\n## Beta\n- One.\n- Two.\n\n\n  More about two, indented.\n\n## Gamma\n- One.\n- Two.\n\n**Notes:**\n  indented under a label\n';
+  const [alpha, beta, gamma] = parseLibrary(md).entries;
+  assert.match(alpha.editProblem, /edit article-digest\.md directly/);
+  assert.match(beta.editProblem, /edit article-digest\.md directly/);
+  assert.equal(gamma.editProblem, null, 'a label after the blank line starts its own block');
+  assert.throws(() => replaceEntry(md, 'alpha', { ...entryInput(alpha), bullets: ['Wrote the API.', 'Built the classifier.'] }), /cannot be edited here/);
+  assert.throws(() => replaceEntry(md, 'beta', { ...entryInput(beta), bullets: ['One.'] }), /cannot be edited here/);
+});
+
+test('given an indented label, fence, rule or heading after a blank line following the last bullet, when parsed, then the entry cannot be edited, since Markdown keeps it inside that bullet (review of SW7-libs-01)', () => {
+  const md = '## Alpha\n- One.\n- Two.\n\n  **Notes:** about two\n\n## Beta\n- One.\n- Two.\n\n  ```\n  code\n  ```\n\n## Gamma\n- One.\n- Two.\n\n  ---\n\n## Delta\n- One.\n- Two.\n\n  ### Details\n';
+  const entries = parseLibrary(md).entries;
+  for (const e of entries) assert.match(e.editProblem ?? '', /edit article-digest\.md directly/, e.id);
+  assert.throws(() => replaceEntry(md, 'alpha', { ...entryInput(entries[0]), bullets: ['Two.', 'One.'] }), /cannot be edited here/);
+});
+
 test('given a label, a code fence, a rule or a sub-heading straight after the last bullet, when parsed, then the entry stays editable, since none of them belongs to that bullet (review of SW5-libs-02)', () => {
   const md = '## Alpha\n- One.\n- Two.\n**Notes:** kept\n\n## Beta\n- One.\n- Two.\n```\ncode\n```\n\n## Gamma\n- One.\n- Two.\n---\n\n## Delta\n- One.\n- Two.\n### Details\n';
   const entries = parseLibrary(md).entries;
