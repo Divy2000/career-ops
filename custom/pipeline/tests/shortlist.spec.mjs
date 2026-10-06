@@ -119,3 +119,38 @@ test('the low-ranked fixture row reads as ranked, so the tests above cover the -
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /Ranked rows with rank >= 1: 1\./);
 });
+
+/** A root with two companies ranked above the cut, and nothing cached, so the run must look both up. */
+function rankedRoot() {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Backend Engineer | Remote | rank: 4.0/5 — fit\n- [ ] https://jobs.example.com/2 | Globex | Data Engineer | Remote | rank: 3.5/5 — fit\n');
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  return root;
+}
+const sponsorCells = (root) => fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8').split('\n').filter((l) => /^\| \d/.test(l)).map((l) => l.split(' | ').slice(1, 4));
+
+test('with no H-1B index and no H1B_API_BASE, one warning says how to install it, and no row reads as the DOL tier unknown (SW2-libs-02)', () => {
+  const root = rankedRoot();
+  const env = rootEnv(root, { H1B_INDEX_PATH: path.join(root, 'no-index.db') });
+  delete env.H1B_API_BASE;
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr.trim().split('\n').length, 1, r.stderr);
+  assert.match(r.stderr, /no local H-1B index.*node plugins\/h1b-sponsor\/install-h1b-index\.mjs/);
+  assert.doesNotMatch(r.stderr, /Command failed/);
+  assert.match(r.stdout, /\(0 tier lookups\)/);
+  assert.deepEqual(sponsorCells(root), [['4', '4', 'lookup unavailable'], ['3.5', '3.5', 'lookup unavailable']]);
+  assert.equal(fs.existsSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json')) && Object.keys(JSON.parse(fs.readFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), 'utf8'))).length, false, 'nothing cached, so the next run after an install looks them up');
+});
+
+test('a lookup that fails names check.mjs\'s reason and marks the row lookup failed, not the DOL tier unknown (SW2-libs-02)', () => {
+  const root = rankedRoot();
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /^tier lookup failed for Acme: fetch failed$/m);
+  assert.match(r.stderr, /^tier lookup failed for Globex: fetch failed$/m);
+  assert.deepEqual(sponsorCells(root), [['4', '4', 'lookup failed'], ['3.5', '3.5', 'lookup failed']]);
+  const again = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  assert.match(again.stdout, /\(2 tier lookups\)/, 'a failed lookup is retried on the next run, never cached as an answer');
+});
