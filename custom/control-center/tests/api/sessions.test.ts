@@ -627,7 +627,9 @@ describe('Claude sessions', () => {
       await a.close();
       b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
       const seen = b.sessions.store.readEvents(id).length;
-      await wait(400);
+      // The run went on writing (its last delta is in the raw log) while b, not yet active, recorded none of it.
+      const runId = b.sessions.read(id)!.turns[0]!.runId;
+      await until(() => b!.runner.store.readRaw(runId).lines.some((l) => l.line.includes('"after"')));
       expect(b.sessions.store.readEvents(id)).toHaveLength(seen);
       b.activate();
       const { meta, events } = await settleOn(b, id);
@@ -660,7 +662,8 @@ describe('Claude sessions', () => {
       // The overlap the handover prevents, forced: a second server reconciles while the first still tracks.
       b = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
       await settleOn(b, id);
-      await wait(600);
+      // A is closed and done with the turn before the count: a late finalize there would have released again by now.
+      await a.close();
       const meta = b.sessions.read(id)!;
       expect(meta.totals).toEqual({ costUsd: 0.07, tokens: 15 });
       expect(meta.reportNum).toBeNull();
@@ -850,7 +853,8 @@ describe('read confinement (BUG-06)', () => {
         const uploaded = await upload(noToken, '%PDF-1.4 retry me');
         const res = await noToken.app.inject({ method: 'POST', url: '/api/sessions', headers: noToken.authedWrite, payload: { mode: 'cv-ingest', target: { type: 'text', value: uploaded }, prompt: `Read the CV at ${uploaded}` } });
         expect(res.json()).toMatchObject({ status: 'error' });
-        await wait(200);
+        // The failed start is settled in the answer; only deleting the session could remove the upload now.
+        expect(noToken.sessions.read(res.json().id)!.status).toBe('error');
         expect(fs.existsSync(uploaded)).toBe(true);
       } finally {
         await noToken.close();
@@ -1040,9 +1044,10 @@ describe('read confinement (BUG-06)', () => {
     expect(fs.existsSync(path.join(t.sessions.store.guardDirOf(meta.id), 'turns', '1', 'after.json'))).toBe(true);
     const statuses = () => t.sessions.store.readEvents(meta.id).map((e) => e.event).filter((e) => e.type === 'status');
     expect(statuses()).toEqual([{ type: 'status', status: 'cancelled', reason: expect.any(String), turn: 1 }]);
-    // Settled now: a later reconcile leaves it alone.
+    // Settled now: a later reconcile leaves it alone. Reconcile decides synchronously; one that took the session up again
+    // would be tracking it now, and nothing records an event for a session that is not tracked.
     t.sessions.reconcile();
-    await wait(400);
+    expect((t.sessions as unknown as { active: Map<string, unknown> }).active.has(meta.id)).toBe(false);
     expect(statuses()).toHaveLength(1);
   });
 
