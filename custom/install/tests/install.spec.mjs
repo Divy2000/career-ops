@@ -5,10 +5,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
-import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands } from './harness.mjs';
+import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands, pythonPtyMissing, PTY_PROBE_OK, SYSTEM_DIRS } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
 const QUIET = ['--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'];
+// pty_run.py needs a python3 that runs; without one the pty tests skip instead of failing. pty_run.py's own tests
+// find it on this process's PATH, an install run under a pty on the world's system folders.
+const PTY_SKIP = pythonPtyMissing(process.env.PATH);
+const WORLD_PTY_SKIP = pythonPtyMissing(SYSTEM_DIRS.join(':'));
 
 function fresh(opts = {}) {
   const w = makeWorld(opts);
@@ -441,7 +445,7 @@ test('on a terminal a differing cv.md shows a summary and asks; n keeps it, y ba
   }
 });
 
-test('under a real pseudo-terminal the same questions work through /dev/tty (python pty)', () => {
+test('under a real pseudo-terminal the same questions work through /dev/tty (python pty)', { skip: WORLD_PTY_SKIP }, () => {
   for (const [answer, replaced] of [['n', false], ['y', true]]) {
     const { w, D } = fresh({ keychain: true });
     w.makeCheckout(D);
@@ -1175,14 +1179,14 @@ const ptyRun = (steps, cmd, { env = {}, pre = '' } = {}) => {
   return spawnSync('python3', args, { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 20_000 });
 };
 
-test('pty_run.py fails when a prompt it was told to answer never appears', () => {
+test('pty_run.py fails when a prompt it was told to answer never appears', { skip: PTY_SKIP }, () => {
   const r = ptyRun([{ expect: 'Never asked\\?', send: 'y\n' }], ['bash', '-c', 'echo hello']);
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /pty_run: prompt never appeared: Never asked/);
   assert.match(r.stdout, /hello/);
 });
 
-test('pty_run.py kills a command still running at its deadline, and fails', () => {
+test('pty_run.py kills a command still running at its deadline, and fails', { skip: PTY_SKIP }, () => {
   const started = Date.now();
   const r = ptyRun([], ['sleep', '30'], { env: { PTY_RUN_TIMEOUT: '1' } });
   assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
@@ -1190,7 +1194,7 @@ test('pty_run.py kills a command still running at its deadline, and fails', () =
   assert.match(r.stderr, /pty_run: timed out after 1 s; killed the command/);
 });
 
-test('pty_run.py exits with the command\'s own status, also on a Python without os.waitstatus_to_exitcode (before 3.9)', () => {
+test('pty_run.py exits with the command\'s own status, also on a Python without os.waitstatus_to_exitcode (before 3.9)', { skip: PTY_SKIP }, () => {
   assert.equal(ptyRun([], ['bash', '-c', 'exit 3']).status, 3);
   const old = ptyRun([], ['bash', '-c', 'exit 3'], { pre: 'import os\ndel os.waitstatus_to_exitcode' });
   assert.equal(old.status, 3, old.stderr);
@@ -1349,3 +1353,20 @@ test('the test world has no system security, launchctl or plutil, so a world wit
   }
 });
 
+test('the pty tests are skipped, not failed, when python3 is missing or is a stub that cannot run (SW5-tests-19)', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'ci-nopy-')));
+  try {
+    assert.match(pythonPtyMissing(dir), /python3/, 'no python3 on PATH');
+    // The macOS Command Line Tools stub: python3 exists but exits non-zero.
+    fs.writeFileSync(path.join(dir, 'python3'), '#!/bin/sh\necho "xcode-select: note: No developer tools were found" >&2\nexit 1\n', { mode: 0o755 });
+    assert.match(pythonPtyMissing(dir), /python3/, 'a python3 that cannot run');
+    // A shim that exits 0 without running anything (review of SW5-tests-19).
+    fs.writeFileSync(path.join(dir, 'python3'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    assert.match(pythonPtyMissing(dir), /python3/, 'a python3 that exits 0 but never imported pty');
+    // Stands in for a python3 that ran the probe: it prints the line the probe prints once pty imported.
+    fs.writeFileSync(path.join(dir, 'python3'), `#!/bin/sh\necho ${PTY_PROBE_OK}\n`, { mode: 0o755 });
+    assert.equal(pythonPtyMissing(dir), false, 'a python3 that runs');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
