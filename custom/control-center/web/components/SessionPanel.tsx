@@ -222,7 +222,9 @@ export function SessionPanel(props: SessionPanelProps) {
         </div>
       </div>
       {gone ? (
-        <p className="muted">This session no longer exists.</p>
+        <p className="muted" style={{ margin: 'var(--space-2) 0 0' }}>
+          This session no longer exists.
+        </p>
       ) : !sessionId ? (
         <form
           className="stack"
