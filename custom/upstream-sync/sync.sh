@@ -85,7 +85,7 @@ ensure_playwright_browser || fail "cannot install Playwright's Chromium for orig
 BASE_DEPS_TREE="$(root_deps_tree)" || fail "cannot read the baseline's installed dependency tree"
 
 echo "--- baseline suite on origin/main"
-suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"
+suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt" || fail "upstream suite run was interrupted"
 # Read once, before Claude runs, and compared from memory: Claude can write to STATE_DIR, so the file could be rewritten.
 BASELINE_FAILURES="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" || fail "cannot read the baseline upstream-suite failures"
 printf '%s\n' "$BASELINE_FAILURES" | grep -q '^SUITE CRASHED' && fail "upstream suite crashed on origin/main before the merge; cannot compare"
@@ -155,7 +155,7 @@ CC_OK=1
 control_center_checks "$STATE_DIR/$TODAY.control-center-tests.txt" || CC_OK=0
 echo "control-center tests and typecheck: $([ $CC_OK = 1 ] && echo pass || echo FAIL)"
 
-suite_failures "$STATE_DIR/$TODAY.after-failures.txt"
+suite_failures "$STATE_DIR/$TODAY.after-failures.txt" || fail "upstream suite run was interrupted"
 NEW_FAILURES="$(new_failures "$BASELINE_FAILURES" "$STATE_DIR/$TODAY.after-failures.txt")" || fail "cannot compare the upstream suite with its baseline"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
 

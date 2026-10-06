@@ -288,22 +288,49 @@ test('a failing suite whose re-run names no test gets one fixed line, the same i
   assert.equal(r.stdout, '', 'a known-red suite that names no test does not hold every sync');
 });
 
-test('a re-run that hangs is cut off, its test process killed too, and the suite gets the fixed line', async () => {
+const HANGING = (pidFile) => `import fs from 'node:fs';\nimport { test } from 'node:test';\nfs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\ntest('hangs', () => new Promise(() => setInterval(() => {}, 1000)));\n`;
+const aliveP = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/** Waits up to 2 s for `pid` to go; kills it if it did not, and says whether it had leaked. */
+async function leakedAndCleaned(pid) {
+  for (let i = 0; i < 40 && aliveP(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  const leaked = aliveP(pid);
+  if (leaked) process.kill(pid, 'SIGKILL');
+  return leaked;
+}
+
+test('a re-run that hangs is cut off, its test process killed too, and the suite holds the PR with a line unique to the run (review of SW3-tests-02)', async () => {
+  const runOnce = async () => {
+    const w = realSuiteWorld(false);
+    const pidFile = path.join(w.dir, 'child.pid');
+    writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), HANGING(pidFile));
+    const started = Date.now();
+    const r = spawnSync('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=1500 suite_failures "${w.dir}/f.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, encoding: 'utf8' });
+    assert.equal(await leakedAndCleaned(Number(readFileSync(pidFile, 'utf8'))), false, 'the per-file test process was killed with the re-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(Date.now() - started < 20_000, `took ${Date.now() - started} ms`);
+    return { text: w.read('f.txt'), file: path.join(w.dir, 'f.txt') };
+  };
+  const base = await runOnce();
+  const after = await runOnce();
+  assert.match(after.text, /^❌ tests\/egress\.test\.mjs — node:test suite failed, re-run timed out \(see .*f\.txt\.raw\)$/m);
+  assert.doesNotMatch(after.text, /no test named on re-run/, 'a timeout is not "named no test"');
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${after.file}"`], { env: { PATH: '/usr/bin:/bin', B: base.text }, encoding: 'utf8' });
+  assert.match(r.stdout, /re-run timed out/, 'a slow already-red suite still holds the PR');
+});
+
+test('a sync interrupted while a re-run hangs takes the re-run\'s test process down with it (review of SW3-tests-02)', async () => {
   const w = realSuiteWorld(false);
   const pidFile = path.join(w.dir, 'child.pid');
-  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), `import fs from 'node:fs';\nimport { test } from 'node:test';\nfs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\ntest('hangs', () => new Promise(() => setInterval(() => {}, 1000)));\n`);
-  const started = Date.now();
-  const r = spawnSync('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=1500 suite_failures "${w.dir}/f.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, encoding: 'utf8' });
-  // Checked (and cleaned up) before anything else, so a failing run of this spec leaves no process behind either.
-  const pid = Number(readFileSync(pidFile, 'utf8'));
-  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  for (let i = 0; i < 40 && alive(); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
-  const leaked = alive();
-  if (leaked) process.kill(pid, 'SIGKILL');
-  assert.equal(leaked, false, 'the per-file test process was killed with the re-run');
-  assert.equal(r.status, 0, r.stderr);
-  assert.ok(Date.now() - started < 20_000, `took ${Date.now() - started} ms`);
-  assert.match(w.read('f.txt'), new RegExp(`^${NO_NAMES}$`, 'm'));
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), HANGING(pidFile));
+  const { spawn } = await import('node:child_process');
+  const sync = spawn('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=60000 suite_failures "${w.dir}/f.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, detached: true, stdio: 'ignore' });
+  const exited = new Promise((resolve) => sync.on('exit', resolve));
+  for (let i = 0; i < 200 && !fs.existsSync(pidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(pidFile), 'the re-run started');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  process.kill(-sync.pid, 'SIGTERM');
+  await exited;
+  assert.equal(await leakedAndCleaned(Number(readFileSync(pidFile, 'utf8'))), false, 'the detached re-run group was killed when the sync was');
 });
 
 test('the re-run timeout defaults to 120 seconds', () => {
@@ -341,7 +368,7 @@ test('sync.sh reads the baseline once, before Claude runs, and compares against 
   const claude = sync.indexOf('claude -p');
   assert.ok(read > sync.indexOf('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"') && read < claude, `baseline read at ${read}`);
   assert.equal(sync.indexOf('baseline-failures.txt', claude), -1, 'nothing after Claude reads the baseline file');
-  assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.after-failures\.txt"$/m);
+  assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.after-failures\.txt" \|\| fail "upstream suite run was interrupted"$/m);
   assert.match(sync, /^NEW_FAILURES="\$\(new_failures "\$BASELINE_FAILURES" "\$STATE_DIR\/\$TODAY\.after-failures\.txt"\)" \|\| fail /m);
 });
 
@@ -514,4 +541,89 @@ test('the in-process node:test suffix next to a failing node:test suite is accou
   w.run(`suite_failures "${w.dir}/f.txt"`);
   assert.doesNotMatch(w.read('f.txt'), /SUITE CRASHED/);
   assert.match(w.read('f.txt'), /node:test ✖ known red upstream test/);
+});
+
+test('a Ctrl-C during a hanging re-run stops the sync itself: it never goes on to write its failure list (review of SW3-tests-02)', async () => {
+  const w = realSuiteWorld(false);
+  const pidFile = path.join(w.dir, 'child.pid');
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), HANGING(pidFile));
+  const { spawn } = await import('node:child_process');
+  const sync = spawn('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=60000 suite_failures "${w.dir}/f.txt"\necho continued > "${w.dir}/after.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, detached: true, stdio: 'ignore' });
+  const exited = new Promise((resolve) => sync.on('exit', (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 200 && !fs.existsSync(pidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(pidFile), 'the re-run started');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  process.kill(-sync.pid, 'SIGINT');
+  const end = await exited;
+  assert.equal(await leakedAndCleaned(Number(readFileSync(pidFile, 'utf8'))), false);
+  assert.equal(fs.existsSync(path.join(w.dir, 'f.txt')), false, 'suite_failures stopped before writing its list');
+  assert.equal(fs.existsSync(path.join(w.dir, 'after.txt')), false, 'the sync did not carry on');
+  assert.equal(end.signal, 'SIGINT', JSON.stringify(end));
+});
+
+test('a signal that reaches only the re-run wrapper stops the sync too, instead of recording "no test named" (review of SW3-tests-02)', async () => {
+  const w = realSuiteWorld(false);
+  const pidFile = path.join(w.dir, 'child.pid');
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), HANGING(pidFile));
+  const { spawn } = await import('node:child_process');
+  const sync = spawn('bash', ['-c', `source "${LIB}"\nSUITE_RERUN_TIMEOUT_MS=60000 suite_failures "${w.dir}/f.txt"\necho continued > "${w.dir}/after.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, detached: true, stdio: 'ignore' });
+  const exited = new Promise((resolve) => sync.on('exit', (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 200 && !fs.existsSync(pidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(pidFile), 'the re-run started');
+  // The wrapper is the `node -e` whose script names the timeout marker, under this sync's process group.
+  const wrapper = spawnSync('pgrep', ['-g', String(sync.pid), '-f', 'rerun timed out'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
+  assert.equal(wrapper.length, 1, `wrapper pids: ${wrapper}`);
+  process.kill(wrapper[0], 'SIGTERM');
+  const end = await exited;
+  assert.equal(await leakedAndCleaned(Number(readFileSync(pidFile, 'utf8'))), false);
+  assert.equal(fs.existsSync(path.join(w.dir, 'after.txt')), false, 'the sync did not carry on');
+  assert.equal(fs.existsSync(path.join(w.dir, 'f.txt')), false, 'no failure list was written from an interrupted re-run');
+  assert.equal(end.signal, 'SIGTERM', JSON.stringify(end));
+});
+
+test('with the hangup signal ignored (nohup, a background job), an interrupted re-run still stops the sync, and a stale list from an earlier run is gone (review of SW3-tests-02)', async () => {
+  const w = realSuiteWorld(false);
+  const pidFile = path.join(w.dir, 'child.pid');
+  writeFileSync(path.join(w.dir, 'tests', 'egress.test.mjs'), HANGING(pidFile));
+  writeFileSync(path.join(w.dir, 'f.txt'), 'an earlier run of the same day\n');
+  const { spawn } = await import('node:child_process');
+  // sync.sh's own call line, with its fail(): the one way out of an interrupted run whose signal is ignored.
+  const call = readFileSync(SYNC, 'utf8').split('\n').find((l) => l.startsWith('suite_failures "$STATE_DIR/$TODAY.after-failures.txt"'));
+  const sync = spawn('bash', ['-c', `trap '' HUP\nsource "${LIB}"\nfail() { echo "!!! $1" >> "${w.dir}/log.txt"; exit 1; }\nSTATE_DIR="${w.dir}" TODAY=t\nexport SUITE_RERUN_TIMEOUT_MS=60000\n${call.replaceAll('$STATE_DIR/$TODAY.after-failures.txt', `${w.dir}/f.txt`)}\necho continued > "${w.dir}/after.txt"`], { cwd: w.dir, env: { PATH: `${path.join(w.dir, 'bin')}:/usr/bin:/bin` }, detached: true, stdio: ['ignore', fs.openSync(path.join(w.dir, 'out.txt'), 'w'), 'ignore'] });
+  const exited = new Promise((resolve) => sync.on('exit', (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 200 && !fs.existsSync(pidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(pidFile), 'the re-run started');
+  const wrapper = spawnSync('pgrep', ['-g', String(sync.pid), '-f', 'rerun timed out'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
+  assert.equal(wrapper.length, 1, `wrapper pids: ${wrapper}`);
+  process.kill(wrapper[0], 'SIGHUP');
+  const end = await exited;
+  assert.equal(await leakedAndCleaned(Number(readFileSync(pidFile, 'utf8'))), false);
+  assert.equal(fs.existsSync(path.join(w.dir, 'after.txt')), false, 'the sync did not carry on');
+  assert.equal(fs.existsSync(path.join(w.dir, 'f.txt')), false, 'the stale list from an earlier run is gone');
+  assert.equal(end.code, 1, JSON.stringify(end));
+  assert.match(readFileSync(path.join(w.dir, 'out.txt'), 'utf8'), /^!!! upstream suite run interrupted$/m, 'the day log says why it stopped');
+  assert.match(readFileSync(path.join(w.dir, 'log.txt'), 'utf8'), /^!!! upstream suite run was interrupted$/m, 'sync.sh fail() is the one exit');
+});
+
+test('sync.sh fails the run when the upstream suite run is interrupted, before and after the merge', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.baseline-failures\.txt" \|\| fail "upstream suite run was interrupted"$/m);
+  assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.after-failures\.txt" \|\| fail "upstream suite run was interrupted"$/m);
+});
+
+test('a re-run wrapper that crashes (killed, out of memory) holds the PR with a line unique to the run, and the sync goes on (review of SW3-tests-02)', () => {
+  const w = realSuiteWorld(false);
+  // The node that runs the wrapper script dies of SIGKILL (exit 137), as the OOM killer would end it.
+  stub(path.join(w.dir, 'bin'), 'node', `if [ "\${1:-}" = test-all.mjs ]; then cat "${path.join(w.dir, 'test-all.out')}"; exit 1; fi\ncase "\${2:-}" in *"rerun timed out"*) kill -9 $$ ;; esac\nexec "${process.execPath}" "$@"`);
+  const r = w.run(`suite_failures "${w.dir}/f.txt"; echo "rc=$?"`);
+  assert.match(r.stdout, /^rc=0$/m, r.stdout + r.stderr);
+  assert.match(w.read('f.txt'), /^❌ tests\/egress\.test\.mjs — node:test suite failed, re-run crashed \(exit 137; see .*f\.txt\.raw\)$/m);
+  assert.doesNotMatch(r.stdout, /interrupted/);
+});
+
+test('the wrapper sets its signal handlers before it starts the re-run, so no signal can orphan the group (review of SW3-tests-02)', () => {
+  const lib = readFileSync(LIB, 'utf8');
+  const body = lib.slice(lib.indexOf('rerun_failing_tests() {'));
+  assert.ok(body.indexOf('process.on(sig') > -1 && body.indexOf('process.on(sig') < body.indexOf('spawn(process.execPath'), 'handlers come before spawn');
+  assert.match(body, /if \(!child\) process\.exit\(/);
 });

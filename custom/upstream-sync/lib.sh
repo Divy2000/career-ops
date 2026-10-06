@@ -224,6 +224,8 @@ unexpected_upstream() {
 # crashed; that is recorded as a failure line of its own so it can never read as
 # "no failures".
 suite_failures() {
+  # A list from an earlier run of the same day must never be read as this one's.
+  rm -f "$1"
   local out="$1.raw"
   node test-all.mjs --quick > "$out" 2>&1
   local code=$?
@@ -239,10 +241,31 @@ suite_failures() {
   while IFS= read -r suite; do
     [ -n "$suite" ] || continue
     names="$(rerun_failing_tests "$suite")"
-    if [ -n "$names" ]; then
+    local rerun_rc=$?
+    case "$rerun_rc" in
+      129 | 130 | 143)
+        # The re-run was interrupted by a hangup, Ctrl-C or a stop (launchd stopping the job): say so, write no list,
+        # and send the same signal to this shell; if that signal is ignored, return it, and sync.sh's
+        # `|| fail "upstream suite run was interrupted"` ends the run.
+        echo "!!! upstream suite run interrupted"
+        if declare -F notify >/dev/null; then notify "upstream suite run interrupted"; fi
+        kill -s "$(kill -l "$rerun_rc")" $$
+        return "$rerun_rc"
+        ;;
+      0) ;;
+      *)
+        # The wrapper itself crashed (killed, out of memory): unique to this run, so it holds the PR.
+        named="${named:+$named$'\n'}❌ $suite — node:test suite failed, re-run crashed (exit $rerun_rc; see $out)"
+        continue
+        ;;
+    esac
+    if printf '%s\n' "$names" | grep -qxF '::rerun timed out::'; then
+      # A slow suite may hide a new failure behind its baseline: unique to this run, so it holds the PR.
+      named="${named:+$named$'\n'}❌ $suite — node:test suite failed, re-run timed out (see $out)"
+    elif [ -n "$names" ]; then
       named="${named:+$named$'\n'}$(printf '%s\n' "$names" | sed "s|^|❌ $suite — node:test ✖ |")"
     else
-      # Fixed, not tied to this run: a known-red suite that names no test (it does not load, or it is slow) must not
+      # Fixed, not tied to this run: a known-red suite that finished naming no test (it does not load) must not
       # hold every sync. A suite that is new in the merged run is still caught by its own "❌ ... suite failed" line.
       named="${named:+$named$'\n'}❌ $suite — node:test suite failed, no test named on re-run"
     fi
@@ -266,30 +289,50 @@ suite_failures() {
 # `not ok N - name`, nested ones included, numbers and directives dropped),
 # sorted. Bounded by SUITE_RERUN_TIMEOUT_MS (default 120000): the run is
 # started in its own process group and the whole group is killed at the
-# deadline, so the per-file test process never outlives it. Nothing when the
-# run names no failing test (a suite that does not load reports only its file),
-# times out or cannot start.
+# deadline (or when this process is interrupted), so the per-file test process
+# never outlives it. Prints the line "::rerun timed out::" when the deadline
+# hit; nothing when the run finished naming no failing test (a suite that does
+# not load reports only its file) or could not start.
 rerun_failing_tests() {
   SUITE="$1" node -e '
 const { spawn } = require("child_process");
 const path = require("path");
 const suite = process.env.SUITE;
+const TIMED_OUT = "::rerun timed out::";
 const env = { ...process.env, NODE_OPTIONS: (process.env.NODE_OPTIONS || "").replace(/--test-reporter(-destination)?[= ]\S+/g, "") };
 delete env.SUITE;
-const child = spawn(process.execPath, ["--test", "--test-reporter=tap", suite], { env, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+let child = null;
 let out = "";
 let timedOut = false;
+const killGroup = () => { if (child) try { process.kill(-child.pid, "SIGKILL"); } catch {} };
+// Set before the run starts, so no signal can arrive while the detached group exists without them. The group is
+// detached from the sync, so an interrupted sync (Ctrl-C, launchd stopping the job) takes it down here; this process
+// then dies of the same signal, or exits 128 + its number when that signal is ignored (nohup, a background job).
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    const status = 128 + require("os").constants.signals[sig];
+    if (!child) process.exit(status);
+    killGroup();
+    process.removeAllListeners(sig);
+    process.kill(process.pid, sig);
+    process.exit(status);
+  });
+}
+child = spawn(process.execPath, ["--test", "--test-reporter=tap", suite], { env, detached: true, stdio: ["ignore", "pipe", "ignore"] });
 child.stdout.setEncoding("utf8").on("data", (d) => { out += d; });
 const timer = setTimeout(() => {
   timedOut = true;
-  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+  killGroup();
 }, Number(process.env.SUITE_RERUN_TIMEOUT_MS || 120000));
 child.on("error", () => { clearTimeout(timer); process.exit(0); });
 child.on("close", () => {
   clearTimeout(timer);
   // A run that ended on its own can still leave a stray process in its group.
-  try { process.kill(-child.pid, "SIGKILL"); } catch {}
-  if (timedOut) process.exit(0);
+  killGroup();
+  if (timedOut) {
+    process.stdout.write(TIMED_OUT + "\n");
+    process.exit(0);
+  }
   const names = new Set();
   for (const line of out.split("\n")) {
     const m = /^\s*not ok \d+ - (.*?)(?: # .*)?$/.exec(line);
@@ -299,6 +342,8 @@ child.on("close", () => {
   process.stdout.write([...names].sort().map((n) => n + "\n").join(""));
 });
 ' 2>/dev/null | LC_ALL=C sort -u
+  local rc=("${PIPESTATUS[@]}")
+  return "${rc[0]}"
 }
 
 # new_failures <baseline-text> <after-file>: the lines of <after-file> that are
