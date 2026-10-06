@@ -8,6 +8,7 @@ import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReport } from './reports.js';
+import { inside } from '../lib/paths.js';
 
 const PENDING_RE = /^##\s+(Pendientes|Pending)\s*$/i;
 const PROCESSED_RE = /^##\s+(Procesadas|Processed)\s*$/i;
@@ -21,8 +22,28 @@ export interface EvaluatedPosting {
   company: string;
   role: string;
   score: number | null;
-  /** The report's **PDF:** header; null when it says none. */
-  pdf: string | null;
+  /** True when the report's **PDF:** header names a generated PDF (see pdfGenerated). */
+  pdf: boolean;
+}
+
+/**
+ * True only when the report's **PDF:** header names a .pdf file that exists inside the data root (links resolved). The
+ * header is otherwise free text: "pending" before the CV is built, or "not generated" in the report's own language.
+ */
+export function pdfGenerated(header: string | null, dataRoot: string): boolean {
+  if (!header) return false;
+  const root = fs.realpathSync(dataRoot);
+  for (const [token] of header.matchAll(/[^\s`'"()<>[\]|]+\.pdf\b/gi)) {
+    let real: string;
+    try {
+      real = fs.realpathSync(path.resolve(root, token));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR') continue;
+      throw err;
+    }
+    if (inside(root, real) && fs.statSync(real).isFile()) return true;
+  }
+  return false;
 }
 
 /** "{url} | company | role" to "{url}". */
@@ -66,7 +87,7 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     remove.add(i);
     if (listed.has(url) || processedLine !== null) continue;
     const parts = body.split('|').map((s) => s.trim());
-    processedLine = `- [x] #${posting.report} | ${url} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf && !/not generated/i.test(posting.pdf) ? '✅' : '❌'}`;
+    processedLine = `- [x] #${posting.report} | ${url} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
   }
   if (remove.size === 0) return { text, moved: false };
   const out: string[] = [];
@@ -103,7 +124,7 @@ export async function markPipelineEvaluated(codeRoot: string, dataRoot: string, 
   if (!report) throw new Error(`not a numbered report file: ${reportFile}`);
   const read = readReport(dataRoot, parseInt(report, 10));
   const r = read.kind === 'ok' ? read.report : null;
-  const posting: EvaluatedPosting = { report, company: r?.company ?? '', role: r?.role ?? '', score: r?.score ?? null, pdf: r?.pdf ?? null };
+  const posting: EvaluatedPosting = { report, company: r?.company ?? '', role: r?.role ?? '', score: r?.score ?? null, pdf: pdfGenerated(r?.pdf ?? null, dataRoot) };
   const { withPipelineLock } = await importCore<PipelineLock>(codeRoot, 'pipeline-lock.mjs');
   return withPipelineLock(
     pipelinePath,
