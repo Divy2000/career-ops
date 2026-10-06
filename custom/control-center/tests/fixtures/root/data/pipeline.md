@@ -13,4 +13,4 @@ Paste job URLs below as `- [ ] {url}` then run `/career-ops pipeline`.
 
 ## Processed
 
-- [x] https://jobs.example.com/oldcorp/1 | Old Corp | Engineer | Remote
+- [x] #009 | https://jobs.example.com/oldcorp/1 | Old Corp | Engineer | 3.0/5 | PDF ❌
