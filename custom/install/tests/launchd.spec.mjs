@@ -369,17 +369,49 @@ test('a plist that passes lint replaces the installed one', () => {
   assert.equal(fs.statSync(path.join(r.home, 'Library', 'LaunchAgents', `${DAILY}.plist`)).mode & 0o777, 0o644, 'readable like any LaunchAgents plist, not mktemp\'s 0600');
 });
 
-test('a data root under Documents or Desktop gets a Full Disk Access note: launchd\'s bash writes the logs there (SW3-scripts-03)', () => {
-  for (const place of ['Documents', 'Desktop']) {
+/** Where the real path of `dir` sits, as the note names it, for a temp dir that may itself be on another volume. */
+const volumeNote = (dir) => {
+  const real = fs.realpathSync(dir);
+  return real.startsWith('/Volumes/') ? `the volume ${real.split('/')[2]}` : null;
+};
+
+// Each place macOS privacy controls keep launchd's /bin/bash out of without Full Disk Access, reached through the data
+// root's real path, so a symlink into one counts too.
+const FDA_PLACES = [
+  ['Documents', (home) => path.join(home, 'Documents', 'career-data')],
+  ['Desktop', (home) => path.join(home, 'Desktop', 'career-data')],
+  ['Downloads', (home) => path.join(home, 'Downloads', 'career-data')],
+  ['iCloud Drive', (home) => path.join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'career-data')],
+  ['a cloud storage folder', (home) => path.join(home, 'Library', 'CloudStorage', 'Dropbox', 'career-data')],
+];
+
+test('a data root in a place macOS protects gets a Full Disk Access note naming it: launchd\'s bash writes the logs there (SW3-scripts-03, SW6-scripts-02)', () => {
+  for (const [place, at] of FDA_PLACES) {
     const probe = run(['--jobs', 'daily']);
-    const data = path.join(probe.home, place, 'career-data');
+    const data = at(probe.home);
     fs.mkdirSync(data, { recursive: true });
     const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: data, HOME: probe.home } });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /note: the data root .* is under Desktop or Documents; give \/bin\/bash Full Disk Access/, place);
+    assert.ok(r.stdout.includes(`note: the data root ${data} is under ${place}; give /bin/bash Full Disk Access`), `${place}:\n${r.stdout}`);
   }
-  const elsewhere = run(['--jobs', 'daily']);
-  assert.doesNotMatch(elsewhere.stdout, /Full Disk Access/);
+});
+
+test('a data root reached through a symlink into Documents gets the note too (SW6-scripts-02)', () => {
+  const probe = run(['--jobs', 'daily']);
+  const real = path.join(probe.home, 'Documents', 'career-data');
+  fs.mkdirSync(real, { recursive: true });
+  const link = path.join(probe.T, 'career-data-link');
+  fs.symlinkSync(real, link);
+  const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: link, HOME: probe.home } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /note: the data root .*career-data-link is under Documents; give \/bin\/bash Full Disk Access/);
+});
+
+test('a checkout and data root elsewhere get a note only when they sit on another volume', () => {
+  const r = run(['--jobs', 'daily']);
+  const where = volumeNote(r.root);
+  if (where) assert.match(r.stdout, new RegExp(`note: the checkout .* is under ${where}; give /bin/bash Full Disk Access`));
+  else assert.doesNotMatch(r.stdout, /Full Disk Access/);
 });
 
 // ---- a reinstall keeps what the user set in the Control Center (SW3-scripts-02 review) ----

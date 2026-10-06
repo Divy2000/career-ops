@@ -2,7 +2,7 @@
 # Install (or reinstall) the fork's launchd jobs for this checkout.
 #   daily  08:00  custom/immigration/run-daily.sh   policy watch, scan, rank, shortlist
 #   weekly Sun 03:00 custom/upstream-sync/sync.sh   merge upstream main into the fork
-# /bin/bash needs Full Disk Access when the checkout or the data root lives under ~/Desktop or ~/Documents.
+# /bin/bash needs Full Disk Access when the checkout or the data root lives in a place macOS protects (fda_place).
 # Usage: install.sh [--jobs daily|all] [--reset]
 #   --jobs   default all; "daily" skips the weekly sync, which only the fork maintainer needs
 #   --reset  put each job back at its default time and turn it on. Without it, a job that is already installed keeps
@@ -32,9 +32,28 @@ AGENTS="$HOME/Library/LaunchAgents"
 # script to point them at the new root.
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 mkdir -p "$AGENTS" "$DATA/data/immigration/logs"
+# The place macOS privacy controls keep launchd's /bin/bash out of without Full Disk Access, for the real path of
+# <dir> (a symlink into one counts): Desktop, Documents, Downloads, iCloud Drive, a File Provider cloud folder, or a
+# volume other than the boot one (removable and network volumes are protected). Nothing for anywhere else.
+# install/install.sh and launchd/install.sh carry the same function; install.spec and launchd.spec cover both.
+fda_place() {
+  local real home
+  real="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
+  home="$(cd "$HOME" 2>/dev/null && pwd -P)" || home="$HOME"
+  case "$real/" in
+    "$home/Desktop/"*) echo Desktop ;;
+    "$home/Documents/"*) echo Documents ;;
+    "$home/Downloads/"*) echo Downloads ;;
+    "$home/Library/Mobile Documents/"*) echo "iCloud Drive" ;;
+    "$home/Library/CloudStorage/"*) echo "a cloud storage folder" ;;
+    /Volumes/*) real="${real#/Volumes/}"; echo "the volume ${real%%/*}" ;;
+  esac
+}
 # launchd's /bin/bash reads the checkout and writes the data root (lock, day logs, launchd.out/err.log).
 fda_note() { # what path
-  case "$2" in "$HOME/Desktop"/* | "$HOME/Documents"/*) echo "note: the $1 $2 is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security), or the jobs cannot use it." ;; esac
+  local place
+  place="$(fda_place "$2")"
+  [ -z "$place" ] || echo "note: the $1 $2 is under $place; give /bin/bash Full Disk Access (System Settings > Privacy & Security), or the jobs cannot use it."
 }
 fda_note checkout "$ROOT"
 fda_note "data root" "$DATA"

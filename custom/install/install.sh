@@ -111,6 +111,24 @@ run_logged() {
   return "$rc"
 }
 
+# The place macOS privacy controls keep launchd's /bin/bash out of without Full Disk Access, for the real path of
+# <dir> (a symlink into one counts): Desktop, Documents, Downloads, iCloud Drive, a File Provider cloud folder, or a
+# volume other than the boot one (removable and network volumes are protected). Nothing for anywhere else.
+# install/install.sh and launchd/install.sh carry the same function; install.spec and launchd.spec cover both.
+fda_place() {
+  local real home
+  real="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
+  home="$(cd "$HOME" 2>/dev/null && pwd -P)" || home="$HOME"
+  case "$real/" in
+    "$home/Desktop/"*) echo Desktop ;;
+    "$home/Documents/"*) echo Documents ;;
+    "$home/Downloads/"*) echo Downloads ;;
+    "$home/Library/Mobile Documents/"*) echo "iCloud Drive" ;;
+    "$home/Library/CloudStorage/"*) echo "a cloud storage folder" ;;
+    /Volumes/*) real="${real#/Volumes/}"; echo "the volume ${real%%/*}" ;;
+  esac
+}
+
 ask() { # ask "question" y|n  -> 0 when the answer is yes; EOF or Enter takes the default
   local question="$1" default="$2" hint ans=""
   if [ "$default" = y ]; then hint="[Y/n]"; else hint="[y/N]"; fi
@@ -807,9 +825,11 @@ else
     else
       say "  The daily job (08:00) runs headless Claude on your subscription: policy watch, scan, rank, shortlist."
     fi
-    case "$DIR" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: this checkout is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can read it." ;; esac
+    place="$(fda_place "$DIR")"
+    [ -z "$place" ] || say "  Note: the checkout is under $place; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can read it."
     # The job's bash writes its lock, day logs and launchd logs under the data root, so that needs it too.
-    case "$DATA" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: the data root is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it." ;; esac
+    place="$(fda_place "$DATA")"
+    [ -z "$place" ] || say "  Note: the data root is under $place; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it."
     if [ "$PROMPT_OK" = 1 ] && ! ask "Install the daily job now?" y; then
       say "  skipped; install later: $DAILY_CMD"
     else

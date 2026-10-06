@@ -156,7 +156,7 @@ After either option:
 4. **Run the daily job once by hand** to see real output: `custom/immigration/run-daily.sh`. Then open Today.
 5. Paste a job URL into Claude Code (`claude` inside `~/career-ops`) to evaluate it, or use Evaluate in the Control Center.
 
-If the checkout or the data root is under `~/Desktop` or `~/Documents`, give `/bin/bash` Full Disk Access (System Settings > Privacy & Security) so launchd can read the checkout and write the data root.
+If the checkout or the data root is in a folder macOS protects (`~/Desktop`, `~/Documents`, `~/Downloads`, iCloud Drive, a cloud storage folder, or an external or network volume, also when reached through a symlink), give `/bin/bash` Full Disk Access (System Settings > Privacy & Security) so launchd can read the checkout and write the data root. The installer names the folder when this applies.
 
 ## Daily use
 
@@ -193,7 +193,7 @@ rm -rf ~/Library/Application\ Support/career-ops-control-center
 
 | Symptom | Fix |
 |---|---|
-| The daily job does not run, or launchd cannot read the checkout | The checkout or the data root is under `~/Desktop` or `~/Documents`. Give `/bin/bash` Full Disk Access, or move them. A data root there can fail with no log at all, since the launchd logs live in it too. |
+| The daily job does not run, or launchd cannot read the checkout | The checkout or the data root is in a folder macOS protects (`~/Desktop`, `~/Documents`, `~/Downloads`, iCloud Drive, a cloud storage folder, an external or network volume, or a symlink into one). Give `/bin/bash` Full Disk Access, or move them. A data root there can fail with no log at all, since the launchd logs live in it too. Access can also lapse later (a macOS update, a reset of privacy settings): check the setting again if a job that used to run stops. |
 | The log says the Keychain item `career-ops-claude-token` is not found | Do the Keychain step in [First run](#first-run). The installer lists it as a pending action until it exists. |
 | Control Center says the port is in use | Start it on another port: `CC_PORT=4318 custom/control-center/bin/cc`. |
 | Warning that `ANTHROPIC_API_KEY` is set | Harmless: sessions and the daily job force it empty so your subscription is used. Unset it in your shell profile to silence the warning. |
