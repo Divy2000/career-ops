@@ -749,6 +749,25 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(lineOnes(here, id)).toBe(1);
   });
 
+  it('a run whose wrapper a killed server had spawned holds its Claude slot here before this process has adopted it (its token still being read): nothing here starts past the cap', async () => {
+    const root = tmpRoot();
+    const other = otherServer(root, req(['0', '3000'], { actionId: 'test.other', claude: true, env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok' } }));
+    await other.holding();
+    const id = new RunStore(root).list().find((m) => m.actionId === 'test.other')!.id;
+    await until(() => fs.existsSync(path.join(new RunStore(root).dirOf(id), 'wrapper.json')));
+    await other.crash();
+    // The Keychain has not answered: the killed server's run is not in this process's queue yet.
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1, readToken: () => new Promise<string>(() => {}) });
+    runners.push(here);
+    here.reconcile();
+    const mine = here.start(req(['0'], { claude: true }));
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    await until(() => here.store.read(id)?.status === 'done', 15_000);
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(mine.id)!.startedAt! >= here.store.read(id)!.endedAt!).toBe(true);
+    expect(lineOnes(here, id)).toBe(1);
+  });
+
   it('a server killed after spawning a wrapper that recorded nothing yet: the run ends lost, its wrapper told to stop, and it is never started again', async () => {
     const root = tmpRoot();
     // A wrapper stand-in that never gets as far as recording anything.

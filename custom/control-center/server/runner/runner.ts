@@ -428,6 +428,7 @@ export class Runner {
     }
     let waitsOnOthers = false;
     try {
+      this.resumeAbandonedStarts();
       const holders = this.holders();
       const foreign = holders.some((m) => !this.active.has(m.id));
       const busy = new Set(holders.flatMap((m) => m.resources));
@@ -452,6 +453,20 @@ export class Runner {
       unlock();
     }
     if (waitsOnOthers) this.retryLater();
+  }
+
+  /**
+   * Runs still queued on disk whose wrapper a process that is gone may have spawned: their wrapper may hold a slot and
+   * resources although nothing counts it, and this queue may not hold them yet (their token still being read), so they
+   * are settled here, under the schedule lock, before the count.
+   */
+  private resumeAbandonedStarts(): void {
+    for (const meta of this.store.list()) {
+      if (meta.status !== 'queued' || !fs.existsSync(path.join(this.store.dirOf(meta.id), STARTING_FILE))) continue;
+      if (this.claim(meta.id, true) === 'held') continue;
+      const current = this.store.read(meta.id);
+      if (current?.status === 'queued') this.resumeInterruptedStart(current);
+    }
   }
 
   private retryLater(): void {
