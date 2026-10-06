@@ -1,38 +1,22 @@
 # Working in `web/`
 
-The web app is a **view over the user's own files**, not a second engine. Read this
-before changing anything under `web/`.
+The web app is a view over the user's own files, not a second engine. Read this before changing anything under `web/`.
 
-## The three rules that are not style preferences
+## Three rules that are not style preferences
 
-1. **Orchestrate the core; never reimplement it.** The CLI already resolves tracker
-   paths, matches tailored CVs and canonicalises statuses: call it, or mirror it
-   behind a parity test. A second implementation of the same rule is how the two
-   halves start disagreeing, and the disagreement is always silent.
-   `web/src/lib/core/` holds the access layer for exactly this.
+1. **Orchestrate the core instead of reimplementing it.** The CLI already resolves tracker paths, matches tailored CVs, and canonicalises statuses. Call it, or mirror it behind a parity test; `web/src/lib/core/` is the access layer for exactly this. A second implementation of the same rule is how the two halves start disagreeing, and that disagreement is always silent.
 
-2. **Markdown is the source of truth.** `data/applications.md`, `cv.md`, `reports/`
-   are canonical; anything else is a derived index. Status changes go through
-   `/api/status`, which delegates to the root `set-status.mjs`. That is the single
-   write path, and it is single on purpose. Never write a user's file from a route
-   that bypasses it.
+2. **Markdown is the source of truth.** `data/applications.md`, `cv.md`, and `reports/` are canonical; everything else is a derived index. Status changes go through `/api/status`, which delegates to the root `set-status.mjs`. That is the single write path, deliberately, so no route writes a user's file around it.
 
-3. **Nothing is ever submitted automatically.** The apply flow fills in and previews;
-   a human presses send. There is no exception, no flag, and no "just for testing".
+3. **Nothing is submitted automatically.** The apply flow fills in and previews; a human presses send. There is no exception, flag, or testing mode that changes this.
 
 ## A missing file is not a malformed file
 
-Treating a parse error as "not there yet" is how a user's config gets overwritten
-with the shipped example. Distinguish `ENOENT` from every other failure, and let a
-broken user-layer file surface as an error the user can act on rather than as an
-empty default. (`web/src/lib/portals-config.mjs` is the worked example.)
+Treating a parse error as "not there yet" is how a user's config gets overwritten with the shipped example. Distinguish `ENOENT` from every other failure, and let a broken user-layer file surface as an error the user can act on rather than as an empty default. `web/src/lib/portals-config.mjs` is the worked example.
 
 ## Testing
 
-Logic that deserves a test lives in a plain `.mjs` module so `node --test` can import
-it with no build step and no `@/` alias loader. See `tracker-table.mjs`,
-`cv-selection.mjs`, `report-sections.mjs`. A component is not a place to put a rule
-you want to assert.
+Logic worth testing lives in a plain `.mjs` module, so `node --test` can import it with no build step and no `@/` alias loader (see `tracker-table.mjs`, `cv-selection.mjs`, `report-sections.mjs`). Keep rules you want to assert out of components.
 
 ```
 npm test          # node --test "tests/**/*.test.mjs"
@@ -40,14 +24,11 @@ npm run typecheck # tsc --noEmit
 npm run dev       # the app, reading the sibling career-ops files
 ```
 
-Point `CAREER_OPS_ROOT` at a scratch directory when you need data to test against;
-it is how the app finds the user's files, and it keeps your real pipeline out of it.
+When you need data to test against, point `CAREER_OPS_ROOT` at a scratch directory. It is how the app finds the user's files, and it keeps your real pipeline out of the test.
 
 ## Reviews and scope
 
-`web/` is maintained as first-party: functional and correctness fixes are very
-welcome, design and feature proposals are routed to Discussion #156 so the surface
-stays coherent. That is a routing decision, not a judgement on the work.
+`web/` is maintained as first-party. Functional and correctness fixes are welcome; design and feature proposals go to Discussion #156 so the surface stays coherent. That is a routing decision, not a judgement on the work.
 
 <!-- The block below is written and re-added by `next dev`. It is committed
      deliberately: keeping it in the file means Next updates only the marked
