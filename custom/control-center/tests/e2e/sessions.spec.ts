@@ -129,6 +129,19 @@ test.describe('AI sessions through the fake Claude', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Tracker' })).toBeVisible();
   });
 
+  test('closing and reopening the Ask drawer keeps the advisor conversation and its proposals (SW-web-a-13)', async ({ page }) => {
+    await page.getByRole('button', { name: 'Open Ask drawer' }).click();
+    await page.getByLabel('Prompt for advisor').fill('What should I follow up on this week?');
+    await page.getByRole('button', { name: 'Ask the advisor' }).click();
+    await page.getByRole('button', { name: 'Close Ask' }).click();
+    await expect(page.getByRole('dialog', { name: 'Ask' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Open Ask drawer' }).click();
+    const drawer = page.getByRole('dialog', { name: 'Ask' });
+    await expect(drawer.getByText('You have one overdue follow-up at Globex Payments.')).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText('Set row #1 to Responded')).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Ask again' })).toBeVisible();
+  });
+
   test('AI search lists offers, marks known URLs and adds a new one to the pipeline', async ({ page }) => {
     await page.goto('/discover?tab=ai');
     await page.getByLabel('Prompt for ai-search').fill('Senior platform engineer, remote, sponsors visas');

@@ -7,7 +7,9 @@ export const DOMAIN_KEYS: Record<string, string[][]> = {
   reports: [['tracker'], ['insights']],
   pipeline: [['pipeline']],
   shortlist: [['shortlist']],
-  immigration: [['immigration'], ['sponsorship']],
+  // An application's detail carries its company sponsorship file and alert.
+  immigration: [['immigration'], ['sponsorship'], ['tracker', 'row']],
+  interviews: [['tracker', 'interviews'], ['insights']],
   followups: [['followups'], ['tracker']],
   config: [['config'], ['system']],
   runs: [['runs']],
@@ -34,6 +36,13 @@ export function useLiveInvalidation(): void {
       void qc.invalidateQueries({ queryKey: ['immigration'] });
     });
     es.addEventListener('run.status', () => void qc.invalidateQueries({ queryKey: ['runs'] }));
+    // The bus keeps no replay and a restarted server's watcher ignores what changed before it started, so whatever
+    // changed while the stream was down sent no event: a reconnect refetches everything instead.
+    let opened = false;
+    es.addEventListener('open', () => {
+      if (opened) void qc.invalidateQueries();
+      opened = true;
+    });
     return () => es.close();
   }, [qc]);
 }

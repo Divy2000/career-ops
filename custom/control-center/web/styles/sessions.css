@@ -36,6 +36,9 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+.drawer[hidden] {
+  display: none;
+}
 .proposal {
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border);

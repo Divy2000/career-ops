@@ -6,14 +6,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The advisor session itself is out of scope: the stub hands its envelope callback to the test.
+// The advisor session itself is out of scope: the stub hands its envelope callback to the test while it is mounted, as
+// the real panel only delivers envelopes while mounted, and counts how often it was mounted (its session id is its state).
 let emitEnvelope: ((kind: string, payload: unknown, turn: number) => void) | null = null;
-vi.mock('@web/components/SessionPanel', () => ({
-  SessionPanel: (props: { onEnvelope?: (kind: string, payload: unknown, turn: number) => void }) => {
-    emitEnvelope = props.onEnvelope ?? null;
-    return null;
-  },
-}));
+const panelMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@web/components/SessionPanel', async () => {
+  const { useEffect } = await import('react');
+  return {
+    SessionPanel: (props: { onEnvelope?: (kind: string, payload: unknown, turn: number) => void }) => {
+      emitEnvelope = props.onEnvelope ?? null;
+      useEffect(() => {
+        panelMounts.count++;
+        return () => void (emitEnvelope = null);
+      }, []);
+      return null;
+    },
+  };
+});
 const navigations = vi.hoisted(() => [] as unknown[]);
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -27,6 +36,7 @@ let root: Root;
 beforeEach(async () => {
   document.body.innerHTML = '';
   emitEnvelope = null;
+  panelMounts.count = 0;
   navigations.length = 0;
   const { AskDrawer } = await import('@web/components/AskDrawer');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
@@ -34,8 +44,10 @@ beforeEach(async () => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(AskDrawer, { open: true, onClose: () => undefined })))));
+  renderDrawer = (open: boolean) => act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(AskDrawer, { open, onClose: () => undefined })))));
+  await renderDrawer(true);
 });
+let renderDrawer: (open: boolean) => Promise<void>;
 afterEach(async () => {
   await act(async () => root.unmount());
 });
@@ -70,6 +82,18 @@ describe('Ask drawer: proposed actions', () => {
     await act(async () => [...item.querySelectorAll('button')].find((b) => b.textContent === 'Run')!.click());
     expect(navigations).toEqual([{ to: '/pipeline', search: { tab: 'inbox', q: 'Stripe' } }]);
     expect(item.dataset.proposalState).toBe('done');
+  });
+});
+
+describe('Ask drawer: closing and reopening (SW-web-a-13)', () => {
+  it('keeps the advisor session while closed, so the conversation is there on reopen and later proposals still arrive', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'navigate', params: { to: '/tracker' } }, 1));
+    await renderDrawer(false);
+    expect(host.querySelector('[role="dialog"][aria-label="Ask"]:not([hidden])')).toBeNull();
+    await act(async () => emitEnvelope!('act', { action: 'navigate', params: { to: '/pipeline' } }, 1));
+    await renderDrawer(true);
+    expect(panelMounts.count).toBe(1);
+    expect([...host.querySelectorAll('li.proposal')].map((li) => li.textContent)).toEqual([expect.stringContaining('Open /tracker'), expect.stringContaining('Open /pipeline')]);
   });
 });
 

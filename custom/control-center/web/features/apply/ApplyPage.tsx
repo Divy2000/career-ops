@@ -76,6 +76,8 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
   }, []);
   const onStatus = useCallback((s: string) => setStatus(s), []);
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
+  // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.
+  const chosen = pdf ? ` The CV PDF I will attach is ${pdf}${cover ? ` and the cover letter text is ${cover}` : ''}; draft the answers to match it.` : '';
 
   const prefill = async () => {
     setSummary(null);
@@ -98,7 +100,8 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
     const confirmed = fields.map(({ id, label, value }) => ({ id, label, value }));
     setFillNote(null);
     try {
-      await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, attach the tailored CV, stop before Submit and report what you filled:\n${JSON.stringify({ fields: confirmed })}`);
+      const attach = pdf ? `attach the CV PDF ${pdf}${cover ? ` and use the cover letter text in ${cover}` : ''}` : 'attach the tailored CV';
+      await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, ${attach}, stop before Submit and report what you filled:\n${JSON.stringify({ fields: confirmed })}`);
       setFillNote('Fill turn sent with your edited answers.');
     } catch (err) {
       setFillNote(`Could not send the fill turn: ${(err as Error).message}`);
@@ -216,7 +219,7 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
           mode="apply"
           title="Apply session"
           target={target}
-          initialPrompt={url ? `Read the application form at ${url}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.` : ''}
+          initialPrompt={url ? `Read the application form at ${url}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.${chosen}` : ''}
           startLabel="Draft answers"
           onEnvelope={onEnvelope}
           onStatus={onStatus}

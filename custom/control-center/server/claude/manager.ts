@@ -17,7 +17,8 @@ import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
-import { decideTurnOutcome, detectNewReports, ownReports, snapshotReports, type NewReport } from './honesty.js';
+import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
+import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass } from '../domains/policyPass.js';
 
@@ -478,6 +479,11 @@ export class SessionManager {
       this.store.setPolicyBatch(id, null);
       reason += `; ${await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch)}`;
     }
+    // A completed evaluation of a pipeline URL leaves Pending, as pipeline mode moves it (modes/pipeline.md, Workflow 2f).
+    if (outcome.status === 'done' && isReportGated(meta.mode) && meta.target.type === 'url' && meta.target.value && newReports[0]) {
+      const note = await this.markEvaluated(meta.target.value, newReports[0]);
+      if (note) reason += `; ${note}`;
+    }
     if (this.turnEnded(id, n)) return;
     this.store.endTurn(id, n, {
       costUsd: r.turnDone?.costUsd ?? 0,
@@ -509,6 +515,16 @@ export class SessionManager {
       }
     }
     return [...out];
+  }
+
+  /** What the move did, or null when the pipeline does not list the URL as pending (a posting evaluated from elsewhere). */
+  private async markEvaluated(url: string, report: NewReport): Promise<string | null> {
+    try {
+      const moved = await markPipelineEvaluated(this.cfg.codeRoot, this.cfg.dataRoot, url, report.file);
+      return moved ? `pipeline row moved to Processed as #${report.file.match(/^\d+/)![0]}` : null;
+    } catch (err) {
+      return `could not move the pipeline row to Processed: ${(err as Error).message}`;
+    }
   }
 
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */

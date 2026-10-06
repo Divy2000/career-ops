@@ -196,6 +196,41 @@ describe('Claude sessions', () => {
     expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 9 is reserved/);
   });
 
+  it('an evaluation of a pending pipeline URL moves its row to Processed once the report is written, as pipeline mode does (SW-web-a-09)', async () => {
+    const other = await makeTestApp();
+    try {
+      const url = 'https://careers.example.com/soylent/42';
+      const fan = (await call(other, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: [url] })).json();
+      const settled = await settleOn(other, fan.sessions[0].id);
+      expect(settled.meta.status).toBe('done');
+      const num = String(fan.reserved[0]).padStart(3, '0');
+      const md = fs.readFileSync(path.join(other.cfg.dataRoot, 'data', 'pipeline.md'), 'utf8');
+      expect(md).not.toContain(`- [ ] ${url}`);
+      expect(md).toContain(`## Processed\n\n- [x] #${num} | ${url} | Soylent Foods | Junior Data Analyst | 4.1/5 | PDF ❌\n`);
+      const pipeline = (await call(other, 'GET', '/api/pipeline')).json();
+      expect(pipeline.rows.filter((r: { section: string; done: boolean }) => r.section === 'pending' && !r.done).map((r: { url: string }) => r.url)).not.toContain(url);
+      expect(settled.meta.lastReason).toContain(`pipeline row moved to Processed as #${num}`);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('an evaluation that ends without a report leaves its pipeline row pending (SW-web-a-09)', async () => {
+    const other = await makeTestApp();
+    try {
+      const url = 'https://careers.example.com/soylent/42';
+      const noReport = scenarioFile({ events: [INIT, result('The posting needs a login; I could not read it.', 0.01)] });
+      const fan = await withScenario(noReport, async () => (await call(other, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: [url] })).json());
+      expect((await settleOn(other, fan.sessions[0].id)).meta.status).toBe('awaiting_user');
+      const md = fs.readFileSync(path.join(other.cfg.dataRoot, 'data', 'pipeline.md'), 'utf8');
+      expect(md).toContain(`- [ ] ${url} | Soylent Foods`);
+      expect(md).not.toContain(`| ${url} | Soylent Foods | Junior Data Analyst | N/A`);
+      expect(md).not.toMatch(/^- \[x\] #\d+ \| https:\/\/careers\.example\.com\/soylent\/42 /m);
+    } finally {
+      await other.close();
+    }
+  });
+
   it('one fan-out takes at most BATCH_MAX_URLS (the limit the Batch tab and Evaluate visible enforce): one more is refused before any number is reserved', async () => {
     expect(BATCH_MAX_URLS).toBe(50);
     const urls = Array.from({ length: BATCH_MAX_URLS + 1 }, (_, i) => `https://jobs.example.com/over/${i}`);
