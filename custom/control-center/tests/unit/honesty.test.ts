@@ -6,7 +6,7 @@ import { parseReservedRange, readOutputLanguage } from '../../server/claude/mana
 import { applyRememberedFact, NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 import { copyFixtureRoot } from '../helpers/app.js';
 
-const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false, answersSeen: false };
+const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false, answersSeen: false, reportProduced: false };
 
 describe('evaluation honesty gate', () => {
   it('snapshots real reports only and detects new ones with their header score', () => {
@@ -41,6 +41,14 @@ describe('evaluation honesty gate', () => {
     expect(decideTurnOutcome({ ...base, isError: true }).status).toBe('error');
     expect(decideTurnOutcome({ ...base, sawResult: false }).status).toBe('error');
     expect(decideTurnOutcome({ ...base, cancelled: true, exitCode: null }).status).toBe('cancelled');
+  });
+
+  it('an evaluation owes its report once: a follow-up turn after it answers like any turn (SW2-claude-03)', () => {
+    const followUp = { ...base, reportProduced: true };
+    expect(decideTurnOutcome({ ...followUp, finalText: 'Block D scored low because the stack overlaps only partly.' })).toMatchObject({ status: 'done', reason: 'clean exit with output' });
+    expect(decideTurnOutcome({ ...followUp, finalText: 'Shall I also save the JD?' }).status).toBe('awaiting_user');
+    // Until a report exists, every turn still owes it.
+    expect(decideTurnOutcome({ ...base, finalText: 'Block D scored low.' })).toMatchObject({ status: 'awaiting_user', reason: expect.stringMatching(/no new report/) });
   });
 
   it('a localized evaluation is report-gated like oferta, whatever its file is called', () => {

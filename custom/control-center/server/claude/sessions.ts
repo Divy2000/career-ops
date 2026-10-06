@@ -60,6 +60,8 @@ export interface SessionMeta {
   conversationStarted?: boolean;
   /** A turn delivered a valid answers envelope (apply): later turns of the conversation, forks included, may fill in prose. */
   answersSeen?: boolean;
+  /** A turn was credited its report (evaluations): later turns, forks included, answer without owing another. */
+  reportProduced?: boolean;
 }
 
 /** Whether the CLI has a conversation to resume under the session's claudeSessionId. */
@@ -145,9 +147,17 @@ export class SessionStore {
   fork(id: string): SessionMeta {
     const src = this.mustRead(id);
     const forked = this.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, claudeSessionId: src.claudeSessionId, forkedFrom: src.id, forkPending: true });
-    if (src.answersSeen !== true) return forked;
-    this.markAnswersSeen(forked.id);
+    if (src.answersSeen === true) this.markAnswersSeen(forked.id);
+    if (src.reportProduced === true) this.markReportProduced(forked.id);
     return this.mustRead(forked.id);
+  }
+
+  /** Records that a turn was credited its report (written once). */
+  markReportProduced(id: string): void {
+    const meta = this.mustRead(id);
+    if (meta.reportProduced === true) return;
+    meta.reportProduced = true;
+    this.write(meta);
   }
 
   /** Records that a turn delivered a valid answers envelope (written once). */

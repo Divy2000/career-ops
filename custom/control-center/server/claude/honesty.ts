@@ -87,6 +87,8 @@ export interface TurnOutcomeInput {
   resumed: boolean;
   /** An earlier turn of this conversation (or of the session it was forked from) delivered a valid answers envelope. */
   answersSeen: boolean;
+  /** An earlier turn of this session (or of the session it was forked from) was credited its report. */
+  reportProduced: boolean;
 }
 
 export type TurnOutcome = { status: Extract<SessionStatus, 'done' | 'awaiting_user' | 'error' | 'cancelled'>; reason: string };
@@ -96,7 +98,8 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
   if (i.exitCode !== 0) return { status: 'error', reason: `claude exited ${i.exitCode ?? 'by signal'}` };
   if (i.isError) return { status: 'error', reason: 'claude reported is_error' };
   if (!i.sawResult) return { status: 'error', reason: 'the stream ended without a result event' };
-  if (isReportGated(i.modeId)) {
+  // An evaluation owes its report once: a follow-up turn after it answers like any other turn.
+  if (isReportGated(i.modeId) && !i.reportProduced) {
     if (i.newReports.length === 0) return { status: 'awaiting_user', reason: 'clean exit but no new report under reports/; not marked done' };
     if (!i.finalText.trim()) return { status: 'awaiting_user', reason: 'a report appeared but the turn produced no output' };
     return { status: 'done', reason: `report ${i.newReports.map((r) => r.file).join(', ')} created` };

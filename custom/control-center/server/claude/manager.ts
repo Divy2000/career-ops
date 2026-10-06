@@ -487,8 +487,10 @@ export class SessionManager {
       resumed: state.resumed ?? n > 1,
       // Read before this turn's own answers are recorded: a turn that delivers them is done by its envelope.
       answersSeen: meta.answersSeen === true,
+      reportProduced: meta.reportProduced === true,
     });
     if (r.answers > 0) this.store.markAnswersSeen(id);
+    if (newReports.length > 0) this.store.markReportProduced(id);
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;
     const num = meta.reportNum;

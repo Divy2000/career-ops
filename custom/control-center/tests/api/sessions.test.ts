@@ -203,6 +203,22 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('an evaluation\'s follow-up turn after its report ends done, also in a fork; one that asks waits (SW2-claude-03)', async () => {
+    const report = '# Evaluation: Follow Corp\n\n**Date:** 2026-10-05\n**Score:** 3.6/5\n**URL:** https://jobs.example.com/follow/1\n\n## A) Role Summary\nx\n';
+    const scenario = scenarioFile({
+      events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/098-follow-corp-2026-10-05.md', content: report } }, result('Scored 3.6/5.', 0.01)],
+      resume: [INIT, result('Block D scored low because the stack overlaps only partly.', 0.01)],
+    });
+    await withScenario(scenario, async () => {
+      const { id } = (await post('/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/follow/1' }, prompt: 'Evaluate https://jobs.example.com/follow/1' })).json();
+      expect((await settle(id)).meta.status).toBe('done');
+      expect((await post(`/api/sessions/${id}/turns`, { prompt: 'Why did Block D score low?' })).statusCode).toBe(202);
+      expect((await settle(id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
+      const fork = (await post(`/api/sessions/${id}/fork`, { prompt: 'Why did Block D score low?' })).json();
+      expect((await settle(fork.id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
+    });
+  });
+
   it('cancel kills the turn and leaves the session cancelled', async () => {
     const { id } = (await post('/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json();
     const deadline = Date.now() + 15_000;
