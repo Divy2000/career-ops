@@ -540,3 +540,15 @@ test('the re-run command printed for a running job keeps --reset when it was giv
   assert.equal(r.status, 4, r.stdout + r.stderr);
   assert.match(r.stderr, /Re-run this once it finishes: bash .*custom\/launchd\/install\.sh' --jobs daily --reset$/m);
 });
+
+test('a data root that is the home directory, or contains it, is refused before any plist is written (SW3-tests-01)', () => {
+  for (const pick of [(home) => home, (home) => path.dirname(home)]) {
+    const home = path.join(mkTmp('ci-launchd-home-'), 'home');
+    fs.mkdirSync(home);
+    const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: pick(home), HOME: home } });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /error: the data root .* is your home directory or contains it/);
+    assert.equal(fs.existsSync(path.join(home, 'Library', 'LaunchAgents')), false);
+    assert.doesNotMatch(r.log, /^launchctl (?!print )/m);
+  }
+});

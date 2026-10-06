@@ -131,6 +131,25 @@ fda_place() {
   esac
 }
 
+# The confinement refuses a data root that is the filesystem root or is (or contains) the home directory: a session
+# could read every file under it (assertRootsConfinable in custom/control-center/server/claude/confinement.mjs). Real
+# paths are compared, so a symlink to home is caught; a root that does not exist yet cannot contain home. Exits 1.
+refuse_unconfinable_root() { # path
+  local real home
+  real="$(cd "$1" 2>/dev/null && pwd -P)" || real="$1"
+  home="$(cd "$HOME" 2>/dev/null && pwd -P)" || home="$HOME"
+  if [ "$real" = / ]; then
+    echo "error: the data root $1 is the filesystem root; sessions and the daily job would refuse it. Choose a dedicated folder (for example ~/career-ops-data) with --data-root or CAREER_OPS_ROOT." >&2
+    exit 1
+  fi
+  case "$home/" in
+    "$real/"*)
+      echo "error: the data root $1 is your home directory or contains it; sessions and the daily job would refuse it. Choose a dedicated folder (for example ~/career-ops-data) with --data-root or CAREER_OPS_ROOT." >&2
+      exit 1
+      ;;
+  esac
+}
+
 ask() { # ask "question" y|n  -> 0 when the answer is yes; EOF or Enter takes the default
   local question="$1" default="$2" hint ans=""
   if [ "$default" = y ]; then hint="[Y/n]"; else hint="[y/N]"; fi
@@ -358,6 +377,7 @@ check_projects() {
 
 check_data_root_conflict
 DATA="$(effective_data_root)"
+refuse_unconfinable_root "$DATA"
 validate_inputs
 check_projects local
 

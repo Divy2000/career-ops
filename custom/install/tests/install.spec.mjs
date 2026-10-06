@@ -1193,3 +1193,32 @@ test('pty_run.py exits with the command\'s own status, also on a Python without 
   const old = ptyRun([], ['bash', '-c', 'exit 3'], { pre: 'import os\ndel os.waitstatus_to_exitcode' });
   assert.equal(old.status, 3, old.stderr);
 });
+
+// ---- a data root the confinement would refuse (SW3-tests-01) ----
+
+test('a data root that is the home directory, a folder containing it, or / is refused with exit 1 before anything changes', () => {
+  const cases = [
+    ['--data-root ~', (w) => ({ args: ['--data-root', w.home] })],
+    ['--data-root /', () => ({ args: ['--data-root', '/'] })],
+    ['--data-root <parent of home>', (w) => ({ args: ['--data-root', path.dirname(w.home)] })],
+    ['CAREER_OPS_ROOT=$HOME', (w) => ({ args: [], env: { CAREER_OPS_ROOT: w.home } })],
+    ['CAREER_OPS_DATA_DIR=$HOME', (w) => ({ args: [], env: { CAREER_OPS_DATA_DIR: w.home } })],
+  ];
+  for (const [name, make] of cases) {
+    const { w, D } = fresh({ keychain: true });
+    const { args, env = {} } = make(w);
+    const before = w.snapshot();
+    const r = w.run(['--dir', D, '--non-interactive', ...QUIET, ...args], { env });
+    assert.equal(r.status, 1, `${name}: ${r.out}`);
+    assert.match(r.out, /error: the data root .* (is your home directory or contains it|is the filesystem root)/, name);
+    assert.deepEqual(w.snapshot(), before, `${name}: nothing created`);
+    assert.equal(w.log().length, 0, `${name}: ${w.log().join('\n')}`);
+  }
+});
+
+test('a data root next to the home directory is fine', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET, '--data-root', path.join(w.home, 'career-data')]);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
+});
