@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
+import type { SessionMeta } from '@shared/api';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,6 +20,10 @@ class FakeEventSource {
   addEventListener() {}
   removeEventListener() {}
   close() {}
+}
+
+function json(status: number, body: unknown) {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
 let host: HTMLElement;
@@ -60,13 +65,38 @@ describe('a session panel on a session that no longer exists', () => {
     await until(() => statuses.includes('gone'), 'the gone status');
   });
 
-  it('tells its host when a start is refused, so the host does not wait for a session that never comes (SW5-web-b-01)', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"Claude is not available"}', { status: 503, headers: { 'content-type': 'application/json' } })));
+  // What POST /api/sessions answers when the turn cannot start (an unapproved CLI, no token): 202 with the session's meta,
+  // status error (manager.failBeforeSpawn). Typed as the server's SessionMeta so the stub cannot drift from it.
+  const MESSAGE = 'Claude Code 9.9.9 is not approved for Control Center sessions (approved: 2.1.288); run `npm run probe:reads` and add it';
+  const FAILED: SessionMeta = {
+    id: 's-failed', claudeSessionId: '11111111-1111-4111-8111-111111111111', mode: 'immigration-policy', policyClass: 'immigration-policy', target: { type: 'none', value: null }, model: null,
+    status: 'error', createdAt: '2026-10-06T12:00:00.000Z', updatedAt: '2026-10-06T12:00:00.000Z', turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null,
+    error: MESSAGE, reportNum: null, lastReason: null, policyVersion: 2,
+  };
+
+  it('tells its host when the session failed to start, and says why (SW4-tests-03)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === '/api/sessions' && init?.method === 'POST') return json(202, FAILED);
+        if (url === `/api/sessions/${FAILED.id}`) return json(200, { meta: FAILED, events: [{ seq: 1, ts: FAILED.createdAt, event: { type: 'error', message: MESSAGE } }] });
+        return json(200, []);
+      }),
+    );
     let failed = 0;
     const { SessionPanel } = await import('@web/components/SessionPanel');
     await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(SessionPanel, { mode: 'immigration-policy', autoStart: true, initialPrompt: 'Run the pass.', onStartFailed: () => void failed++ }))));
     await until(() => failed === 1, 'the start failure');
-    expect(host.textContent).toContain('Claude is not available');
+    await until(() => host.querySelector('[role="alert"]')?.textContent?.includes('is not approved for Control Center sessions'), 'the reason');
+  });
+
+  it('tells its host when the server refuses the start outright (a mode it will not run)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => (url === '/api/sessions' && init?.method === 'POST' ? json(422, { error: 'mode batch never runs as a session' }) : json(200, []))));
+    let failed = 0;
+    const { SessionPanel } = await import('@web/components/SessionPanel');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(SessionPanel, { mode: 'immigration-policy', autoStart: true, initialPrompt: 'Run the pass.', onStartFailed: () => void failed++ }))));
+    await until(() => failed === 1, 'the start failure');
+    expect(host.textContent).toContain('mode batch never runs as a session');
   });
 });
 
