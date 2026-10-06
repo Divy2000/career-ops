@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { rootEnv } from '../../test-support/root-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..', '..');
@@ -31,9 +32,7 @@ function build(payload) {
   const input = path.join(dir, 'payload.json');
   const output = path.join(dir, 'cv.html');
   fs.writeFileSync(input, JSON.stringify(payload));
-  const env = { ...process.env, CAREER_OPS_ROOT: dir };
-  delete env.CAREER_OPS_DATA_DIR;
-  const r = spawnSync(process.execPath, [path.join(REPO, 'build-cv-html.mjs'), input, output, FORK], { cwd: REPO, env, encoding: 'utf8', timeout: 30000 });
+  const r = spawnSync(process.execPath, [path.join(REPO, 'build-cv-html.mjs'), input, output, FORK], { cwd: REPO, env: rootEnv(dir), encoding: 'utf8', timeout: 30000 });
   assert.equal(r.status, 0, r.stderr);
   return fs.readFileSync(output, 'utf8');
 }

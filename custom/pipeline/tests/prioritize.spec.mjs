@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
-import { rootEnv } from './root-env.mjs';
+import { rootEnv } from '../../test-support/root-env.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');

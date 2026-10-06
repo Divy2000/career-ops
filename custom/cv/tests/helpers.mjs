@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { rootEnv } from '../../test-support/root-env.mjs';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(HERE, '..', '..', '..');
@@ -38,7 +39,5 @@ export function dataRoot({ cv = null, library = null } = {}) {
 }
 
 export function envFor(root) {
-  const env = { ...process.env, CAREER_OPS_ROOT: root };
-  delete env.CAREER_OPS_DATA_DIR;
-  return env;
+  return rootEnv(root);
 }
