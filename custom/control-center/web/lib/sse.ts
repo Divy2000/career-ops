@@ -36,6 +36,13 @@ export function useLiveInvalidation(): void {
       void qc.invalidateQueries({ queryKey: ['immigration'] });
     });
     es.addEventListener('run.status', () => void qc.invalidateQueries({ queryKey: ['runs'] }));
+    // The bus keeps no replay and a restarted server's watcher ignores what changed before it started, so whatever
+    // changed while the stream was down sent no event: a reconnect refetches everything instead.
+    let opened = false;
+    es.addEventListener('open', () => {
+      if (opened) void qc.invalidateQueries();
+      opened = true;
+    });
     return () => es.close();
   }, [qc]);
 }

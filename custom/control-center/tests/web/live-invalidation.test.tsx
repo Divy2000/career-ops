@@ -101,3 +101,14 @@ describe('live invalidation of what a page session writes (SW-web-a-11)', () => 
     await until(() => fetches.interviews === 2, 'the interviews refetch');
   });
 });
+
+describe('live invalidation after the event stream reconnects (SW-web-a-12)', () => {
+  it('the first open refetches nothing; a reconnect refetches every live query, since changes made while it was down sent no event', async () => {
+    expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
+    await act(async () => FakeEventSource.last!.emit('open', null));
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
+    await act(async () => FakeEventSource.last!.emit('open', null));
+    await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2, 'every query to refetch');
+  });
+});
