@@ -5,6 +5,7 @@ import { apiGet, apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { DataState } from '../../components/ui';
 import { AppearanceSetting } from '../../components/AppearanceSetting';
+import { useUnsaved } from '../../lib/unsaved';
 import type { AppSettings, AppSettingsRead } from '@shared/api';
 
 export const useAppSettings = () => useQuery({ queryKey: ['system', 'settings'], queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
@@ -34,6 +35,7 @@ export function AppTab() {
   const { save, error } = useSaveSettings();
   const [retention, setRetention] = useState<string | null>(null);
   const s = q.data;
+  useUnsaved('the run retention', retention !== null && s !== undefined && Number(retention) !== s.retention);
   return (
     <div className="card" aria-labelledby="app-settings-heading">
       <h2 id="app-settings-heading">App</h2>
@@ -96,6 +98,8 @@ export function EngineSettings() {
   const [budget7, setBudget7] = useState<string | null>(null);
   const s = q.data;
   const toBudget = (v: string | null, current: number | null) => (v === null ? current : v.trim() === '' ? null : Number(v));
+  useUnsaved('the model default', model !== null && s !== undefined && model !== s.modelDefault);
+  useUnsaved('the token budgets', s !== undefined && (toBudget(budget5, s.usageBudgets.fiveHourTokens) !== s.usageBudgets.fiveHourTokens || toBudget(budget7, s.usageBudgets.sevenDayTokens) !== s.usageBudgets.sevenDayTokens));
   return (
     <DataState query={q}>
       {s && (
