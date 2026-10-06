@@ -768,9 +768,15 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(fs.existsSync(path.join(here.store.dirOf(id), 'raw.ndjson'))).toBe(false);
   });
 
+  /** A claim dated ahead, so it never ages into one cut short: only the process it names can make it count as gone. */
+  const writeNamed = (file: string, text: string) => {
+    fs.writeFileSync(file, text);
+    const ahead = new Date(Date.now() + 3_600_000);
+    fs.utimesSync(file, ahead, ahead);
+  };
   for (const [format, write] of [
-    ['its PID and start time', (file: string, pid: number) => fs.writeFileSync(file, JSON.stringify({ pid, start: 1_700_000_000 }))],
-    ['a bare PID (the earlier format)', (file: string, pid: number) => fs.writeFileSync(file, String(pid))],
+    ['its PID and start time', (file: string, pid: number) => writeNamed(file, JSON.stringify({ pid, start: 1_700_000_000 }))],
+    ['a bare PID (the earlier format)', (file: string, pid: number) => writeNamed(file, String(pid))],
     ['nothing (a claim cut short), long enough ago', (file: string) => {
       fs.writeFileSync(file, '');
       const past = new Date(Date.now() - 60_000);
