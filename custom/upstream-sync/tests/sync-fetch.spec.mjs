@@ -506,38 +506,64 @@ test('merge_snapshot and changed_since_snapshot fail, not print nothing, when th
 
 // ---- the merged tree is tested with the dependencies it will merge ----
 
-test('refresh_root_deps reinstalls the root dependencies when the merge changed them, and only then', () => {
+test('refresh_root_deps reinstalls from HEAD every time, a dependency change in the merge included', () => {
   const w = npmStubWorld();
   try {
-    const base = git(w.repo, 'rev-parse', 'HEAD').trim();
-    const same = bashLib(w.repo, `refresh_root_deps ${base}`, w.env);
-    assert.equal(same.status, 0, same.stderr);
-    assert.equal(existsSync(w.log), false, 'no install when nothing changed');
     commitFile(w.repo, 'package.json', '{"name":"x","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}\n', 'upstream adds a dependency');
-    const changed = bashLib(w.repo, `refresh_root_deps ${base}`, w.env);
-    assert.equal(changed.status, 0, changed.stderr);
-    assert.match(changed.stdout, /root dependencies changed in the merge; reinstalling/);
+    const res = bashLib(w.repo, 'refresh_root_deps', w.env);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /reinstalling the root dependencies from the merged tree/);
     const calls = readFileSync(w.log, 'utf8').trim().split('\n');
     assert.equal(calls.length, 1);
     assert.match(calls[0], /^install\b.*--ignore-scripts/);
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });
 
-test('refresh_root_deps fails when the reinstall fails or the base cannot be read, never testing stale modules', () => {
+test('refresh_root_deps fails when the reinstall fails, never testing stale modules', () => {
   const w = npmStubWorld();
   try {
-    const base = git(w.repo, 'rev-parse', 'HEAD').trim();
-    commitFile(w.repo, 'package.json', '{"name":"x","version":"2.0.0"}\n', 'bump');
     stub(w.bin, 'npm', 'exit 7');
-    assert.notEqual(bashLib(w.repo, `refresh_root_deps ${base}`, w.env).status, 0);
-    assert.notEqual(bashLib(w.repo, 'refresh_root_deps no-such-rev', w.env).status, 0);
+    assert.notEqual(bashLib(w.repo, 'refresh_root_deps', w.env).status, 0);
   } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });
 
-test('sync.sh reinstalls changed root dependencies after the merge is verified and before any post-merge test', () => {
+test('sync.sh reinstalls the root dependencies after the merge is verified and before any post-merge test', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  const refresh = sync.indexOf('refresh_root_deps origin/main || fail ');
+  const refresh = sync.indexOf('refresh_root_deps || fail ');
   const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")"');
   const custom = sync.indexOf('custom_tests "$STATE_DIR/$TODAY.custom-tests.txt"');
   assert.ok(gate > -1 && refresh > gate && custom > refresh, `order was verify=${gate} refresh=${refresh} custom=${custom}`);
+});
+
+/** Runs sync.sh's own post-verify dependency line in a repo whose origin/main is HEAD (fingerprints match). */
+function syncDepsStep(w) {
+  git(w.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  const line = readFileSync(SYNC, 'utf8').split('\n').find((l) => l.startsWith('refresh_root_deps'));
+  assert.ok(line, 'no refresh_root_deps line in sync.sh');
+  return bashLib(w.repo, `fail() { echo "!!! $1" >&2; exit 1; }\n${line}`, w.env);
+}
+
+test('a node_modules the sync Claude changed is thrown away and reinstalled from HEAD, though package.json did not change', () => {
+  const w = npmStubWorld();
+  try {
+    const tampered = path.join(w.repo, 'node_modules', 'js-yaml', 'index.js');
+    mkdirSync(path.dirname(tampered), { recursive: true });
+    writeFileSync(tampered, 'module.exports = "patched by the pass";\n');
+    const res = syncDepsStep(w);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(existsSync(path.join(w.repo, 'node_modules')), false, 'the old tree is gone (the npm stub installs nothing)');
+    const calls = readFileSync(w.log, 'utf8').trim().split('\n');
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /^install\b.*--ignore-scripts/);
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
+});
+
+test('a failed reinstall after Claude fails the run', () => {
+  const w = npmStubWorld();
+  try {
+    stub(w.bin, 'npm', 'exit 7');
+    const res = syncDepsStep(w);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /^!!! /m);
+  } finally { rmSync(w.dir, { recursive: true, force: true }); }
 });

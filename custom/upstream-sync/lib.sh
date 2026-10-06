@@ -49,23 +49,22 @@ deps_fingerprint() {
   git rev-parse --verify --quiet "$1:package-lock.json" 2>/dev/null || git rev-parse --verify "$1:package.json"
 }
 
-# refresh_root_deps <base-rev>: after the merge, reinstall the root
-# dependencies (no lifecycle scripts) when they differ from <base-rev>'s, so
-# the post-merge tests run on the dependencies the merge brings, not the ones
-# installed before it. Fails when a fingerprint cannot be read or the install
+# refresh_root_deps: after Claude, delete the root node_modules and install
+# again from HEAD (no lifecycle scripts). Claude may run npm and write inside
+# the gitignored node_modules, and verify_merge ignores untracked files, so the
+# post-merge tests only run on a tree installed after it exited. Matching
+# dependency fingerprints are no reason to skip this. Fails when either step
 # fails.
 refresh_root_deps() {
-  local before after
-  before="$(deps_fingerprint "$1")" || return 1
-  after="$(deps_fingerprint HEAD)" || return 1
-  [ "$before" = "$after" ] && return 0
-  echo "root dependencies changed in the merge; reinstalling"
+  echo "reinstalling the root dependencies from the merged tree"
+  rm -rf node_modules || return 1
   install_root_deps ignore-scripts
 }
 
 # control_center_checks <log>: install custom/control-center from its tracked
-# lockfile (no lifecycle scripts), then run its vitest suite (which holds the
-# contract test against upstream's CLIs) and its typecheck, all output to <log>.
+# lockfile with npm ci, which deletes any node_modules Claude left (no
+# lifecycle scripts), then run its vitest suite (which holds the contract test
+# against upstream's CLIs) and its typecheck, all output to <log>.
 # Fails at the first failing step, and when no test ran at all.
 control_center_checks() {
   local log="$1"
