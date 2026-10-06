@@ -72,8 +72,16 @@ else
 fi
 
 # The node both jobs run on, pinned as CC_NODE_BIN (custom/launchd/pinned-node.sh puts it first on the job's PATH):
-# launchd's PATH never reaches a node from nvm, fnm, volta or asdf. Its real path, so an fnm per-shell link is not pinned.
-NODE_BIN="$(node -p process.execPath)"
+# launchd's PATH never reaches a node from nvm, fnm, volta or asdf. The pin is the node on this shell's PATH as written
+# (/opt/homebrew/bin/node, an nvm version folder), which outlives an upgrade where the versioned folder it links into
+# does not. It is the real binary only when that entry is an fnm per-shell link (fnm_multishells, gone with its shell),
+# or does not resolve to the node that runs (a shim, a relative entry). The Control Center writes the same pin.
+NODE_BIN="$(node -e '
+const fs = require("node:fs");
+const found = process.argv[1] || "";
+const keep = found.startsWith("/") && !found.includes("fnm_multishells") && fs.realpathSync(found) === fs.realpathSync(process.execPath);
+process.stdout.write(keep ? found : process.execPath);
+' "$(command -v node)")"
 echo "jobs use node $NODE_BIN ($("$NODE_BIN" --version))"
 
 write_plist() { # label script hour minute weekday(or empty) logdir
