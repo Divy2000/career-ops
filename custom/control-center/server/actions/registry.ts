@@ -9,6 +9,7 @@ import { cliScriptPath } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { listReportFiles } from '../domains/reports.js';
+import { containedTarget, OutsideRootsError } from '../lib/atomic-write.js';
 import { RunStore } from '../runner/store.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
 import { outputFileProblem } from '../../shared/output-path.js';
@@ -393,7 +394,17 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: false,
     params: z.object({ file: outputPath(/\.(png|jpe?g|gif|webp|bmp|svg)$/i, 'a png, jpg, gif, webp, bmp or svg image'), pdf: outputPath(/\.pdf$/i, 'a .pdf file'), force: z.boolean().default(false) }),
-    check: (p, ctx) => (resolveOutputFile(ctx.dataRoot, p.file) ? null : `The image ${p.file} does not exist.`),
+    check: (p, ctx) => {
+      if (!resolveOutputFile(ctx.dataRoot, p.file)) return `The image ${p.file} does not exist.`;
+      // img-to-pdf.mjs writes wherever the path leads: a symlinked PDF or folder under output/ must not take it out.
+      try {
+        containedTarget(path.join(ctx.dataRoot, p.pdf), { within: [{ root: path.join(ctx.dataRoot, 'output'), name: 'output folder' }] });
+        return null;
+      } catch (err) {
+        if (err instanceof OutsideRootsError) return err.message;
+        throw err;
+      }
+    },
     // img-to-pdf.mjs <image-path> <output-path> [--force]: without --force it refuses to replace an existing PDF.
     build: (p, ctx) => node(ctx, 'imgToPdf', [path.join(ctx.dataRoot, p.file), path.join(ctx.dataRoot, p.pdf), ...flag(p.force, '--force')]),
   }),

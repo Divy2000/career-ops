@@ -10,6 +10,7 @@ import { findAction } from '../../server/actions/registry.js';
 import { RunStore } from '../../server/runner/store.js';
 import type { RunMeta } from '../../server/runner/store.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -120,25 +121,46 @@ describe('Seed follow-up cadence', () => {
 });
 
 describe('Image to PDF', () => {
+  // A 1x1 PNG.
+  const raw = Buffer.from([0, 255, 0, 0]);
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+
   it('converts an image under output/ into the PDF named under output/', async () => {
-    // A 1x1 PNG.
-    const raw = Buffer.from([0, 255, 0, 0]);
-    const chunk = (type: string, data: Buffer) => {
-      const len = Buffer.alloc(4);
-      len.writeUInt32BE(data.length);
-      const body = Buffer.concat([Buffer.from(type), data]);
-      const crc = Buffer.alloc(4);
-      crc.writeUInt32BE(zlib.crc32(body));
-      return Buffer.concat([len, body, crc]);
-    };
-    const ihdr = Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
-    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
     fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'offer-shot.png'), png);
     const res = await post('docs.imgToPdf', { file: 'output/offer-shot.png', pdf: 'output/offer-shot.pdf' });
     expect(res.statusCode, res.body).toBe(202);
     const run = await finished(res.json().runId);
     expect(run.meta.status, run.text).toBe('done');
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'output', 'offer-shot.pdf')).subarray(0, 5).toString()).toBe('%PDF-');
+  });
+
+  it('refuses a PDF path that leads outside output/ through a symlinked file or folder, and leaves the outside file alone (SW3-tests-03)', async () => {
+    fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'shot2.png'), png);
+    const outside = tempDir('cc-img-outside-');
+    fs.writeFileSync(path.join(outside, 'victim.pdf'), 'keep me');
+    fs.symlinkSync(path.join(outside, 'victim.pdf'), path.join(t.cfg.dataRoot, 'output', 'linked.pdf'));
+    fs.symlinkSync(outside, path.join(t.cfg.dataRoot, 'output', 'linked-dir'));
+    try {
+      const file = await post('docs.imgToPdf', { file: 'output/shot2.png', pdf: 'output/linked.pdf', force: true });
+      expect(file.statusCode, file.body).toBe(400);
+      expect(file.body).toMatch(/outside/);
+      const dir = await post('docs.imgToPdf', { file: 'output/shot2.png', pdf: 'output/linked-dir/new.pdf', force: true });
+      expect(dir.statusCode, dir.body).toBe(400);
+      expect(fs.readFileSync(path.join(outside, 'victim.pdf'), 'utf8')).toBe('keep me');
+      expect(fs.existsSync(path.join(outside, 'new.pdf'))).toBe(false);
+    } finally {
+      fs.rmSync(path.join(t.cfg.dataRoot, 'output', 'linked.pdf'));
+      fs.rmSync(path.join(t.cfg.dataRoot, 'output', 'linked-dir'));
+    }
   });
 
   it('refuses a missing image, or an output that is not a PDF, before running', async () => {
