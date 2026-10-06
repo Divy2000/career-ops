@@ -244,11 +244,17 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const refused = unlockRefused(meta.mode, req.headers);
       if (refused) return reply.code(403).send({ error: refused });
     }
-    // A fork continues the pass of the session it forks: it takes the claim from it (and from no other live holder).
+    const source = manager.read(req.params.id);
+    const isPass = source?.mode === 'immigration-policy';
+    // A fork continues the pass of the session it forks, taking over its claim: only a pass paused for a reply has no
+    // Claude run of its own that would go on with the same items beside the fork's.
+    if (isPass && source.status !== 'awaiting_user') {
+      return reply.code(409).send({ error: `Not forked: this AI policy pass is ${source.status}; only a pass waiting for your reply can be forked. Start a new pass instead.` });
+    }
+    // It takes the claim from the paused source (and from no other live holder).
     const starting = `starting:${crypto.randomUUID()}`;
     const busy = claimForTurn(req.params.id, starting, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
-    const isPass = manager.read(req.params.id)?.mode === 'immigration-policy';
     const giveBack = () => policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`);
     return mutate(reply, async () => {
       let forked;

@@ -297,6 +297,26 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     expect((await del(a.id)).statusCode).toBe(200);
   });
 
+  it('a running pass cannot be forked: the fork is refused with 409, and the pass keeps its claim and its batch (SW8 review 1)', async () => {
+    writePending([item(13)]);
+    const res = await withScenario({ events: [INIT, ...Array.from({ length: 30 }, () => ({ __sleep: 100 })), result('Pass done.')] }, start);
+    expect(res.statusCode, res.body).toBe(202);
+    const id = res.json().id as string;
+    const batch = t.sessions.read(id)!.policyBatch;
+    expect(t.sessions.read(id)!.status).toBe('running');
+    const before = (await t.app.inject({ method: 'GET', url: '/api/sessions', headers: t.authed })).json().length as number;
+    const forked = await fork(id);
+    expect(forked.statusCode, forked.body).toBe(409);
+    expect(forked.json().error).toMatch(/running/);
+    expect((await t.app.inject({ method: 'GET', url: '/api/sessions', headers: t.authed })).json().length).toBe(before);
+    expect(claim()?.owner).toBe(`session:${id}`);
+    expect(t.sessions.read(id)!.policyBatch).toBe(batch);
+    expect((await settle(id)).meta.status).toBe('done');
+    expect(readPending()).toEqual([]);
+    expect(claim()).toBeNull();
+    expect((await del(id)).statusCode).toBe(200);
+  });
+
   it('a pass still waiting on the token keeps its claim however long it waits: a second pass is refused (SW8 review 2)', async () => {
     writePending([item(14)]);
     const open = holdToken();
