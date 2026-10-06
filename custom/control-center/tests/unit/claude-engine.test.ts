@@ -1041,6 +1041,11 @@ describe('checkBash: exact per-command argument grammars', () => {
       no(devchat, cmd);
   });
 
+  it('refuses a word starting with = (zsh expands =curl to the path of curl) in a command the policy otherwise allows, saying so (SW5-tests-04)', () => {
+    ok(oferta, 'node merge-tracker.mjs');
+    expect(checkBash('node merge-tracker.mjs =curl', oferta, root)).toMatch(/words starting with = are not allowed/);
+  });
+
   it('git: only status, diff and log with read-only flags and in-repo paths; never --output, -o or --no-index', () => {
     for (const cmd of ['git status', 'git status --short custom/control-center/package.json', 'git status -s -b', 'git diff', 'git diff --stat -- custom/', 'git diff --cached --name-only', 'git diff HEAD~1 -- custom/control-center/server', 'git diff main..feat/x --stat', 'git log --oneline -n 5', 'git log --oneline -5 -- custom/', 'git log --format=%h --since=2.weeks'])
       ok(devchat, cmd);
