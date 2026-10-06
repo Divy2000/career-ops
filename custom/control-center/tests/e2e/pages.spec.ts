@@ -1,7 +1,9 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
-import { E2E_TOKEN } from '../../playwright.config.js';
+import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
+import { localDate } from '../../shared/local-date.js';
 
 async function login(page: Page) {
   await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -17,14 +19,28 @@ async function axeClean(page: Page) {
 test.describe('read-only pages render fixture data', () => {
   test.beforeEach(async ({ page }) => login(page));
 
-  test('Today shows the shortlist, the failed daily job, policy bullets and fresh matches', async ({ page }) => {
-    await expect(page.getByText('Daily job 2026-10-03: failed')).toBeVisible();
-    await expect(page.getByRole('cell', { name: 'Globex Payments' })).toBeVisible();
-    await expect(page.getByText('Proposed rule on a new petition fee')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Fresh matches this week' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Decisions' })).toBeVisible();
-    await expect(page.getByText('Northwind Analytics').first()).toBeVisible();
-    await axeClean(page);
+  test('Today shows the shortlist, the failed daily job, policy bullets, an evaluated row under Decisions and a fresh match', async ({ page }) => {
+    // Each feature is checked inside its own card, on data this test sets up and restores (SW2-tests-08): #2 waiting for a
+    // decision (an earlier spec may have decided it), and a posting first seen today (the fixture's dated rows age out).
+    const setStatus = (row: number, state: string) => page.request.post('/api/actions/tracker.setStatus', { data: { params: { row, state } }, headers: { 'x-cc': '1', origin: `http://127.0.0.1:${E2E_PORT}` } });
+    const before = ((await (await page.request.get('/api/tracker')).json()) as { rows: Array<{ num: number; status: string }> }).rows.find((r) => r.num === 2)!.status;
+    const history = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'scan-history.tsv');
+    const original = fs.readFileSync(history, 'utf8');
+    fs.appendFileSync(history, `https://careers.example.com/today-e2e/1\t${localDate()}\tgreenhouse\tSite Reliability Lead\tToday E2E Co\tadded\tRemote\tf-today\t\t0.7\t\ttoday e2e co\n`);
+    try {
+      if (before !== 'Evaluated') expect((await setStatus(2, 'Evaluated')).status()).toBe(200);
+      await page.reload();
+      await expect(page.getByText('Daily job 2026-10-03: failed')).toBeVisible();
+      await expect(page.getByRole('cell', { name: 'Globex Payments' })).toBeVisible();
+      await expect(page.getByText('Proposed rule on a new petition fee')).toBeVisible();
+      await expect(page.getByRole('list', { name: 'Decisions' }).getByRole('link', { name: 'Northwind Analytics' })).toBeVisible();
+      const fresh = page.locator('.card', { has: page.getByRole('heading', { name: 'Fresh matches this week' }) });
+      await expect(fresh.getByRole('listitem').filter({ hasText: 'Today E2E Co' })).toContainText(`Site Reliability Lead Today E2E Co ${localDate()}`);
+      await axeClean(page);
+    } finally {
+      fs.writeFileSync(history, original);
+      if (before !== 'Evaluated') expect((await setStatus(2, before)).status()).toBe(200);
+    }
   });
 
   test('Tracker lists rows, filters by tab and search, previews and opens an application', async ({ page }) => {
