@@ -725,6 +725,24 @@ test('--onboard interactive starts claude without -p, from the checkout, with a 
   assert.ok(w.calls('claude').some((l) => l.includes(`(cwd=${D})`)));
 });
 
+test('--yes at a terminal takes onboarding\'s default answer too: Claude Code starts interactively, as --help documents (SW6-scripts-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--yes', '--no-start', '--no-launchd', '--no-h1b-index', '--resume', resume], { tty: '\n' });
+  const argv = w.claudeArgv();
+  assert.ok(argv, r.out);
+  assert.ok(!argv.includes('-p'), argv.join(' '));
+  assert.match(argv.at(-1), /ONBOARDING\.md/);
+});
+
+test('--yes without a terminal still only prints the onboarding command', () => {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--yes', '--no-start', '--no-launchd', '--no-h1b-index', '--resume', resume]);
+  assert.equal(w.claudeArgv(), null, r.out);
+  assert.match(r.out, /claude '/);
+});
+
 test('--onboard interactive without a usable terminal prints the command and records a pending action instead', () => {
   const { w, D } = fresh({ keychain: true });
   const r = w.run(['--dir', D, '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'interactive']);

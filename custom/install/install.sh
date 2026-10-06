@@ -723,6 +723,9 @@ else
       mode=skip
     elif [ "$PROMPT_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && ask "Start Claude Code now to personalize career-ops from your documents?" y; then
       mode=interactive
+    elif [ "$ASSUME_YES" = 1 ] && [ "$TTY_OK" = 1 ] && [ "$DRY_RUN" = 0 ] && [ -n "$CLAUDE_BIN" ]; then
+      # --yes takes the default answer, which is yes: start onboarding as --help documents.
+      mode=interactive
     else
       mode=none
     fi
