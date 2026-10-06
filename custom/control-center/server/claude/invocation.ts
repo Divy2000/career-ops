@@ -104,6 +104,15 @@ export function toolResultsDirs(projectsDir: string, codeRoot: string, claudeSes
 }
 
 /**
+ * The transcript the CLI keeps for a conversation, under both spellings of the code root: <projects>/<the cwd with
+ * every non-alphanumeric character as '-'>/<session id>.jsonl. The CLI (2.1.289) refuses --session-id for an id
+ * whose transcript exists and --resume for one whose transcript does not.
+ */
+export function transcriptFiles(projectsDir: string, codeRoot: string, claudeSessionId: string): string[] {
+  return [...new Set(spellings(codeRoot).map((c) => path.join(projectsDir, c.replace(/[^a-zA-Z0-9]/g, '-'), `${claudeSessionId}.jsonl`)))];
+}
+
+/**
  * An @-mention can attach a file before any tool or hook runs; a word joiner after the @ keeps the text readable
  * and the mention inert. An @ is left as written only when the character before it can sit inside a URL or an
  * e-mail address (a word character or one of . + - / : = ? & %), so https://medium.com/@acme, query strings and

@@ -392,6 +392,29 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('a turn whose CLI saved its transcript but died before reporting session.init is resumed, never restarted under the same id', async () => {
+    const app = await makeTestApp();
+    const args = async (runId: string) => (await call(app, 'GET', `/api/runs/${runId}`)).json().meta.cmd.args as string[];
+    try {
+      // Nothing on stdout, exit 1: the CLI died before its init event.
+      const died = scenarioFile({ events: [], exitCode: 1 });
+      const id: string = (await withScenario(died, async () => call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' }))).json().id;
+      const first = await settleOn(app, id);
+      expect(first.meta.status).toBe('error');
+      // ...after it had written the transcript the CLI keys --session-id and --resume on (<projects>/<cwd as slug>/<id>.jsonl).
+      const slug = fs.realpathSync.native(app.cfg.codeRoot).replace(/[^a-zA-Z0-9]/g, '-');
+      fs.mkdirSync(path.join(app.cfg.claudeProjectsDir, slug), { recursive: true });
+      fs.writeFileSync(path.join(app.cfg.claudeProjectsDir, slug, `${first.meta.claudeSessionId}.jsonl`), '{"type":"user"}\n');
+      expect((await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Research' })).statusCode).toBe(202);
+      const second = await settleOn(app, id);
+      const secondArgs = await args(second.meta.turns[1]!.runId);
+      expect(secondArgs).toEqual(expect.arrayContaining(['--resume', first.meta.claudeSessionId]));
+      expect(secondArgs).not.toContain('--session-id');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('two concurrent sends on one session: one starts a turn, the other gets 409', async () => {
     const slow = await makeTestApp({}, { readToken: async () => (await wait(150), FAKE_TOKEN) });
     try {

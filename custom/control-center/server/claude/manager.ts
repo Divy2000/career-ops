@@ -14,7 +14,7 @@ import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
-import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, writePolicyFile, writeSettingsFile } from './invocation.js';
+import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
@@ -177,7 +177,7 @@ export class SessionManager {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
-      return await this.runTurn(meta, policy, prompt, { resume: conversationStarted(meta) || forkPending, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
+      return await this.runTurn(meta, policy, prompt, { resume: this.hasConversation(meta) || forkPending, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
     } finally {
       this.sending.delete(id);
     }
@@ -188,7 +188,7 @@ export class SessionManager {
     assertCurrentPolicy(src);
     const policy = this.turnPolicy(src.mode);
     // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
-    if (!conversationStarted(src)) {
+    if (!this.hasConversation(src)) {
       const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
       return this.runTurn(fresh, policy, prompt, { resume: false, fork: false });
     }
@@ -259,6 +259,15 @@ export class SessionManager {
   close(): void {
     for (const t of this.active.values()) clearInterval(t.timer);
     this.active.clear();
+  }
+
+  /**
+   * Whether the CLI has a conversation under the session's id to resume: a turn reported session.init, or the CLI
+   * saved its transcript (a turn that died before its init event). Neither means a turn starts it with --session-id;
+   * if that is ever wrong the CLI refuses the reused id and the transcript is left as it was.
+   */
+  private hasConversation(meta: SessionMeta): boolean {
+    return conversationStarted(meta) || transcriptFiles(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId).some((f) => fs.existsSync(f));
   }
 
   private must(id: string): SessionMeta {
