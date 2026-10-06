@@ -29,7 +29,16 @@ mkdir -p "$IMM/logs"
 if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
   CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 0 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
   rc=$?
-  if [ "$rc" = 75 ]; then echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"; exit 0; fi
+  if [ "$rc" = 75 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"
+    # A start the user asked for (the Control Center sets CC_RUN_DAILY_SKIP_EXIT) must not read as a finished run:
+    # say why nothing ran and exit with that code. launchd sets nothing, so its skipped start still exits 0.
+    case "${CC_RUN_DAILY_SKIP_EXIT:-}" in
+      '' ) exit 0 ;;
+      *[!0-9]* ) exit 0 ;;
+      * ) echo "run-daily: skipped, because the daily job is already running (another run holds its lock)" >&2; exit "$CC_RUN_DAILY_SKIP_EXIT" ;;
+    esac
+  fi
   exit "$rc"
 fi
 # Only the lock holder gets here: the Control Center reads this pid to tell this data root's run is alive, however

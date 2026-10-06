@@ -10,6 +10,7 @@ import { findAction } from '../../server/actions/registry.js';
 import { RunStore } from '../../server/runner/store.js';
 import type { RunMeta } from '../../server/runner/store.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
+import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -120,19 +121,20 @@ describe('Seed follow-up cadence', () => {
 });
 
 describe('Image to PDF', () => {
+  // A 1x1 PNG.
+  const raw = Buffer.from([0, 255, 0, 0]);
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+
   it('converts an image under output/ into the PDF named under output/', async () => {
-    // A 1x1 PNG.
-    const raw = Buffer.from([0, 255, 0, 0]);
-    const chunk = (type: string, data: Buffer) => {
-      const len = Buffer.alloc(4);
-      len.writeUInt32BE(data.length);
-      const body = Buffer.concat([Buffer.from(type), data]);
-      const crc = Buffer.alloc(4);
-      crc.writeUInt32BE(zlib.crc32(body));
-      return Buffer.concat([len, body, crc]);
-    };
-    const ihdr = Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
-    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
     fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'offer-shot.png'), png);
     const res = await post('docs.imgToPdf', { file: 'output/offer-shot.png', pdf: 'output/offer-shot.pdf' });
     expect(res.statusCode, res.body).toBe(202);
@@ -141,9 +143,58 @@ describe('Image to PDF', () => {
     expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'output', 'offer-shot.pdf')).subarray(0, 5).toString()).toBe('%PDF-');
   });
 
+  it('refuses a PDF path that leads outside output/ through a symlinked file or folder, and leaves the outside file alone (SW3-tests-03)', async () => {
+    fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'shot2.png'), png);
+    const outside = tempDir('cc-img-outside-');
+    fs.writeFileSync(path.join(outside, 'victim.pdf'), 'keep me');
+    fs.symlinkSync(path.join(outside, 'victim.pdf'), path.join(t.cfg.dataRoot, 'output', 'linked.pdf'));
+    fs.symlinkSync(outside, path.join(t.cfg.dataRoot, 'output', 'linked-dir'));
+    try {
+      const file = await post('docs.imgToPdf', { file: 'output/shot2.png', pdf: 'output/linked.pdf', force: true });
+      expect(file.statusCode, file.body).toBe(400);
+      expect(file.body).toMatch(/outside/);
+      const dir = await post('docs.imgToPdf', { file: 'output/shot2.png', pdf: 'output/linked-dir/new.pdf', force: true });
+      expect(dir.statusCode, dir.body).toBe(400);
+      expect(fs.readFileSync(path.join(outside, 'victim.pdf'), 'utf8')).toBe('keep me');
+      expect(fs.existsSync(path.join(outside, 'new.pdf'))).toBe(false);
+    } finally {
+      fs.rmSync(path.join(t.cfg.dataRoot, 'output', 'linked.pdf'));
+      fs.rmSync(path.join(t.cfg.dataRoot, 'output', 'linked-dir'));
+    }
+  });
+
   it('refuses a missing image, or an output that is not a PDF, before running', async () => {
     expect((await post('docs.imgToPdf', { file: 'output/nope.png', pdf: 'output/x.pdf' })).statusCode).toBe(400);
     expect((await post('docs.imgToPdf', { file: 'output/acme-robotics-cv.html', pdf: 'output/x.txt' })).statusCode).toBe(400);
+  });
+});
+
+describe('Archive posting', () => {
+  it('takes a report number, never the row number "n" means elsewhere, and refuses one with no report file (SW4-libs-03)', async () => {
+    const action = findAction('docs.archivePosting')!;
+    expect(action.params.safeParse({ n: 1, url: 'https://jobs.example.com/1' }).success).toBe(false);
+    expect(action.params.safeParse({ report: 1, url: 'https://jobs.example.com/1' }).success).toBe(true);
+    const missing = await post('docs.archivePosting', { report: 99, url: 'https://jobs.example.com/1' });
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(missing.body).toMatch(/no file for report 99 under reports\//);
+  });
+});
+
+describe('Paste a reply', () => {
+  it('appends one reply candidate per paste to data/reply-candidates.json, with the pasted sender, subject and body (SW3-tests-17)', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json');
+    fs.rmSync(file, { force: true });
+    const first = await post('followups.replyPaste', { from: 'Dana Recruiter <dana@acme.example>', subject: 'Re: Platform Engineer', body: 'Thanks for applying.\n\nCan you talk Tuesday?' });
+    expect(first.statusCode, first.body).toBe(200);
+    // A body that itself starts with header-like lines, and a sender with a line break, stay in their fields.
+    const second = await post('followups.replyPaste', { from: 'Lee\nOps', subject: '', body: 'Subject: not a header\nFrom: nobody' });
+    expect(second.statusCode, second.body).toBe(200);
+    const candidates = JSON.parse(fs.readFileSync(file, 'utf8')) as Array<Record<string, unknown>>;
+    expect(candidates.map(({ from, subject, body_snippet }) => ({ from, subject, body_snippet }))).toEqual([
+      { from: 'Dana Recruiter <dana@acme.example>', subject: 'Re: Platform Engineer', body_snippet: 'Thanks for applying.\n\nCan you talk Tuesday?' },
+      { from: 'Lee Ops', subject: '', body_snippet: 'Subject: not a header\nFrom: nobody' },
+    ]);
+    expect(new Set(candidates.map((c) => c.message_id)).size).toBe(2);
   });
 });
 
@@ -162,8 +213,15 @@ describe('Release report numbers', () => {
     const reserved = await post('pipeline.reserveReportNums', { count: 2 });
     expect(reserved.statusCode, reserved.body).toBe(200);
     const range = String(reserved.json().result).match(/(\d+)(?:\s*-\s*(\d+))?/)!;
+    const nums = [Number(range[1]), Number(range[2] ?? range[1])];
+    // The reservation is its reports/NNN-RESERVED.md sentinels; the release must remove exactly those (SW3-tests-18).
+    const sentinels = () => fs.readdirSync(path.join(t.cfg.dataRoot, 'reports')).filter((f) => /^\d+-RESERVED\.md$/.test(f) && nums.includes(parseInt(f, 10)));
+    expect(sentinels()).toHaveLength(2);
     const res = await post('pipeline.releaseReportNums', { range: `${range[1]}-${range[2] ?? range[1]}` });
     expect(res.statusCode, res.body).toBe(200);
+    expect(sentinels()).toEqual([]);
+    // A sentinel outside the released range stays.
+    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', '005-RESERVED.md'))).toBe(true);
     expect((await post('pipeline.releaseReportNums', { range: '8,9' })).statusCode).toBe(400);
   });
 });

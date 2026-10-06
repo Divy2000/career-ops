@@ -69,7 +69,8 @@ export async function authPlugin(app: FastifyInstance, cfg: ServerConfig): Promi
         return reply.code(403).type('text/plain').send('cross-origin request refused');
       }
     }
-    if (url.startsWith('/auth')) return;
+    // Only the token exchange itself: a prefix match would let /authx (the SPA fallback) through without a session.
+    if (url === '/auth' || url.startsWith('/auth?')) return;
     if (hasSession(req, cfg)) return;
     if (isApiPath(url)) {
       return reply.code(401).send({ error: 'unauthenticated', hint: 'open the /auth?t= link printed by npm start' });

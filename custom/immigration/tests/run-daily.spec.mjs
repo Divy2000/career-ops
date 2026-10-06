@@ -386,6 +386,25 @@ jobTest('a run that starts while another holds the lock is skipped: a dated line
   }
 });
 
+jobTest('a run the Control Center started (CC_RUN_DAILY_SKIP_EXIT) that finds the lock held says it was skipped and exits with that code (SW4-server-01)', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  const lock = path.join(imm, '.run-daily.lockf');
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore' });
+  try {
+    for (let i = 0; i < 200 && !fs.existsSync(lock); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(fs.existsSync(lock), 'the holder never took the lock');
+    const r = w.run({ CC_RUN_DAILY_SKIP_EXIT: '75' });
+    assert.equal(r.status, 75, r.stderr);
+    assert.match(r.stderr, /^run-daily: skipped, because the daily job is already running \(another run holds its lock\)$/m);
+    assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /another run-daily holds the lock; skipped$/m);
+    assert.equal(r.steps, '');
+  } finally {
+    holder.kill();
+  }
+});
+
 jobTest('with no working node, the job stops with a clear reason instead of running against an empty data root (SW2-tests-12)', () => {
   const w = dailyWorld();
   // The pinned node goes first on the job's PATH (pinned-node.sh): one that answers nothing stands in for no node at all.

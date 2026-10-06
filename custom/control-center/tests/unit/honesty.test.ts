@@ -133,4 +133,15 @@ describe('remembered facts', () => {
     expect(applyRememberedFact(second.text, 'Open to  Berlin').result).toBe('deduped');
     expect(applyRememberedFact('', '   ').result).toBe('deduped');
   });
+
+  it('a fact that is only part of a remembered line (it may contradict it) is written, and a whole line is not (SW3-tests-25)', () => {
+    const md = `# Profile\n\n## Notes from the web assistant\n${NOTES_START}\n- Not open to relocation\n${NOTES_END}\n`;
+    const r = applyRememberedFact(md, 'open to relocation');
+    expect(r.result).toBe('ok');
+    expect(r.text).toContain(`- Not open to relocation\n- open to relocation\n${NOTES_END}`);
+    expect(applyRememberedFact(r.text, 'Not open to relocation').result).toBe('deduped');
+    // Before the block exists, the same rule over the profile's own lines.
+    expect(applyRememberedFact('# Profile\n\nNot open to relocation\n', 'open to relocation').result).toBe('ok');
+    expect(applyRememberedFact('# Profile\n\n- Open to Berlin\n', 'Open to Berlin').result).toBe('deduped');
+  });
 });

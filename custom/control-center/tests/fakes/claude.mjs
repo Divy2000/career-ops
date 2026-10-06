@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Fake Claude CLI for tests. Replays stream-json scenario files, honors
-// --session-id / --resume, performs scripted writes, reads, fetches and Bash steps and
+// --session-id / --resume, performs scripted writes, reads, fetches and Bash steps, sleeps or waits for files, and
 // invokes the real guard hook from --settings with the real stdin JSON so the
 // hook is exercised. A write or Bash step marked expectDenied is never performed:
 // if the hook allows it, the fake reports it and exits 3. Scenario selection: FAKE_CLAUDE_SCENARIO (one file) or
@@ -234,6 +234,22 @@ for (const ev of events) {
   }
   if (ev.__sleep) {
     sleep(ev.__sleep);
+    continue;
+  }
+  if (ev.__waitFor) {
+    // Holds the run until another run has written its files: { dir, pattern, count, timeoutMs }. Gives up with exit 4,
+    // so a test that orders two runs fails instead of checking nothing.
+    const { dir, pattern, count = 1, timeoutMs = 20_000 } = ev.__waitFor;
+    const re = new RegExp(pattern);
+    const deadline = Date.now() + timeoutMs;
+    const seen = () => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => re.test(n)).length : 0);
+    while (seen() < count) {
+      if (Date.now() > deadline) {
+        console.error(`fake claude: waited ${timeoutMs} ms for ${count} file(s) matching ${pattern} in ${dir}`);
+        process.exit(4);
+      }
+      sleep(50);
+    }
     continue;
   }
   if (ev.type === 'result') {

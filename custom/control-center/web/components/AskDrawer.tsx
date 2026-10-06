@@ -120,9 +120,14 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
           await qc.invalidateQueries({ queryKey: ['tracker'] });
           break;
-        case 'remember':
-          await apiSend('POST', '/api/memory', { fact: String(p.params.fact ?? '') });
+        case 'remember': {
+          const r = await apiSend<{ result: 'ok' | 'deduped' }>('POST', '/api/memory', { fact: String(p.params.fact ?? '') });
+          if (r.result === 'deduped') {
+            update(p.id, { state: 'done', note: 'Already remembered: modes/_profile.md has this line.' });
+            return;
+          }
           break;
+        }
         case 'setApplyField':
           update(p.id, { state: 'unsupported', note: 'Edit the field directly in the Apply form.' });
           return;

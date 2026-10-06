@@ -562,7 +562,8 @@ describe('Claude sessions', () => {
     const h = await makeTestApp();
     try {
       expect((await call(h, 'PUT', '/api/settings/app', { claudeConcurrency: 4 })).statusCode).toBe(200);
-      const silent = scenarioFile({ events: [INIT, { __sleep: 1200 }, result('Evaluation complete.', 0.02)] });
+      // A runs until both of B's reports exist, however slow B is: the gate must see them land during A's turn.
+      const silent = scenarioFile({ events: [INIT, { __waitFor: { dir: path.join(h.cfg.dataRoot, 'reports'), pattern: '-synthetic-corp\\.md$', count: 2 } }, result('Evaluation complete.', 0.02)] });
       const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A2', reportNum: 50 })).json()]);
       const b = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B' })).json();
       const bReserved = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B2', reportNum: 51 })).json();
@@ -805,6 +806,150 @@ describe('read confinement (BUG-06)', () => {
     const { events } = await withScenario(scenario, async () => settle((await post('/api/sessions', { mode: 'cv-ingest', target: { type: 'text', value: uploaded }, prompt: `Read the CV at ${uploaded}` })).json().id));
     expect(evs(events).filter((e) => e.type === 'permission.denied')).toEqual([]);
     expect(evs(events).find((e) => e.type === 'tool.result')).toMatchObject({ ok: true, summary: expect.stringContaining('%PDF-1.4 synthetic upload') });
+  });
+
+  describe('an uploaded CV (personal data) lives as long as a session that reads it (SW4-server-02)', () => {
+    const upload = async (app: TestApp, text: string) => (await app.app.inject({ method: 'POST', url: '/api/cv/upload?name=cv', headers: { ...app.authedWrite, 'content-type': 'application/pdf' }, payload: Buffer.from(text) })).json().path as string;
+    const parsed = result('Parsed.\n<<cc:cv {"markdown":"# Alex Example"}>>', 0.01);
+    const startOn = (file: string, events: unknown[]) => withScenario(scenarioFile({ events }), async () => (await post('/api/sessions', { mode: 'cv-ingest', target: { type: 'text', value: file }, prompt: `Read the CV at ${file}` })).json().id as string);
+    const replyReads = async (id: string, file: string) => {
+      const after = await withScenario(scenarioFile({ events: [INIT, { __read: file }, parsed] }), async () => {
+        expect((await post(`/api/sessions/${id}/turns`, { prompt: 'Read page 2 again' })).statusCode).toBe(202);
+        return settle(id);
+      });
+      return evs(after.events).filter((e) => e.type === 'tool.result').at(-1);
+    };
+    const remove = (id: string) => t.app.inject({ method: 'DELETE', url: `/api/sessions/${id}`, headers: t.authedWrite, payload: {} });
+
+    it('a done turn keeps the upload, so a follow-up turn can read it again; deleting the session removes it', async () => {
+      const uploaded = await upload(t, '%PDF-1.4 personal data');
+      const id = await startOn(uploaded, [INIT, { __read: uploaded }, parsed]);
+      expect((await settle(id)).meta.status).toBe('done');
+      expect(await replyReads(id, uploaded)).toMatchObject({ ok: true, summary: expect.stringContaining('%PDF-1.4 personal data') });
+      expect((await remove(id)).statusCode).toBe(200);
+      expect(fs.existsSync(uploaded)).toBe(false);
+    });
+
+    it('a turn that ends waiting for the user keeps the upload, so the reply turn can still read it', async () => {
+      const uploaded = await upload(t, '%PDF-1.4 asked a question');
+      const id = await startOn(uploaded, [INIT, result('Which of the two CVs in this PDF is yours?', 0.01)]);
+      expect((await settle(id)).meta.status).toBe('awaiting_user');
+      expect(await replyReads(id, uploaded)).toMatchObject({ ok: true, summary: expect.stringContaining('%PDF-1.4 asked a question') });
+    });
+
+    it('a session that fails before it can start keeps the upload for a retry', async () => {
+      const noToken = await makeTestApp({}, { readToken: async () => { throw new Error('Keychain item career-ops-claude-token not found'); } });
+      try {
+        const uploaded = await upload(noToken, '%PDF-1.4 retry me');
+        const res = await noToken.app.inject({ method: 'POST', url: '/api/sessions', headers: noToken.authedWrite, payload: { mode: 'cv-ingest', target: { type: 'text', value: uploaded }, prompt: `Read the CV at ${uploaded}` } });
+        expect(res.json()).toMatchObject({ status: 'error' });
+        await wait(200);
+        expect(fs.existsSync(uploaded)).toBe(true);
+      } finally {
+        await noToken.close();
+      }
+    });
+
+    it('a fork shares the upload: deleting either session keeps it for the other, and deleting the last removes it', async () => {
+      const uploaded = await upload(t, '%PDF-1.4 shared by a fork');
+      const a = await startOn(uploaded, [INIT, result('Which of the two is yours?', 0.01)]);
+      expect((await settle(a)).meta.status).toBe('awaiting_user');
+      const b = await withScenario(scenarioFile({ events: [INIT, { __read: uploaded }, parsed] }), async () => {
+        const fork = await post(`/api/sessions/${a}/fork`, { prompt: 'The second one' });
+        expect(fork.statusCode, fork.body).toBe(202);
+        return fork.json().id as string;
+      });
+      expect((await settle(b)).meta.status).toBe('done');
+      expect((await remove(b)).statusCode).toBe(200);
+      expect(fs.existsSync(uploaded)).toBe(true);
+      expect(await replyReads(a, uploaded)).toMatchObject({ ok: true, summary: expect.stringContaining('%PDF-1.4 shared by a fork') });
+      expect((await remove(a)).statusCode).toBe(200);
+      expect(fs.existsSync(uploaded)).toBe(false);
+    });
+
+    it('two sessions that name the same upload with different spellings share it: deleting one keeps it for the other', async () => {
+      const uploaded = await upload(t, '%PDF-1.4 two spellings');
+      const dir = path.dirname(uploaded);
+      const a = await startOn(uploaded, [INIT, parsed]);
+      const spellings = [path.join(dir, '.', path.basename(uploaded)).replace(dir, `${dir}/.`), `${dir}//${path.basename(uploaded)}`];
+      const others: string[] = [];
+      for (const spelled of spellings) others.push(await startOn(spelled, [INIT, parsed]));
+      for (const id of [a, ...others]) expect((await settle(id)).meta.status).toBe('done');
+      // Stored in one canonical form, whatever spelling started them.
+      for (const id of others) expect((await get(`/api/sessions/${id}`)).json().meta.target.value).toBe(fs.realpathSync.native(uploaded));
+      expect((await remove(a)).statusCode).toBe(200);
+      expect(fs.existsSync(uploaded)).toBe(true);
+      expect((await remove(others[0]!)).statusCode).toBe(200);
+      expect(fs.existsSync(uploaded)).toBe(true);
+      expect((await remove(others[1]!)).statusCode).toBe(200);
+      expect(fs.existsSync(uploaded)).toBe(false);
+    });
+
+    it('a text target in the uploads folder that does not resolve to an upload there is refused, and nothing starts', async () => {
+      const dir = path.join(t.cfg.dataRoot, 'data', 'control-center', 'uploads');
+      fs.mkdirSync(dir, { recursive: true });
+      const outside = path.join(tempDir('cc-upload-outside-'), 'elsewhere.pdf');
+      fs.writeFileSync(outside, '%PDF-1.4 not an upload');
+      fs.symlinkSync(outside, path.join(dir, '999-link.pdf'));
+      try {
+        for (const value of [path.join(dir, '999-missing.pdf'), path.join(dir, '999-link.pdf')]) {
+          const res = await post('/api/sessions', { mode: 'cv-ingest', target: { type: 'text', value }, prompt: `Read the CV at ${value}` });
+          expect(res.statusCode, `${value}: ${res.body}`).toBe(400);
+          expect(res.json().error).toMatch(/uploads folder/);
+        }
+      } finally {
+        fs.rmSync(path.join(dir, '999-link.pdf'));
+      }
+    });
+
+    it('an upload path that is not a file (a folder) is left alone, and the delete does not fail over it', async () => {
+      const dir = path.join(t.cfg.dataRoot, 'data', 'control-center', 'uploads', '123-folder.pdf');
+      fs.mkdirSync(dir, { recursive: true });
+      const id = await startOn(dir, [INIT, parsed]);
+      expect((await settle(id)).meta.status).toBe('done');
+      const del = await remove(id);
+      expect(del.statusCode, del.body).toBe(200);
+      expect(fs.statSync(dir).isDirectory()).toBe(true);
+    });
+
+    it('a sibling session folder with a corrupt or partial meta.json does not fail the delete; the upload is kept rather than guessed', async () => {
+      const sessions = path.join(t.cfg.dataRoot, 'data', 'control-center', 'sessions');
+      const corrupt = path.join(sessions, 'zz-corrupt-meta');
+      const partial = path.join(sessions, 'zz-partial-meta');
+      const uploaded = await upload(t, '%PDF-1.4 corrupt sibling');
+      const id = await startOn(uploaded, [INIT, parsed]);
+      expect((await settle(id)).meta.status).toBe('done');
+      fs.mkdirSync(corrupt, { recursive: true });
+      fs.writeFileSync(path.join(corrupt, 'meta.json'), '{"id": "zz-corrupt-meta", "target":');
+      fs.mkdirSync(partial, { recursive: true });
+      fs.writeFileSync(path.join(partial, 'meta.json'), JSON.stringify({ id: 'zz-partial-meta' }));
+      try {
+        const del = await remove(id);
+        expect(del.statusCode, del.body).toBe(200);
+        expect((await get(`/api/sessions/${id}`)).statusCode).toBe(404);
+        // Which sessions still read it cannot be told while a sibling is unreadable: the age sweep takes it later.
+        expect(fs.existsSync(uploaded)).toBe(true);
+      } finally {
+        fs.rmSync(corrupt, { recursive: true, force: true });
+        fs.rmSync(partial, { recursive: true, force: true });
+      }
+    });
+
+    it('with only a partial sibling meta.json (no target), the delete still removes the upload', async () => {
+      const partial = path.join(t.cfg.dataRoot, 'data', 'control-center', 'sessions', 'zz-partial-only');
+      const uploaded = await upload(t, '%PDF-1.4 partial sibling');
+      const id = await startOn(uploaded, [INIT, parsed]);
+      expect((await settle(id)).meta.status).toBe('done');
+      fs.mkdirSync(partial, { recursive: true });
+      fs.writeFileSync(path.join(partial, 'meta.json'), JSON.stringify({ id: 'zz-partial-only' }));
+      try {
+        const del = await remove(id);
+        expect(del.statusCode, del.body).toBe(200);
+        expect(fs.existsSync(uploaded)).toBe(false);
+      } finally {
+        fs.rmSync(partial, { recursive: true, force: true });
+      }
+    });
   });
 
   it('a session started before read confinement can be viewed, but a new turn or a fork is refused with 409 and nothing starts', async () => {

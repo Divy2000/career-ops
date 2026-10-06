@@ -252,6 +252,35 @@ describe('action registry', () => {
     }
   });
 
+  it('Run the daily job now while the daily job is already running is refused as skipped, and starts nothing (SW4-server-01)', async () => {
+    const busy = await makeTestApp({ fakeDaily: 'running' });
+    // Captured, not run, should the refusal fail: the daily job would scan portals and call Claude.
+    const spy = vi.spyOn(busy.runner, 'start').mockImplementation(() => ({ id: '20261005000000-abcdef' }) as RunMeta);
+    try {
+      const res = await busy.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: busy.authedWrite, payload: { params: {}, confirmed: true } });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toMatch(/^Skipped: the daily job is already running/);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      await busy.close();
+    }
+  });
+
+  it('a daily run the app starts asks run-daily.sh to exit 75 when it finds the job already running, so the run is not shown as done', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      expect((await post('/api/actions/daily.runNow', { params: {}, confirmed: true })).statusCode).toBe(202);
+      expect(started[0]!.env).toMatchObject({ CC_RUN_DAILY_SKIP_EXIT: '75' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('Run the daily job now passes no CC_CLAUDE_BIN when the app has no absolute claude, so the job looks it up itself', async () => {
     const bare = await makeTestApp({ claudeBin: 'claude' });
     const started: Array<Parameters<typeof bare.runner.start>[0]> = [];
