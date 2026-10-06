@@ -126,7 +126,7 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.locator('tbody tr')).toHaveCount(1);
     await expect(page.getByRole('row', { name: /Soylent Foods/ })).toBeVisible();
     await page.getByLabel('Filter inbox').fill('');
-    await expect(page.locator('tbody tr')).toHaveCount(4);
+    await expect(page.locator('tbody tr')).toHaveCount(5);
     await expect(page).not.toHaveURL(/q=soylent/);
   });
 
@@ -134,9 +134,14 @@ test.describe('read-only pages render fixture data', () => {
     await page.goto('/pipeline');
     await expect(page.getByRole('heading', { level: 1, name: 'Pipeline' })).toBeVisible();
     await expect(page.getByText('Soylent Foods')).toBeVisible();
-    await expect(page.locator('tbody tr')).toHaveCount(4);
+    await expect(page.locator('tbody tr')).toHaveCount(5);
+    // A posting pipeline mode could not fetch waits for its JD, with the error it noted (SW5-tests-02).
+    const walled = page.getByRole('row', { name: /linkedin\.com\/jobs\/view\/4100000001/ });
+    await expect(walled.getByText('needs JD')).toBeVisible();
+    await expect(walled.getByText('Error: login required')).toBeVisible();
     await page.getByLabel('Show done').check();
-    await expect(page.locator('tbody tr')).toHaveCount(6);
+    await expect(page.locator('tbody tr')).toHaveCount(9);
+    await expect(page.getByRole('row', { name: /Kramerica Industries/ })).toBeVisible();
     await axeClean(page);
     await page.getByRole('tab', { name: 'Shortlist' }).click();
     await expect(page).toHaveURL(/tab=shortlist/);

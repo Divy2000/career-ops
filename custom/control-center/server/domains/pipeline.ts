@@ -10,6 +10,8 @@ export interface PipelineRow {
   location: string | null;
   compensation: string | null;
   done: boolean;
+  /** A `- [!]` row: pipeline mode could not fetch the posting (a login wall) and waits for its JD text to be pasted. */
+  needsJd: boolean;
   section: 'pending' | 'done' | 'other';
   postedAt: string | null;
   rank: number | null;
@@ -23,13 +25,15 @@ export interface PipelineRow {
 
 export type PipelineRead = { kind: 'missing'; path: string } | { kind: 'ok'; path: string; rows: PipelineRow[]; etag: string };
 
-const CHECKBOX_RE = /^\s*-\s*\[([ xX])\]\s*(.+)$/;
+const CHECKBOX_RE = /^\s*-\s*\[([ xX!])\]\s*(.+)$/;
 const LABELED = /^([a-z][\w-]*):\s*(.*)$/i;
 const EM_DASH = String.fromCharCode(0x2014);
 const EN_DASH = String.fromCharCode(0x2013);
 const RANK_DASH = `(?:[-:]|${EN_DASH}|${EM_DASH})`;
 // `rank: 3.2/5 <dash> reason`; the dash written by rank-pipeline is U+2014, hand edits use - or :.
 const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*${RANK_DASH}?\\s*(.*)$`);
+// The URL cell of a `- [!]` row: the URL, then the error pipeline mode noted after a dash.
+const FLAGGED_URL_RE = new RegExp(`^(\\S+)\\s+${RANK_DASH}?\\s*(.*)$`);
 // Labeled segments ride on any row shape, so on a bare URL row they sit where company and title go. There a cell is a
 // label only in the exact form a writer emits it: scan.mjs formatPipelineOffer (`posted: YYYY-MM-DD`,
 // `trust: <score>[ flag,flag]`, `note: <text>`) and rank-pipeline.mjs formatRankSegment (`rank: <n>/5 <dash> <reason>`).
@@ -112,6 +116,15 @@ export function parsePipeline(md: string): PipelineRow[] {
       positional.length = 1;
       if (reason && !labels.has('note')) labels.set('note', reason);
     } else if (urlAt > 0) positional.length = Math.min(positional.length, 3);
+    // modes/pipeline.md writes a URL it could not fetch as `- [!] URL <dash> Error: <reason>`: the reason is the note.
+    const needsJd = m[1] === '!';
+    if (needsJd) {
+      const flagged = positional[0]!.match(FLAGGED_URL_RE);
+      if (flagged) {
+        positional[0] = flagged[1]!;
+        if (flagged[2] && !labels.has('note')) labels.set('note', flagged[2]);
+      }
+    }
     const rankCell = labels.get('rank');
     const { rank, reason } = rankCell ? parseRankCell(rankCell) : { rank: null, reason: null };
     const posted = labels.get('posted');
@@ -122,6 +135,7 @@ export function parsePipeline(md: string): PipelineRow[] {
       location: positional[3] ? unescapeMarkdownCell(positional[3]) : null,
       compensation: positional[4] ? unescapeMarkdownCell(positional[4]) : null,
       done: m[1]!.toLowerCase() === 'x',
+      needsJd,
       section,
       postedAt: posted && /^\d{4}-\d{2}-\d{2}$/.test(posted) ? posted : null,
       rank,

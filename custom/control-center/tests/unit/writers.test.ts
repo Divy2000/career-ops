@@ -37,6 +37,15 @@ describe('inbox skip port', () => {
     const same = applyInboxSkip(PIPELINE, 'https://a.example/2', true);
     expect(same).toMatchObject({ ok: true, matched: 1, changed: 0 });
   });
+  it('skips a [!] row that waits for its JD, keeping its error note (SW5-tests-02)', () => {
+    const text = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n`;
+    const r = applyInboxSkip(text, 'https://private.example/job/1', true);
+    expect(r).toMatchObject({ ok: true, matched: 1, changed: 1 });
+    if (!r.ok) return;
+    expect(r.text).toBe(text.replace('- [!]', '- [x]'));
+    // Restoring a row that was never checked off changes nothing.
+    expect(applyInboxSkip(text, 'https://private.example/job/1', false)).toMatchObject({ ok: true, matched: 1, changed: 0 });
+  });
   it('reports unmatched and invalid URLs', () => {
     expect(applyInboxSkip(PIPELINE, 'https://a.example/nope', true)).toEqual({ ok: false, error: 'unmatched' });
     expect(applyInboxSkip(PIPELINE, 'ftp://a.example/1', true)).toEqual({ ok: false, error: 'invalid-url' });

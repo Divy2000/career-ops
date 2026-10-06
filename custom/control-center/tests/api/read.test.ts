@@ -128,7 +128,7 @@ describe('read endpoints', () => {
   });
 
   it('GET /api/pipeline, /api/shortlist and /api/whats-new read the fixtures', async () => {
-    expect((await get('/api/pipeline')).json().rows).toHaveLength(6);
+    expect((await get('/api/pipeline')).json().rows).toHaveLength(9);
     expect((await get('/api/shortlist')).json().rows).toHaveLength(3);
   });
 

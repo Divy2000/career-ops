@@ -3,7 +3,8 @@
 import { localJdPath } from '../../shared/local-jd.js';
 
 const MAX_URL_LEN = 2048;
-const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX])\](.*)$/;
+// `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
+const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
 const PENDING_HEADING = /^##\s+(Pending|Pendientes)\s*$/i;
 
 /**
@@ -47,7 +48,8 @@ export function pipelineRef(raw: unknown): string | null {
 }
 
 function jobUrlFromRest(rest: string): string | null {
-  return pipelineRef(unescapeMarkdownUrl(rest.split('|')[0] ?? ''));
+  // The URL is the cell's first word: a `[!]` row notes its error after it (`URL <dash> Error: login required`).
+  return pipelineRef(unescapeMarkdownUrl(rest.split('|')[0]?.trim().split(/\s+/)[0] ?? ''));
 }
 
 function pendingRange(lines: string[]): { start: number; end: number } | null {

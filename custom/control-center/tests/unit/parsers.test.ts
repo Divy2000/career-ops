@@ -211,13 +211,17 @@ describe('pipeline', () => {
 
   it('parses checkbox rows with labels, sections and rank reasons containing the em dash', () => {
     const rows = parsePipeline(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'));
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(9);
     const acme = rows[0]!;
     expect(acme).toMatchObject({ company: 'Acme Robotics', location: 'Austin, TX', rank: 4.4, rankReason: 'strong backend match, sponsors visas', postedAt: '2026-09-15', done: false, section: 'pending', seniority: 'senior' });
     expect(rows.find((r) => r.company === 'Initech Cloud')).toMatchObject({ done: true, rank: null, section: 'pending' });
     // The Processed row is in the shape the app writes when it moves an evaluated posting (#NNN | URL | ...).
     expect(rows.find((r) => r.company === 'Old Corp')).toMatchObject({ url: 'https://jobs.example.com/oldcorp/1', role: 'Engineer', location: null, section: 'done', done: true });
     expect(rows.some((r) => r.url === 'not a checkbox line')).toBe(false);
+    // Every row shape pipeline mode and the liveness sweep write (SW5-tests-02).
+    expect(rows.find((r) => r.url === 'https://www.linkedin.com/jobs/view/4100000001')).toMatchObject({ needsJd: true, done: false, note: 'Error: login required', section: 'pending' });
+    expect(rows.find((r) => r.company === 'Kramerica Industries')).toMatchObject({ role: 'Import Analyst', done: true, needsJd: false, section: 'done' });
+    expect(rows.find((r) => r.url === 'https://jobs.example.com/pendant/3')).toMatchObject({ company: '', done: true, section: 'done', note: 'skipped (pre-screen mismatch: requires on-site in Palo Alto)' });
   });
 
   it('reads every documented Processed row shape: #NNN, a report link, a #-- pre-screen skip and a struck-out expired row (SW5-server-01)', () => {
@@ -248,6 +252,15 @@ describe('pipeline', () => {
     expect(rows[0]).toMatchObject({ company: 'Acme', role: 'PM', section: 'pending', done: false, line: 3 });
     expect(rows[1]).toMatchObject({ company: 'Acme', role: 'Staff Engineer', location: 'Remote' });
     expect(sourceOf('local:jds/apify-acme-staff.md', null)).toBe('local');
+  });
+
+  it('reads a [!] row pipeline mode wrote for a URL it could not fetch as open and needing the JD, with its error as the note (SW5-tests-02)', () => {
+    const dash = String.fromCharCode(0x2014);
+    const rows = parsePipeline(['## Pending', `- [!] https://private.example/job/1 ${dash} Error: login required`, '- [!] https://jobs.example.com/acme/9 | Acme | Backend Engineer', ''].join('\n'));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ url: 'https://private.example/job/1', company: '', role: '', done: false, needsJd: true, note: 'Error: login required', section: 'pending', line: 2 });
+    expect(rows[1]).toMatchObject({ url: 'https://jobs.example.com/acme/9', company: 'Acme', role: 'Backend Engineer', done: false, needsJd: true, note: null });
+    expect(parsePipeline('## Pending\n- [ ] https://jobs.example.com/a | A\n- [x] https://jobs.example.com/b | B\n').map((r) => r.needsJd)).toEqual([false, false]);
   });
 
   it('keeps a bare pasted URL row and a URL row with only labeled segments, with company and role empty', () => {

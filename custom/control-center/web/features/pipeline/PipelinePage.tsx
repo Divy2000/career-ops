@@ -151,7 +151,8 @@ function Inbox() {
       </div>
       <Message message={message} />
       <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
-        <InboxAi urls={visible.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url)} savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length} />
+        {/* A row waiting for its JD could not be fetched, so an evaluation would hit the same wall. */}
+        <InboxAi urls={visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null).map((r) => r.url)} savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length} />
         {skipError && (
           <p role="alert" className="danger-text">
             {skipError}
@@ -215,8 +216,10 @@ function Inbox() {
                       <span className="faint small">
                         {/* A checked Pending row was skipped here or evaluated in place by a batch evaluator; a Processed row is finished. */}
                         {r.done && <Pill>{r.section === 'done' ? 'processed' : 'done'}</Pill>}
+                        {r.needsJd && <Pill tone="warn">needs JD</Pill>}
                         {r.seniority ?? ''}
                       </span>
+                      {r.needsJd && r.note && <div className="faint small">{r.note}</div>}
                     </td>
                     <td className="muted">
                       {r.location && (
