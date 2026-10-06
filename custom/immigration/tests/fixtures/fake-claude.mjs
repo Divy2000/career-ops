@@ -49,4 +49,10 @@ console.log('SUMMARY: 0 policy changes, 0 company alerts');
 // FAKE_CLAUDE_EXIT makes a pass (or rank call) fail the way a crashed or refused claude -p does; FAKE_CLAUDE_RANK_EXIT
 // fails only the rank calls (a usage limit reached after the policy pass).
 if (argv[1] === 'RANK PROMPT' && process.env.FAKE_CLAUDE_RANK_EXIT) process.exit(Number(process.env.FAKE_CLAUDE_RANK_EXIT));
+// FAKE_CLAUDE_RANK_SLEEP_MS makes a rank call hang (past rank-pipeline's timeout); FAKE_CLAUDE_PIDS records this
+// process and its parent (the shim), so a spec can check that nothing is left running.
+if (argv[1] === 'RANK PROMPT' && process.env.FAKE_CLAUDE_RANK_SLEEP_MS) {
+  if (process.env.FAKE_CLAUDE_PIDS) fs.writeFileSync(process.env.FAKE_CLAUDE_PIDS, `${process.pid} ${process.ppid}\n`);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_CLAUDE_RANK_SLEEP_MS));
+}
 process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? 0));

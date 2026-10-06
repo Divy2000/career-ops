@@ -217,8 +217,23 @@ import path from "node:path";
 const { shellQuote } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
 const shim = path.resolve("custom/control-center/server/claude/claude-shim.mjs");
 // Not exec: each call that exits non-zero (the shim refusing it, or the real claude failing: a usage limit, no
-// network) is recorded, since rank-pipeline.mjs catches every failed call and still exits 0.
-fs.writeFileSync(path.join(process.env.DIR, "claude"), `#!/bin/sh\n${shellQuote(process.execPath)} ${shellQuote(shim)} "$@"\nrc=$?\n[ "$rc" -eq 0 ] || echo "$rc" >> ${shellQuote(path.join(process.env.DIR, "failures"))}\nexit "$rc"\n`, { mode: 0o755 });
+// network) is recorded, since rank-pipeline.mjs catches every failed call and still exits 0. Its own timeout kills this
+// wrapper with SIGTERM: the trap then kills the shim and the claude it runs (their own process group, set -m), records
+// the failure and exits 143, so nothing is orphaned and the timed-out call still fails the step.
+const failures = shellQuote(path.join(process.env.DIR, "failures"));
+fs.writeFileSync(path.join(process.env.DIR, "claude"), [
+  "#!/bin/bash",
+  "set -m",
+  `${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
+  "child=$!",
+  `on_term() { kill -TERM -- "-$child" 2>/dev/null; wait "$child" 2>/dev/null; echo 143 >> ${failures}; exit 143; }`,
+  "trap on_term TERM INT",
+  "wait \"$child\"",
+  "rc=$?",
+  `[ "$rc" -eq 0 ] || echo "$rc" >> ${failures}`,
+  "exit \"$rc\"",
+  "",
+].join("\n"), { mode: 0o755 });
 '; then
     rm -rf "$shim_dir"
     return 1

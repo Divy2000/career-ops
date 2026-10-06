@@ -66,10 +66,11 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
   // claude (the first one on PATH must be the shim's wrapper, or it records that and stops). Like the real script, it
-  // catches a failed call, logs it, leaves the batch un-annotated and still exits 0.
+  // catches a failed call, logs it, leaves the batch un-annotated and still exits 0. Its call times out like the real one
+  // (120 s, which kills the claude it runs with SIGTERM); FAKE_RANK_TIMEOUT_MS shortens that for a test.
   put(
     'rank-pipeline.mjs',
-    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { execFileSync } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nlet out;\ntry {\n  out = execFileSync('claude', ['-p', 'RANK PROMPT', '--model', 'sonnet'], { encoding: 'utf8' });\n} catch (err) {\n  console.error('  batch 1: CLI call failed (' + (err.code ?? err.message) + ') - entries left un-annotated');\n  fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank batch failed\\n');\n  process.exit(0);\n}\nfs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n`,
+    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { execFileSync } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nlet out;\ntry {\n  out = execFileSync('claude', ['-p', 'RANK PROMPT', '--model', 'sonnet'], { encoding: 'utf8', timeout: Number(process.env.FAKE_RANK_TIMEOUT_MS || 120000) });\n} catch (err) {\n  console.error('  batch 1: CLI call failed (' + (err.code ?? err.message) + ') - entries left un-annotated');\n  fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank batch failed\\n');\n  process.exit(0);\n}\nfs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n`,
   );
   fs.writeFileSync(path.join(data, 'config/profile.yml'), 'location:\n  needs_sponsorship: true\n');
   fs.writeFileSync(path.join(bin, 'security'), '#!/bin/bash\necho fake-keychain-token\n', { mode: 0o755 });
@@ -424,4 +425,27 @@ jobTest('a rank step whose calls succeed stays green', () => {
   const r = dailyWorld().run();
   assert.doesNotMatch(r.log, /rank call\(s\) failed|step failed: rank/);
   assert.equal(r.status, 0, r.log);
+});
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leaves no shim or claude running (SW4-scripts-03 review)', async () => {
+  const w = dailyWorld();
+  const pids = path.join(w.T, 'rank-claude.pids');
+  const r = w.run({ FAKE_CLAUDE_RANK_SLEEP_MS: '30000', FAKE_CLAUDE_PIDS: pids, FAKE_RANK_TIMEOUT_MS: '1500' });
+  assert.match(r.steps, /^rank batch failed$/m, 'the stand-in caught the timed-out call, as the real script does');
+  assert.match(r.log, /^1 rank call\(s\) failed \(claude exited 143\); the rank step fails$/m);
+  assert.match(r.log, /^!!! step failed: rank top 100$/m);
+  assert.equal(r.status, 1);
+  const [claudePid, shimPid] = readFileSync(pids, 'utf8').trim().split(' ').map(Number);
+  for (let i = 0; i < 40 && (alive(claudePid) || alive(shimPid)); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(alive(shimPid), false, 'the node shim was killed with the wrapper');
+  assert.equal(alive(claudePid), false, 'the claude the shim ran was killed too');
 });
