@@ -285,6 +285,38 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('a report written on a turn that did not end done still moves the pipeline row once a later turn ends done (SW2-claude-03 review)', async () => {
+    const other = await makeTestApp();
+    try {
+      const cases = [
+        { url: 'https://careers.example.com/soylent/42', num: '097', first: { type: 'result', subtype: 'success', result: '', total_cost_usd: 0.01, usage: {}, num_turns: 1, is_error: false }, firstStatus: 'awaiting_user' },
+        { url: 'https://careers.example.com/globex/777', num: '096', first: { type: 'result', subtype: 'error_during_execution', result: 'Interrupted.', total_cost_usd: 0.01, usage: {}, num_turns: 1, is_error: true }, firstStatus: 'error' },
+      ];
+      for (const c of cases) {
+        const report = `# Evaluation: Pending Corp\n\n**Date:** 2026-10-05\n**Score:** 3.9/5\n**URL:** ${c.url}\n\n## A) Role Summary\nx\n`;
+        const scenario = scenarioFile({ events: [INIT, { __write: { path: `{{DATA_ROOT}}/reports/${c.num}-pending-corp-2026-10-05.md`, content: report } }, c.first], resume: [INIT, result('Done: the report is written.', 0.01)] });
+        await withScenario(scenario, async () => {
+          const { id } = (await call(other, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: c.url }, prompt: `Evaluate ${c.url}` })).json();
+          expect((await settleOn(other, id)).meta.status, c.url).toBe(c.firstStatus);
+          // The row stays pending until a turn ends done.
+          expect(fs.readFileSync(path.join(other.cfg.dataRoot, 'data', 'pipeline.md'), 'utf8')).toContain(`- [ ] ${c.url}`);
+          expect((await call(other, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Finish up' })).statusCode).toBe(202);
+          const second = await settleOn(other, id);
+          expect(second.meta.status, c.url).toBe('done');
+          expect(second.meta.lastReason, c.url).toContain(`pipeline row moved to Processed as #${c.num}`);
+          const md = fs.readFileSync(path.join(other.cfg.dataRoot, 'data', 'pipeline.md'), 'utf8');
+          expect(md, c.url).not.toContain(`- [ ] ${c.url}`);
+          expect(md, c.url).toContain(`#${c.num} | ${c.url}`);
+          // A later done turn does not move or re-mark it.
+          expect((await call(other, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Thanks' })).statusCode).toBe(202);
+          expect((await settleOn(other, id)).meta.lastReason, c.url).not.toContain('pipeline row');
+        });
+      }
+    } finally {
+      await other.close();
+    }
+  });
+
   it('an evaluation that ends without a report leaves its pipeline row pending (SW-web-a-09)', async () => {
     const other = await makeTestApp();
     try {
