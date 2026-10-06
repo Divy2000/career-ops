@@ -59,6 +59,8 @@ export function monotonicIso(): string {
 }
 
 const RUN_ID = /^[\w-]+$/;
+/** The file in a run's folder that asks its wrapper to stop (wrapper.mjs reads the same name). */
+export const CANCEL_FILE = 'cancel';
 
 export class RunStore {
   constructor(
@@ -132,6 +134,11 @@ export class RunStore {
     } catch {
       return null;
     }
+  }
+
+  /** Asks the run's wrapper to stop: it reads this before it spawns the command and once more after recording it. */
+  requestCancel(id: string): void {
+    fs.writeFileSync(path.join(this.dirOf(id), CANCEL_FILE), new Date().toISOString());
   }
 
   readWrapper(id: string): { wrapperPid: number; childPid: number } | null {

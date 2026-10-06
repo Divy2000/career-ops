@@ -25,42 +25,63 @@ const write = (stream, line) => {
   out.write(JSON.stringify({ seq, ts: new Date().toISOString(), stream, line: text }) + '\n');
 };
 
-const child = spawn(cmd, args, { cwd, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-fs.writeFileSync(path.join(runDir, 'wrapper.json'), JSON.stringify({ wrapperPid: process.pid, childPid: child.pid, startedAt: new Date().toISOString() }));
-
-let open = 2;
-const done = (code, signal) => {
-  if (open > 0) return;
-  out.end(() => {
-    fs.writeFileSync(path.join(runDir, 'exit.json'), JSON.stringify({ code, signal, endedAt: new Date().toISOString() }));
-    process.exit(0);
-  });
-};
-let exit = null;
-for (const [name, stream] of [['stdout', child.stdout], ['stderr', child.stderr]]) {
-  const rl = readline.createInterface({ input: stream });
-  rl.on('line', (line) => write(name, line));
-  rl.on('close', () => {
-    open -= 1;
-    if (exit) done(exit.code, exit.signal);
-  });
-}
-child.on('error', (err) => {
-  write('stderr', `spawn failed: ${err.message}`);
-  open = 0;
-  done(127, null);
-});
-child.on('exit', (code, signal) => {
-  exit = { code, signal };
-  done(code, signal);
-});
+// A cancel can come before this wrapper has a signal handler (while node is still starting, a SIGTERM would end it
+// with no exit record and, later, an orphaned command): the runner leaves a cancel file instead, read before the
+// command is spawned and again once it is recorded in wrapper.json (the runner signals only once that file exists).
+const cancelPath = path.join(runDir, 'cancel');
+let child = null;
 // Forward a termination of the wrapper itself to the whole process group.
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
+    if (!child?.pid) return;
     try {
       process.kill(-child.pid, sig);
     } catch {
       /* already gone */
     }
   });
+}
+if (fs.existsSync(cancelPath)) {
+  out.end(() => {
+    fs.writeFileSync(path.join(runDir, 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: new Date().toISOString() }));
+    process.exit(0);
+  });
+} else {
+  child = spawn(cmd, args, { cwd, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+  fs.writeFileSync(path.join(runDir, 'wrapper.json'), JSON.stringify({ wrapperPid: process.pid, childPid: child.pid, startedAt: new Date().toISOString() }));
+
+  let open = 2;
+  let exit = null;
+  const done = (code, signal) => {
+    if (open > 0) return;
+    out.end(() => {
+      fs.writeFileSync(path.join(runDir, 'exit.json'), JSON.stringify({ code, signal, endedAt: new Date().toISOString() }));
+      process.exit(0);
+    });
+  };
+  for (const [name, stream] of [['stdout', child.stdout], ['stderr', child.stderr]]) {
+    const rl = readline.createInterface({ input: stream });
+    rl.on('line', (line) => write(name, line));
+    rl.on('close', () => {
+      open -= 1;
+      if (exit) done(exit.code, exit.signal);
+    });
+  }
+  child.on('error', (err) => {
+    write('stderr', `spawn failed: ${err.message}`);
+    open = 0;
+    done(127, null);
+  });
+  child.on('exit', (code, signal) => {
+    exit = { code, signal };
+    done(code, signal);
+  });
+  // A cancel written while the command was being spawned: the runner did not see wrapper.json yet, so it is ours to act on.
+  if (fs.existsSync(cancelPath)) {
+    try {
+      process.kill(-child.pid, 'SIGTERM');
+    } catch {
+      /* already gone */
+    }
+  }
 }

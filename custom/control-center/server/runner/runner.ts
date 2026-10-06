@@ -360,11 +360,16 @@ export class Runner {
       }, 5000);
       killTimer.unref();
     } else if (meta.wrapperPid && wrapper !== false) {
-      // The wrapper forwards SIGTERM to its own child's process group.
-      try {
-        process.kill(meta.wrapperPid, 'SIGTERM');
-      } catch {
-        /* gone */
+      // A wrapper that has not recorded its command yet may still be starting, with no SIGTERM handler: a signal would
+      // end it with no exit record. The cancel file stops it instead (read before it spawns and after it records the
+      // command); one that has recorded it by now forwards SIGTERM to its command's process group.
+      this.store.requestCancel(id);
+      if (this.store.readWrapper(id)) {
+        try {
+          process.kill(meta.wrapperPid, 'SIGTERM');
+        } catch {
+          /* gone */
+        }
       }
     }
     return marked;

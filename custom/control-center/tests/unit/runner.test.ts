@@ -214,6 +214,20 @@ describe('Runner', () => {
     expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('got SIGTERM');
   });
 
+  it('a cancel that lands while the wrapper is still starting ends the run cancelled, with an exit record and no command left running', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '20000']));
+    // At once: the wrapper process exists but has not run a line of its own yet (no wrapper.json, no signal handler).
+    expect(runner.store.readWrapper(meta.id)).toBeNull();
+    runner.cancel(meta.id);
+    await until(() => Boolean(runner.store.readExit(meta.id)) && runner.store.read(meta.id)?.status === 'cancelled', 10_000);
+    // The command never started, or was stopped with the run: nothing of it outlives the cancel.
+    const childPid = runner.store.readWrapper(meta.id)?.childPid;
+    if (childPid) await until(() => !pidAlive(childPid));
+    expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).not.toContain('line three');
+  });
+
   it('orders runs that share a resource and drops a queued run on cancel', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);
