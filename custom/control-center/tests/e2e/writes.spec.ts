@@ -59,14 +59,19 @@ test.describe('deterministic writes from the pages', () => {
     }
   });
 
-  test('inbox Skip flips the pipeline checkbox, Undo restores it, and Add URLs appends a row', async ({ page }) => {
+  test('inbox Skip flips the pipeline checkbox, Back to queue restores it after asking, and Add URLs appends a row', async ({ page }) => {
     await page.goto('/pipeline');
     const row = page.getByRole('row', { name: /Soylent Foods/ });
     await row.getByRole('button', { name: /Skip Soylent Foods/ }).click();
     await expect(page.getByRole('row', { name: /Soylent Foods/ })).toHaveCount(0);
-    await page.getByLabel('Show skipped').check();
+    await page.getByLabel('Show done').check();
     await page.getByRole('button', { name: /Restore Soylent Foods/ }).click();
+    // A checked row may have been evaluated in place, so putting it back asks first (SW4-web-a-03).
+    await page.getByRole('dialog', { name: 'Put Soylent Foods back in the queue?' }).getByRole('button', { name: 'Back to queue' }).click();
     await expect(page.getByRole('row', { name: /Soylent Foods/ }).getByRole('button', { name: /Skip Soylent Foods/ })).toBeVisible();
+    // Under Processed a checked row is finished: it says so and has nothing to undo.
+    await expect(page.getByRole('row', { name: /Old Corp/ })).toContainText('processed');
+    await expect(page.getByRole('row', { name: /Old Corp/ }).getByRole('button')).toHaveCount(0);
     await page.getByRole('button', { name: 'Add URLs' }).click();
     await page.getByLabel('Posting URLs').fill('https://jobs.example.com/e2e/1');
     await page.getByRole('button', { name: 'Add to pipeline' }).click();

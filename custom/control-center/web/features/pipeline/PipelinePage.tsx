@@ -7,6 +7,7 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
 import { InboxAi } from './InboxAi';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
 
 const route = getRouteApi('/pipeline');
@@ -98,8 +99,9 @@ function Inbox() {
   const q = usePipeline();
   const qc = useQueryClient();
   const actions = useActions();
-  const { run, message, setMessage } = useRunAction();
+  const { run, busy, message, setMessage } = useRunAction();
   const [skipError, setSkipError] = useState<string | null>(null);
+  const confirm = useConfirm();
   const skip = async (url: string, done: boolean) => {
     setSkipError(null);
     try {
@@ -108,6 +110,11 @@ function Inbox() {
     } catch (err) {
       setSkipError(`Could not ${done ? 'skip' : 'restore'}: ${describeError(err)}`);
     }
+  };
+  // A checked Pending row may have been evaluated in place, so putting it back queues it for a second evaluation.
+  const restore = async (url: string, name: string) => {
+    if (!(await confirm({ title: `Put ${name} back in the queue?`, body: 'If it was evaluated, not just skipped, Evaluate visible and Batch will see it as new and it will be evaluated again.', confirmLabel: 'Back to queue', danger: true }))) return;
+    await skip(url, false);
   };
   const [source, setSource] = useState('');
   const [seniority, setSeniority] = useState('');
@@ -127,9 +134,9 @@ function Inbox() {
     <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
       <div className="toolbar" aria-label="Inbox actions">
         <AddUrls onDone={(n) => { setMessage({ tone: 'ok', text: `Added ${n} URL${n === 1 ? '' : 's'} to the pipeline` }); void qc.invalidateQueries({ queryKey: ['pipeline'] }); }} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} disabled={busy !== null} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} disabled={busy !== null} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} disabled={busy !== null} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
           Rank (50)
         </ActionButton>
       </div>
@@ -155,7 +162,7 @@ function Inbox() {
           ))}
         </select>
         <label className="row gap">
-          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show skipped
+          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show done
         </label>
         <span className="faint">{visible.length} rows</span>
       </div>
@@ -196,7 +203,8 @@ function Inbox() {
                       </a>
                     </div>
                     <span className="faint small">
-                      {r.done && <Pill>skipped</Pill>}
+                      {/* A checked Pending row was skipped here or evaluated in place by a batch evaluator; a Processed row is finished. */}
+                      {r.done && <Pill>{r.section === 'done' ? 'processed' : 'done'}</Pill>}
                       {r.seniority ?? ''}
                     </span>
                   </td>
@@ -212,9 +220,15 @@ function Inbox() {
                     {r.postedAt && <div className="faint">posted {r.postedAt}</div>}
                   </td>
                   <td>
-                    <button type="button" aria-label={`${r.done ? 'Restore' : 'Skip'} ${r.company || r.url}`} onClick={() => void skip(r.url, !r.done)}>
-                      {r.done ? 'Undo skip' : 'Skip'}
-                    </button>
+                    {!r.done ? (
+                      <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
+                        Skip
+                      </button>
+                    ) : r.section !== 'done' ? (
+                      <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>
+                        Back to queue
+                      </button>
+                    ) : null}
                   </td>
                 </tr>
               ))}

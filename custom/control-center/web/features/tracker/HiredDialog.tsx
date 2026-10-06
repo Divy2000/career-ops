@@ -19,7 +19,9 @@ export function HiredDialog({ report, company, onClose }: { report: string; comp
       setError(describeError(err));
     }
   };
-  const issueUrl = output?.match(/https:\/\/github\.com\/\S+/)?.[0] ?? null;
+  // hired-share.mjs prints the payload (the story, which may quote GitHub URLs) before the prefilled issue URL: take the
+  // last issues/new link.
+  const issueUrl = [...(output ?? '').matchAll(/https:\/\/github\.com\/[^\s"']+\/issues\/new\?[^\s"']+/g)].pop()?.[0] ?? null;
   return (
     <div className="card stack" role="dialog" aria-label="Hired celebration">
       <h2>Congratulations on {company}!</h2>

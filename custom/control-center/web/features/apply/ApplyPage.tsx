@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
@@ -74,7 +74,12 @@ export function ApplyBody({ n, company, postingUrl }: { n: string | null; compan
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind === 'answers') setFields((payload as { fields: AnswerField[] }).fields);
   }, []);
-  const onStatus = useCallback((s: string) => setStatus(s), []);
+  // Counts the statuses the stream delivered, so a late answer to a turn POST cannot overwrite a newer one.
+  const statusSeq = useRef(0);
+  const onStatus = useCallback((s: string) => {
+    statusSeq.current += 1;
+    setStatus(s);
+  }, []);
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
   // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.
   const chosen = pdf ? ` The CV PDF I will attach is ${pdf}${cover ? ` and the cover letter text is ${cover}` : ''}; draft the answers to match it.` : '';
@@ -100,16 +105,25 @@ export function ApplyBody({ n, company, postingUrl }: { n: string | null; compan
     }
   };
 
+  // Busy from the click to the server's answer: the turn's running status arrives later, over the stream.
+  const [filling, setFilling] = useState(false);
   const fill = async () => {
     if (!sessionId || !fields) return;
     const confirmed = fields.map(({ id, label, value }) => ({ id, label, value }));
     setFillNote(null);
+    setFilling(true);
+    const seqAtClick = statusSeq.current;
     try {
       const attach = pdf ? `attach the CV PDF ${pdf}${cover ? ` and use the cover letter text in ${cover}` : ''}` : 'attach the tailored CV';
-      await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, ${attach}, stop before Submit and report what you filled:\n${JSON.stringify({ fields: confirmed })}`);
+      const meta = await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, ${attach}, stop before Submit and report what you filled:\n${JSON.stringify({ fields: confirmed })}`);
+      // The turn is running from here on, but its running event over the stream may come later and the button would
+      // wake up. A status the stream already delivered since the click is newer than this answer, so it stays.
+      if (statusSeq.current === seqAtClick) setStatus(meta.status);
       setFillNote('Fill turn sent with your edited answers.');
     } catch (err) {
-      setFillNote(`Could not send the fill turn: ${(err as Error).message}`);
+      setFillNote(`Could not send the fill turn: ${describeError(err)}`);
+    } finally {
+      setFilling(false);
     }
   };
 
@@ -208,7 +222,7 @@ export function ApplyBody({ n, company, postingUrl }: { n: string | null; compan
               <>
                 <AnswersForm fields={fields} onChange={setFields} />
                 <div className="row gap" style={{ marginTop: 12 }}>
-                  <button type="button" disabled={!playwright || status === 'running' || status === 'queued'} title={playwright ? 'Sends the edited answers as the next turn; the browser stays headed and stops before Submit' : 'Disabled: Playwright MCP is not available on this machine'} onClick={() => void fill()}>
+                  <button type="button" disabled={filling || !playwright || status === 'running' || status === 'queued'} title={playwright ? 'Sends the edited answers as the next turn; the browser stays headed and stops before Submit' : 'Disabled: Playwright MCP is not available on this machine'} onClick={() => void fill()}>
                     Fill real form
                   </button>
                   {!playwright && <span className="faint small">Drafting only on this machine.</span>}

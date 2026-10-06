@@ -10,6 +10,7 @@ export const DOMAIN_KEYS: Record<string, string[][]> = {
   // An application's detail carries its company sponsorship file and alert.
   immigration: [['immigration'], ['sponsorship'], ['tracker', 'row']],
   interviews: [['tracker', 'interviews'], ['insights']],
+  documents: [['tracker', 'documents'], ['apply', 'documents']],
   followups: [['followups'], ['tracker']],
   config: [['config'], ['system']],
   runs: [['runs']],

@@ -112,3 +112,20 @@ describe('live invalidation after the event stream reconnects (SW-web-a-12)', ()
     await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2, 'every query to refetch');
   });
 });
+
+describe('live invalidation of generated documents (SW4-web-a-07)', () => {
+  function DocsProbe() {
+    useLiveInvalidation();
+    // Application > Documents and the Apply page's PDF picker.
+    useQuery({ queryKey: ['tracker', 'documents', 1], queryFn: () => ((fetches.docs = (fetches.docs ?? 0) + 1), { ok: true }) });
+    useQuery({ queryKey: ['apply', 'documents', '1'], queryFn: () => ((fetches.apply = (fetches.apply ?? 0) + 1), { ok: true }) });
+    return null;
+  }
+
+  it('a re-rendered PDF or a new tailored CV refetches the Documents tab and the Apply PDF list', async () => {
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }) }, createElement(DocsProbe))));
+    await until(() => fetches.docs === 1 && fetches.apply === 1, 'the first fetches');
+    await act(async () => FakeEventSource.last!.emit('data.changed', { domain: 'documents', paths: ['output/cv-acme.pdf'] }));
+    await until(() => fetches.docs === 2 && fetches.apply === 2, 'both document lists to refetch');
+  });
+});

@@ -151,6 +151,20 @@ test.describe('AI sessions through the fake Claude', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Tracker' })).toBeVisible();
   });
 
+  test('a held or double-pressed Enter on Review and run opens the write confirm on Cancel, so it declines (SW4-web-a-02)', async ({ page }) => {
+    await page.getByRole('button', { name: 'Open Ask drawer' }).click();
+    await page.getByLabel('Prompt for advisor').fill('What should I do next?');
+    await page.getByRole('button', { name: 'Ask the advisor' }).click();
+    await expect(page.getByText('Set row #1 to Responded')).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'Review and run' }).focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'The advisor proposes a write' });
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('li.proposal[data-proposal-state="rejected"]')).toContainText('declined');
+  });
+
   test('closing and reopening the Ask drawer keeps the advisor conversation and its proposals (SW-web-a-13)', async ({ page }) => {
     await page.getByRole('button', { name: 'Open Ask drawer' }).click();
     await page.getByLabel('Prompt for advisor').fill('What should I follow up on this week?');

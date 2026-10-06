@@ -160,6 +160,26 @@ test.describe('P3 editors and P6 polish', () => {
     await page.keyboard.press('Escape');
   });
 
+  test('a yes/no parameter in the palette form is a 16px checkbox on the same line as its name', async ({ page }) => {
+    await page.keyboard.press('Control+k');
+    await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('tracker.delete');
+    await expect(page.locator('[cmdk-item]', { hasText: 'tracker.delete' })).toBeVisible();
+    await page.keyboard.press('Enter');
+    const row = page.locator('[role="dialog"].dialog label', { hasText: 'dryRun' });
+    const box = (await row.getByRole('checkbox').boundingBox())!;
+    const text = (await row.evaluate((label) => {
+      const range = document.createRange();
+      range.selectNodeContents(label.lastChild!);
+      const r = range.getBoundingClientRect();
+      return { x: r.x, y: r.y, height: r.height };
+    }))!;
+    expect(box.width).toBeCloseTo(16, 0);
+    // Side by side: the name starts after the box, and the two share a line.
+    expect(text.x).toBeGreaterThan(box.x + box.width);
+    expect(Math.abs(text.y + text.height / 2 - (box.y + box.height / 2))).toBeLessThan(6);
+    await page.keyboard.press('Escape');
+  });
+
   test('Insights script tabs, Interviews, Follow-ups tabs and Tracker compare reach their new homes', async ({ page }) => {
     await page.goto('/insights?tab=velocity');
     await expect(page.getByRole('heading', { name: 'Funnel velocity (funnel-velocity.mjs)' })).toBeVisible();

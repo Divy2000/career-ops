@@ -79,8 +79,9 @@ export function AiSearchTab() {
               </thead>
               <tbody>
                 {offers.map((o) => {
-                  const dup = known.has(o.url);
+                  // What this page sent decides first: once added, the refetched pipeline lists the URL too.
                   const done = sent.get(o.url);
+                  const dup = done === undefined && known.has(o.url);
                   return (
                     <tr key={o.url}>
                       <td>{o.company}</td>
