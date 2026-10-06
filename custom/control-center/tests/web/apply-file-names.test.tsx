@@ -24,6 +24,8 @@ let root: Root;
 let posts: string[];
 
 beforeEach(async () => {
+  // The page remembers its last apply session in this tab; each test starts as a fresh tab.
+  sessionStorage.clear();
   posts = [];
   vi.stubGlobal(
     'fetch',

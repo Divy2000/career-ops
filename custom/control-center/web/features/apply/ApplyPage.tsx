@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
-import { useEngine, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
+import { useEngine, useSessionStream, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
+import { useRememberedSession } from '../../lib/useRememberedSession';
+import { UnsavedProvider, useUnsaved } from '../../lib/unsaved';
 import { describeError, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
 import { CostPill, Message } from '../../components/ActionBar';
@@ -53,12 +55,32 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
   );
 }
 
-export function ApplyBody({ n, company, postingUrl }: { n: string | null; company: string | null; postingUrl: string }) {
+type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: string };
+
+/** Leaving the page with edited answers asks first: the session keeps only the answers as it drafted them. */
+export function ApplyBody(props: ApplyBodyProps) {
+  return (
+    <UnsavedProvider>
+      <ApplyForm {...props} />
+    </UnsavedProvider>
+  );
+}
+
+function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
   const navigate = useNavigate();
   const engine = useEngine();
-  const [url, setUrl] = useState(postingUrl);
+  // The draft is a paid session and Fill is reachable only here: the row's last apply session is re-attached when the
+  // page comes back, and its answers envelope (replayed by the panel) rebuilds the form.
+  const remembered = useRememberedSession(`cc.apply.${n ?? 'url'}`);
+  const sessionId = remembered.panel.sessionId;
+  // A session re-attached on /apply (no row) brings back its posting URL, which it carries as its target.
+  const [reattached] = useState(sessionId);
+  const attached = useSessionStream(n === null ? reattached : null).meta?.target;
+  const [typedUrl, setUrl] = useState<string | null>(null);
+  const url = typedUrl ?? (attached?.type === 'url' && attached.value ? attached.value : postingUrl);
   const [fields, setFields] = useState<AnswerField[] | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [drafted, setDrafted] = useState<AnswerField[] | null>(null);
+  useUnsaved('the edited answers', fields !== null && JSON.stringify(fields) !== JSON.stringify(drafted));
   const [status, setStatus] = useState('queued');
   const [fillNote, setFillNote] = useState<string | null>(null);
   const actions = useRunAction();
@@ -72,14 +94,22 @@ export function ApplyBody({ n, company, postingUrl }: { n: string | null; compan
   const blockers = prefillBlockers({ url, pdf, cover, pdfCount: docs.data?.pdfs.length ?? 0, company });
   const playwright = engine.data?.playwrightAvailable ?? false;
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
-    if (kind === 'answers') setFields((payload as { fields: AnswerField[] }).fields);
+    if (kind !== 'answers') return;
+    const next = (payload as { fields: AnswerField[] }).fields;
+    setFields(next);
+    setDrafted(next);
   }, []);
   // Counts the statuses the stream delivered, so a late answer to a turn POST cannot overwrite a newer one.
   const statusSeq = useRef(0);
-  const onStatus = useCallback((s: string) => {
-    statusSeq.current += 1;
-    setStatus(s);
-  }, []);
+  const rememberStatus = remembered.panel.onStatus;
+  const onStatus = useCallback(
+    (s: string) => {
+      statusSeq.current += 1;
+      setStatus(s);
+      rememberStatus(s);
+    },
+    [rememberStatus],
+  );
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
   // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.
   const chosen = pdf ? ` The CV PDF I will attach is ${pdf}${cover ? ` and the cover letter text is ${cover}` : ''}; draft the answers to match it.` : '';
@@ -235,6 +265,8 @@ export function ApplyBody({ n, company, postingUrl }: { n: string | null; compan
           </div>
         </div>
         <SessionPanel
+          key={remembered.panelKey}
+          sessionId={sessionId}
           mode="apply"
           title="Apply session"
           target={target}
@@ -242,7 +274,8 @@ export function ApplyBody({ n, company, postingUrl }: { n: string | null; compan
           startLabel="Draft answers"
           onEnvelope={onEnvelope}
           onStatus={onStatus}
-          onSessionId={setSessionId}
+          onSessionId={remembered.panel.onSessionId}
+          onStartFailed={remembered.panel.onStartFailed}
           replyLabel="Send"
         />
       </div>
