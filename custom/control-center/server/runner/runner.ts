@@ -190,7 +190,7 @@ export class Runner {
     }
     if (holder.pid === process.pid) {
       this.self ??= { pid: process.pid, start: this.recordStart(process.pid) };
-      return holder.start !== null && this.self.start !== null && holder.start !== this.self.start;
+      if (holder.start !== null && this.self.start !== null) return holder.start !== this.self.start;
     }
     const live = this.identity(holder.pid, holder.start);
     if (live !== null) return !live;

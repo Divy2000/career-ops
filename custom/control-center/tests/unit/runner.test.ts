@@ -893,6 +893,21 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(lineOnes(runner, waiting.id)).toBe(1);
   });
 
+  it('a bare-PID claim naming this very process, written before it started (its PID was reused), counts as gone: the run starts instead of staying queued', async () => {
+    const root = tmpRoot();
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const holder = runner.start(req(['0', '400'], { resources: ['tracker'] }));
+    const waiting = runner.start(req(['0'], { resources: ['tracker'] }));
+    const claim = path.join(runner.store.dirOf(waiting.id), 'claim');
+    fs.writeFileSync(claim, String(process.pid));
+    const written = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(claim, written, written);
+    await until(() => runner.store.read(holder.id)?.status === 'done', 15_000);
+    await until(() => runner.store.read(waiting.id)?.status === 'done', 15_000);
+    expect(lineOnes(runner, waiting.id)).toBe(1);
+  });
+
   it('a run claimed by a live process is never taken from it; once that process is gone without starting it, this one starts it', async () => {
     const root = tmpRoot();
     const runner = new Runner(root, new EventBus(), { pollMs: 50 });
