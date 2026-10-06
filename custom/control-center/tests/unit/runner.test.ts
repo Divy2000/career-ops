@@ -545,6 +545,18 @@ describe('Runner', () => {
     }
   });
 
+  it('every ANTHROPIC_ variable and every CLAUDE_CODE_ credential is dropped, while CLAUDE_CODE_ settings pass (SW8-server-02 review)', () => {
+    const base = {
+      ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer x', ANTHROPIC_BASE_URL: 'https://proxy.example',
+      CLAUDE_CODE_OAUTH_TOKEN: 'o', CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'r', CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '1', CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: 'p', CLAUDE_CODE_CLIENT_CERT: '/c.pem', CLAUDE_CODE_SESSION_ACCESS_TOKEN: 's',
+      CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', PATH: '/bin', HOME: '/h',
+    };
+    const env = childEnv({}, base);
+    expect(Object.keys(env).sort()).toEqual(['CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // A session's own credentials, passed explicitly, still reach it.
+    expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
+  });
+
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
     const saved = { ...process.env };
     Object.assign(process.env, { CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', CC_DATA_ROOT: '/x', CC_GUARD_DIR: '/g' });
