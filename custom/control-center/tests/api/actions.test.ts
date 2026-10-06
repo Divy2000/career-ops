@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { DailyJobWatch } from '../../server/system/daily.js';
+import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
 import type { RunMeta } from '../../server/runner/store.js';
@@ -344,6 +345,21 @@ describe('action registry', () => {
     try {
       expect((await post('/api/actions/daily.runNow', { params: {}, confirmed: true })).statusCode).toBe(202);
       expect(started[0]!.env).toMatchObject({ CC_RUN_DAILY_SKIP_EXIT: '75' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('Run the daily job now pins the node the scheduled job is pinned to (CC_NODE_BIN), so it never runs on an older node first on PATH (SW7-server-02)', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      expect((await post('/api/actions/daily.runNow', { params: {}, confirmed: true })).statusCode).toBe(202);
+      expect(path.isAbsolute(pinnedNodeBin())).toBe(true);
+      expect(started[0]!.env).toMatchObject({ CC_NODE_BIN: pinnedNodeBin() });
     } finally {
       spy.mockRestore();
     }
