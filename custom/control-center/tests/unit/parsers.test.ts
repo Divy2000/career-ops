@@ -53,6 +53,17 @@ describe('reports', () => {
     expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'G']);
   });
 
+  it('keeps a report\'s **URL:** only when it is a real http(s) URL, cleaned the way merge-tracker.mjs cleans it (SW2-server-06)', () => {
+    const url = (value: string) => parseReport(`# Evaluation: Acme - Eng\n\n**URL:** ${value}\n**Score:** 4/5\n`, '010-acme.md', 10).url;
+    // N/A is legitimate for recruiter-sourced roles (merge-tracker.mjs resolveReportUrl).
+    expect(url('N/A')).toBeNull();
+    expect(url('-')).toBeNull();
+    expect(url('javascript:alert(1)')).toBeNull();
+    expect(url('<https://jobs.example.com/acme/1>')).toBe('https://jobs.example.com/acme/1');
+    expect(url('https://jobs.example.com/acme/2).')).toBe('https://jobs.example.com/acme/2');
+    expect(url('https://jobs.example.com/acme/3')).toBe('https://jobs.example.com/acme/3');
+  });
+
   it('still reads a Block A written as bullets, and its Comp line when the Machine Summary has no advertised_comp', () => {
     const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## A) Role Summary\n- Remote: full remote\n- Comp: $150k\n- TL;DR: Good fit.\n';
     expect(parseReport(md, '010-acme.md', 10)).toMatchObject({ remote: 'full remote', comp: '$150k', tldr: 'Good fit.' });
