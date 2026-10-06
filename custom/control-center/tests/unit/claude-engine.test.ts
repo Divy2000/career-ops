@@ -330,6 +330,21 @@ describe('guard hook', () => {
     for (const t of [`Edit(/${code}/reports/**)`, `Edit(/${code}/cv.md)`, `Edit(/${data}/custom/**)`]) expect(tools).not.toContain(t);
   });
 
+  it('a documents session (pdf, text, latex, latex-tex, cover) can save the JD its mode needs as jds/<slug>.md, in the data root, and nothing else there (SW3-libs-01)', () => {
+    const code = fs.realpathSync(tempDir('cc-jd-code-'));
+    const data = fs.realpathSync(tempDir('cc-jd-data-'));
+    for (const mode of ['pdf', 'text', 'latex', 'latex-tex', 'cover']) {
+      const dir = fs.realpathSync(tempDir(`cc-jd-guard-${mode}-`));
+      const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] });
+      const write = (file: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: code, session_id: 's' }).status;
+      expect(write(path.join(data, 'jds', 'acme-backend.md')), mode).toBe(0);
+      expect(write(path.join(code, 'jds', 'acme-backend.md')), `${mode} code root`).toBe(2);
+      expect(write(path.join(data, 'jds', 'acme', 'nested.md')), `${mode} nested`).toBe(2);
+      expect(write(path.join(data, 'jds', 'acme.pdf')), `${mode} pdf`).toBe(2);
+      expect(buildAllowedTools(getModePolicy(mode)!, code, data), mode).toContain(`Edit(/${data}/jds/*.md)`);
+    }
+  });
+
   it('every policy gets the split, one written by the daily job or before this change included (SW2-claude-02)', () => {
     const code = fs.realpathSync(tempDir('cc-split-old-code-'));
     const data = fs.realpathSync(tempDir('cc-split-old-data-'));
