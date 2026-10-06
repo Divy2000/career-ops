@@ -651,6 +651,14 @@
   ],
   "exports": [
     {
+      "module": "plugins/_engine.mjs",
+      "names": [
+        "discoverPlugins",
+        "pluginRoots",
+        "resolveSuccessorIds"
+      ]
+    },
+    {
       "module": "path-resolver.mjs",
       "names": [
         "getCareerOpsRoot",

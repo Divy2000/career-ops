@@ -67,10 +67,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
   });
 
   // ---- plugins ----
-  app.get('/api/plugins', async () => listPlugins(cfg.codeRoot, cfg.dataRoot));
+  app.get('/api/plugins', async () => listPlugins(cfg.codeRoot, cfg.dataRoot, cfg.pluginsLocalDir));
 
   app.get<{ Params: { id: string } }>('/api/plugins/:id/skill', async (req, reply) => {
-    const known = listPlugins(cfg.codeRoot, cfg.dataRoot).plugins.find((p) => p.id === req.params.id);
+    const known = (await listPlugins(cfg.codeRoot, cfg.dataRoot, cfg.pluginsLocalDir)).plugins.find((p) => p.id === req.params.id);
     if (!known) return reply.code(404).send({ error: `no plugin ${req.params.id}` });
     const r = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, 'plugins'), 'skill', known.id], { cwd: cfg.codeRoot, timeoutMs: 15_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1' } });
     if (r.code !== 0) return reply.code(502).send({ error: `plugins.mjs skill exited ${r.code}`, stderr: r.stderr.trim().slice(-2000) });

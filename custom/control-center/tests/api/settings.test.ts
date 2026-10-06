@@ -173,6 +173,37 @@ describe('plugins', () => {
     expect(res.json().plugins.some((p: { id: string }) => p.id === '_template')).toBe(false);
     expect(res.json().config.kind).toBe('missing');
   });
+  it('finds plugins the way plugins.mjs does: a symlinked plugins.local checkout is listed, an invalid manifest or a shadowed id is not (SW2-server-02)', async () => {
+    const local = tempDir('cc-plugins-local-');
+    const manifest = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({ id, name: id, version: '1.0.0', apiVersion: 1, description: `${id} plugin`, hooks: ['ingest'], humanInTheLoop: true, ...extra });
+    const put = (dir: string, json: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'manifest.json'), json);
+      fs.writeFileSync(path.join(dir, 'index.mjs'), 'export const hooks = {};\n');
+    };
+    // A plugin developed in its own checkout and linked in, as plugins.local/ is meant to be used.
+    const checkout = path.join(tempDir('cc-plugin-checkout-'), 'my-plugin');
+    put(checkout, manifest('my-plugin'));
+    fs.symlinkSync(checkout, path.join(local, 'my-plugin'));
+    put(path.join(local, 'no-id'), manifest('no-id', { id: undefined }));
+    put(path.join(local, 'wrong-dir'), manifest('another-id'));
+    put(path.join(local, 'gmail'), manifest('gmail'));
+    const own = await makeTestApp({ pluginsLocalDir: local });
+    try {
+      const plugins = (await own.app.inject({ method: 'GET', url: '/api/plugins', headers: own.authed })).json().plugins as Array<{ id: string; source: string }>;
+      const ids = plugins.map((p) => p.id);
+      expect(plugins.find((p) => p.id === 'my-plugin')).toMatchObject({ source: 'local' });
+      expect(ids).not.toContain('no-id');
+      expect(ids).not.toContain('another-id');
+      expect(ids).not.toContain('wrong-dir');
+      expect(plugins.filter((p) => p.id === 'gmail')).toEqual([expect.objectContaining({ source: 'bundled' })]);
+      const toggle = await own.app.inject({ method: 'PUT', url: '/api/config/plugins/my-plugin', headers: own.authedWrite, payload: { enabled: true } });
+      expect(toggle.statusCode, toggle.body).toBe(200);
+    } finally {
+      await own.close();
+    }
+  });
+
   it('refuses a plugin toggle sent with a stale ETag: 409 with the current version, and config/plugins.yml unchanged (SW2-tests-22)', async () => {
     const stale = (await get('/api/plugins')).json().config.etag as string | null;
     const file = path.join(t.cfg.dataRoot, 'config', 'plugins.yml');
