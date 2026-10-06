@@ -91,4 +91,18 @@ describe('DocumentsTab re-render', () => {
       files = original;
     }
   });
+
+  it('re-renders a file with no recorded format without naming one, so generate-pdf uses the profile\'s page_format (SW5-web-a-01)', async () => {
+    const original = files;
+    files = () => [{ path: 'output/cv-acme-swe.pdf', html: 'output/cv-acme-swe.html', kind: 'cv', format: null, date: null, source: 'output', rerenderBlock: null }] as unknown as ReturnType<typeof original>;
+    try {
+      const posts = await mount(9, 12);
+      await act(async () => rerenderButton().click());
+      await until(() => posts.length > 0, 'the re-render request');
+      expect(posts).toEqual([{ params: { row: 9, report: 12, html: 'output/cv-acme-swe.html', pdf: 'output/cv-acme-swe.pdf' } }]);
+    } finally {
+      files = original;
+    }
+  });
 });
+
