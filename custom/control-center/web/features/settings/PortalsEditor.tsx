@@ -21,7 +21,8 @@ export const PORTAL_SECTIONS: SectionDef[] = [
   { key: 'tracked_companies', help: 'Companies scanned on every run. Each needs a careers_url (or an api URL); the scanner picks the provider from it unless provider names one. Toggle enabled to pause one without losing it.', empty: [], columns: ['name', 'careers_url', 'api', 'provider', 'enabled'] },
   { key: 'job_boards', help: 'Job boards and aggregators.', empty: [], columns: ['name', 'careers_url', 'api', 'provider', 'enabled'] },
   { key: 'search_queries', help: 'Free-text queries for boards that support search.', empty: [], columns: ['name', 'query', 'enabled'] },
-  { key: 'visa_filter', help: 'Sponsorship signals used to rank or drop postings.', empty: {} },
+  // The scanner runs the filter whenever the block exists and enabled is not false, so a new block starts off.
+  { key: 'visa_filter', help: 'Sponsorship signals used to drop postings. The filter runs whenever this block exists and enabled is not false; set enabled to turn it on.', empty: { enabled: false } },
   { key: 'max_posting_age_days', help: 'Postings older than this are skipped.', empty: 30 },
   { key: 'scan_history', help: 'Scan history options.', empty: {} },
   { key: 'interamt_searches', help: 'Interamt (German public sector) searches.', empty: [], columns: ['was'] },
