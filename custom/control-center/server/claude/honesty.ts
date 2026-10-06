@@ -46,10 +46,13 @@ export function ownReports(found: NewReport[], opts: { reportNum: number | null;
   return found.filter((r) => written.has(r.file));
 }
 
-/** Modes whose turn is an evaluation of one posting and must leave a report behind, in every language. */
+/**
+ * Modes whose turn is an evaluation of one posting and must leave a report behind, in every language. The regional
+ * modes are advisory (calibration added to an existing evaluation) and write no report of their own.
+ */
 export function isReportGated(modeId: string): boolean {
   const id = englishModeOf(modeId);
-  return id === 'oferta' || id === 'auto-pipeline' || id.startsWith('regional/') || id.endsWith('/oferta');
+  return id === 'oferta' || id === 'auto-pipeline' || id.endsWith('/oferta');
 }
 
 /**
