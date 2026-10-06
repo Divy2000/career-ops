@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
-import { locate, matches, relativeToRoot, resolveReal } from '../server/claude/guard-policy.mjs';
+import { findSnapshot, locate, matches, relativeToRoot, resolveReal, snapshotKey as turnSnapshotKey } from '../server/claude/guard-policy.mjs';
 import { processStartTime, type ProcessStart } from './instance-lock.js';
 
 export interface ChangeRecord {
@@ -57,8 +57,9 @@ export function guardSessionDir(guardRoot: string, sessionId: string): string {
   return path.join(guardRoot, 'sessions', sessionId);
 }
 
+/** Where a turn's snapshot of `abs` is written (the guard hook's own rule); reads go through findSnapshot, older names included. */
 export function snapshotKey(turnDir: string, abs: string): string {
-  return path.join(turnDir, 'before', encodeURIComponent(abs));
+  return turnSnapshotKey(turnDir, abs);
 }
 
 export function readFilesLog(sessionDir: string): ChangeRecord[] {
@@ -159,9 +160,10 @@ function countLines(patch: string): { additions: number; deletions: number } {
  * Binary sides, sides over MAX_DIFF_BYTES and edits past DIFF_LIMITS get a summary in place of the patch.
  */
 export function diffFile(turnDir: string, rec: ChangeRecord, after?: { exists: boolean; bytes: Buffer }): FileDiff {
-  const key = snapshotKey(turnDir, rec.abs);
-  const hadSnapshot = fs.existsSync(key);
-  const wasAbsent = fs.existsSync(`${key}.absent`);
+  const snap = findSnapshot(turnDir, rec.abs);
+  const key = snap?.key ?? '';
+  const hadSnapshot = snap !== null && !snap.absent;
+  const wasAbsent = snap?.absent === true;
   const exists = after ? after.exists : fs.existsSync(rec.abs);
   const current = after ? after.bytes : exists ? fs.readFileSync(rec.abs) : Buffer.alloc(0);
   if (!hadSnapshot && !wasAbsent) return { ...rec, status: 'no-snapshot', additions: 0, deletions: 0, patch: '', canRevert: false };
@@ -185,10 +187,9 @@ export function diffFile(turnDir: string, rec: ChangeRecord, after?: { exists: b
 }
 
 function snapshotState(turnDir: string, abs: string): { exists: boolean; bytes: Buffer } | null {
-  const key = snapshotKey(turnDir, abs);
-  if (fs.existsSync(key)) return { exists: true, bytes: fs.readFileSync(key) };
-  if (fs.existsSync(`${key}.absent`)) return { exists: false, bytes: Buffer.alloc(0) };
-  return null;
+  const snap = findSnapshot(turnDir, abs);
+  if (!snap) return null;
+  return snap.absent ? { exists: false, bytes: Buffer.alloc(0) } : { exists: true, bytes: fs.readFileSync(snap.key) };
 }
 
 export function listChanges(sessionDir: string, meta: MetaLike): TurnChanges[] {
@@ -285,10 +286,10 @@ function planRevert(turnDir: string, abs: string, ctx: RevertContext): RevertPla
   // The turn's recorded scope in either root: a revert only puts back the turn's own snapshot, so a turn recorded before
   // the guard split the roots (which may have written a user file into the code checkout) can still be undone.
   if (!matches(found.rel, policy.allow) || matches(found.rel, policy.deny)) throw new RevertRefused(403, `${found.rel} is outside turn ${n}'s write scope; refusing to revert it`);
-  const key = snapshotKey(turnDir, abs);
-  const hadSnapshot = fs.existsSync(key);
-  const wasAbsent = !hadSnapshot && fs.existsSync(`${key}.absent`);
-  if (!hadSnapshot && !wasAbsent) return { abs, action: 'no-snapshot', key };
+  const snap = findSnapshot(turnDir, abs);
+  if (!snap) return { abs, action: 'no-snapshot', key: snapshotKey(turnDir, abs) };
+  const { key } = snap;
+  const wasAbsent = snap.absent;
   const after = readJson<{ files?: Record<string, string | null> }>(path.join(turnDir, 'after.json'))?.files;
   if (!after || !(abs in after)) throw new RevertRefused(409, `turn ${n} has no post-turn record for ${found.rel} (it did not finish), so a later edit cannot be ruled out; nothing was reverted`, [found.rel]);
   const current = fileHash(abs);

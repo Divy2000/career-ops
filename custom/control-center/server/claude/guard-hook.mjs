@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, matches, PLAYWRIGHT_TOOL_PREFIX, readUrlList, snapshotKey, unresolvedPathReason, urlListFilesIn, writeScopeReason } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, matches, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, unresolvedPathReason, urlListFilesIn, writeScopeReason } from './guard-policy.mjs';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -19,8 +19,9 @@ function deny(reason) {
 
 function snapshot(sessionDir, abs) {
   fs.mkdirSync(path.join(sessionDir, 'before'), { recursive: true });
+  // The first write of the turn keeps the bytes: one taken under the older name (a turn that began before the rename) counts.
+  if (findSnapshot(sessionDir, abs)) return;
   const key = snapshotKey(sessionDir, abs);
-  if (fs.existsSync(key) || fs.existsSync(`${key}.absent`)) return;
   if (fs.existsSync(abs)) fs.copyFileSync(abs, key);
   else fs.writeFileSync(`${key}.absent`, '');
 }

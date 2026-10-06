@@ -1,6 +1,7 @@
 // Pure path and command policy shared by the guard hook (guard-hook.mjs) and
 // the change-set reverts (supervisor/recovery.ts). Plain .mjs with no side
 // effects on import, so the hook entry itself can run unconditionally.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
@@ -892,6 +893,24 @@ export async function checkPlaywright(policy, tool, input, cwd, lookup = lookupA
 }
 
 /** First-touch snapshot keyed by the absolute path, so code-root and data-root files never collide. */
+/**
+ * Where a turn keeps a file's bytes from before its first write: named by a hash of the absolute path, so any path
+ * fits in a file name (an encoded long or CJK path is past the 255 bytes a name may have, and the write was refused).
+ */
 export function snapshotKey(sessionDir, abs) {
+  return path.join(sessionDir, 'before', crypto.createHash('sha256').update(abs).digest('hex'));
+}
+
+/** The name snapshots had before: the URL-encoded path. Still read, so turns snapshotted then diff and revert. */
+export function legacySnapshotKey(sessionDir, abs) {
   return path.join(sessionDir, 'before', encodeURIComponent(abs));
+}
+
+/** The turn's snapshot of `abs` under either name, the current one first: its key and whether the file was absent; null if none. */
+export function findSnapshot(sessionDir, abs) {
+  for (const key of [snapshotKey(sessionDir, abs), legacySnapshotKey(sessionDir, abs)]) {
+    if (fs.existsSync(key)) return { key, absent: false };
+    if (fs.existsSync(`${key}.absent`)) return { key, absent: true };
+  }
+  return null;
 }

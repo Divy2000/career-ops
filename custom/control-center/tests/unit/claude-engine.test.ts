@@ -286,6 +286,19 @@ describe('guard hook', () => {
     expect(pre('Edit', { file_path: path.join(realRoot, 'reports', '001-existing.md'), old_string: 'old', new_string: 'new' }).status).toBe(0);
     expect(fs.readFileSync(snapshotKey(sessionDir, path.join(realRoot, 'reports', '001-existing.md')), 'utf8')).toBe('old\n');
   });
+  it('snapshots a file whose encoded path is longer than a file name may be (CJK names), so the write is allowed and revertable (SW5-claude-03)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-longname-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('interview-prep')! });
+    const file = path.join(realRoot, 'interview-prep', '北京字节跳动科技有限公司-高级机器学习平台研发工程师-面试准备笔记.md');
+    expect(encodeURIComponent(file).length).toBeGreaterThan(255);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'notes before\n');
+    const r = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file, old_string: 'notes', new_string: 'Notes' }, cwd: realRoot, session_id: 's' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readFileSync(snapshotKey(dir, file), 'utf8')).toBe('notes before\n');
+    expect(path.basename(snapshotKey(dir, file)).length).toBeLessThanOrEqual(255);
+  });
+
   it('resolves writes against a separate data root and records which root a changed file belongs to', () => {
     const dataRoot = fs.mkdtempSync(path.join(realRoot, 'data-root-'));
     fs.mkdirSync(path.join(dataRoot, 'reports'));
