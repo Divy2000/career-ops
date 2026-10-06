@@ -173,7 +173,7 @@ git switch main && git pull --ff-only
 custom/install/install.sh --non-interactive --no-start --no-launchd --no-h1b-index   # refreshes dependencies and checks; existing files are never overwritten
 ```
 
-The extra flags keep an update from touching choices you made: without them the installer would install the daily launchd job if you removed it (one that is installed keeps the time and on/off state you set in the Control Center) and download the H-1B index again. To (re)enable them deliberately: `custom/launchd/install.sh --jobs daily` installs the 8am job, and `node plugins.mjs enable h1b-sponsor --confirm` followed by `node plugins/h1b-sponsor/install-h1b-index.mjs` enables the sponsor plugin and downloads the index.
+The extra flags keep an update from touching choices you made: without them the installer would install the daily launchd job if you removed it (one that is installed keeps the time and on/off state you set in the Control Center) and download the H-1B index again. To (re)enable them deliberately: `custom/launchd/install.sh --jobs daily` installs the 8am job (an installed one keeps its time and on/off state; `custom/launchd/install.sh --jobs daily --reset` puts it back at 8am and turns it on), and `node plugins.mjs enable h1b-sponsor --confirm` followed by `node plugins/h1b-sponsor/install-h1b-index.mjs` enables the sponsor plugin and downloads the index.
 
 Do **not** run `node update-system.mjs apply` in this fork: it can overwrite fork files. Do not use `npx @santifer/career-ops init` either, because that installs upstream, not this fork. The maintainer's weekly sync pull request is the update path for upstream changes.
 

@@ -794,16 +794,16 @@ else
   elif [ "$KEYCHAIN_OK" = 0 ]; then
     say "  The Keychain item is missing, so the job would fail every morning; not installing it yet."
     pending "Store the Keychain token, then install the daily job: $DAILY_CMD"
-  elif [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ]; then
-    # The Control Center's Runs & Schedule owns the time and the on/off state once the job exists: a re-run of this
-    # installer (the pending actions ask for one) must not put it back to 08:00 or enable a job the user turned off.
-    jobs=daily
-    if [ "$WITH_UPSTREAM_SYNC" = 1 ]; then jobs=all; fi
-    say "  The daily job is already installed; its schedule and on/off state stay as set in the Control Center. To reinstall it at 08:00: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
   else
     jobs=daily
     if [ "$WITH_UPSTREAM_SYNC" = 1 ]; then jobs=all; fi
-    say "  The daily job (08:00) runs headless Claude on your subscription: policy watch, scan, rank, shortlist."
+    if [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ]; then
+      # Reinstalled so its paths follow this checkout and data root; launchd/install.sh keeps the time and on/off state
+      # set in the Control Center (Runs & Schedule).
+      say "  The daily job is already installed; reinstalling it for this checkout keeps its time and on/off state from the Control Center."
+    else
+      say "  The daily job (08:00) runs headless Claude on your subscription: policy watch, scan, rank, shortlist."
+    fi
     case "$DIR" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: this checkout is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can read it." ;; esac
     # The job's bash writes its lock, day logs and launchd logs under the data root, so that needs it too.
     case "$DATA" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: the data root is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it." ;; esac

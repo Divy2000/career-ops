@@ -802,18 +802,16 @@ test('a ready install gets the daily job only; --with-upstream-sync gets both', 
   assert.deepEqual(b.w.calls('launchd-install'), ['launchd-install --jobs all']);
 });
 
-test('a daily job that is already installed is left alone: its time and on/off state are the Control Center\'s (SW3-scripts-02)', () => {
-  for (const extra of [[], ['--with-upstream-sync']]) {
+test('a daily job that is already installed is reinstalled for this checkout, which keeps its time and on/off state (SW3-scripts-02)', () => {
+  for (const [extra, jobs] of [[[], 'daily'], [['--with-upstream-sync'], 'all']]) {
     const { w, D } = fresh({ keychain: true });
     w.makeCheckout(D, { files: READY_FILES });
     const agents = path.join(w.home, 'Library', 'LaunchAgents');
     fs.mkdirSync(agents, { recursive: true });
-    const plist = path.join(agents, 'com.career-ops.immigration-watch.plist');
-    fs.writeFileSync(plist, 'USER SCHEDULE 06:30, DISABLED');
+    fs.writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), 'an install from another checkout');
     const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none', ...extra]);
-    assert.equal(w.calls('launchd-install').length, 0, r.out);
-    assert.match(r.out, /The daily job is already installed; its schedule and on\/off state stay as set in the Control Center\. To reinstall it at 08:00: bash .*custom\/launchd\/install\.sh' --jobs (daily|all)/);
-    assert.equal(fs.readFileSync(plist, 'utf8'), 'USER SCHEDULE 06:30, DISABLED');
+    assert.deepEqual(w.calls('launchd-install'), [`launchd-install --jobs ${jobs}`], r.out);
+    assert.match(r.out, /The daily job is already installed; reinstalling it for this checkout keeps its time and on\/off state from the Control Center\./);
     assert.equal(r.status, 0, r.out);
   }
 });

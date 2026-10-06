@@ -7,6 +7,7 @@ if [ -n "${STUB_LAUNCHD_DISABLED:-}" ]; then
   case "$1" in
     disable) echo "${2##*/}" >> "$STUB_LAUNCHD_DISABLED" ;;
     enable) grep -vxF "${2##*/}" "$STUB_LAUNCHD_DISABLED" > "$STUB_LAUNCHD_DISABLED.new" || true; mv "$STUB_LAUNCHD_DISABLED.new" "$STUB_LAUNCHD_DISABLED" ;;
+    print-disabled) sed 's/.*/	"&" => disabled/' "$STUB_LAUNCHD_DISABLED" ;;
     bootstrap)
       label="$(basename "$3" .plist)"
       if grep -qxF "$label" "$STUB_LAUNCHD_DISABLED"; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi

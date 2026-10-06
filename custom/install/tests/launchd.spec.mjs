@@ -19,7 +19,7 @@ const mkTmp = (prefix) => {
   return d;
 };
 
-function run(args, { env = {}, marker = null, existing = [], homeName = 'home', claude = null, localClaude = null, relativeClaude = false, realPlutil = false, nodeAt = 'bin', nodeShim = false } = {}) {
+function run(args, { env = {}, marker = null, existing = [], existingXml = {}, homeName = 'home', claude = null, localClaude = null, relativeClaude = false, realPlutil = false, nodeAt = 'bin', nodeShim = false } = {}) {
   const T = mkTmp('ci-launchd-');
   const bin = path.join(T, 'bin');
   fs.mkdirSync(bin);
@@ -59,6 +59,7 @@ function run(args, { env = {}, marker = null, existing = [], homeName = 'home', 
   const agentsDir = path.join(home, 'Library', 'LaunchAgents');
   fs.mkdirSync(agentsDir, { recursive: true });
   for (const label of existing) fs.writeFileSync(path.join(agentsDir, `${label}.plist`), 'PRE-EXISTING');
+  for (const [label, xml] of Object.entries(existingXml)) fs.writeFileSync(path.join(agentsDir, `${label}.plist`), xml.replaceAll('$T', T));
   const stubLog = path.join(T, 'stub.log');
   fs.writeFileSync(stubLog, '');
   const r = spawnSync('bash', [path.join(root, 'custom', 'launchd', 'install.sh'), ...args], {
@@ -378,4 +379,72 @@ test('a data root under Documents or Desktop gets a Full Disk Access note: launc
   }
   const elsewhere = run(['--jobs', 'daily']);
   assert.doesNotMatch(elsewhere.stdout, /Full Disk Access/);
+});
+
+// ---- a reinstall keeps what the user set in the Control Center (SW3-scripts-02 review) ----
+
+/** An installed plist as an older install (another checkout and data root) and the Control Center left it. */
+const oldPlist = (label, { hour, minute, weekday = null, root = '/old/checkout', data = '/old/data' }) => `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>${root}/custom/immigration/run-daily.sh</string></array>
+  <key>WorkingDirectory</key><string>${root}</string>
+  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${data}</string></dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer>${weekday === null ? '' : `<key>Weekday</key><integer>${weekday}</integer>`}</dict>
+  <key>StandardOutPath</key><string>${data}/data/immigration/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>${data}/data/immigration/logs/launchd.err.log</string>
+</dict>
+</plist>
+`;
+
+test('a reinstall over a job from another checkout points it at this one and keeps the time the user set', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 6, minute: 30 }) } });
+  assert.equal(r.status, 0, r.stderr);
+  const xml = plistText(r, DAILY);
+  assert.ok(xml.includes(`<string>${r.root}/custom/immigration/run-daily.sh</string>`), xml);
+  assert.ok(xml.includes(`<key>WorkingDirectory</key><string>${r.root}</string>`), xml);
+  assert.doesNotMatch(xml, /\/old\//);
+  assert.ok(xml.includes('<dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>'), xml);
+  assert.match(r.stdout, /installed com\.career-ops\.immigration-watch \(keeping its 06:30 schedule\)/);
+});
+
+test('a reinstall keeps a job the user turned off turned off: rewritten, never enabled or bootstrapped', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const T = mkTmp('ci-launchd-disabled-');
+  const disabled = path.join(T, 'disabled');
+  fs.writeFileSync(disabled, `${DAILY}\n`);
+  const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 7, minute: 5 }) }, env: { STUB_LAUNCHD_DISABLED: disabled } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes(`<string>${r.root}/custom/immigration/run-daily.sh</string>`));
+  assert.equal(fs.readFileSync(disabled, 'utf8').trim(), DAILY, 'still disabled');
+  assert.doesNotMatch(r.log, new RegExp(`^launchctl (enable|bootstrap) .*${DAILY.replaceAll('.', '\\.')}`, 'm'));
+  assert.match(r.stdout, /installed com\.career-ops\.immigration-watch \(keeping its 07:05 schedule; left off, as set in the Control Center\)/);
+});
+
+test('--reset puts the job back at its default time and turns it on', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const T = mkTmp('ci-launchd-disabled-');
+  const disabled = path.join(T, 'disabled');
+  fs.writeFileSync(disabled, `${DAILY}\n`);
+  const r = run(['--jobs', 'daily', '--reset'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 6, minute: 30 }) }, env: { STUB_LAUNCHD_DISABLED: disabled } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes('<dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>'));
+  assert.equal(fs.readFileSync(disabled, 'utf8').trim(), '');
+  assert.match(r.log, new RegExp(`^launchctl bootstrap .*${DAILY.replaceAll('.', '\\.')}\\.plist$`, 'm'));
+});
+
+test('--jobs all adds the weekly sync next to an installed daily job, and the daily job keeps its time', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const r = run(['--jobs', 'all'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 6, minute: 30 }) } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.plists, [`${DAILY}.plist`, `${SYNC}.plist`]);
+  assert.ok(plistText(r, DAILY).includes('<key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer>'));
+  assert.ok(plistText(r, SYNC).includes('<dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>0</integer></dict>'));
+});
+
+test('an installed plist whose schedule cannot be read gets the default time, not a broken one', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const r = run(['--jobs', 'daily'], { existing: [DAILY] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(plistText(r, DAILY).includes('<dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>'));
 });
