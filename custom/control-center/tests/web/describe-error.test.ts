@@ -29,6 +29,19 @@ describe('describeError', () => {
     expect(describeError(refused({ error: 'bullet 2 must be one line; name must be at most 120 characters', issues }))).toBe('bullet 2 must be one line; name must be at most 120 characters');
   });
 
+  it('a label that carries a hint still gets the issues: which row is wrong (SW3-web-a-04 review 2)', () => {
+    const err = refused({ error: 'invalid rows: company, since (YYYY-MM-DD), reason; each line one row', issues: [{ code: 'invalid_format', path: ['rows', 8, 'since'], message: 'a YYYY-MM-DD date' }] });
+    expect(describeError(err)).toBe('invalid rows: company, since (YYYY-MM-DD), reason; each line one row: rows item 9 since: a YYYY-MM-DD date');
+  });
+
+  it('a schedule label gets the field the job refused; a label that already quotes every issue message is left alone', () => {
+    const tooBig = { code: 'too_big', path: ['hour'], maximum: 23, origin: 'number', message: 'Too big: expected number to be <=23' };
+    expect(describeError(refused({ error: 'invalid schedule: hour 0-23, minute 0-59, weekday 0-6 (weekly jobs only), enabled', issues: [tooBig] }))).toBe(
+      'invalid schedule: hour 0-23, minute 0-59, weekday 0-6 (weekly jobs only), enabled: hour: Too big: expected number to be <=23',
+    );
+    expect(describeError(refused({ error: 'invalid body: a YYYY-MM-DD date', issues: [{ code: 'custom', path: ['date'], message: 'a YYYY-MM-DD date' }] }))).toBe('invalid body: a YYYY-MM-DD date');
+  });
+
   it('keeps the plain error, the stderr tail and the fallbacks as they were', () => {
     expect(describeError(new ApiError(500, '500 Internal Server Error', { error: 'exited 2', stderr: 'boom\n' }))).toBe('exited 2 (boom)');
     expect(describeError(new ApiError(502, '502 Bad Gateway', null))).toBe('502 Bad Gateway');

@@ -44,9 +44,13 @@ function describeIssues(issues: unknown): string {
 export function describeError(err: unknown): string {
   const e = err as ApiError;
   const body = e?.body as { error?: string; stderr?: string; issues?: unknown } | null | undefined;
-  // Only a bare schema label ("invalid params", "invalid body") lacks the details; a route that already wrote the
-  // issues into its error in its own words (the projects routes) would otherwise show them twice.
-  const issues = /^invalid \w+$/.test(body?.error ?? '') ? describeIssues(body?.issues) : '';
+  // A schema label ("invalid body", or one with a hint: "invalid rows: company, since ...") says what was refused, not
+  // where. A route that wrote the issues into its error in its own words (the projects routes: "bullet 2 must be one
+  // line") would show them twice, and so would a label that already quotes every issue's message.
+  const error = body?.error ?? '';
+  const list = Array.isArray(body?.issues) ? (body.issues as Array<{ message?: unknown }>) : [];
+  const said = list.length > 0 && list.every((i) => error.includes(String(i.message ?? '')));
+  const issues = /^invalid\b/.test(error) && !said ? describeIssues(body?.issues) : '';
   return `${body?.error ?? e?.message ?? 'unknown error'}${issues}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
 }
 
