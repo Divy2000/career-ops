@@ -92,7 +92,7 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const readToken = deps.readToken ?? keychainTokenReader(exec);
   await app.register(systemRoutes, { cfg, readToken, exec });
   await app.register(readRoutes, { cfg, bus, exec, daily });
-  await app.register(actionRoutes, { cfg, runner, bus, exec });
+  await app.register(actionRoutes, { cfg, runner, bus, exec, daily });
   await app.register(sponsorshipRoutes, { cfg, exec });
   await app.register(tutorialRoutes, { cfg });
   await app.register(writeRoutes, { cfg, daily });

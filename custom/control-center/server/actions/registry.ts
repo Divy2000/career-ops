@@ -27,7 +27,12 @@ export interface ActionContext {
   tmpInputs: string[];
   /** The community plugins folder (default <codeRoot>/plugins.local). */
   pluginsLocalDir?: string;
+  /** Whether this data root's daily job is running now (however it was started); absent where nothing can tell. */
+  dailyRunning?: () => Promise<boolean>;
 }
+
+/** A check's refusal: a reason (400), or a reason with its own status (409 for a conflict with what is running). */
+export type CheckProblem = string | { status: number; error: string };
 
 export interface Command {
   bin: string;
@@ -54,7 +59,7 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   sync: boolean;
   params: S;
   /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
-  check?: (params: z.infer<S>, ctx: ActionContext) => string | null | Promise<string | null>;
+  check?: (params: z.infer<S>, ctx: ActionContext) => CheckProblem | null | Promise<CheckProblem | null>;
   build: (params: z.infer<S>, ctx: ActionContext) => Command;
   /** Exit code to HTTP status for sync actions (default: non-zero is 500). */
   exitMap?: Record<number, number>;
@@ -529,7 +534,11 @@ export const ACTIONS: ActionDef[] = [
     claude: true,
     sync: false,
     params: none,
-    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { env: { CC_CLAUDE_BIN: ctx.claudeBin } } : {}) }),
+    // A second run would only find the job's lock held and skip: say so now instead of starting a run that does nothing.
+    check: async (_p, ctx) => ((await ctx.dailyRunning?.()) ? { status: 409, error: 'Skipped: the daily job is already running (its schedule or another start began it). Watch it on Runs & Schedule; it ran nothing new.' } : null),
+    // CC_RUN_DAILY_SKIP_EXIT: should the job start in between, run-daily.sh still finds the lock held, and then says
+    // it skipped and exits 75, so this run ends failed with that line instead of done with an empty log.
+    build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, env: { CC_RUN_DAILY_SKIP_EXIT: '75', ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { CC_CLAUDE_BIN: ctx.claudeBin } : {}) } }),
   }),
   define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
 ];
