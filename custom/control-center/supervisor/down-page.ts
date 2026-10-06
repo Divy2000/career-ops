@@ -4,6 +4,16 @@
 import type { ReloadState } from './bluegreen.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
 
+const ESC = '\u001b';
+// CSI (colours and cursor moves: ESC [ parameters, final byte), OSC (ESC ] text, ended by BEL or ESC \), and the
+// short escapes: ESC, any intermediate bytes, one final byte (ESC 7, ESC M, ESC ( B).
+const ANSI = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]|${ESC}\\][^\\u0007${ESC}]*(?:\\u0007|${ESC}\\\\)|${ESC}[ -/]*[0-~]`, 'g');
+
+/** Terminal escape sequences out: a child's stderr is coloured when FORCE_COLOR is set, and pages show it as text. */
+export function stripAnsi(s: string): string {
+  return s.replace(ANSI, '');
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 }

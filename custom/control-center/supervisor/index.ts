@@ -21,7 +21,7 @@ import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
 import { serverChildCommand } from './child-command.js';
-import { escapeHtml, renderDownPage } from './down-page.js';
+import { escapeHtml, renderDownPage, stripAnsi } from './down-page.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
@@ -61,7 +61,9 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       stdio: ['ignore', 'inherit', 'pipe', 'ipc'],
       shell: false,
     });
+    // Raw for the terminal; everything that shows it (pages, replies, the status API) gets it without escape sequences.
     let tail = '';
+    const plainTail = () => stripAnsi(tail);
     const exited = new Promise<void>((done) => proc.once('exit', () => done()));
     proc.stderr?.on('data', (d: Buffer) => {
       process.stderr.write(d);
@@ -69,7 +71,7 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
     });
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      reject(new Error(`server child did not report a port within 20 s\n${tail}`));
+      reject(new Error(`server child did not report a port within 20 s\n${plainTail()}`));
     }, 20_000);
     proc.on('message', (msg: unknown) => {
       const m = msg as { type?: string; port?: number };
@@ -100,13 +102,13 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
             const hard = setTimeout(() => proc.exitCode === null && proc.signalCode === null && proc.kill('SIGKILL'), 5000);
             hard.unref();
           },
-          stderrTail: () => tail,
+          stderrTail: plainTail,
         });
       }
     });
     proc.on('exit', (code, signal) => {
       clearTimeout(timer);
-      reject(new Error(`server child exited before listening (code ${code}, signal ${signal})\n${tail}`));
+      reject(new Error(`server child exited before listening (code ${code}, signal ${signal})\n${plainTail()}`));
     });
   });
 }

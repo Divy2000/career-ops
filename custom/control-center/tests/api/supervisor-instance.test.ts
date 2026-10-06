@@ -398,6 +398,32 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('a startup error the child printed in colour (FORCE_COLOR) reaches every page and reply as plain text', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port), FORCE_COLOR: '1' } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      // The colour is real: the child's own stderr, which the terminal keeps, carries the escapes.
+      expect(s.output()).toContain('\u001b[');
+      const cookie = await signIn(port);
+      const down = await request(port, 'GET', '/', { cookie });
+      expect(down.body).toMatch(/EADDRINUSE/);
+      const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' });
+      expect(restart.status).toBe(502);
+      const page = await request(port, 'GET', '/__recovery', { cookie });
+      const status = await request(port, 'GET', '/__supervisor/status', { cookie });
+      for (const [what, text] of [['503 page', down.body], ['restart reply', restart.body], ['recovery page', page.body], ['status API', status.body]] as const) {
+        expect(text, what).toMatch(/EADDRINUSE/);
+        expect(text, what).not.toContain('\u001b');
+        expect(text, what).not.toMatch(/\[\d{1,3}(;\d{1,3})*m/);
+      }
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
   it('a first start that fails after a Dev Chat turn changed files points at reverting that turn (SW2-claude-05 review)', async () => {
     const root = copyFixtureRoot();
     const guardRoot = tempDir('cc-sup-guard-devchat-');

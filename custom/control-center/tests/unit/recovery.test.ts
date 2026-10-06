@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { changesByTurn, devChatChangeInEffect, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
-import { renderDownPage } from '../../supervisor/down-page.js';
+import { renderDownPage, stripAnsi } from '../../supervisor/down-page.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
@@ -446,6 +446,15 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
   it('a turn that never finished (no post-turn record) cannot be ruled out, so it is still blamed', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts'], { finalized: false });
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
+  });
+
+  it('strips terminal escape sequences (colours, a hyperlink, a two-byte escape) and keeps the text and its line breaks', () => {
+    const E = '\u001b';
+    const coloured = `${E}[90m    at listenInCluster (node:net:2224:12)${E}[39m\n  code: ${E}[32m'EADDRINUSE'${E}[39m, ${E}[1;31mbold red${E}[0m`;
+    expect(stripAnsi(coloured)).toBe("    at listenInCluster (node:net:2224:12)\n  code: 'EADDRINUSE', bold red");
+    expect(stripAnsi(`see ${E}]8;;https://example.com${E}\\the docs${E}]8;;${E}\\ and ${E}]0;title\u0007done`)).toBe('see the docs and done');
+    expect(stripAnsi(`${E}Mline${E}7 ${E}(Bend`)).toBe('line end');
+    expect(stripAnsi('plain [90m text')).toBe('plain [90m text');
   });
 
   it('without a Dev Chat change, a signed-in viewer sees the startup error (escaped, once) and no blame on a change', () => {
