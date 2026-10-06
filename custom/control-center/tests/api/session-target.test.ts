@@ -49,3 +49,18 @@ describe('a row target and a number in the prompt', () => {
     expect(await firstPrompt({ mode: 'advisor', target: { type: 'app', value: '3' }, prompt: 'Prepare me for #3' })).toBe('Prepare me for #3');
   });
 });
+
+describe('a target that only appears inside a longer word or number', () => {
+  it('given row 3 and a prompt that names row #30, then row 3 is still named', async () => {
+    expect(await firstPrompt({ mode: 'advisor', target: { type: 'app', value: '3' }, prompt: 'Compare with #30' })).toBe('Compare with #30\n\nTarget: tracker row #3');
+  });
+
+  it('given company Meta and a prompt that only says "Metadata", then the company is still named', async () => {
+    expect(await firstPrompt({ mode: 'advisor', target: { type: 'company', value: 'Meta' }, prompt: 'Summarize the Metadata fields' })).toBe('Summarize the Metadata fields\n\nTarget: company Meta');
+  });
+
+  it('given a company the prompt names as a word in any case, or one ending in punctuation, then nothing is added', async () => {
+    expect(await firstPrompt({ mode: 'advisor', target: { type: 'company', value: 'Meta' }, prompt: 'Is meta hiring?' })).toBe('Is meta hiring?');
+    expect(await firstPrompt({ mode: 'advisor', target: { type: 'company', value: 'Stripe, Inc.' }, prompt: 'Research Stripe, Inc. today' })).toBe('Research Stripe, Inc. today');
+  });
+});

@@ -16,6 +16,16 @@ const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function namesTarget(prompt: string, type: string, v: string): boolean {
+  // A row is named only as "#3", never inside "#30": a bare "3" in the prompt can be anything.
+  if (type === 'app') return new RegExp(`#${escapeRegExp(v)}(?!\\d)`).test(prompt);
+  // A company as a whole word in any case ("Meta" is not named by "Metadata"); lookarounds, not \b, so "Stripe, Inc." works.
+  if (type === 'company') return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(v)}(?![\\p{L}\\p{N}_])`, 'iu').test(prompt);
+  return prompt.includes(v);
+}
+
 /**
  * Claude only gets the prompt and the preamble, never the session's target, so a target the prompt does not already
  * name is added to the first message. A text target (a document path) is the mode's own input and is left alone.
@@ -23,8 +33,7 @@ const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 export function promptWithTarget(prompt: string, target: { type: string; value: string | null }): string {
   const v = target.value?.trim();
   if (!v || target.type === 'none' || target.type === 'text') return prompt;
-  // A row number is only named as "#3": a bare "3" in the prompt can be anything.
-  if (prompt.includes(target.type === 'app' ? `#${v}` : v)) return prompt;
+  if (namesTarget(prompt, target.type, v)) return prompt;
   const what = target.type === 'app' ? `tracker row #${v}` : target.type === 'company' ? `company ${v}` : v;
   return `${prompt}\n\nTarget: ${what}`;
 }
