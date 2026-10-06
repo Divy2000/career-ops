@@ -136,3 +136,34 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(item.dataset.proposalState).toBe('done');
   });
 });
+
+describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () => {
+  let starts: number;
+  beforeEach(() => {
+    starts = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && url === '/api/sessions') {
+          starts++;
+          return new Promise<Response>(() => undefined);
+        }
+        return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('runs the proposal once while its session is starting, and shows it as running', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.example.com/1' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(starts).toBe(1);
+    expect(item.dataset.proposalState).toBe('running');
+    expect(bodyButton('Review and run')).toBeUndefined();
+  });
+});
+

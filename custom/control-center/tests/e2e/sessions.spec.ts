@@ -142,6 +142,21 @@ test.describe('AI sessions through the fake Claude', () => {
     await expect(drawer.getByRole('button', { name: 'Ask again' })).toBeVisible();
   });
 
+  test('finished sessions on one page do not use up the browser connections: six of them, then the app still loads (SW3-web-a-01)', async ({ page }) => {
+    // Chromium allows 6 HTTP/1.1 connections to one host, and Shell's live event stream holds one. A session stream that
+    // stays open after its turn ends holds another, so the sixth session (or the next fetch) used to hang.
+    await page.goto('/tracker/3');
+    await page.getByRole('tab', { name: 'Interview' }).click();
+    for (let i = 1; i <= 6; i++) {
+      await page.getByRole('button', { name: 'Open prompt' }).click();
+      await page.getByRole('button', { name: 'Start session' }).first().click();
+      await expect(page.getByRole('paragraph').filter({ hasText: /^Working on it\. Done\.$/ })).toHaveCount(i, { timeout: 20_000 });
+    }
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Tracker' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Tracker' })).toBeVisible();
+    await expect(page.locator('tbody tr')).not.toHaveCount(0, { timeout: 10_000 });
+  });
+
   test('AI search lists offers, marks known URLs and adds a new one to the pipeline', async ({ page }) => {
     await page.goto('/discover?tab=ai');
     await page.getByLabel('Prompt for ai-search').fill('Senior platform engineer, remote, sponsors visas');

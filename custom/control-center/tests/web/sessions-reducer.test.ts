@@ -51,4 +51,21 @@ describe('session transcript reducer', () => {
     expect(['done', 'awaiting_user', 'error', 'cancelled'].every(isTerminal)).toBe(true);
     expect(isTerminal('running')).toBe(false);
   });
+
+  it('a later turn that runs clears an earlier turn\'s error, so its alert does not sit under the new answer (SW3-web-a-02)', () => {
+    const t = reduceAll([
+      at(1, { type: 'status', status: 'running', turn: 1 }),
+      at(2, { type: 'error', message: 'the stream ended without a result event' }),
+      at(3, { type: 'status', status: 'error', reason: 'the stream ended without a result event', turn: 1 }),
+      at(4, { type: 'status', status: 'running', turn: 2 }),
+      at(5, { type: 'text.done', text: 'Second answer.' }),
+      at(6, { type: 'status', status: 'done', reason: 'clean exit with output', turn: 2 }),
+    ]);
+    expect(t).toMatchObject({ status: 'done', error: null });
+  });
+
+  it('an error reported during the running turn stays shown', () => {
+    const t = reduceAll([at(1, { type: 'status', status: 'running', turn: 1 }), at(2, { type: 'error', message: 'claude exited 1' })]);
+    expect(t).toMatchObject({ status: 'error', error: 'claude exited 1' });
+  });
 });

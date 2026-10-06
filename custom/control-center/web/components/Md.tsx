@@ -14,8 +14,18 @@ const components: Components = {
  * because a remote image in text copied from a feed would be fetched from this local app every time the page loads.
  */
 export function SafeMarkdown(props: Omit<Options, 'remarkPlugins' | 'rehypePlugins' | 'disallowedElements'>) {
-  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} disallowedElements={['img']} {...props} />;
+  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} disallowedElements={['img']} {...props} components={{ a: ExternalLink, ...props.components }} />;
 }
+
+/** A web link opens in a new tab, like every other external link in the app: in this tab it would drop unsaved page state. */
+const ExternalLink: NonNullable<Components['a']> = ({ href, children }) =>
+  href && /^https?:\/\//i.test(href) ? (
+    <a href={href} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  ) : (
+    <a href={href}>{children}</a>
+  );
 
 /** Sanitized markdown for untrusted text (reports, digests, plugin docs). */
 export function Md({ text }: { text: string }) {

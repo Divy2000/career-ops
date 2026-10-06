@@ -15,6 +15,26 @@ describe('summarizeDigest', () => {
     expect(lines('- Proposed rule on a new petition fee published for comment. Nothing else changes.\n* Agency page updated; premium unchanged.')).toEqual(['Proposed rule on a new petition fee published for comment.', 'Agency page updated; premium unchanged.']);
   });
 
+  it('does not end the first sentence at an abbreviation (U.S., Oct., e.g., No., Dr.) (SW3-web-a-08)', () => {
+    expect(lines('- The U.S. State Department paused H-1B stamping in India until Oct. 15. [source](https://state.gov/x)')).toEqual(['The U.S. State Department paused H-1B stamping in India until Oct. 15.']);
+    expect(lines('- Fees rise for some forms, e.g. the I-129, under Rule No. 5 from Dr. Smith. Later text.')).toEqual(['Fees rise for some forms, e.g. the I-129, under Rule No. 5 from Dr. Smith.']);
+  });
+
+  it('recognises an abbreviation after an opening bracket or quote (SW3-web-a-08 review)', () => {
+    expect(lines('- Stamping paused (U.S. State Department) until further notice. Later text.')).toEqual(['Stamping paused (U.S. State Department) until further notice.']);
+    expect(lines('- Some forms ("e.g. Form I-129") cost more. Later text.')).toEqual(['Some forms ("e.g. Form I-129") cost more.']);
+    expect(lines('- A memo [Dr. Smith] explains the change. Later text.')).toEqual(['A memo [Dr. Smith] explains the change.']);
+  });
+
+  it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
+    expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
+  });
+
+  it('still ends the first sentence at a period before the next sentence', () => {
+    expect(lines('- USCIS updated the fee page. The premium fee is unchanged.')).toEqual(['USCIS updated the fee page.']);
+    expect(lines('- Processing paused! Check back Monday.')).toEqual(['Processing paused!']);
+  });
+
   it('shows a bare URL as its host but keeps the full address as the link target', () => {
     expect(summarizeDigest(`- See ${LONG} for details.`)[0]).toEqual([{ text: 'See ' }, { text: 'www.federalregister.gov', href: LONG }, { text: ' for details.' }]);
   });

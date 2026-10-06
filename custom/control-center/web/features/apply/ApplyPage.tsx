@@ -4,7 +4,7 @@ import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
 import { useEngine, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
-import { describeError, useRunAction } from '../../lib/actions';
+import { describeError, paramAccepts, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
@@ -53,7 +53,7 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
   );
 }
 
-function ApplyBody({ n, company, postingUrl }: { n: string | null; company: string | null; postingUrl: string }) {
+export function ApplyBody({ n, company, postingUrl }: { n: string | null; company: string | null; postingUrl: string }) {
   const navigate = useNavigate();
   const engine = useEngine();
   const [url, setUrl] = useState(postingUrl);
@@ -69,7 +69,9 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
   const pdf = pickedPdf ?? docs.data?.suggestedPdf ?? '';
   const cover = pickedCover ?? docs.data?.suggestedCover ?? '';
   const [summary, setSummary] = useState<string | null>(null);
-  const blockers = prefillBlockers({ url, pdf, pdfCount: docs.data?.pdfs.length ?? 0, company });
+  const prefillMeta = useActions().data?.find((a) => a.id === 'docs.prepareApplication');
+  const refused = Object.entries({ pdf, cover }).filter(([key, file]) => file && !paramAccepts(prefillMeta, key, file)).map(([, file]) => file);
+  const blockers = prefillBlockers({ url, pdf, pdfCount: docs.data?.pdfs.length ?? 0, company, refused });
   const playwright = engine.data?.playwrightAvailable ?? false;
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind === 'answers') setFields((payload as { fields: AnswerField[] }).fields);
@@ -85,13 +87,18 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
     if (out && 'result' in out) setSummary(String(out.result).trim());
   };
 
+  // Each click starts a paid session, so the button waits for the first start to answer.
+  const [generating, setGenerating] = useState(false);
   const generatePdf = async () => {
     if (!n) return;
+    setGenerating(true);
     try {
       const m = await startTailoredCvSession(n);
       await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       actions.setMessage({ tone: 'danger', text: `Could not start the tailored CV session: ${describeError(err)}` });
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -176,7 +183,7 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
                 ))}
                 {blockers.needsPdf && n && (
                   <div>
-                    <button type="button" onClick={() => void generatePdf()}>
+                    <button type="button" disabled={generating} onClick={() => void generatePdf()}>
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
                   </div>

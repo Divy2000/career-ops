@@ -8,6 +8,13 @@ describe('prefillBlockers', () => {
     expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/a.pdf', pdfCount: 1, company: 'Acme' })).toEqual({ reasons: [], needsPdf: false });
   });
 
+  it('says which chosen file the prefill action would refuse for its name, and how to fix it (SW3-web-a-03)', () => {
+    expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/Acme Resume.pdf', pdfCount: 1, company: 'Acme', refused: ['output/Acme Resume.pdf'] })).toEqual({
+      reasons: ["Prefill can't take output/Acme Resume.pdf: its name may only use letters, digits and . _ -. Rename it in output/."],
+      needsPdf: false,
+    });
+  });
+
   it('asks for the link when it is empty', () => {
     expect(prefillBlockers({ url: '', pdf: 'output/a.pdf', pdfCount: 1, company: null }).reasons).toEqual(['Enter the apply link first.']);
   });

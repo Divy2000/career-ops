@@ -13,17 +13,18 @@ let host: HTMLElement;
 let root: Root;
 
 const RENDER_META = { id: 'docs.renderPdf', label: 'Re-render PDF from HTML', cost: 'free', confirm: null, resources: [], claude: false, sync: false, params: {} };
+let files = (rerenderBlock: string | null) => [{ path: 'output/acme-robotics-cv.pdf', html: 'output/acme-robotics-cv.html', kind: 'cv', format: 'letter', date: null, source: 'index', rerenderBlock }];
 const docsFor = (report: number | null, rerenderBlock: string | null = null) => ({
-  files: [{ path: 'output/acme-robotics-cv.pdf', html: 'output/acme-robotics-cv.html', kind: 'cv', format: 'letter', date: null, source: 'index', rerenderBlock }],
+  files: files(rerenderBlock),
   jds: [],
   indexPresent: true,
   report,
 });
 
-async function mount(row: number, report: number | null, rerenderBlock: string | null = null) {
+async function mount(row: number, report: number | null, rerenderBlock: string | null = null, meta: object = RENDER_META) {
   const posts: unknown[] = [];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    const body = url === '/api/actions' ? [RENDER_META] : url.endsWith('/documents') ? docsFor(report, rerenderBlock) : url.startsWith('/api/actions/') ? { runId: 'r1' } : [];
+    const body = url === '/api/actions' ? [meta] : url.endsWith('/documents') ? docsFor(report, rerenderBlock) : url.startsWith('/api/actions/') ? { runId: 'r1' } : [];
     if (init?.method === 'POST') posts.push(JSON.parse(String(init.body)));
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   });
@@ -66,5 +67,19 @@ describe('DocumentsTab re-render', () => {
     await mount(5, null);
     expect(rerenderButton().disabled).toBe(true);
     expect(host.textContent).toContain('Re-render needs an evaluation report for this application, because the PDF index files every PDF under its report number.');
+  });
+
+  it('does not offer re-render for a file whose name the re-render action refuses, and says to rename it (SW3-web-a-03)', async () => {
+    const OUTPUT_FILE = { type: 'string', maxLength: 512, pattern: '^output\\/(?:[\\w.-]+\\/)*[\\w.-]+$' };
+    const strict = { ...RENDER_META, params: { type: 'object', properties: { html: OUTPUT_FILE, pdf: OUTPUT_FILE } } };
+    const original = files;
+    files = () => [{ path: 'output/Acme Resume.pdf', html: 'output/Acme Resume.html', kind: 'cv', format: 'letter', date: null, source: 'output', rerenderBlock: null }];
+    try {
+      await mount(1, 1, null, strict);
+      expect(rerenderButton()).toBeUndefined();
+      expect(host.textContent).toContain('Re-render needs a file name with only letters, digits and . _ -. Rename output/Acme Resume.html and its PDF in output/.');
+    } finally {
+      files = original;
+    }
   });
 });

@@ -145,7 +145,11 @@ function useRunLines(runId: string | null) {
 }
 
 function RunTail({ runId }: { runId: string }) {
-  const { lines, status } = useRunLines(runId);
+  return <RunLog {...useRunLines(runId)} />;
+}
+
+/** A run's log from lines its host already follows: a second stream for the same run would hold another connection. */
+function RunLog({ lines, status }: { lines: RawLine[]; status: string | null }) {
   return (
     <pre className="log" aria-live="polite" aria-label="Scan log" tabIndex={0}>
       {lines.slice(-200).map((l) => (
@@ -158,7 +162,7 @@ function RunTail({ runId }: { runId: string }) {
   );
 }
 
-function NetworkScan() {
+export function NetworkScan() {
   const actions = useActions();
   const qc = useQueryClient();
   const { run, message, setMessage } = useRunAction();
@@ -313,7 +317,7 @@ function NetworkScan() {
               </TableScroll>
             </>
           )}
-          <RunTail runId={runId} />
+          <RunLog lines={lines} status={status} />
         </div>
       )}
     </div>

@@ -8,10 +8,50 @@ export type ActionOutcome = { runId: string } | { result: unknown; stderr?: stri
 
 export const useActions = () => useQuery({ queryKey: ['actions'], queryFn: () => apiGet<ActionMeta[]>('/api/actions'), staleTime: 60_000 });
 
+/**
+ * Whether an action's schema (GET /api/actions describes it as JSON schema) takes `value` for string param `name`:
+ * its pattern and maxLength. A schema that does not say, or is not loaded yet, takes it; the server still checks.
+ */
+export function paramAccepts(meta: ActionMeta | undefined, name: string, value: string): boolean {
+  const prop = (meta?.params.properties as Record<string, { pattern?: string; maxLength?: number }> | undefined)?.[name];
+  if (!prop) return true;
+  if (prop.maxLength !== undefined && value.length > prop.maxLength) return false;
+  if (prop.pattern === undefined) return true;
+  let re: RegExp;
+  try {
+    re = new RegExp(prop.pattern, 'u');
+  } catch {
+    // A pattern this browser cannot compile decides nothing here; the server's own check still runs.
+    return true;
+  }
+  return re.test(value);
+}
+
+const MAX_ISSUES = 3;
+
+/** A schema refusal's zod issues as "field: message" ("urls item 3: ..."), so the user sees what to fix. */
+function describeIssues(issues: unknown): string {
+  if (!Array.isArray(issues) || issues.length === 0) return '';
+  const one = (i: { path?: unknown; message?: unknown }) => {
+    const where = (Array.isArray(i.path) ? i.path : []).map((p) => (typeof p === 'number' ? `item ${p + 1}` : String(p))).join(' ');
+    return `${where ? `${where}: ` : ''}${String(i.message ?? 'invalid')}`;
+  };
+  const shown = issues.slice(0, MAX_ISSUES).map(one);
+  if (issues.length > MAX_ISSUES) shown.push(`and ${issues.length - MAX_ISSUES} more`);
+  return `: ${shown.join('; ')}`;
+}
+
 export function describeError(err: unknown): string {
   const e = err as ApiError;
-  const body = e?.body as { error?: string; stderr?: string } | null | undefined;
-  return `${body?.error ?? e?.message ?? 'unknown error'}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
+  const body = e?.body as { error?: string; stderr?: string; issues?: unknown } | null | undefined;
+  // A schema label ("invalid body", or one with a hint: "invalid rows: company, since ...") says what was refused, not
+  // where. A route that wrote the issues into its error in its own words (the projects routes: "bullet 2 must be one
+  // line") would show them twice, and so would a label that already quotes every issue's message.
+  const error = body?.error ?? '';
+  const list = Array.isArray(body?.issues) ? (body.issues as Array<{ message?: unknown }>) : [];
+  const said = list.length > 0 && list.every((i) => error.includes(String(i.message ?? '')));
+  const issues = /^invalid\b/.test(error) && !said ? describeIssues(body?.issues) : '';
+  return `${body?.error ?? e?.message ?? 'unknown error'}${issues}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
 }
 
 /**

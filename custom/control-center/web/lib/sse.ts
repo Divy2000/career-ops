@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { isTerminal, sessionTurnStarted } from './sessions';
 
 /** Server domains map to the query keys that go stale when they change. */
 export const DOMAIN_KEYS: Record<string, string[][]> = {
@@ -36,6 +37,15 @@ export function useLiveInvalidation(): void {
       void qc.invalidateQueries({ queryKey: ['immigration'] });
     });
     es.addEventListener('run.status', () => void qc.invalidateQueries({ queryKey: ['runs'] }));
+    // A turn started anywhere (another tab, the Apply fill) reopens that session's stream if it closed after its last turn.
+    es.addEventListener('session.status', (ev: MessageEvent) => {
+      try {
+        const { sessionId, status } = JSON.parse(ev.data) as { sessionId: string; status: string };
+        if (!isTerminal(status)) sessionTurnStarted(sessionId);
+      } catch {
+        /* a malformed frame reopens nothing */
+      }
+    });
     // The bus keeps no replay and a restarted server's watcher ignores what changed before it started, so whatever
     // changed while the stream was down sent no event: a reconnect refetches everything instead.
     let opened = false;

@@ -135,7 +135,8 @@ export function TrackerPage() {
   const visibleCols = COLUMNS.filter((c) => !c.optional || cols.has(c.key));
   const checkedRows = rows.filter((r) => checked.has(r.num));
 
-  const update = (patch: Partial<TrackerSearch>) => void navigate({ to: '/tracker', search: (prev: TrackerSearch) => ({ ...prev, ...patch }) });
+  // The search box replaces its history entry: a push per keystroke would make Back step through every letter.
+  const update = (patch: Partial<TrackerSearch>, replace = false) => void navigate({ to: '/tracker', search: (prev: TrackerSearch) => ({ ...prev, ...patch }), replace });
   const toggleSort = (key: SortKey) => update({ sort: key, dir: search.sort === key && search.dir === 'asc' ? 'desc' : 'asc' });
   const toggleChecked = (num: number) =>
     setChecked((prev) => {
@@ -210,7 +211,7 @@ export function TrackerPage() {
           <>
         <Tabs label="Status" tabs={TRACKER_TABS.map((t) => ({ id: t.id, label: t.label, count: rows.filter(t.match).length }))} value={search.tab} onChange={(tab) => update({ tab })} />
         <div className="toolbar">
-          <input id="tracker-search" type="search" placeholder="Search company, role, notes" aria-label="Search tracker" value={search.q} onChange={(e) => update({ q: e.target.value })} />
+          <input id="tracker-search" type="search" placeholder="Search company, role, notes" aria-label="Search tracker" value={search.q} onChange={(e) => update({ q: e.target.value }, true)} />
           <button type="button" aria-pressed={search.view === 'grouped'} onClick={() => update({ view: search.view === 'flat' ? 'grouped' : 'flat' })}>
             {search.view === 'grouped' ? 'Grouped by status' : 'Flat list'}
           </button>
