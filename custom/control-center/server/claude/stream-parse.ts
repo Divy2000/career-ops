@@ -35,6 +35,8 @@ function contentText(content: unknown): string {
 
 export class StreamParser {
   text = '';
+  /** The text of every assistant message so far: envelopes may sit in any of them, not only the last one (the result). */
+  private said: string[] = [];
 
   /** One stdout line in, zero or more normalized events out. Non-JSON lines surface as stderr text. */
   push(line: string): SessionEvent[] {
@@ -59,16 +61,31 @@ export class StreamParser {
         }
         return [];
       }
-      case 'assistant':
-        return this.blocks(obj).flatMap((b) => (b.type === 'tool_use' ? [{ type: 'tool.use', id: String(b.id), name: String(b.name), summary: toolSummary(String(b.name), b.input) } as SessionEvent] : []));
+      case 'assistant': {
+        const blocks = this.blocks(obj);
+        const text = blocks.map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('');
+        if (text) this.said.push(text);
+        return blocks.flatMap((b) => (b.type === 'tool_use' ? [{ type: 'tool.use', id: String(b.id), name: String(b.name), summary: toolSummary(String(b.name), b.input) } as SessionEvent] : []));
+      }
       case 'user':
         return this.blocks(obj).flatMap((b) => (b.type === 'tool_result' ? [{ type: 'tool.result', id: String(b.tool_use_id), ok: !b.is_error, summary: contentText(b.content).slice(0, 400) } as SessionEvent] : []));
       case 'result': {
         const out: SessionEvent[] = [];
         for (const d of (Array.isArray(obj.permission_denials) ? obj.permission_denials : []) as Json[]) out.push({ type: 'permission.denied', tool: String(d.tool_name ?? ''), input: d.tool_input });
         const finalText = typeof obj.result === 'string' && obj.result ? obj.result : this.text;
-        const { envelopes, visibleText } = extractEnvelopes(finalText, false);
-        for (const e of envelopes) out.push(e.ok ? { type: 'envelope', kind: e.kind, payload: e.payload } : { type: 'envelope.invalid', kind: e.kind, error: e.error, raw: e.raw });
+        const { visibleText } = extractEnvelopes(finalText, false);
+        // The result is only the last assistant message: an envelope written before a later tool call is in an earlier
+        // one. Every message's envelopes count, in order, and one repeated word for word (the last message is also the
+        // result) counts once.
+        const seen = new Set<string>();
+        for (const text of [...this.said, finalText]) {
+          for (const e of extractEnvelopes(text, false).envelopes) {
+            const key = e.ok ? `${e.kind}\u0000${JSON.stringify(e.payload)}` : `${e.kind}\u0000${e.raw}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(e.ok ? { type: 'envelope', kind: e.kind, payload: e.payload } : { type: 'envelope.invalid', kind: e.kind, error: e.error, raw: e.raw });
+          }
+        }
         out.push({ type: 'text.done', text: visibleText });
         const usage = (obj.usage ?? {}) as Json;
         const tokens = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((sum, k) => sum + (typeof usage[k] === 'number' ? (usage[k] as number) : 0), 0);

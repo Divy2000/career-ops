@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, SCENARIO_DIR, type TestApp } from '../helpers/app.js';
+import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, PACKAGE_ROOT, SCENARIO_DIR, type TestApp } from '../helpers/app.js';
 import { SESSION_POLICY_VERSION } from '../../server/claude/modes.js';
 import type { SessionMeta } from '../../server/claude/sessions.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
@@ -1016,6 +1016,38 @@ describe('read confinement (BUG-06)', () => {
     t.sessions.reconcile();
     expect(t.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
     expect(t.sessions.store.readEvents(meta.id).map((e) => e.event).at(-1)).toEqual({ type: 'status', status: 'error', reason: 'run record missing after a restart', turn: 1 });
+  });
+
+  it('a turn cancelled while no tracker followed it (between a drain and the new server\'s activation) is finalized at the next reconcile, once (SW4-claude-04)', async () => {
+    const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    // Its run (here one that ends at once) and its turn, as runTurn records them; then Cancel lands while no server tracks it.
+    const run = t.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT } });
+    t.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+    t.sessions.store.setStatus(meta.id, 'cancelled');
+    await until(() => !['queued', 'running'].includes(t.runner.store.read(run.id)!.status));
+    expect(t.sessions.read(meta.id)!.turns[0]!.endedAt).toBeNull();
+    t.sessions.reconcile();
+    await until(() => t.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+    const settled = t.sessions.read(meta.id)!;
+    expect(settled.status).toBe('cancelled');
+    expect(fs.existsSync(path.join(t.sessions.store.guardDirOf(meta.id), 'turns', '1', 'after.json'))).toBe(true);
+    const statuses = () => t.sessions.store.readEvents(meta.id).map((e) => e.event).filter((e) => e.type === 'status');
+    expect(statuses()).toEqual([{ type: 'status', status: 'cancelled', reason: expect.any(String), turn: 1 }]);
+    // Settled now: a later reconcile leaves it alone.
+    t.sessions.reconcile();
+    await wait(400);
+    expect(statuses()).toHaveLength(1);
+  });
+
+  it('a session already settled after its run record went missing is not settled again at the next reconcile', () => {
+    const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    t.sessions.store.beginTurn(meta.id, { runId: 'r-gone-twice', userText: 'x' });
+    t.sessions.store.setStatus(meta.id, 'running');
+    t.sessions.reconcile();
+    const events = t.sessions.store.readEvents(meta.id).length;
+    t.sessions.reconcile();
+    expect(t.sessions.store.readEvents(meta.id)).toHaveLength(events);
+    expect(t.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
   });
 
   it('new sessions and forks carry the current policy version', () => {

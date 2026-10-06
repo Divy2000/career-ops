@@ -21,6 +21,7 @@ import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
 import { serverChildCommand } from './child-command.js';
+import { waitHealthy } from './health.js';
 import { escapeHtml, plainTail, renderDownPage, renderStatus } from './down-page.js';
 import { RECOVERY_SCRIPT } from './recovery-script.js';
 
@@ -110,25 +111,6 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       clearTimeout(timer);
       reject(new Error(`server child exited before listening (code ${code}, signal ${signal})\n${tail.text()}`));
     });
-  });
-}
-
-function waitHealthy(port: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      const req = http.get({ host: '127.0.0.1', port, path: '/healthz', headers: { host: `127.0.0.1:${PORT}` } }, (res) => {
-        res.resume();
-        if (res.statusCode === 200) return resolve();
-        retry();
-      });
-      req.on('error', retry);
-    };
-    const retry = () => {
-      if (Date.now() > deadline) return reject(new Error('healthz did not return 200 in time'));
-      setTimeout(tick, 250);
-    };
-    tick();
   });
 }
 
@@ -222,7 +204,7 @@ async function main(): Promise<void> {
   let startError: { error: string; stderrTail: string } | null = null;
   try {
     first = await spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' });
-    await waitHealthy(first.port, 20_000);
+    await waitHealthy(first.port, 20_000, `127.0.0.1:${PORT}`);
   } catch (err) {
     startError = { error: (err as Error).message, stderrTail: first?.stderrTail() ?? '' };
     first?.kill();
@@ -232,7 +214,7 @@ async function main(): Promise<void> {
     if (process.env.CC_NO_RELOAD) process.exit(1);
     console.error('Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).');
   }
-  const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
+  const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000, `127.0.0.1:${PORT}`), { drainMs: 2000 });
   if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
 
   // Drained children exit on purpose, and so does the active one when the supervisor stops. An active child that exits on
@@ -261,13 +243,17 @@ async function main(): Promise<void> {
     const host = req.headers.host ?? '';
     return host === `127.0.0.1:${PORT}` || host === `localhost:${PORT}`;
   };
+  const tokenOk = (url: URL) => {
+    const t = url.searchParams.get('t');
+    return Boolean(t && safeEqual(t, token));
+  };
   const authed = (req: http.IncomingMessage, url: URL) => {
     const cookie = req.headers.cookie ?? '';
     const match = cookie.split(';').map((c) => c.trim()).find((c) => c.startsWith(`${SESSION_COOKIE}=`));
     if (match && safeEqual(match.slice(SESSION_COOKIE.length + 1), sessionSecret)) return true;
-    const t = url.searchParams.get('t');
-    return Boolean(t && safeEqual(t, token));
+    return tokenOk(url);
   };
+  const sessionCookie = `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`;
   const readBody = (req: http.IncomingMessage) =>
     new Promise<string>((resolve) => {
       let body = '';
@@ -294,7 +280,7 @@ async function main(): Promise<void> {
     }
     if (url.pathname === '/__recovery' && req.method === 'GET') {
       if (url.searchParams.get('t')) {
-        res.writeHead(302, { 'set-cookie': `${SESSION_COOKIE}=${sessionSecret}; HttpOnly; SameSite=Strict; Path=/`, location: '/__recovery' }).end();
+        res.writeHead(302, { 'set-cookie': sessionCookie, location: '/__recovery' }).end();
         return true;
       }
       const html = renderRecovery(sessionsDir, guardRoot, bg.status);
@@ -338,10 +324,14 @@ async function main(): Promise<void> {
       if (handled) return;
       const active = bg.active;
       if (!active) {
-        const signedIn = hostOk(req) && authed(req, new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`));
+        const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
+        const signedIn = hostOk(req) && authed(req, url);
         const devChatChanged = signedIn && devChatChangeInEffect(sessionsDir, guardRoot, serverLoads(CODE_ROOT, PACKAGE_ROOT, CORE_ENTRIES), CODE_ROOT);
         const html = renderDownPage(bg.status, signedIn ? { devChatChanged } : null);
-        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5' }).end(html);
+        // The startup URL (/auth?t=) lands here once the server child is gone, and only that child's /auth would set the
+        // session cookie: set it here, so the page's link to /__recovery opens.
+        const signIn = hostOk(req) && tokenOk(url) ? { 'set-cookie': sessionCookie } : {};
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5', ...signIn }).end(html);
         return;
       }
       const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
@@ -398,7 +388,8 @@ async function main(): Promise<void> {
     // Without a server child, /auth is not served: the recovery link sets the session cookie itself.
     const url = first ? `http://127.0.0.1:${PORT}/auth?t=${token}` : `http://127.0.0.1:${PORT}/__recovery?t=${token}`;
     console.log(first ? `Control Center ready: ${url}` : `Control Center server did not start; recover at: ${url}`);
-    console.log(`Recovery page: http://127.0.0.1:${PORT}/__recovery`);
+    // With the token, so the recovery page opens even when the server child dies after this line (it signs the browser in).
+    console.log(`Recovery page: http://127.0.0.1:${PORT}/__recovery?t=${token}`);
     if (!process.env.CC_NO_OPEN && process.platform === 'darwin') {
       execFile('open', [url], { shell: false }, () => undefined);
     }
