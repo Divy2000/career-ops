@@ -55,6 +55,20 @@ describe('a target that only appears inside a longer word or number', () => {
     expect(await firstPrompt({ mode: 'advisor', target: { type: 'app', value: '3' }, prompt: 'Compare with #30' })).toBe('Compare with #30\n\nTarget: tracker row #3');
   });
 
+  it('given a URL target and a prompt that names only a longer URL starting with it, then the URL is still named (SW3-tests-20)', async () => {
+    const target = { type: 'url', value: 'https://jobs.example.com/acme/1' };
+    for (const longer of ['https://jobs.example.com/acme/12', 'https://jobs.example.com/acme/1/apply', 'https://jobs.example.com/acme/1?ref=x', 'https://jobs.example.com/acme/1.5']) {
+      expect(await firstPrompt({ mode: 'advisor', target, prompt: `Compare with ${longer}` }), longer).toBe(`Compare with ${longer}\n\nTarget: https://jobs.example.com/acme/1`);
+    }
+  });
+
+  it('given a URL target the prompt names at the end of a sentence or in brackets, then nothing is added', async () => {
+    const target = { type: 'url', value: 'https://jobs.example.com/acme/1' };
+    for (const prompt of ['Evaluate https://jobs.example.com/acme/1.', 'Evaluate (https://jobs.example.com/acme/1) now', 'Is "https://jobs.example.com/acme/1", the role, open?']) {
+      expect(await firstPrompt({ mode: 'advisor', target, prompt }), prompt).toBe(prompt);
+    }
+  });
+
   it('given company Meta and a prompt that only says "Metadata", then the company is still named', async () => {
     expect(await firstPrompt({ mode: 'advisor', target: { type: 'company', value: 'Meta' }, prompt: 'Summarize the Metadata fields' })).toBe('Summarize the Metadata fields\n\nTarget: company Meta');
   });

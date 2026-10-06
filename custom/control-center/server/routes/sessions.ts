@@ -23,7 +23,9 @@ function namesTarget(prompt: string, type: string, v: string): boolean {
   if (type === 'app') return new RegExp(`#${escapeRegExp(v)}(?!\\d)`).test(prompt);
   // A company as a whole word in any case ("Meta" is not named by "Metadata"); lookarounds, not \b, so "Stripe, Inc." works.
   if (type === 'company') return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(v)}(?![\\p{L}\\p{N}_])`, 'iu').test(prompt);
-  return prompt.includes(v);
+  // A URL is named only where it ends: before a space or the end, after any closing punctuation ("...1", or "...1).").
+  // A longer URL that starts with it (.../acme/12, .../acme/1/apply, .../acme/1?ref=x) is another URL.
+  return new RegExp(`${escapeRegExp(v)}(?=[.,;:!?)\\]}>"']*(?:\\s|$))`).test(prompt);
 }
 
 /**
