@@ -155,7 +155,8 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
   const [state, dispatch] = useReducer(streamReducer, { id: null, transcript: EMPTY_TRANSCRIPT, meta: null });
   const qc = useQueryClient();
   const [opening, setOpening] = useState(0);
-  const seen = useRef<{ id: string | null; seq: number; open: boolean }>({ id: null, seq: 0, open: false });
+  // seq and status are the last ones this stream delivered: a meta answer may be older than either.
+  const seen = useRef<{ id: string | null; seq: number; status: string | null; open: boolean }>({ id: null, seq: 0, status: null, open: false });
   useEffect(() => {
     if (!id) return;
     return onSessionTurn(id, () => {
@@ -164,7 +165,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
   }, [id]);
   useEffect(() => {
     if (!id) return;
-    if (seen.current.id !== id) seen.current = { id, seq: 0, open: false };
+    if (seen.current.id !== id) seen.current = { id, seq: 0, status: null, open: false };
     let closed = false;
     const es = new EventSource(`/api/sessions/${id}/events`);
     seen.current.open = true;
@@ -178,7 +179,10 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
         if (closed) return;
         dispatch({ type: 'meta', id, meta: r.meta });
         const last = Math.max(0, ...(r.events ?? []).map((e) => e.seq));
-        if (isTerminal(r.meta.status) && seen.current.seq >= last) close();
+        // The stream's own latest status decides: a meta asked for before the next turn's running arrived still says
+        // the old turn is over. With no status delivered yet, the stream is done only if the session has no events.
+        const streamDone = seen.current.status === null ? last === 0 : isTerminal(seen.current.status);
+        if (streamDone && isTerminal(r.meta.status) && seen.current.seq >= last) close();
       });
     const onEvent = (raw: Event) => {
       // The EventSource "error" event (connection drop) shares a name with our error event and carries no data.
@@ -186,6 +190,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       const stored = JSON.parse(raw.data) as StoredEvent;
       if (stored.seq <= seen.current.seq) return;
       seen.current.seq = stored.seq;
+      if (stored.event.type === 'status') seen.current.status = stored.event.status;
       dispatch({ type: 'event', id, event: stored.event });
       if (stored.event.type === 'status' && isTerminal(stored.event.status)) {
         loadMeta();

@@ -42,6 +42,8 @@ let root: Root;
 let stored: Stored[];
 let status: string;
 let latest: Transcript;
+let holdMeta: boolean;
+let heldMeta: Array<() => void>;
 
 function Probe() {
   useLiveInvalidation();
@@ -60,12 +62,17 @@ beforeEach(async () => {
   FakeEventSource.all = [];
   stored = [...TURN_1];
   status = 'done';
+  holdMeta = false;
+  heldMeta = [];
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       const body = url === '/api/sessions/s1' ? { meta: { id: 's1', status, turns: [] }, events: stored } : { id: 's1' };
-      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      const response = new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (url !== '/api/sessions/s1' || !holdMeta) return response;
+      // A held meta GET answers with the state as it was when it was asked, whenever the test lets it.
+      return new Promise<Response>((resolve) => heldMeta.push(() => resolve(response)));
     }),
   );
   host = document.createElement('div');
@@ -129,4 +136,22 @@ describe('session event stream', () => {
     await act(async () => bus().emit('session.status', { sessionId: 'other', status: 'running', mode: 'advisor', turn: 1 }));
     expect(live()).toHaveLength(1);
   });
+
+  it('a meta answer asked for before the next turn started does not close that turn\'s stream (SW3-web-a-01 review)', async () => {
+    holdMeta = true;
+    await replay(streams()[0]!, TURN_1);
+    // The terminal status asked for the meta, which is still in flight (done, events up to seq 3) when the next turn starts.
+    expect(heldMeta.length).toBeGreaterThan(0);
+    await act(async () => void (await sendTurn('s1', 'and then?')));
+    await replay(streams()[0]!, [TURN_2[0]!]);
+    for (const answer of heldMeta.splice(0)) await act(async () => answer());
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(live()).toHaveLength(1);
+    holdMeta = false;
+    stored = [...TURN_1, ...TURN_2];
+    await replay(live()[0]!, TURN_2.slice(1));
+    await until(() => live().length === 0, 'the second turn to end the stream');
+    expect(latest.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
+  });
 });
+
