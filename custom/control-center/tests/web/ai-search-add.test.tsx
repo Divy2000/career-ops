@@ -41,7 +41,8 @@ beforeEach(async () => {
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === '/api/pipeline') return json(200, { kind: 'ok', path: 'data/pipeline.md', rows: [], etag: 'e' });
+      // Like the server: what an add wrote is in the pipeline the next time it is read.
+      if (url === '/api/pipeline') return json(200, { kind: 'ok', path: 'data/pipeline.md', rows: posted.flatMap((b) => b.offers.map((o) => ({ url: o.url }))), etag: 'e' });
       if (url === '/api/tracker') return json(200, { kind: 'ok', rows: [] });
       if (url === '/api/pipeline/add' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as { offers: Offer[] };
@@ -116,6 +117,16 @@ describe('Discover > AI search: add', () => {
     await act(async () => button('Add all new').click());
     await until(() => status().startsWith('Added'), 'the add result');
     expect(posted[0]!.offers).toEqual([{ url: 'https://jobs.example.com/4', company: 'Hooli', title: 'SRE', portal: 'greenhouse', postedAt: '2026-10-01' }]);
+  });
+
+  it('an offer just added keeps its added pill after the pipeline refetch lists it (SW4-web-a-04)', async () => {
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/fresh', company: 'Fresh Co', title: 'SRE' }, 1));
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    const row = host.querySelector('tbody tr')!;
+    expect(row.querySelectorAll('td')[3]!.textContent).toBe('added');
+    expect(row.querySelector('button')!.disabled).toBe(true);
   });
 
   it('a refused add shows the server reason, not just the status line', async () => {
