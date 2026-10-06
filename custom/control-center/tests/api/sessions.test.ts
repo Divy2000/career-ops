@@ -160,6 +160,8 @@ describe('Claude sessions', () => {
     await post(`/api/sessions/${id}/turns`, { prompt: `Fill the real form with these confirmed answers: ${answers}` });
     const second = await settle(id);
     expect(second.meta.turns[1]!.userText).toContain('Edited answer');
+    // The fill turn reports in prose: the answers envelope belongs to the turn that read the form (SW2-tests-20).
+    expect(second.meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
   });
 
   it('cancel kills the turn and leaves the session cancelled', async () => {

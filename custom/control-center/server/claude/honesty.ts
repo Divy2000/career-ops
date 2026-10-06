@@ -58,6 +58,11 @@ export function isReportGated(modeId: string): boolean {
  * question rule like any other mode.
  */
 export const ENVELOPE_MODES = new Set(['apply', 'cv-ingest', 'projects-ingest']);
+/**
+ * Envelope modes whose contract asks for the envelope only on the turn that opens the conversation: apply drafts its
+ * answers first, and the fill turn the user sends after confirming them reports in prose.
+ */
+const OPENING_TURN_ENVELOPE_MODES = new Set(['apply']);
 
 export function endsWithQuestion(text: string): boolean {
   const lines = text
@@ -78,6 +83,8 @@ export interface TurnOutcomeInput {
   finalText: string;
   envelopeCount: number;
   newReports: NewReport[];
+  /** The turn resumed an existing conversation (--resume) instead of opening one. */
+  resumed: boolean;
 }
 
 export type TurnOutcome = { status: Extract<SessionStatus, 'done' | 'awaiting_user' | 'error' | 'cancelled'>; reason: string };
@@ -92,7 +99,8 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
     if (!i.finalText.trim()) return { status: 'awaiting_user', reason: 'a report appeared but the turn produced no output' };
     return { status: 'done', reason: `report ${i.newReports.map((r) => r.file).join(', ')} created` };
   }
-  if (ENVELOPE_MODES.has(englishModeOf(i.modeId))) {
+  const mode = englishModeOf(i.modeId);
+  if (ENVELOPE_MODES.has(mode) && !(i.resumed && OPENING_TURN_ENVELOPE_MODES.has(mode))) {
     return i.envelopeCount > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
   }
   if (endsWithQuestion(i.finalText)) return { status: 'awaiting_user', reason: 'the turn ended with a question' };

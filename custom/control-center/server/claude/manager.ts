@@ -64,6 +64,8 @@ export interface StartInput {
 interface TurnState {
   beforeReports: string[];
   filesOffset: number;
+  /** The turn resumed a conversation; absent in turns started before it was recorded, which go by their number. */
+  resumed?: boolean;
 }
 
 interface Tracked {
@@ -360,7 +362,7 @@ export class SessionManager {
         preamble,
       });
       // Written before the run exists, so a restart always finds the turn's starting point.
-      state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id) };
+      state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id), resumed: opts.resume };
       fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     } catch (err) {
       return this.failBeforeSpawn(meta, (err as Error).message);
@@ -480,6 +482,7 @@ export class SessionManager {
       finalText: r.finalText,
       envelopeCount: r.envelopes,
       newReports,
+      resumed: state.resumed ?? n > 1,
     });
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;
