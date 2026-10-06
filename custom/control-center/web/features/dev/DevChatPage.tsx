@@ -1,7 +1,10 @@
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiSend } from '../../lib/api';
+import { apiGet, apiSend, ApiError } from '../../lib/api';
+import type { SessionMeta } from '@shared/api';
+import { readLastDevSession, writeLastDevSession } from '../../lib/devchatSession';
 import { isTerminal } from '../../lib/sessions';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -161,8 +164,65 @@ export function ReloadStatusCard() {
   );
 }
 
+export interface DevSearch {
+  session?: string;
+}
+
+/** /dev?session=<id>: the conversation to reopen. Only a session id as the server makes them is kept. */
+export function validateDevSearch(s: Record<string, unknown>): DevSearch {
+  return typeof s.session === 'string' && /^[\w-]{1,80}$/.test(s.session) ? { session: s.session } : {};
+}
+
+const is404 = (e: unknown) => e instanceof ApiError && e.status === 404;
+
+/** The session check's retry backoff (doubling from baseMs, capped at maxMs); tests shorten it. */
+export const SESSION_CHECK_RETRY = { baseMs: 1000, maxMs: 3000 };
+
 export function DevChatPage() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  // The URL is the one source of the session, so the transcript, the Changes and Revert panel and New conversation
+  // always show the same one; /dev without it reopens this tab's last session.
+  const { session } = useSearch({ strict: false }) as DevSearch;
+  const navigate = useNavigate();
+  const sessionId = session ?? readLastDevSession();
+  const [gone, setGone] = useState<string | null>(null);
+  // The session must be a Dev Chat session that exists: a deleted, mistyped or other-root id, another mode's session or a
+  // route under /api/sessions/ (engine) is dropped with a note instead of hanging the page.
+  const meta = useQuery({
+    queryKey: ['sessions', sessionId],
+    queryFn: () => apiGet<{ meta?: SessionMeta }>(`/api/sessions/${sessionId}`),
+    enabled: sessionId !== null,
+    // Retried until it answers (a server restart can take a while); only a 404 is an answer that it is gone.
+    retry: (_n, e) => !is404(e),
+    retryDelay: (n) => Math.min(SESSION_CHECK_RETRY.baseMs * 2 ** n, SESSION_CHECK_RETRY.maxMs),
+  });
+  const missing = is404(meta.error) || (meta.isSuccess && meta.data.meta?.mode !== 'devchat');
+  const checkFailed = !missing && meta.failureReason && !meta.isSuccess ? describeError(meta.failureReason) : null;
+  if (missing && gone !== sessionId) setGone(sessionId);
+  useEffect(() => {
+    if (missing) {
+      writeLastDevSession(null);
+      void navigate({ to: '/dev', search: {}, replace: true });
+    } else if (session) writeLastDevSession(session);
+    else if (sessionId) void navigate({ to: '/dev', search: { session: sessionId }, replace: true });
+  }, [missing, session, sessionId, navigate]);
+  // The panel is remounted only when the URL moves to a session it did not assign itself (a link, New conversation):
+  // its own start or fork keeps it mounted, with what it shows (a start error, the forked transcript).
+  const [panel, setPanel] = useState<{ key: number; own: string | null; seen: string | null }>({ key: 0, own: null, seen: sessionId });
+  if (sessionId !== panel.seen) setPanel((p) => ({ key: sessionId === p.own ? p.key : p.key + 1, own: sessionId === p.own ? p.own : null, seen: sessionId }));
+  const setSessionId = useCallback(
+    (id: string) => {
+      setPanel((p) => ({ ...p, own: id }));
+      setGone(null);
+      void navigate({ to: '/dev', search: { session: id }, replace: true });
+    },
+    [navigate],
+  );
+  const newConversation = () => {
+    writeLastDevSession(null);
+    setPanel((p) => ({ key: p.key + 1, own: null, seen: null }));
+    void navigate({ to: '/dev', search: {} });
+  };
+  // The panel reports 'queued' as it mounts, then the stream's statuses.
   const [status, setStatus] = useState('queued');
   const [blacklist, setBlacklist] = useState(false);
   const actions = useActions();
@@ -170,7 +230,8 @@ export function DevChatPage() {
   const onStatus = useCallback((s: string) => setStatus(s), []);
   // The unlock covers the one turn it was sent with; the next turn needs the box ticked again.
   const onSent = useCallback(() => setBlacklist(false), []);
-  const live = sessionId !== null && !isTerminal(status);
+  // The Changes panel polls only a Dev Chat session the server confirmed, while its stream does not report it finished.
+  const live = sessionId !== null && meta.isSuccess && !missing && !isTerminal(status);
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
@@ -185,7 +246,26 @@ export function DevChatPage() {
       <Message message={message} />
       <p className="muted small">Scope: the user layer (cv.md, profile, portals, data/, reports/, output/, interview-prep/) and custom/**. Never the supervisor, node_modules, applications.md, or the blacklist unless you tick the box.</p>
       <div className="split">
-        <SessionPanel key="devchat" mode="devchat" title="Dev Chat" placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
+        <div className="stack">
+          {gone && !sessionId && (
+            <p role="status" className="muted small">
+              That conversation no longer exists, or is not a Dev Chat conversation (deleted, from another data root, or another mode). Start a new one below.
+            </p>
+          )}
+          {checkFailed && (
+            <p role="alert" className="danger-text small">
+              Could not check this conversation: {checkFailed}. Retrying.
+            </p>
+          )}
+          <SessionPanel key={`devchat-${panel.key}`} mode="devchat" title="Dev Chat" sessionId={sessionId} placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
+          {sessionId && (
+            <div className="row gap">
+              <button type="button" onClick={newConversation}>
+                New conversation
+              </button>
+            </div>
+          )}
+        </div>
         <div className="stack">
           <ReloadStatusCard />
           <ChangesPanel sessionId={sessionId} live={live} />
