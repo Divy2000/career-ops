@@ -27,10 +27,10 @@ export function plistToJson(xml: string): Record<string, unknown> {
  * What `launchctl print` shows for a loaded job, in the real shape (tests/fixtures/launchctl): a job that never fired
  * reads "not running", runs 0 and "(never exited)"; after it fires, its run count and last exit code.
  */
-function printJob(label: string, history: { runs: number; lastExit: number } | undefined): string {
+function printJob(label: string, history: { runs: number; lastExit: number } | undefined, running: boolean): string {
   const runs = history?.runs ?? 0;
   const exit = history ? String(history.lastExit) : '(never exited)';
-  return `gui/501/${label} = {\n\tactive count = 0\n\ttype = LaunchAgent\n\tstate = not running\n\n\truns = ${runs}\n\tlast exit code = ${exit}\n}\n`;
+  return `gui/501/${label} = {\n\tactive count = ${running ? 1 : 0}\n\ttype = LaunchAgent\n\tstate = ${running ? 'running' : 'not running'}\n\n\truns = ${runs}\n\tlast exit code = ${exit}\n}\n`;
 }
 
 export function fakeLaunchdExec(fallback: Exec = execNoShell): {
@@ -43,7 +43,10 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): {
   fire: (label: string, code: number) => void;
   /** Steps to fail, as "<cmd> <subcommand>" ("plutil -lint", "launchctl bootstrap"): each fails until removed. */
   fail: Set<string>;
+  /** Labels launchd is running right now (print says "state = running"). */
+  running: Set<string>;
 } {
+  const running = new Set<string>();
   const fail = new Set<string>();
   const calls: LaunchdCall[] = [];
   const loaded = new Set<string>();
@@ -82,7 +85,7 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): {
     const sub = args[0];
     if (sub === 'print') {
       const label = (args[1] ?? '').split('/').pop() ?? '';
-      return loaded.has(label) ? { code: 0, stdout: printJob(label, history.get(label)), stderr: '' } : { code: 113, stdout: '', stderr: 'Could not find service in domain for port' };
+      return loaded.has(label) ? { code: 0, stdout: printJob(label, history.get(label), running.has(label)), stderr: '' } : { code: 113, stdout: '', stderr: 'Could not find service in domain for port' };
     }
     if (sub === 'bootout') {
       const label = (args[1] ?? '').split('/').pop() ?? '';
@@ -107,7 +110,7 @@ export function fakeLaunchdExec(fallback: Exec = execNoShell): {
     }
     return { code: 2, stdout: '', stderr: `fake launchctl: unsupported subcommand ${sub}` };
   };
-  return { exec, calls, loaded, disabled, login, fire, fail };
+  return { exec, calls, loaded, disabled, login, fire, fail, running };
 }
 
 /** Test builds only: swap the real launchctl/plutil for the fake when asked. */

@@ -5,11 +5,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { readShortlist } from '../../server/domains/shortlist.js';
+import { applyInboxSkip } from '../../server/domains/inboxSkip.js';
+import { parseShortlist, readShortlist } from '../../server/domains/shortlist.js';
 import { parseReport } from '../../server/domains/reports.js';
 import { parseContacts, readInterviews } from '../../server/domains/contacts.js';
 import { USER_FILES } from '../../server/routes/files.js';
-import { parsePipeline, readScanHistory } from '../../server/domains/pipeline.js';
+import { parsePipeline, readPipeline, readScanHistory } from '../../server/domains/pipeline.js';
 import { activePin, parseFollowups, parseNextOverrides } from '../../server/domains/followups.js';
 import { pathToFileURL } from 'node:url';
 import { localDate } from '../../shared/local-date.js';
@@ -217,6 +218,27 @@ describe('pipeline.md rows (scan.mjs formatPipelineOffer)', () => {
     expect(r.status, r.stderr).toBe(0);
     return JSON.parse(r.stdout) as string[];
   }
+
+  it('a URL the writer escapes ([, ] and |) reads back as the posting URL, joins its scan-history row, and Skip still finds its row (SW3-libs-04)', () => {
+    const raw = 'https://jobs.example.com/apply?ids[]=7&team=a|b';
+    const [line] = format([{ url: raw, company: 'Acme Robotics', title: 'Platform Engineer' }]);
+    expect(line).toContain('ids\\[\\]=7&team=a%7Cb');
+    const root = tempDir('cc-escaped-url-');
+    fs.mkdirSync(path.join(root, 'data'));
+    const pipeline = `# Pipeline\n\n## Pending\n\n${line}\n`;
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), pipeline);
+    // scan-history.tsv keeps the raw URL (scan.mjs appendToScanHistory).
+    fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), `url\tfirst_seen\tportal\ttitle\tcompany\tstatus\n${raw}\t2026-10-01\tgreenhouse\tPlatform Engineer\tAcme Robotics\tadded\n`);
+    const read = readPipeline(root);
+    if (read.kind !== 'ok') throw new Error(read.kind);
+    expect(read.rows.map((r) => [r.url, r.firstSeen, r.source])).toEqual([['https://jobs.example.com/apply?ids[]=7&team=a%7Cb', '2026-10-01', 'greenhouse']]);
+    expect(applyInboxSkip(pipeline, read.rows[0]!.url, true)).toMatchObject({ ok: true, matched: 1, changed: 1 });
+  });
+
+  it('a shortlist link to an escaped URL reads back as the posting URL (SW3-libs-04)', () => {
+    const md = '# Shortlist - 2026-10-05\n\n| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |\n|---|---|---|---|---|---|---|---|---|\n| 1 | 4.5 | 4.0 | strong | Acme Robotics | [Platform Engineer](https://jobs.example.com/apply?ids\\[\\]=7&team=a%7Cb) | Remote | - | fit |\n';
+    expect(parseShortlist(md).rows[0]!.url).toBe('https://jobs.example.com/apply?ids[]=7&team=a%7Cb');
+  });
 
   it('a location with a colon stays the location, and the compensation after it stays the compensation (R8-16)', () => {
     const lines = format([

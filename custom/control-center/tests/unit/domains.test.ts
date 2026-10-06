@@ -5,7 +5,7 @@ import { parseDigest, parseDailyLog, parseCompanyFile, readImmigrationOverview, 
 import { collectWhatsNew, resolveOfferLimit, evaluatedKeys, isEvaluated } from '../../server/domains/whatsNew.js';
 import { computeDashboard, loadFunnelStages, parseStatusLog, readStatusLog, workModeOf } from '../../server/domains/insights.js';
 import { readTracker } from '../../server/domains/tracker.js';
-import { readScanHistory } from '../../server/domains/pipeline.js';
+import { readScanHistory, type ScanHistoryRow } from '../../server/domains/pipeline.js';
 import { importCore } from '../../server/core/adapter.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { copyFixtureRoot } from '../helpers/app.js';
@@ -203,6 +203,24 @@ describe('fresh matches (whats-new port)', () => {
     expect(isEvaluated(keys, normalizeTextKey, 'ACME Robotics', 'Senior Backend Engineer')).toBe(true);
     expect(isEvaluated(keys, normalizeTextKey, 'Acme Robotics', 'Staff Engineer')).toBe(false);
     expect(isEvaluated(keys, normalizeTextKey, '', 'x')).toBe(false);
+  });
+
+  it('the "last N days" window is N local calendar days, whatever the time of day and the time zone (SW3-server-03)', () => {
+    const norm = (v: unknown) => String(v ?? '').toLowerCase().trim();
+    const added = (firstSeen: string) => ({ url: `https://jobs.example.com/${firstSeen}`, firstSeen, portal: 'greenhouse', title: 'Engineer', company: `Co ${firstSeen}`, status: 'added', location: '', postedAt: '' }) as unknown as ScanHistoryRow;
+    const history = ['2026-09-28', '2026-09-29', '2026-10-05'].map(added);
+    const seen = (now: Date) => collectWhatsNew({ history, applications: [], norm, now: now.getTime(), days: 7, limit: 50 }).offers.map((o) => o.firstSeen);
+    // vitest runs in America/Los_Angeles: an evening on 2026-10-05 is already 2026-10-06 in UTC.
+    expect(seen(new Date(2026, 9, 5, 8, 0))).toEqual(['2026-10-05', '2026-09-29']);
+    expect(seen(new Date(2026, 9, 5, 18, 0))).toEqual(['2026-10-05', '2026-09-29']);
+    const tz = process.env.TZ;
+    process.env.TZ = 'Asia/Tokyo';
+    try {
+      // Early morning in UTC+9 is still the day before in UTC: 2026-09-28 is 7 days back, outside a 7-day window.
+      expect(seen(new Date(2026, 9, 5, 1, 0))).toEqual(['2026-10-05', '2026-09-29']);
+    } finally {
+      process.env.TZ = tz;
+    }
   });
 
   it('returns recent, unevaluated, non-skipped rows newest first with a complete count', async () => {

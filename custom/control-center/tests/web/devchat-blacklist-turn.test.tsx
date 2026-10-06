@@ -22,8 +22,10 @@ class FakeEventSource {
   addEventListener(type: string, fn: (ev: MessageEvent) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
+  /** One stored event of session s-1, as the server sends it: a session.event frame on the app event stream. */
   emit(seq: number, event: { type: string; [k: string]: unknown }) {
-    for (const fn of this.listeners.get(event.type) ?? []) fn(new MessageEvent(event.type, { data: JSON.stringify({ seq, ts: '2026-10-05T12:00:00.000Z', event }) }));
+    const data = JSON.stringify({ sessionId: 's-1', stored: { seq, ts: '2026-10-05T12:00:00.000Z', event }, ts: '2026-10-05T12:00:00.000Z' });
+    for (const fn of this.listeners.get('session.event') ?? []) fn(new MessageEvent('session.event', { data }));
   }
   close() {}
 }

@@ -56,6 +56,21 @@ describe('moving an evaluated posting to Processed', () => {
     expect(moveToProcessed(md, URL, POSTING).text).toBe(`## Pending\n\n\n## Done\n\n- [x] https://jobs.example.com/old | Old | Role\n\n## Processed\n\n- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌\n`);
   });
 
+  it('a row whose URL scan.mjs escaped moves when evaluated by its posting URL, and keeps the escaped form (SW3-libs-04 review)', () => {
+    const escaped = 'https://jobs.example.com/apply?ids\\[0\\]=7&path=a\\\\b';
+    const posting = 'https://jobs.example.com/apply?ids[0]=7&path=a\\b';
+    const md = `## Pending\n\n- [ ] ${escaped} | Acme | Eng\n\n## Processed\n`;
+    const r = moveToProcessed(md, posting, POSTING);
+    expect(r.moved).toBe(true);
+    expect(r.text).toBe(`## Pending\n\n\n## Processed\n\n- [x] #042 | ${escaped} | Acme | Eng | 4.2/5 | PDF ❌\n`);
+  });
+
+  it('an escaped URL Processed already lists only drops its Pending copy (SW3-libs-04 review)', () => {
+    const escaped = 'https://jobs.example.com/apply?ids\\[0\\]=7';
+    const md = `## Pending\n- [ ] ${escaped} | Acme | Eng\n## Processed\n- [x] #040 | ${escaped} | Acme | Eng | 4.0/5 | PDF ✅\n`;
+    expect(moveToProcessed(md, 'https://jobs.example.com/apply?ids[0]=7', POSTING).text).toBe(`## Pending\n## Processed\n- [x] #040 | ${escaped} | Acme | Eng | 4.0/5 | PDF ✅\n`);
+  });
+
   it('only drops the Pending copy of a URL Processed already lists', () => {
     const md = `## Pending\n- [ ] ${URL} | Acme | Eng\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`;
     expect(moveToProcessed(md, URL, POSTING).text).toBe(`## Pending\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`);

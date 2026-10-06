@@ -10,16 +10,17 @@ import { ConfirmProvider } from '@web/components/ConfirmDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** What the session stream reports: done by default, as the server's replay of a finished session does. */
+/** What the session's stored events end on: done by default, as the replay of a finished session does. */
 let streamStatus: string;
+/** The app's one event stream; sessions are read from their stored events, so it carries nothing here. */
 class FakeEventSource {
   onerror: ((ev: Event) => void) | null = null;
   constructor(public url: string) {}
-  addEventListener(type: string, fn: (ev: MessageEvent) => void) {
-    if (type === 'status') setTimeout(() => fn(new MessageEvent('status', { data: JSON.stringify({ seq: 1, ts: '2026-10-05T12:00:00.000Z', event: { type: 'status', status: streamStatus, turn: 1 } }) })), 0);
-  }
+  addEventListener() {}
+  removeEventListener() {}
   close() {}
 }
+const stored = () => [{ seq: 1, ts: '2026-10-05T12:00:00.000Z', event: { type: 'status', status: streamStatus, turn: 1 } }];
 
 let host: HTMLElement;
 let root: Root;
@@ -49,12 +50,12 @@ async function open(entry: string) {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST' && url === '/api/sessions') return json(startReply, 202);
       if (init?.method === 'POST' && url === '/api/sessions/s-7/fork') return json({ ...meta, id: 's-8' }, 202);
-      if (url === '/api/sessions/s-7') return json({ meta, events: [] });
-      if (url === '/api/sessions/s-8') return json({ meta: { ...meta, id: 's-8' }, events: [] });
-      if (url === '/api/sessions/s-9') return json({ meta: { ...meta, id: 's-9', status: 'error' }, events: [] });
-      // The page's check and the panel's stream each read it once on open: both get the 500, the retry gets the session.
-      if (url === '/api/sessions/s-r') return ++runningMetaFetches <= failingReads ? json({ error: 'internal error' }, 500) : json({ meta: { ...meta, id: 's-r', status: 'running' }, events: [] });
-      if (url === '/api/sessions/s-apply') return json({ meta: { ...meta, id: 's-apply', mode: 'apply' }, events: [] });
+      if (url === '/api/sessions/s-7') return json({ meta, events: stored() });
+      if (url === '/api/sessions/s-8') return json({ meta: { ...meta, id: 's-8' }, events: stored() });
+      if (url === '/api/sessions/s-9') return json({ meta: { ...meta, id: 's-9', status: 'error' }, events: stored() });
+      // The page's check and the panel's read each ask on open and both get the 500s; their retries get the session.
+      if (url === '/api/sessions/s-r') return ++runningMetaFetches <= failingReads ? json({ error: 'internal error' }, 500) : json({ meta: { ...meta, id: 's-r', status: 'running' }, events: stored() });
+      if (url === '/api/sessions/s-apply') return json({ meta: { ...meta, id: 's-apply', mode: 'apply' }, events: stored() });
       if (url === '/api/sessions/engine') return json({ playwrightAvailable: false, modes: ['devchat'] });
       if (url.startsWith('/api/sessions/')) return json({ error: 'no such session' }, 404);
       if (url.startsWith('/api/dev/changes/')) {
@@ -185,7 +186,7 @@ describe('Dev Chat session in the URL', () => {
 
   it('given a server down for longer than a few retries (a restart), then the check keeps retrying and polling starts once it is back', async () => {
     streamStatus = 'running';
-    // The panel's stream reads once on open; the page's check fails five times in a row.
+    // The page's check and the panel's read share the failing answers, so the check fails several times in a row.
     failingReads = 6;
     await open('/dev?session=s-r');
     await act(async () => new Promise((r) => setTimeout(r, 500)));

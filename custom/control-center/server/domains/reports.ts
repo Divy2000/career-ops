@@ -152,7 +152,7 @@ function blockField(sectionContent: string, label: string): string | null {
  * autolink wrapper and trailing punctuation dropped), and only when it is a real http(s) URL: `N/A` is legitimate for a
  * recruiter-sourced role and must not become a link.
  */
-function postingUrl(value: string | null): string | null {
+export function postingUrl(value: string | null | undefined): string | null {
   if (!value) return null;
   const raw = value.split(/\s/)[0]!.replace(/^<|>$/g, '').replace(/[),.;]+$/, '');
   try {

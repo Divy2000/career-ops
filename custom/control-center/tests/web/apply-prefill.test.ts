@@ -8,11 +8,18 @@ describe('prefillBlockers', () => {
     expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/a.pdf', pdfCount: 1, company: 'Acme' })).toEqual({ reasons: [], needsPdf: false });
   });
 
-  it('says which chosen file the prefill action would refuse for its name, and how to fix it (SW3-web-a-03)', () => {
-    expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/Acme Resume.pdf', pdfCount: 1, company: 'Acme', refused: ['output/Acme Resume.pdf'] })).toEqual({
-      reasons: ["Prefill can't take output/Acme Resume.pdf: its name may only use letters, digits and . _ -. Rename it in output/."],
+  it('says which chosen file the prefill action would refuse for its name, and how to fix it, by the shared output/ rule (SW3-web-a-03)', () => {
+    expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/odd\u0007name.pdf', pdfCount: 1, company: 'Acme' })).toEqual({
+      reasons: ["Prefill can't take output/odd\u0007name.pdf: a file name with a control character. Rename it in output/."],
       needsPdf: false,
     });
+    expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/cv.pdf', cover: 'output/a/../cover.txt', pdfCount: 1, company: 'Acme' }).reasons).toEqual([
+      'Prefill can\'t take output/a/../cover.txt: one file under output/, with no empty, "." or ".." folder. Rename it in output/.',
+    ]);
+  });
+
+  it('takes a name people give files they drop into output/, spaces and all (seed: SW3-web-a-03)', () => {
+    expect(prefillBlockers({ url: GREENHOUSE, pdf: 'output/Acme Resume.pdf', cover: 'output/Acme cover letter.txt', pdfCount: 1, company: 'Acme' })).toEqual({ reasons: [], needsPdf: false });
   });
 
   it('asks for the link when it is empty', () => {

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { pipelineUrlKey, unescapeMarkdownUrl } from './inboxSkip.js';
 import { parseTsv, readText } from './files.js';
 
 export interface PipelineRow {
@@ -99,7 +100,7 @@ export function parsePipeline(md: string): PipelineRow[] {
     const { rank, reason } = rankCell ? parseRankCell(rankCell) : { rank: null, reason: null };
     const posted = labels.get('posted');
     rows.push({
-      url: positional[0]!,
+      url: unescapeMarkdownUrl(positional[0]!),
       company: positional[1] ?? '',
       role: positional[2] ?? '',
       location: positional[3] || null,
@@ -154,9 +155,10 @@ export function readPipeline(dataRoot: string): PipelineRead {
   const p = path.join(dataRoot, 'data', 'pipeline.md');
   const read = readText(p);
   if (read.kind === 'missing') return { kind: 'missing', path: p };
-  const history = new Map(readScanHistory(dataRoot).map((r) => [r.url, r]));
+  // History keeps the raw URL, the pipeline its escaped form: both are keyed as the pipeline writes them.
+  const history = new Map(readScanHistory(dataRoot).map((r) => [pipelineUrlKey(r.url), r]));
   const rows = parsePipeline(read.text).map((row) => {
-    const h = history.get(row.url);
+    const h = history.get(pipelineUrlKey(row.url));
     return { ...row, firstSeen: h?.firstSeen || null, source: sourceOf(row.url, h?.portal || null) };
   });
   return { kind: 'ok', path: p, rows, etag: read.etag };

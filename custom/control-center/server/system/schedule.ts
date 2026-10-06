@@ -223,6 +223,13 @@ export class ScheduleService {
    */
   async write(job: ScheduleJob, input: ScheduleInput): Promise<{ ok: true; state: ScheduleState } | { ok: false; status: number; error: string; stderr: string }> {
     const plistPath = this.plistPath(job);
+    // Every save boots the job out, and bootout of a LaunchAgent launchd is running stops that run mid-step (a half-done
+    // policy pass, an unacked queue, a half-installed node_modules). Only launchd's own instance is at risk: a run
+    // started from the app or a terminal is not its child.
+    const print = await this.deps.exec('launchctl', ['print', `gui/${this.deps.uid}/${job.label}`], { timeoutMs: 10_000 });
+    if (print.code === 0 && parseLaunchctlPrint(print.stdout).state === 'running') {
+      return { ok: false, status: 409, error: `${job.title} is running now, and changing its schedule would stop it. Try again once it finishes.`, stderr: '' };
+    }
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv, claudeBin: this.deps.claudeBin, nodeBin: this.deps.nodeBin }));

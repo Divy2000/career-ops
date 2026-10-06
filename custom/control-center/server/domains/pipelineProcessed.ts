@@ -9,6 +9,7 @@ import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReport } from './reports.js';
 import { inside } from '../lib/paths.js';
+import { unescapeMarkdownUrl } from './inboxSkip.js';
 
 const PENDING_RE = /^##\s+(Pendientes|Pending)\s*$/i;
 const PROCESSED_RE = /^##\s+(Procesadas|Processed)\s*$/i;
@@ -75,19 +76,22 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     for (let i = procStart + 1; i < sectionEnd(procStart); i++) {
       const m = lines[i]!.match(/^- \[x\]\s+(.+)$/i);
       const cell = m?.[1]!.split('|').map((s) => s.trim())[1];
-      if (cell) listed.add(cell);
+      if (cell) listed.add(unescapeMarkdownUrl(cell));
     }
   }
+  // Rows hold the URL as scan.mjs escaped it ([, ] and \ backslashed); callers pass the posting URL.
+  const target = unescapeMarkdownUrl(url);
   const remove = new Set<number>();
   let processedLine: string | null = null;
   for (let i = pendStart + 1; i < sectionEnd(pendStart); i++) {
     if (!PENDING_ITEM_RE.test(lines[i]!)) continue;
     const body = lines[i]!.replace(PENDING_ITEM_RE, '');
-    if (lineUrl(body) !== url) continue;
+    const cell = lineUrl(body);
+    if (unescapeMarkdownUrl(cell) !== target) continue;
     remove.add(i);
-    if (listed.has(url) || processedLine !== null) continue;
+    if (listed.has(target) || processedLine !== null) continue;
     const parts = body.split('|').map((s) => s.trim());
-    processedLine = `- [x] #${posting.report} | ${url} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
+    processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
   }
   if (remove.size === 0) return { text, moved: false };
   const out: string[] = [];

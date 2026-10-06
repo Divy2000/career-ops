@@ -11,6 +11,7 @@ import { readTracker } from '../domains/tracker.js';
 import { listReportFiles } from '../domains/reports.js';
 import { RunStore } from '../runner/store.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
+import { outputFileProblem } from '../../shared/output-path.js';
 import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { writeTmpInput } from './tmp-inputs.js';
 
@@ -86,13 +87,12 @@ const positive = z.number().int().positive();
 const reportLabel = z.union([z.string().regex(/^\d{1,6}$/), z.number().int().positive().max(999999)]);
 const safeToken = z.string().min(1).max(200).regex(/^[\w.@:,/+=-]+$/, 'letters, digits and . _ - : , / + = @ only');
 const relOutput = z.string().regex(/^output\/[\w.-]+$/, 'a file directly under output/');
+/** A file under output/ by the rule the Apply page shows too (shared/output-path.ts): any name, one contained file. */
 const outputPath = (ext: RegExp, what: string) =>
-  z
-    .string()
-    .max(512)
-    .regex(/^output\/(?:[\w.-]+\/)*[\w.-]+$/, 'a file under output/')
-    .refine((p) => !p.split('/').includes('..'), 'no .. segments')
-    .refine((p) => ext.test(p), what);
+  z.string().superRefine((p, ctx) => {
+    const problem = outputFileProblem(p, ext, what);
+    if (problem) ctx.addIssue({ code: 'custom', message: problem });
+  });
 const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) only').max(2048);
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 

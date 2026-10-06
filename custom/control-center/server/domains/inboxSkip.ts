@@ -4,6 +4,19 @@ const MAX_URL_LEN = 2048;
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX])\](.*)$/;
 const PENDING_HEADING = /^##\s+(Pending|Pendientes)\s*$/i;
 
+/**
+ * The posting URL a pipeline.md or shortlist.md cell stands for: scan.mjs backslash-escapes \\, [ and ] in it
+ * (sanitizePipelineUrl), as markdown link destinations do. A | is written as %7C, which is already a valid URL.
+ */
+export function unescapeMarkdownUrl(cell: string): string {
+  return cell.replace(/\\([\\[\]])/g, '$1');
+}
+
+/** The key a scan-history URL has in pipeline.md once unescaped: | is written as %7C there. */
+export function pipelineUrlKey(url: string): string {
+  return unescapeMarkdownUrl(url.trim().split(/\s+/)[0] ?? '').replace(/\|/g, '%7C');
+}
+
 /** Accept only a real http(s) posting URL; anything else cannot become a write. */
 export function postingUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -21,7 +34,7 @@ export function postingUrl(raw: unknown): string | null {
 }
 
 function jobUrlFromRest(rest: string): string | null {
-  return postingUrl(rest.split('|')[0]);
+  return postingUrl(unescapeMarkdownUrl(rest.split('|')[0] ?? ''));
 }
 
 function pendingRange(lines: string[]): { start: number; end: number } | null {
@@ -41,7 +54,8 @@ export type SkipResult = { ok: true; text: string; matched: number; changed: num
 
 /** Flip `- [ ]` and `- [x]` on Pending rows whose job URL equals `url`; every other byte stays. */
 export function applyInboxSkip(text: string, url: string, done: boolean): SkipResult {
-  const parsed = postingUrl(url);
+  // The app reads rows unescaped (parsePipeline); the file holds the escaped form, so both sides compare unescaped.
+  const parsed = postingUrl(typeof url === 'string' ? unescapeMarkdownUrl(url.trim()) : url);
   if (!parsed) return { ok: false, error: 'invalid-url' };
   const nl = text.includes('\r\n') ? '\r\n' : '\n';
   const endedWithNl = /\r?\n$/.test(text);

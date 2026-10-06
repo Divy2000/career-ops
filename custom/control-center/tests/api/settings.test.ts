@@ -265,6 +265,8 @@ describe('launchd schedule through the injectable executor (never the real launc
     const uid = String(process.getuid?.() ?? 0);
     // The new plist is linted beside the installed one and only then moved over it (SW2-tests-19).
     expect(fake.calls.map((c) => [c.cmd, ...c.args].join(' '))).toEqual([
+      // First a read: is launchd running the job right now (SW3-server-01)?
+      `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
       expect.stringMatching(new RegExp(`^plutil -lint ${plist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-\\d+$`)),
       `launchctl enable gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootout gui/${uid}/com.career-ops.upstream-sync`,
@@ -299,7 +301,8 @@ describe('launchd schedule through the injectable executor (never the real launc
     }
     expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
     expect(fs.readdirSync(t.cfg.launchAgentsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
-    expect(fake.calls.filter((c) => c.cmd === 'launchctl')).toEqual([]);
+    // Only the read-only running check reached launchctl: nothing was enabled, disabled, booted out or in.
+    expect(fake.calls.filter((c) => c.cmd === 'launchctl' && c.args[0] !== 'print')).toEqual([]);
   });
   for (const [step, status, error] of [
     ['launchctl enable', 502, /launchctl enable failed/],
@@ -325,6 +328,26 @@ describe('launchd schedule through the injectable executor (never the real launc
     } finally {
       fake.fail.clear();
     }
+  });
+  it('refuses to save or disable a schedule while launchd is running that job, since bootout would kill the run mid-step (SW3-server-01)', async () => {
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    const plist = path.join(t.cfg.launchAgentsDir, 'com.career-ops.upstream-sync.plist');
+    const installed = fs.readFileSync(plist, 'utf8');
+    fake.running.add('com.career-ops.upstream-sync');
+    try {
+      fake.calls.length = 0;
+      for (const enabled of [true, false]) {
+        const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 6, minute: 0, weekday: 0, enabled });
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().error).toMatch(/Weekly upstream sync is running now.*would stop it.*Try again once it finishes/);
+      }
+      expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+      expect(fake.calls.filter((c) => c.cmd === 'launchctl' && ['bootout', 'bootstrap', 'enable', 'disable'].includes(c.args[0]!))).toEqual([]);
+      expect((await get('/api/schedule')).json().jobs[1]).toMatchObject({ loaded: true, state: 'running' });
+    } finally {
+      fake.running.delete('com.career-ops.upstream-sync');
+    }
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 6, minute: 0, weekday: 0, enabled: true })).statusCode).toBe(200);
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
     // The weekly job installed and loaded, as the test above leaves it, so this test holds alone too.

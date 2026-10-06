@@ -38,6 +38,23 @@ test.describe('AI sessions through the fake Claude', () => {
     await expect(row).toContainText('oferta');
   });
 
+  test('a session page follows its session on the app event stream and opens no stream of its own (seed: SW3-web-a-01)', async ({ page }) => {
+    const streams: string[] = [];
+    page.on('request', (req) => {
+      const url = new URL(req.url());
+      if (url.pathname === '/api/events' || /^\/api\/sessions\/[^/]+\/events$/.test(url.pathname)) streams.push(url.pathname);
+    });
+    // The app stream opened at login, before this listener: load the page again so its one stream is seen opening.
+    await page.reload();
+    await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
+    await page.getByLabel('Posting URL to evaluate').fill('https://jobs.example.com/synthetic/9');
+    await page.getByRole('button', { name: 'Evaluate URL' }).click();
+    await expect(page).toHaveURL(/\/sessions\/s/);
+    await expect(page.getByText(/Evaluation complete/)).toBeVisible({ timeout: 20_000 });
+    expect(streams.filter((p) => p !== '/api/events')).toEqual([]);
+    expect(streams.filter((p) => p === '/api/events').length).toBeGreaterThanOrEqual(1);
+  });
+
   test('Pipeline > Batch asks first, then starts one oferta session per URL through the fan-out', async ({ page }) => {
     const bodies: unknown[] = [];
     // Answered here so no evaluation runs: the server side of the fan-out is covered by the sessions API tests.

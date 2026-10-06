@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { readText } from './files.js';
-import { parseScore, readReport, summaryOf, type ReportSummary } from './reports.js';
+import { parseScore, postingUrl, readReport, summaryOf, type ReportSummary } from './reports.js';
 import { parseFollowups } from './followups.js';
 import { statusLabeler } from './insights.js';
 
@@ -94,7 +94,9 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
       reportLabel: reportNum === null ? null : (raw.report ?? '').match(/\d+/)?.[0] ?? null,
       notes: raw.notes ?? '',
       location: raw.location ?? null,
-      url: raw.url ?? summary?.url ?? null,
+      // The URL column (merge-tracker.mjs --backfill-urls) only when its cell is a real posting URL: a later addition with
+      // no url leaves it empty, and a hand-typed N/A is no link. Otherwise the report's own URL, as with no column.
+      url: postingUrl(raw.url) ?? summary?.url ?? null,
       posted: postedFromNotes(raw.notes ?? ''),
       lastContact: lastContact.get(raw.num) ?? null,
       summary,
