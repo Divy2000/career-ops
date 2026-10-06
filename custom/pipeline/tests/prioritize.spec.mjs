@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
+import { formatPipelineOffer, formatScanHistoryRow } from '../../../scan.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PRIORITIZE = path.join(REPO, 'custom', 'pipeline', 'prioritize.mjs');
@@ -85,4 +86,43 @@ test('--help prints the usage and touches nothing (SW-libs-05)', () => {
   assert.match(r.stdout, /Usage: node custom\/pipeline\/prioritize\.mjs \[--today YYYY-MM-DD\]/);
   assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+});
+
+// ---- fixtures written by scan.mjs's own writers (SW2-tests-33) ----
+
+/** A root whose pipeline and scan history are written the way scan.mjs writes them, for the given offers. */
+function scannedRoot(offers, extraLines = []) {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const pipeline = ['# Pipeline', '', '## Pending', '', ...offers.map((o) => formatPipelineOffer(o)), '', '## Processed', '', ...extraLines, ''].join('\n');
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), pipeline);
+  const history = ['url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation', ...offers.map((o) => formatScanHistoryRow(o, o.seen))].join('\n');
+  fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), `${history}\n`);
+  return { root, pipeline };
+}
+
+test('a job whose URL has brackets (escaped in the pipeline, raw in the scan history) still counts as first seen today', () => {
+  const backlog = { url: 'https://jobs.example.com/backlog', company: 'Backlog Co', title: 'Data Analyst', source: 'x', seen: '2026-09-01' };
+  const bracketed = { url: 'https://jobs.example.com/apply?ids[]=7&team=a|b', company: 'Fresh Co', title: 'Data Analyst', source: 'x', seen: '2026-10-05' };
+  const { root } = scannedRoot([backlog, bracketed]);
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /\(1 first seen 2026-10-05\)/);
+  const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
+  assert.deepEqual(pending, [formatPipelineOffer(bracketed), formatPipelineOffer(backlog)]);
+});
+
+test('only pending rows move: every other line keeps its place, and the file as it was is kept as pipeline.md.bak', () => {
+  const offers = [
+    { url: 'https://jobs.example.com/old', company: 'Old Co', title: 'Data Analyst', source: 'x', seen: '2026-09-01' },
+    { url: 'https://jobs.example.com/new', company: 'New Co', title: 'Data Analyst', source: 'x', seen: '2026-10-05' },
+  ];
+  const { root, pipeline } = scannedRoot(offers, ['- [x] https://jobs.example.com/done | Done Co | Engineer', 'A note the user wrote.']);
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  const before = pipeline.split('\n');
+  const after = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n');
+  assert.equal(after.length, before.length);
+  for (const [i, line] of before.entries()) if (!line.startsWith('- [ ] ')) assert.equal(after[i], line, `line ${i + 1}`);
+  assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md.bak'), 'utf8'), pipeline);
 });
