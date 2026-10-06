@@ -228,6 +228,25 @@ describe('Runner', () => {
     expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).not.toContain('line three');
   });
 
+  it('a wrapper that cannot be spawned (node gone after an upgrade) fails its run with the reason, and the next queued run still starts (SW7-server-03)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50, nodePath: '/nonexistent/node-removed-by-brew-upgrade' });
+    runners.push(runner);
+    const meta = runner.start(req(['0'], { resources: ['pipeline'] }));
+    await until(() => runner.store.read(meta.id)?.status === 'failed');
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/could not start.*ENOENT/i), endedAt: expect.any(String) });
+    expect(runner.pending('test.noisy')).toEqual([]);
+  });
+
+  it('a spawn that throws at once (an argument node refuses) fails its run instead of leaving it claimed and queued forever (SW7-server-03)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const bad = runner.start(req(['bad\u0000arg'], { resources: ['pipeline'] }));
+    expect(runner.store.read(bad.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/could not start/i) });
+    // The resource it would have held is free: the next run starts and finishes.
+    const next = runner.start(req(['0'], { resources: ['pipeline'] }));
+    await until(() => runner.store.read(next.id)?.status === 'done');
+  });
+
   it('orders runs that share a resource and drops a queued run on cancel', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);

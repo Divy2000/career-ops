@@ -93,7 +93,7 @@ export class Runner {
   constructor(
     private dataRoot: string,
     private bus: EventBus,
-    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void } = {},
+    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void; nodePath?: string } = {},
   ) {
     this.store = new RunStore(dataRoot, opts.retention);
     this.procStart = opts.procStart ?? ((pid) => processStartTime(pid, undefined, opts.kill));
@@ -251,11 +251,27 @@ export class Runner {
     const meta = this.store.read(queued.id) ?? queued;
     if (meta.status !== 'queued') return false;
     const runDir = this.store.dirOf(meta.id);
-    const child = spawn(process.execPath, [WRAPPER_PATH, runDir, meta.cmd.cwd, meta.cmd.bin, ...meta.cmd.args], {
-      detached: true,
-      stdio: 'ignore',
-      env,
-      shell: false,
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(this.opts.nodePath ?? process.execPath, [WRAPPER_PATH, runDir, meta.cmd.cwd, meta.cmd.bin, ...meta.cmd.args], {
+        detached: true,
+        stdio: 'ignore',
+        env,
+        shell: false,
+      });
+    } catch (err) {
+      // Refused at once (an argument node will not pass on): the run is claimed, so nothing else would ever settle it.
+      this.failToStart(meta, err);
+      return false;
+    }
+    // ENOENT (the app's node was removed by an upgrade), EAGAIN or EMFILE arrive as an 'error' event: without a listener
+    // that is an uncaught exception that takes the server child down.
+    child.once('error', (err) => {
+      const entry = this.active.get(meta.id);
+      if (entry) clearInterval(entry.timer);
+      this.active.delete(meta.id);
+      this.failToStart(this.store.read(meta.id) ?? meta, err);
+      this.pump();
     });
     child.unref();
     const wrapperPid = child.pid ?? null;
@@ -264,6 +280,15 @@ export class Runner {
     this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
     this.track(running);
     return true;
+  }
+
+  /** A run whose wrapper could not be started ends failed with the reason; its inputs go and its resources are free. */
+  private failToStart(meta: RunMeta, err: unknown): void {
+    this.envById.delete(meta.id);
+    const failed: RunMeta = { ...meta, status: 'failed', endedAt: new Date().toISOString(), error: `could not start the run: ${(err as Error).message}` };
+    this.store.write(failed);
+    this.dropInputs(failed);
+    this.bus.publish('run.status', { runId: meta.id, status: 'failed', actionId: meta.actionId });
   }
 
   private track(meta: RunMeta): void {
