@@ -328,11 +328,9 @@ async function main(): Promise<void> {
         return true;
       }
       // A blue/green reload: with no server running (a first start that failed) the new one takes over at once.
-      const started = await bg.reload();
-      const s = bg.status;
-      // A reload queued behind this one may already be running, so the status no longer holds this failure.
-      const text = started ? 'the server started' : `the server still does not start: ${s.state === 'failed' ? s.error : 'another restart is under way'}`;
-      res.writeHead(started ? 200 : 502, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(text);
+      const result = await bg.reload();
+      const text = result.state === 'ok' ? 'the server started' : `the server still does not start: ${result.error}`;
+      res.writeHead(result.state === 'ok' ? 200 : 502, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(text);
       return true;
     }
     res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');

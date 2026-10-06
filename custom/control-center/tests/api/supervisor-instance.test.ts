@@ -258,6 +258,33 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('a restart asked for while another is under way answers with its own run\'s result (SW2-claude-05 review)', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      const cookie = await signIn(port);
+      const post = { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' };
+      const first = request(port, 'POST', '/__recovery/restart', post);
+      const state = async () => (JSON.parse((await request(port, 'GET', '/__supervisor/status', { cookie })).body) as { state: string }).state;
+      const deadline = Date.now() + 20_000;
+      while ((await state()) !== 'reloading') {
+        if (Date.now() > deadline) throw new Error(`the first restart never started\n${s.output()}`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const second = request(port, 'POST', '/__recovery/restart', post);
+      for (const reply of await Promise.all([first, second])) {
+        expect(reply.status, reply.body).toBe(502);
+        expect(reply.body).toMatch(/^the server still does not start: server child exited before listening/);
+      }
+      expect(s.proc.exitCode).toBeNull();
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
   it('a first start that fails after a Dev Chat turn changed files points at reverting that turn (SW2-claude-05 review)', async () => {
     const root = copyFixtureRoot();
     const guardRoot = tempDir('cc-sup-guard-devchat-');

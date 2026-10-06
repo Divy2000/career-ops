@@ -522,7 +522,7 @@ describe('blue/green reload', () => {
     const bg = new BlueGreen(first, async () => second, async () => undefined, { drainMs: 100, now: () => 'T' });
     const seen: string[] = [];
     bg.onStatus((s) => seen.push(s.state));
-    expect(await bg.reload()).toBe(true);
+    expect((await bg.reload()).state).toBe('ok');
     expect(bg.active).toBe(second);
     expect(bg.status).toEqual({ state: 'ok', at: 'T', pid: 12 });
     expect(first.drained).toBe(true);
@@ -546,10 +546,10 @@ describe('blue/green reload', () => {
       return fixed;
     }, async () => undefined, { now: () => 'T' });
     expect(bg.active).toBeNull();
-    expect(await bg.reload()).toBe(false);
+    expect((await bg.reload()).state).toBe('failed');
     expect(bg.active).toBeNull();
     expect(bg.status).toMatchObject({ state: 'failed' });
-    expect(await bg.reload()).toBe(true);
+    expect((await bg.reload()).state).toBe('ok');
     expect(bg.active).toBe(fixed);
     await flush();
     expect(log).toEqual(['activate 13']);
@@ -560,7 +560,7 @@ describe('blue/green reload', () => {
     const first = handle(5001, 11, log);
     const second = handle(5002, 12, log);
     const bg = new BlueGreen(first, async () => second, async () => undefined, { drainMs: 60_000 });
-    expect(await bg.reload()).toBe(true);
+    expect((await bg.reload()).state).toBe('ok');
     await flush();
     expect(log).toEqual(['drain 11']);
     first.exit();
@@ -592,21 +592,48 @@ describe('blue/green reload', () => {
     const first = handle(5001, 11);
     const broken = handle(5003, 13);
     const bg = new BlueGreen(first, async () => broken, async () => { throw new Error('healthz did not return 200 in time'); }, { now: () => 'T' });
-    expect(await bg.reload()).toBe(false);
+    expect((await bg.reload()).state).toBe('failed');
     expect(bg.active).toBe(first);
     expect(bg.status).toEqual({ state: 'failed', at: 'T', error: 'healthz did not return 200 in time', stderrTail: 'stderr of 13' });
     expect(broken.killed).toBe(true);
     expect(first.drained).toBe(false);
     const bg2 = new BlueGreen(first, async () => { throw new Error('tsx crashed'); }, async () => undefined, { now: () => 'T' });
-    expect(await bg2.reload()).toBe(false);
+    expect((await bg2.reload()).state).toBe('failed');
     expect(bg2.status).toMatchObject({ state: 'failed', error: 'tsx crashed' });
+  });
+
+  it('a reload asked for while one is under way answers with the follow-up run\'s own result, not the earlier run\'s (SW2-claude-05 review)', async () => {
+    // The watcher's reload fails; a restart asked for meanwhile runs after it, from the fixed code, and comes up.
+    const fixed = handle(5004, 14);
+    const outcomes: Array<() => Promise<ChildHandle>> = [];
+    let fail!: () => void;
+    outcomes.push(() => new Promise((_, reject) => (fail = () => reject(new Error('server child exited before listening (code 1)')))));
+    outcomes.push(async () => fixed);
+    const bg = new BlueGreen(null, () => outcomes.shift()!(), async () => undefined, { now: () => 'T' });
+    const watcher = bg.reload();
+    const restart = bg.reload();
+    fail();
+    expect(await watcher).toMatchObject({ state: 'failed', error: 'server child exited before listening (code 1)' });
+    expect(await restart).toEqual({ state: 'ok', at: 'T', pid: 14 });
+    expect(bg.active).toBe(fixed);
+  });
+
+  it('a follow-up run that fails answers its own error even when the run before it came up (SW2-claude-05 review)', async () => {
+    const first = handle(5001, 11);
+    const second = handle(5002, 12);
+    const outcomes: Array<() => Promise<ChildHandle>> = [async () => second, async () => { throw new Error('tsx crashed'); }];
+    const bg = new BlueGreen(first, () => outcomes.shift()!(), async () => undefined, { now: () => 'T', drainMs: 1 });
+    const [a, b] = await Promise.all([bg.reload(), bg.reload()]);
+    expect(a).toEqual({ state: 'ok', at: 'T', pid: 12 });
+    expect(b).toMatchObject({ state: 'failed', error: 'tsx crashed' });
+    expect(bg.active).toBe(second);
   });
 
   it('coalesces a burst of reload requests into one in-flight run plus one follow-up', async () => {
     let spawned = 0;
     const bg = new BlueGreen(handle(1, 1), async () => handle(2 + spawned, 2 + spawned++), async () => undefined, { drainMs: 1 });
     const results = await Promise.all([bg.reload(), bg.reload(), bg.reload()]);
-    expect(results).toEqual([true, true, true]);
+    expect(results.map((r) => r.state)).toEqual(['ok', 'ok', 'ok']);
     await new Promise((r) => setTimeout(r, 20));
     expect(spawned).toBe(2);
   });

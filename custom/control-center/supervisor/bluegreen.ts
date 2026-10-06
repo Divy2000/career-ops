@@ -23,12 +23,15 @@ export interface ChildHandle {
 }
 
 export type ReloadState = { state: 'idle' } | { state: 'reloading'; startedAt: string } | { state: 'ok'; at: string; pid: number } | { state: 'failed'; at: string; error: string; stderrTail: string };
+/** How one reload run ended. */
+export type ReloadResult = Extract<ReloadState, { state: 'ok' | 'failed' }>;
 
 export class BlueGreen {
   status: ReloadState = { state: 'idle' };
   private listeners = new Set<(s: ReloadState, active: ChildHandle | null) => void>();
-  private inFlight: Promise<boolean> | null = null;
-  private pending = false;
+  private inFlight: Promise<ReloadResult> | null = null;
+  /** The one run queued behind inFlight, shared by every reload asked for while inFlight runs. */
+  private queued: Promise<ReloadResult> | null = null;
   /** Settles after every child swapped out so far has exited. */
   private handover: Promise<void> = Promise.resolve();
 
@@ -50,23 +53,26 @@ export class BlueGreen {
     for (const l of this.listeners) l(s, this.active);
   }
 
-  /** Coalesces bursts: a reload requested while one runs queues exactly one more. */
-  reload(): Promise<boolean> {
-    if (this.inFlight) {
-      this.pending = true;
+  /**
+   * Coalesces bursts: a reload asked for while one runs queues exactly one more, and answers with that run's own
+   * result, since the run under way may have started from older code.
+   */
+  reload(): Promise<ReloadResult> {
+    if (!this.inFlight) {
+      this.inFlight = this.run().finally(() => {
+        this.inFlight = null;
+      });
       return this.inFlight;
     }
-    this.inFlight = this.run().finally(() => {
-      this.inFlight = null;
-      if (this.pending) {
-        this.pending = false;
-        void this.reload();
-      }
-    });
-    return this.inFlight;
+    const next = () => {
+      this.queued = null;
+      return this.reload();
+    };
+    this.queued ??= this.inFlight.then(next, next);
+    return this.queued;
   }
 
-  private async run(): Promise<boolean> {
+  private async run(): Promise<ReloadResult> {
     const now = this.opts.now ?? (() => new Date().toISOString());
     this.set({ state: 'reloading', startedAt: now() });
     let fresh: ChildHandle | null = null;
@@ -76,13 +82,15 @@ export class BlueGreen {
     } catch (err) {
       const tail = fresh?.stderrTail() ?? '';
       fresh?.kill();
-      this.set({ state: 'failed', at: now(), error: (err as Error).message, stderrTail: tail });
-      return false;
+      const failed: ReloadResult = { state: 'failed', at: now(), error: (err as Error).message, stderrTail: tail };
+      this.set(failed);
+      return failed;
     }
     const old = this.active;
     const next = fresh;
     this.active = next;
-    this.set({ state: 'ok', at: now(), pid: next.pid });
+    const ok: ReloadResult = { state: 'ok', at: now(), pid: next.pid };
+    this.set(ok);
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (old) {
       old.drain();
@@ -94,6 +102,6 @@ export class BlueGreen {
       // A later reload may already have replaced (and drained) this child; only the active one reconciles.
       if (this.active === next) next.activate();
     });
-    return true;
+    return ok;
   }
 }
