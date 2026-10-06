@@ -148,14 +148,17 @@ ensure_playwright_browser() {
 # lockfile with npm ci, which deletes any node_modules Claude left (no
 # lifecycle scripts), then run its vitest suite (which holds the contract test
 # against upstream's CLIs) and its typecheck, all output to <log>.
-# Fails at the first failing step, and when no test ran at all.
+# Fails at the first failing step, and when no test ran at all. Colors are off
+# whatever the caller exports, since escapes would split the summary grepped.
 control_center_checks() {
   local log="$1"
-  {
+  (
+    unset FORCE_COLOR
+    export NO_COLOR=1
     npm --prefix custom/control-center ci --ignore-scripts --no-audit --no-fund &&
       npm --prefix custom/control-center test &&
       npm --prefix custom/control-center run typecheck
-  } > "$log" 2>&1 || return 1
+  ) > "$log" 2>&1 || return 1
   grep -qE 'Tests[[:space:]]+[1-9][0-9]* passed' "$log"
 }
 
@@ -184,7 +187,8 @@ custom_tests() {
     esac
   done
   [ -z "$reporter" ] || kept+=("$reporter")
-  NODE_OPTIONS="${kept[*]-}" node --test custom/*/tests/*.spec.mjs > "$log" 2>&1 || return 1
+  # FORCE_COLOR (even empty) would color the summary and split the line grepped below.
+  (unset FORCE_COLOR && NODE_OPTIONS="${kept[*]-}" node --test custom/*/tests/*.spec.mjs) > "$log" 2>&1 || return 1
   grep -qE '^(#|ℹ) pass [1-9]' "$log"
 }
 

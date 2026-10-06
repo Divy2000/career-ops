@@ -74,3 +74,19 @@ test('Given NODE_OPTIONS asks for the dot reporter, the guard still sees the sui
     else process.env.NODE_OPTIONS = saved;
   }
 });
+
+test('Given the caller exports FORCE_COLOR, the guard child prints a plain summary the guard can read (SW5-tests-18)', () => {
+  assert.equal('FORCE_COLOR' in suiteEnv({ PATH: '/bin', FORCE_COLOR: '1' }, '/fresh'), false);
+  const dir = tempDir('tmp-guard-color-');
+  fs.writeFileSync(path.join(dir, 'a.spec.mjs'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
+  const saved = process.env.FORCE_COLOR;
+  process.env.FORCE_COLOR = '1';
+  try {
+    const r = runSuiteInFreshTmp(dir, 'none');
+    assert.equal(r.status, 0, r.output);
+    assert.doesNotMatch(r.output, /\x1b\[/);
+  } finally {
+    if (saved === undefined) delete process.env.FORCE_COLOR;
+    else process.env.FORCE_COLOR = saved;
+  }
+});
