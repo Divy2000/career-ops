@@ -97,7 +97,13 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     // The check file is named by companySlug (custom/immigration/lib.mjs), which drops legal suffixes; its heading may
     // carry the DOL legal name ("Acme Robotics, Inc." from a Lookup), so the slug decides and the heading is the fallback.
     const { companySlug } = await importCore<{ companySlug: (name: string) => string }>(cfg.codeRoot, 'custom/immigration/lib.mjs');
-    const slug = key === '' ? '' : companySlug(row.company);
+    // companySlug throws on a name that is only a legal suffix ("Inc."): no slug, so the name match decides.
+    let slug = '';
+    try {
+      slug = key === '' ? '' : companySlug(row.company);
+    } catch {
+      slug = '';
+    }
     const companyFile = (slug ? overview.companies.find((c) => c.slug === slug) : undefined) ?? overview.companies.find((c) => sameCompany(c.name)) ?? null;
     // An alert's slug column is the same companySlug; a session may write the legal name in its company column.
     const alert = (slug ? overview.alerts.latest.find((a) => a.slug === slug) : undefined) ?? overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;

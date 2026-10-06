@@ -91,6 +91,18 @@ describe('read endpoints', () => {
     }
   });
 
+  it('GET /api/tracker/:n answers for a row whose company is only a legal suffix ("Inc."), which has no company slug, by matching names (SW2 review)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.appendFileSync(path.join(own.cfg.dataRoot, 'data', 'applications.md'), '| 7 | 2026-10-01 | Inc. | - | Data role | 3.1/5 | Applied | ❌ | - | company name lost in a paste |\n');
+      const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ row: { company: 'Inc.' }, sponsorship: { companyFile: null, alert: null } });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n gives an unknown-employer (?) row no company history, company file or alert (SW-server-05)', async () => {
     const own = await makeTestApp();
     try {
