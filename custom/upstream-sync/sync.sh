@@ -98,7 +98,8 @@ if ! git merge --no-ff --no-edit -m "chore(sync): merge upstream main $TODAY" up
   esac
 fi
 # What the merge itself produced: only what Claude changes after this, outside the conflicts, can hold the PR.
-merge_snapshot > "$STATE_DIR/$TODAY.merge-snapshot.txt" || fail "cannot record the merge result before Claude runs"
+# Kept in this shell's memory: Claude can write to STATE_DIR and the worktree, so a file there could be rewritten.
+MERGE_SNAPSHOT="$(merge_snapshot)" || fail "cannot record the merge result before Claude runs"
 
 echo "--- headless Claude ($MODEL)"
 PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
@@ -128,7 +129,8 @@ if [ -n "$CHANGED_UPSTREAM" ]; then
   echo "NOTE: files outside custom/ differ from upstream/main (expected only for conflict resolutions):"
   echo "$CHANGED_UPSTREAM"
 fi
-UNEXPECTED_UPSTREAM="$(unexpected_upstream "$(changed_since_snapshot "$STATE_DIR/$TODAY.merge-snapshot.txt")" "$CONFLICTS")"
+CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail "cannot compare HEAD with the merge result"
+UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"
 
 CUSTOM_OK=1
 custom_tests "$STATE_DIR/$TODAY.custom-tests.txt" || CUSTOM_OK=0

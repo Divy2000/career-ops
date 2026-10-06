@@ -386,7 +386,7 @@ test('sync.sh stops the run through verify_merge before it pushes', () => {
  * one commit ahead. `conflict` makes upstream edit scan.mjs too. The sync branch merges upstream; `claude(repo)` then
  * stands in for the headless pass. Returns what sync.sh's own lines decide is an unexpected upstream edit.
  */
-function heldUpstream({ conflict = false, claude = () => {} } = {}) {
+function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => snap, failing = false } = {}) {
   const base = mkdtempSync(path.join(tmpdir(), 'sync-held-'));
   const repo = path.join(base, 'repo');
   const state = path.join(base, 'state');
@@ -406,18 +406,22 @@ function heldUpstream({ conflict = false, claude = () => {} } = {}) {
     const merged = spawnSync('git', ['merge', '-q', '--no-ff', '--no-edit', 'upstream/main'], { cwd: repo, env: GIT_ENV, encoding: 'utf8' });
     assert.equal(merged.status === 0, !conflict, merged.stderr);
     const lines = readFileSync(SYNC, 'utf8').split('\n');
-    const snapshot = lines.find((l) => l.startsWith('merge_snapshot ')) ?? '';
+    const snapshot = lines.find((l) => l.startsWith('MERGE_SNAPSHOT="$(merge_snapshot)"'));
+    assert.ok(snapshot, 'sync.sh takes no MERGE_SNAPSHOT before Claude');
     const from = lines.findIndex((l) => l.startsWith('CHANGED_UPSTREAM="$(git diff'));
     const to = lines.findIndex((l) => l.startsWith('UNEXPECTED_UPSTREAM='));
     assert.ok(from > -1 && to > from, 'the CHANGED_UPSTREAM .. UNEXPECTED_UPSTREAM block was not found');
     const vars = `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="$(git diff --name-only --diff-filter=U)"\nfail() { echo "!!! $1"; exit 1; }\n`;
-    const before = bashLib(repo, `${vars}${snapshot}\nprintf '%s' "$CONFLICTS"`);
+    const before = bashLib(repo, `${vars}${snapshot}\nprintf '%s\\0%s' "$CONFLICTS" "$MERGE_SNAPSHOT"`);
     assert.equal(before.status, 0, before.stdout + before.stderr);
-    const conflicts = before.stdout;
+    const [conflicts, taken] = before.stdout.split('\0');
+    // Nothing on disk for the sync Claude (Write and Edit, --add-dir STATE_DIR) to rewrite or delete.
+    assert.deepEqual(readdirSync(state), []);
     claude(repo);
-    const after = bashLib(repo, `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="${conflicts}"\n{\n${lines.slice(from, to + 1).join('\n')}\n} >/dev/null\nprintf '%s' "$UNEXPECTED_UPSTREAM"`);
-    assert.equal(after.status, 0, after.stderr);
-    return { conflicts, unexpected: after.stdout, differs: git(repo, 'diff', '--name-only', 'upstream/main', 'HEAD').trim() };
+    // The snapshot crosses into the second shell the way it stays in sync.sh's memory: as a variable.
+    const after = bashLib(repo, `STATE_DIR="${state}" TODAY=2026-10-05 CONFLICTS="${conflicts}"\nfail() { echo "!!! $1" >&2; exit 1; }\n{\n${lines.slice(from, to + 1).join('\n')}\n} >/dev/null\nprintf '%s' "$UNEXPECTED_UPSTREAM"`, { MERGE_SNAPSHOT: tamper(taken) });
+    if (!failing) assert.equal(after.status, 0, after.stderr);
+    return { conflicts, status: after.status, unexpected: after.stdout, stderr: after.stderr, differs: git(repo, 'diff', '--name-only', 'upstream/main', 'HEAD').trim() };
   } finally { rmSync(base, { recursive: true, force: true }); }
 }
 
@@ -465,8 +469,37 @@ test('resolving a conflict is allowed, but an upstream file slipped into the mer
   assert.equal(heldUpstream({ conflict: true, claude: resolve(true) }).unexpected, 'other.mjs');
 });
 
-test('sync.sh records the merge result after the README step and before Claude runs', () => {
+test('sync.sh records the merge result in memory after the README step and before Claude runs, and fails the run when it cannot', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  const snap = sync.indexOf('merge_snapshot > "$STATE_DIR/$TODAY.merge-snapshot.txt" || fail ');
+  const snap = sync.indexOf('MERGE_SNAPSHOT="$(merge_snapshot)" || fail ');
   assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('claude -p'), `merge_snapshot at ${snap}`);
+  assert.equal(/merge-snapshot|merge_snapshot >/.test(sync), false, 'the snapshot is never written to a file');
+});
+
+test('a missing merge snapshot fails the run: it never reads as "nothing changed" and auto-merges', () => {
+  const r = heldUpstream({ tamper: () => '', failing: true });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^!!! /m);
+  assert.equal(r.unexpected, '');
+});
+
+test('a snapshot that no longer matches the merge holds the PR for every path it disagrees on', () => {
+  const r = heldUpstream({ tamper: (snap) => snap.replace(/^other\.mjs\t(\S+) \S+$/m, 'other.mjs\t$1 0000000000000000000000000000000000000000') });
+  assert.equal(r.unexpected, 'other.mjs');
+});
+
+test('merge_snapshot and changed_since_snapshot fail, not print nothing, when they cannot do their job', () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'sync-snap-'));
+  try {
+    assert.notEqual(bashLib(base, 'merge_snapshot').status, 0, 'outside a git repository');
+    git(base, 'init', '-q', '-b', 'main');
+    assert.notEqual(bashLib(base, 'merge_snapshot').status, 0, 'an index with nothing in it');
+    commitFile(base, 'a.txt', 'a\n', 'a');
+    assert.notEqual(bashLib(base, 'changed_since_snapshot ""').status, 0, 'an empty snapshot');
+    const snap = bashLib(base, 'merge_snapshot');
+    assert.equal(snap.status, 0, snap.stderr);
+    const same = bashLib(base, 'changed_since_snapshot "$S"', { S: snap.stdout });
+    assert.equal(same.status, 0, same.stderr);
+    assert.equal(same.stdout, '');
+  } finally { rmSync(base, { recursive: true, force: true }); }
 });

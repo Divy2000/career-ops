@@ -160,7 +160,9 @@ test('unexpected_upstream lists the upstream files that differ but did not confl
 test('sync.sh blocks on upstream edits this run made after the merge, outside the conflicts it handed Claude', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const claude = sync.indexOf('claude -p');
-  const unexpected = sync.indexOf('UNEXPECTED_UPSTREAM="$(unexpected_upstream "$(changed_since_snapshot "$STATE_DIR/$TODAY.merge-snapshot.txt")" "$CONFLICTS")"');
+  const changed = sync.indexOf('CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail ');
+  const unexpected = sync.indexOf('UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"');
+  assert.ok(changed > claude && unexpected > changed, `changed_since_snapshot at ${changed}, its own statement before ${unexpected}`);
   const decide = sync.indexOf('BLOCKERS="$(merge_blockers)"');
   assert.ok(claude > -1 && unexpected > claude && decide > unexpected, `order was claude=${claude} unexpected=${unexpected} decide=${decide}`);
 });

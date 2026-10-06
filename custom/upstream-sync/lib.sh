@@ -85,18 +85,28 @@ verify_merge() {
 # merge_snapshot: every path the merge left resolved (index stage 0), one
 # "path<TAB>mode blob" line each, sorted. Taken right after the merge attempt
 # and before Claude runs: auto-merged content as the merge staged it, and no
-# entry for a path that still conflicts.
+# entry for a path that still conflicts. sync.sh keeps it in a variable, never in
+# a file the sync Claude could rewrite. Fails when git fails or nothing is staged.
 merge_snapshot() {
-  git ls-files -s | awk -F'\t' '{ split($1, m, " "); if (m[3] == 0) print $2 "\t" m[1] " " m[2] }' | LC_ALL=C sort
+  local index snap
+  index="$(git ls-files -s)" || return 1
+  snap="$(printf '%s\n' "$index" | awk -F'\t' '{ split($1, m, " "); if (m[3] == 0) print $2 "\t" m[1] " " m[2] }' | LC_ALL=C sort)"
+  if [ -z "$snap" ]; then echo "merge_snapshot: the index has no resolved paths" >&2; return 1; fi
+  printf '%s\n' "$snap"
 }
 
 # changed_since_snapshot <snapshot>: the paths outside custom/ and
 # .github/README.md whose content, mode or presence at HEAD differs from the
-# merge_snapshot in <snapshot>: what this run changed after the merge. A fork
+# merge_snapshot text <snapshot>: what this run changed after the merge. A fork
 # difference from upstream kept by an earlier sync is in both, so it is not here.
+# Fails closed: an empty snapshot or an unreadable HEAD is an error, never
+# "nothing changed".
 changed_since_snapshot() {
-  git ls-tree -r HEAD | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] " " m[3] }' | LC_ALL=C sort |
-    LC_ALL=C comm -3 "$1" - | sed -e 's/^\t//' | cut -f1 |
+  local tree
+  if [ -z "${1:-}" ]; then echo "changed_since_snapshot: no merge snapshot to compare with" >&2; return 1; fi
+  tree="$(git ls-tree -r HEAD)" || return 1
+  printf '%s\n' "$tree" | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] " " m[3] }' | LC_ALL=C sort |
+    LC_ALL=C comm -3 <(printf '%s\n' "$1") - | sed -e 's/^\t//' | cut -f1 |
     awk '!/^custom\// && $0 != ".github/README.md"' | LC_ALL=C sort -u
 }
 
