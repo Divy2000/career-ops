@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
-import { sendTurn, useSessionStream, type Transcript } from '@web/lib/sessions';
+import { SESSION_LOAD_RETRY, sendTurn, useSessionStream, type Transcript } from '@web/lib/sessions';
 import type { SessionMeta } from '@shared/api';
 import { useLiveInvalidation } from '@web/lib/sse';
 
@@ -136,6 +136,8 @@ describe('one session across its turns', () => {
   let latest: { transcript: Transcript; meta: SessionMeta | null };
   let holdMeta: boolean;
   let heldMeta: Array<() => void>;
+  let failing: number;
+  const retry = { ...SESSION_LOAD_RETRY };
 
   function Probe() {
     useLiveInvalidation();
@@ -161,10 +163,17 @@ describe('one session across its turns', () => {
     state = 'done';
     holdMeta = false;
     heldMeta = [];
+    failing = 0;
+    // The load's retry backoff in milliseconds instead of seconds, so the outage test does not wait on real delays.
+    Object.assign(SESSION_LOAD_RETRY, { baseMs: 5, maxMs: 20 });
     vi.stubGlobal('EventSource', FakeEventSource);
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
+        if (url === '/api/sessions/s1' && failing > 0) {
+          failing -= 1;
+          return new Response('{"error":"server restarting"}', { status: 503, headers: { 'content-type': 'application/json' } });
+        }
         const body = url === '/api/sessions/s1' ? { meta: { id: 's1', status: state, turns: [] }, events } : { id: 's1' };
         const response = new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
         if (url !== '/api/sessions/s1' || !holdMeta) return response;
@@ -177,6 +186,7 @@ describe('one session across its turns', () => {
     await act(async () => root.unmount());
     host.remove();
     vi.unstubAllGlobals();
+    Object.assign(SESSION_LOAD_RETRY, retry);
   });
 
   it('a finished session is read from its stored events and holds no connection of its own', async () => {
@@ -282,6 +292,19 @@ describe('one session across its turns', () => {
     events = [...events, stored(3, { type: 'text.delta', text: 'b' }), stored(4, { type: 'text.delta', text: 'c' })];
     await frames([events[3]!]);
     await until(() => latest.transcript.turns[0]?.text === 'abc', 'every event, in order');
+  });
+
+  it('stored events that failed to load are read again until they load, and live frames wait for them', async () => {
+    state = 'running';
+    events = [TURN_1[0]!, stored(2, { type: 'text.delta', text: 'a' })];
+    // The first read and the one a live frame asks for both fail (the server is restarting), then it answers.
+    failing = 2;
+    await mount();
+    await settle();
+    events = [...events, stored(3, { type: 'text.delta', text: 'b' })];
+    await frames([events[2]!]);
+    await until(() => latest.transcript.turns[0]?.text === 'ab' && latest.meta?.status === 'running', 'the whole history');
+    expect(failing).toBe(0);
   });
 
   it('a session that failed before its turn could start (only an error event) shows the error, and a later turn clears it (SW3-web-a-01 review 2)', async () => {

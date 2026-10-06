@@ -127,6 +127,9 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
   return { ...base, transcript: action.events.reduce(reduceEvent, base.transcript) };
 }
 
+/** The stored events' retry backoff (doubling from baseMs, capped at maxMs); tests shorten it. */
+export const SESSION_LOAD_RETRY = { baseMs: 1000, maxMs: 3000 };
+
 /** A status that ends the turn, or an error event (a session can fail before its turn spawns: an error and no status). */
 const ends = (e: StoredEvent) => (e.event.type === 'status' && isTerminal(e.event.status)) || e.event.type === 'error';
 
@@ -135,7 +138,7 @@ const ends = (e: StoredEvent) => (e.event.type === 'status' && isTerminal(e.even
  * each event once, in seq order. No session holds a connection of its own, so finished and running sessions alike cost
  * nothing beyond the page's one stream. Frames that arrive while the stored events load wait for them; each time the
  * stream opens, and whenever a frame skips a seq, the stored events are read again, since the stream keeps no replay of
- * what it sent while it was not attached.
+ * what it sent while it was not attached. A read that fails is retried until it answers, and frames wait for it.
  * The meta decides how the session stands (one marked failed after a restart can end on a running event), but only a
  * meta answer that counts the last turn start the stream delivered: an older one was asked before that turn started.
  */
@@ -149,6 +152,8 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     let lastStart = 0;
     let loading = true;
     let pending: StoredEvent[] = [];
+    let failures = 0;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const apply = (events: StoredEvent[]) => {
       // The stored events and the frames that waited for them overlap: one event per seq.
       const fresh = [...new Map(events.filter((e) => e.seq > last).map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
@@ -158,10 +163,12 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       dispatch({ type: 'events', id, events: fresh.map((e) => e.event) });
       return fresh.some(ends);
     };
-    const load = (): void =>
+    const load = (): void => {
+      clearTimeout(retry);
       void apiGet<{ meta?: SessionMeta; events: StoredEvent[] }>(`/api/sessions/${id}`).then(
         (r) => {
           if (closed) return;
+          failures = 0;
           if (!r.meta) {
             // Not a session at all (another route under /api/sessions/, such as engine): nothing to follow, and meta
             // stays null, so the page that names the session says why.
@@ -183,9 +190,13 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
           if (ended && waiting.length > 0) void qc.invalidateQueries({ queryKey: ['sessions'] });
         },
         () => {
-          loading = false;
+          // Still loading: live frames keep waiting, since applying them first would move past the history it filters.
+          if (closed) return;
+          retry = setTimeout(load, Math.min(SESSION_LOAD_RETRY.baseMs * 2 ** failures, SESSION_LOAD_RETRY.maxMs));
+          failures += 1;
         },
       );
+    };
     const offEvents = subscribeAppEvents('session.event', (raw) => {
       let frame: { sessionId?: string; stored?: StoredEvent };
       try {
@@ -222,6 +233,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     load();
     return () => {
       closed = true;
+      clearTimeout(retry);
       offEvents();
       offOpen();
     };
