@@ -1,3 +1,4 @@
+import { localDate } from '../../shared/local-date.js';
 import type { ScanHistoryRow } from './pipeline.js';
 
 export type NormalizeTextKey = (value: unknown, separator?: string) => string;
@@ -48,14 +49,17 @@ export function collectWhatsNew(opts: {
   limit: number;
 }): { offers: FreshOffer[]; count: number } {
   const days = Math.min(30, Math.max(1, opts.days));
-  const cutoff = opts.now - days * 86_400_000;
+  // scan.mjs writes first_seen as a local date, so the window is N local calendar days ending today, not N x 24h back
+  // from now (which kept 6, 7 or 8 days depending on the hour and the time zone).
+  const today = new Date(opts.now);
+  const earliest = localDate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1)));
   const keys = evaluatedKeys(opts.applications, opts.norm);
   const offers: FreshOffer[] = [];
   let count = 0;
   const sorted = [...opts.history].sort((a, b) => (a.firstSeen < b.firstSeen ? 1 : a.firstSeen > b.firstSeen ? -1 : 0));
   for (const row of sorted) {
     if (!/^https?:\/\//i.test(row.url)) continue;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.firstSeen) || Date.parse(`${row.firstSeen}T00:00:00Z`) < cutoff) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.firstSeen) || row.firstSeen < earliest) continue;
     // Only what the scanner put in the pipeline: it also records skips, expiries and company cooldowns (`cooldown:...`).
     if (row.status.trim().toLowerCase() !== 'added') continue;
     if (isEvaluated(keys, opts.norm, row.company, row.title)) continue;
