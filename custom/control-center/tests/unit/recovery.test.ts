@@ -347,7 +347,7 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
       run(runDir);
     }
     const revert = (serverRunning: boolean) => recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: root, dataRoot: root }, sessionId: 's1', turn: 1, serverRunning });
-    return { file, turnDir, revert };
+    return { file, turnDir, revert, runsDir: path.dirname(runDir) };
   }
   const runMeta = (runDir: string, fields: Record<string, unknown>) => fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({ id: path.basename(runDir), status: 'running', wrapperPid: null, childPid: null, ...fields }));
   /** A PID that ran and has exited. */
@@ -368,6 +368,37 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(gone.revert(false).status).toBe(200);
     const reused = stalled((dir) => runMeta(dir, { wrapperPid: process.pid, wrapperStartedAt: 1_000_000, childPid: deadPid() }));
     expect(reused.revert(false).status).toBe(200);
+  });
+
+  it('a run of the session that has not ended blocks the revert even when the meta\'s last turn is an older, finished one (the server spawned the next turn\'s run and died before it recorded the turn)', () => {
+    const t = stalled((dir) => {
+      runMeta(dir, { status: 'done', params: { sessionId: 's1', turn: 1 } });
+      fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
+    });
+    const next = path.join(t.runsDir, 'r20261006000001-abcdef');
+    fs.mkdirSync(next);
+    runMeta(next, { params: { sessionId: 's1', turn: 2 }, wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid) });
+    // Another session's live run is none of this one's business.
+    const other = path.join(t.runsDir, 'r20261006000002-abcdef');
+    fs.mkdirSync(other);
+    runMeta(other, { params: { sessionId: 's2', turn: 1 }, wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid) });
+    expect(t.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    expect(fs.readFileSync(t.file, 'utf8')).toBe('broken by the turn\n');
+    fs.writeFileSync(path.join(next, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
+    expect(t.revert(false).status).toBe(200);
+  });
+
+  it('a run whose meta has no child PID yet is judged by the PIDs the wrapper recorded in wrapper.json', () => {
+    const live = stalled((dir) => {
+      runMeta(dir, { wrapperPid: deadPid(), childPid: null });
+      fs.writeFileSync(path.join(dir, 'wrapper.json'), JSON.stringify({ wrapperPid: deadPid(), childPid: process.pid }));
+    });
+    expect(live.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    const gone = stalled((dir) => {
+      runMeta(dir, { wrapperPid: null, childPid: null });
+      fs.writeFileSync(path.join(dir, 'wrapper.json'), JSON.stringify({ wrapperPid: deadPid(), childPid: deadPid() }));
+    });
+    expect(gone.revert(false).status).toBe(200);
   });
 
   it('a run still going is never reverted under it, nor one that cannot be shown to have ended, nor any while a server runs', () => {

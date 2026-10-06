@@ -366,14 +366,45 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
   }
   if (!run) return false;
   if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost' || run.status === 'queued') return true;
+  // The wrapper writes its own and the child's PIDs to wrapper.json first; the server copies them into the meta later.
+  let wrapper: { wrapperPid?: number | null; childPid?: number | null } | null;
+  try {
+    wrapper = readJson(path.join(dir, 'wrapper.json'));
+  } catch {
+    return false;
+  }
   const procs = [
-    { pid: run.wrapperPid, started: run.wrapperStartedAt },
-    { pid: run.childPid, started: run.childStartedAt },
+    { pid: run.wrapperPid ?? wrapper?.wrapperPid, started: run.wrapperPid ? run.wrapperStartedAt : undefined },
+    { pid: run.childPid ?? wrapper?.childPid, started: run.childPid ? run.childStartedAt : undefined },
   ].filter((p): p is { pid: number; started: unknown } => Number.isInteger(p.pid) && (p.pid as number) > 0);
   if (procs.length === 0) return false;
   return procs.every(({ pid, started }) => {
     const now = startOf(pid);
     return now === null || (typeof started === 'number' && typeof now === 'number' && now !== started);
+  });
+}
+
+/**
+ * Whether every run of a session has ended: the server starts a turn's run before it records the turn in the session's
+ * meta, so a run can be live that the meta does not name yet. A runs folder that cannot be read counts as not ended.
+ */
+export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
+  const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
+  let names: string[];
+  try {
+    names = fs.readdirSync(runs);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  return names.every((name) => {
+    let run: { params?: { sessionId?: unknown } } | null;
+    try {
+      run = readJson(path.join(runs, name, 'meta.json'));
+    } catch {
+      // Not readable as a run (a stray file, a torn write): nothing ties it to this session.
+      return true;
+    }
+    return run?.params?.sessionId !== sessionId || runEnded(dataRoot, name, startOf);
   });
 }
 
@@ -388,7 +419,9 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     // finalized here the way the server would: its post-turn record from the hashes the hook took at each write.
     if (opts.serverRunning !== false) return { status: 409, text: 'the session is still running; cancel it before reverting' };
     const last = Array.isArray(meta.turns) ? meta.turns.at(-1) : undefined;
-    if (!last || !runEnded(opts.ctx.dataRoot, last.runId)) return { status: 409, text: 'the session\'s last turn is still running (its run has not ended); wait for it to finish before reverting' };
+    if (!last || !runEnded(opts.ctx.dataRoot, last.runId) || !sessionRunsEnded(opts.ctx.dataRoot, meta.id)) {
+      return { status: 409, text: 'the session is still running (one of its runs has not ended); wait for it to finish before reverting' };
+    }
     const offset = turnOffset(sessionDir, last.n);
     if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
   }
