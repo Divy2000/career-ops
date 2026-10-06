@@ -52,7 +52,8 @@ describe('preflight', () => {
   it('fails below the Node floor and warns about ANTHROPIC_API_KEY', async () => {
     const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v20.0.0', env: { ANTHROPIC_API_KEY: 'x' }, exec: execOk });
     expect(r.ok).toBe(false);
-    expect(r.errors[0]).toContain('below the floor');
+    // Requirement change: the check is the supported range, and the message names it (it said "below the floor").
+    expect(r.errors[0]).toBe('Node 20.0.0 is not supported; use 22.22.2+, 24.15+ or 26+. Install a supported Node.');
     expect(r.warnings[0]).toContain('ANTHROPIC_API_KEY');
   });
 });

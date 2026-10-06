@@ -92,30 +92,33 @@ test('without --dir the installer targets ~/career-ops when the script is not in
 
 // ---------------------------------------------------------------- platform and prerequisites
 
-// Requirement change: the floor is the Control Center's, the lowest Node every dependency accepts, 22.22.2 (it was 22.6.0).
-test('Node 20 fails with exit 1 naming the 22.22.2 floor, before anything is changed', () => {
+// Requirement change: the installer accepts the Control Center's supported Node versions, 22.22.2+, 24.15+ or 26+ (the
+// versions every dependency in its lockfile accepts), where it used to take any Node from 22.6.0.
+test('Node 20 fails with exit 1 naming the supported versions, before anything is changed', () => {
   const { w, D, args } = fresh();
   const r = w.run(args(), { env: { FAKE_NODE_VERSION: 'v20.11.0' } });
   assert.equal(r.status, 1);
-  assert.match(r.out, /22\.22\.2/);
+  assert.match(r.out, /Node 20\.11\.0 is not supported; use 22\.22\.2\+, 24\.15\+ or 26\+/);
   assert.equal(exists(D), false);
   assert.equal(w.calls('git').length, 0);
 });
 
-test('Node just below the floor (22.22.1, or the old floor 22.6.0) fails the same way', () => {
-  for (const version of ['v22.22.1', 'v22.6.0']) {
+test('a Node the dependencies do not support fails the same way: just below the floor, the old floor, 23, 24 before 24.15, 25', () => {
+  for (const version of ['v22.22.1', 'v22.6.0', 'v23.0.0', 'v24.0.0', 'v24.14.0', 'v25.0.0']) {
     const { w, D, args } = fresh();
     const r = w.run(args(), { env: { FAKE_NODE_VERSION: version } });
     assert.equal(r.status, 1, version);
-    assert.match(r.out, /older than the required 22\.22\.2/, version);
+    assert.match(r.out, new RegExp(`Node ${version.slice(1).replace(/\./g, '\\.')} is not supported; use 22\\.22\\.2\\+, 24\\.15\\+ or 26\\+`), version);
     assert.equal(exists(D), false, version);
   }
 });
 
-test('Node 22.22.2 is accepted', () => {
-  const { w, args } = fresh();
-  const r = w.run(args('--dry-run'), { env: { FAKE_NODE_VERSION: 'v22.22.2' } });
-  assert.equal(r.status, 0, r.out);
+test('Node 22.22.2, 24.15.0, 26.0.0 and 26.4.0 are accepted', () => {
+  for (const version of ['v22.22.2', 'v24.15.0', 'v26.0.0', 'v26.4.0']) {
+    const { w, args } = fresh();
+    const r = w.run(args('--dry-run'), { env: { FAKE_NODE_VERSION: version } });
+    assert.equal(r.status, 0, `${version}\n${r.out}`);
+  }
 });
 
 test('a missing npm is a failure (exit 1) that names npm', () => {

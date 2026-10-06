@@ -22,6 +22,32 @@ export function versionAtLeast(actual, floor) {
   return true;
 }
 
+function fullVersion(v) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(v).trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/**
+ * Whether `version` is in `range`, written as the Control Center's NODE_RANGE is (supervisor/preflight.ts, whose test
+ * checks this copy too): alternatives joined by ||, each one or more of ^X.Y.Z (that major, from X.Y.Z), >=X.Y.Z and
+ * <X.Y.Z. A range or version it cannot read accepts nothing.
+ */
+export function nodeSupported(version, range) {
+  const v = fullVersion(version);
+  if (!v) return false;
+  const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  return String(range).split('||').some((alt) => {
+    const terms = alt.trim().split(/\s+/).filter(Boolean);
+    return terms.length > 0 && terms.every((term) => {
+      const m = /^(\^|>=|<)(\d+\.\d+\.\d+)$/.exec(term);
+      const b = m ? fullVersion(m[2]) : null;
+      if (!m || !b) return false;
+      if (m[1] === '<') return compare(v, b) < 0;
+      return compare(v, b) >= 0 && (m[1] === '>=' || v[0] === b[0]);
+    });
+  });
+}
+
 const LOCAL_PATHS_HEADER = '# Files this checkout owns that upstream does not ship (added by custom/install/install.sh).\n';
 
 /** The new config/local-paths.txt text with `custom/` declared, or null when it already is. */
@@ -278,6 +304,8 @@ export function main(argv) {
   switch (cmd) {
     case 'version-ge':
       return versionAtLeast(rest[0], rest[1]) ? 0 : 1;
+    case 'node-supported':
+      return nodeSupported(rest[0], rest[1]) ? 0 : 1;
     case 'same-repo':
       return sameRepo(rest[0], rest[1]) ? 0 : 1;
     case 'same-path':
@@ -298,7 +326,7 @@ export function main(argv) {
       return 0;
     }
     default:
-      process.stderr.write('usage: cli.mjs version-ge|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
+      process.stderr.write('usage: cli.mjs version-ge|node-supported|same-repo|same-path|doctor-state|onboard-prompt|render-headless ...\n');
       return 2;
   }
 }

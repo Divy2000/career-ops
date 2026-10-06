@@ -26,7 +26,7 @@ Claude Code does the install and then builds your profile from your documents. I
 I want to install the H-1B-aware career-ops fork (Divy2000/career-ops). Follow these steps in order and never skip a confirmation.
 
 1. Show me your plan first: every command you will run and every folder you will create or change. Ask me before each system change (installing software, cloning, writing outside the clone). Wait for my yes.
-2. Check the requirements: macOS, git, Node.js 22.22.2 or newer, npm and the claude CLI. Tell me what is missing and how to install it. Do not install system software without asking me.
+2. Check the requirements: macOS, git, Node.js 22.22.2+, 24.15+ or 26+, npm and the claude CLI. Tell me what is missing and how to install it. Do not install system software without asking me.
 3. Clone the fork at the pinned tag into ~/career-ops:
    git clone --branch fork-install-v3 https://github.com/Divy2000/career-ops.git ~/career-ops
 4. Run the installer from the clone:
@@ -142,7 +142,7 @@ Pages: Today, Pipeline, Tracker, Apply, Follow-ups, Interviews, Discover, Sponso
 ## Requirements
 
 - macOS (the Control Center and daily job use Keychain, `lockf` and launchd). On Linux, use `--core-only`.
-- git, Node.js 22.22.2 or newer, npm.
+- git, Node.js 22.22.2+, 24.15+ or 26+, npm.
 - The [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/overview) and a Claude subscription.
 - Optional: `gh` (GitHub CLI), `poppler` (`pdftotext`, better PDF reading), Go (only for the upstream terminal dashboard).
 

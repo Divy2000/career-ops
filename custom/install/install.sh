@@ -10,8 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FORK_URL="${CAREER_OPS_REPO_URL:-https://github.com/Divy2000/career-ops.git}"
 UPSTREAM_URL="https://github.com/career-ops-hq/career-ops.git"
-# The Control Center's Node floor (supervisor/preflight.ts; a test there checks this copy).
-NODE_FLOOR="22.22.2"
+# The Node versions the Control Center supports (NODE_RANGE in supervisor/preflight.ts; a test there checks these copies).
+NODE_RANGE="^22.22.2 || ^24.15.0 || >=26.0.0"
+NODE_SUPPORTED="22.22.2+, 24.15+ or 26+"
 KEYCHAIN_SERVICE="career-ops-claude-token"
 # The terminal the installer talks to. Overridable so tests can feed answers from a file.
 TTY_DEV="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"
@@ -400,7 +401,7 @@ fi
 
 step "2/11 Prerequisites"
 FAILED=()
-for entry in "git|git|xcode-select --install (or: brew install git)" "node|node|brew install node (needs Node >= $NODE_FLOOR)" "npm|node|comes with Node: brew install node"; do
+for entry in "git|git|xcode-select --install (or: brew install git)" "node|node|brew install node (needs Node $NODE_SUPPORTED)" "npm|node|comes with Node: brew install node"; do
   tool="${entry%%|*}"; rest="${entry#*|}"; formula="${rest%%|*}"; fix="${rest#*|}"
   if have "$tool"; then continue; fi
   say "  missing: $tool - $fix"
@@ -412,8 +413,8 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
   die 1 "install the missing prerequisites above and re-run (or pass --install-missing)."
 fi
 NODE_VERSION="$(node --version)"
-if ! lib version-ge "$NODE_VERSION" "$NODE_FLOOR"; then
-  die 1 "Node $NODE_VERSION is older than the required $NODE_FLOOR. Install a newer Node (brew install node, or https://nodejs.org) and re-run."
+if ! lib node-supported "$NODE_VERSION" "$NODE_RANGE"; then
+  die 1 "Node ${NODE_VERSION#v} is not supported; use $NODE_SUPPORTED. Install a supported Node (brew install node, or https://nodejs.org) and re-run."
 fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
