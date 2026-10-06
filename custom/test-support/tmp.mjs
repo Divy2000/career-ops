@@ -21,12 +21,33 @@ export function tempDir(prefix) {
 
 /**
  * The environment for a guard child: `tmp` as TMPDIR, TEMP and TMP (os.tmpdir() reads TEMP or TMP before
- * TMPDIR on Windows), and no NODE_TEST_CONTEXT, which, inherited from this test process, makes the child
- * skip every file.
+ * TMPDIR on Windows), no NODE_TEST_CONTEXT, which, inherited from this test process, makes the child
+ * skip every file, and no test reporter in NODE_OPTIONS but spec or tap.
  */
 export function suiteEnv(base, tmp) {
   const { NODE_TEST_CONTEXT: _ctx, ...env } = base;
-  return { ...env, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
+  const out = { ...env, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
+  // A reporter the caller chose in NODE_OPTIONS other than spec or tap (dot, junit...), or a destination that sends the
+  // report elsewhere, leaves no summary suiteRanTests can read.
+  if (env.NODE_OPTIONS !== undefined) out.NODE_OPTIONS = readableTestReporter(env.NODE_OPTIONS);
+  return out;
+}
+
+/**
+ * NODE_OPTIONS keeping only the first test reporter whose summary the suite checks read (spec, tap), and no
+ * --test-reporter-destination; each flag in either `=` or spaced form. One reporter at most: node --test refuses
+ * several reporters without a destination for each.
+ */
+export function readableTestReporter(options) {
+  let kept = false;
+  return options
+    .replace(/(^|\s)--test-reporter(-destination)?(?:=|\s+)(\S+)/g, (whole, lead, dest, value) => {
+      if (dest || kept || !/^(spec|tap)$/.test(value)) return lead;
+      kept = true;
+      return whole;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**

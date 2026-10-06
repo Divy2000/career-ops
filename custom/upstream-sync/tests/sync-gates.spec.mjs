@@ -627,3 +627,13 @@ test('the wrapper sets its signal handlers before it starts the re-run, so no si
   assert.ok(body.indexOf('process.on(sig') > -1 && body.indexOf('process.on(sig') < body.indexOf('spawn(process.execPath'), 'handlers come before spawn');
   assert.match(body, /if \(!child\) process\.exit\(/);
 });
+
+test('custom_tests reads its summary even when the caller\'s NODE_OPTIONS picks another reporter (SW4-tests-27)', () => {
+  const dir = tempDir('sync-custom-dot-');
+  mkdirSync(path.join(dir, 'custom/a/tests'), { recursive: true });
+  writeFileSync(path.join(dir, 'custom/a/tests/a.spec.mjs'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
+  for (const opts of ['--test-reporter=dot', '--test-reporter junit --test-reporter-destination out.xml', '--test-reporter=tap', '--max-old-space-size=4096 --test-reporter spec', '--test-reporter=spec --test-reporter-destination=stdout --test-reporter tap --test-reporter-destination out.tap']) {
+    const r = spawnSync('bash', ['-c', `source "${LIB}"\ncustom_tests "${dir}/custom.log"`], { cwd: dir, env: { PATH: process.env.PATH, NODE_OPTIONS: opts }, encoding: 'utf8' });
+    assert.equal(r.status, 0, `${opts}: ${readFileSync(path.join(dir, 'custom.log'), 'utf8')}`);
+  }
+});

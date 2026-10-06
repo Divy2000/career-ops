@@ -164,8 +164,27 @@ control_center_checks() {
 # Node 22 prints TAP ("# pass N") when output is not a TTY and Node 23+ the spec
 # reporter ("ℹ pass N"), so either summary counts.
 custom_tests() {
-  local log="$1"
-  node --test custom/*/tests/*.spec.mjs > "$log" 2>&1 || return 1
+  local log="$1" words=() kept=() w next="" reporter=""
+  # A reporter chosen in the caller's NODE_OPTIONS other than spec or tap (dot, junit...), or a destination sending the
+  # report elsewhere, prints neither summary below: those flags are dropped, everything else is kept. Only the first
+  # spec or tap reporter stays, since node --test refuses several reporters without a destination for each.
+  read -ra words <<<"${NODE_OPTIONS:-}"
+  for w in ${words[@]+"${words[@]}"}; do
+    if [ -n "$next" ]; then
+      if [ "$next" = reporter ] && [ -z "$reporter" ]; then case "$w" in spec | tap) reporter="--test-reporter=$w" ;; esac; fi
+      next=""
+      continue
+    fi
+    case "$w" in
+      --test-reporter=spec | --test-reporter=tap) [ -n "$reporter" ] || reporter="$w" ;;
+      --test-reporter=* | --test-reporter-destination=*) ;;
+      --test-reporter) next=reporter ;;
+      --test-reporter-destination) next=destination ;;
+      *) kept+=("$w") ;;
+    esac
+  done
+  [ -z "$reporter" ] || kept+=("$reporter")
+  NODE_OPTIONS="${kept[*]-}" node --test custom/*/tests/*.spec.mjs > "$log" 2>&1 || return 1
   grep -qE '^(#|ℹ) pass [1-9]' "$log"
 }
 

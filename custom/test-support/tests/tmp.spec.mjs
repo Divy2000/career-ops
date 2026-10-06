@@ -37,3 +37,40 @@ test('Given the child test runner prints TAP, the guard still sees the suite run
     else process.env.NODE_OPTIONS = saved;
   }
 });
+
+test('the guard child keeps only a spec or tap reporter from the caller\'s NODE_OPTIONS, so it prints a summary the guard can read (SW4-tests-27)', () => {
+  const env = suiteEnv({ PATH: '/bin', NODE_OPTIONS: '--max-old-space-size=4096 --test-reporter=dot --test-reporter-destination=out.txt --test-reporter junit' }, '/fresh');
+  assert.equal(env.NODE_OPTIONS, '--max-old-space-size=4096');
+  assert.equal(suiteEnv({ NODE_OPTIONS: '--test-reporter=tap' }, '/fresh').NODE_OPTIONS, '--test-reporter=tap');
+  assert.equal(suiteEnv({ NODE_OPTIONS: '--test-reporter spec' }, '/fresh').NODE_OPTIONS, '--test-reporter spec');
+});
+
+test('Given NODE_OPTIONS sends a spec and a tap report to two destinations, the guard child keeps only the first reporter, since node --test refuses two reporters with no destinations', () => {
+  const opts = '--test-reporter=spec --test-reporter-destination=stdout --test-reporter tap --test-reporter-destination out.tap';
+  assert.equal(suiteEnv({ NODE_OPTIONS: opts }, '/fresh').NODE_OPTIONS, '--test-reporter=spec');
+  const dir = tempDir('tmp-guard-two-');
+  fs.writeFileSync(path.join(dir, 'a.spec.mjs'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
+  const saved = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = opts;
+  try {
+    const r = runSuiteInFreshTmp(dir, 'none');
+    assert.equal(r.status, 0, r.output);
+  } finally {
+    if (saved === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = saved;
+  }
+});
+
+test('Given NODE_OPTIONS asks for the dot reporter, the guard still sees the suite run', () => {
+  const dir = tempDir('tmp-guard-dot-');
+  fs.writeFileSync(path.join(dir, 'a.spec.mjs'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
+  const saved = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = '--test-reporter=dot';
+  try {
+    const r = runSuiteInFreshTmp(dir, 'none');
+    assert.equal(r.status, 0, r.output);
+  } finally {
+    if (saved === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = saved;
+  }
+});
