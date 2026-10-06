@@ -485,6 +485,19 @@ jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leave
   assert.equal(fs.existsSync(`${pids}.woke`), false, 'the claude was killed at the timeout, not left to run to its end');
 });
 
+test('the rank wrapper sets its TERM/INT trap before it starts the shim, so a timeout that comes first still records the failure and orphans nothing', () => {
+  const body = readFileSync(RUN_DAILY, 'utf8');
+  const wrapper = body.slice(body.indexOf('rank_top() {'));
+  const trap = wrapper.indexOf('"trap on_term TERM INT"');
+  const start = wrapper.indexOf('"$@" &`');
+  assert.ok(trap > -1 && start > -1, 'the wrapper has a trap and a background start');
+  assert.ok(trap < start, 'the trap comes before the shim starts');
+  const handler = wrapper.slice(wrapper.indexOf('on_term() {'), wrapper.indexOf('}`', wrapper.indexOf('on_term() {')));
+  // $! rather than a variable set after the start: a signal between the start and that assignment still finds the shim.
+  assert.match(handler, /\[ -z "\$!" \] \|\| \{ kill -TERM -- "-\$!"/, 'the handler kills the shim group only once it exists');
+  assert.match(handler, /echo 143 >> .*; exit 143;/, 'and always records the failure and exits 143');
+});
+
 jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan and its provider plugins, prioritize, rank-pipeline, shortlist) sees it (SW7-scripts-01)', () => {
   const w = dailyWorld();
   const r = w.run({ CLAUDE_CODE_OAUTH_TOKEN: 'inherited-from-launchd' });
