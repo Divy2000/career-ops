@@ -62,14 +62,14 @@ const runPs = (pid: number): string =>
  * ps's own "no such process" (exit 1, nothing printed) is null; when ps cannot answer otherwise, kill(pid, 0) decides
  * between null and 'unknown'; output that does not parse is 'unknown'. Callers treat 'unknown' as running.
  */
-export function processStartTime(pid: number, ps: (pid: number) => string = runPs): ProcessStart {
+export function processStartTime(pid: number, ps: (pid: number) => string = runPs, kill?: (pid: number, signal: 0) => void): ProcessStart {
   let out: string;
   try {
     out = ps(pid).trim();
   } catch (err) {
     const e = err as { status?: number | null; signal?: string | null; stdout?: string };
     if (e.status === 1 && !e.signal && !String(e.stdout ?? '').trim()) return null;
-    return pidLiveness(pid) === 'own' ? 'unknown' : null;
+    return pidLiveness(pid, kill) === 'own' ? 'unknown' : null;
   }
   if (!out) return null;
   const m = LSTART.exec(out);
@@ -96,7 +96,7 @@ export class Runner {
     private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void } = {},
   ) {
     this.store = new RunStore(dataRoot, opts.retention);
-    this.procStart = opts.procStart ?? processStartTime;
+    this.procStart = opts.procStart ?? ((pid) => processStartTime(pid, undefined, opts.kill));
   }
 
   /**

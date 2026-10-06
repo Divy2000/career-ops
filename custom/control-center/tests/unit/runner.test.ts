@@ -363,11 +363,16 @@ describe('Runner', () => {
     }
   });
 
-  it('when ps cannot answer, a PID that is not ours (pid 1, which kill refuses with EPERM) reads as gone, not unknown (EPERM review)', () => {
+  it('when ps cannot answer, a PID kill(pid, 0) refuses with EPERM (not ours) reads as gone, and one it accepts as unknown (EPERM review)', () => {
     const noPs = () => {
       throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });
     };
-    expect(processStartTime(1, noPs)).toBeNull();
+    const eperm = () => {
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    };
+    // Fake kills: the answer does not depend on who runs the test (root, or a container whose PID 1 is this process).
+    expect(processStartTime(4242, noPs, eperm)).toBeNull();
+    expect(processStartTime(4242, noPs, () => undefined)).toBe('unknown');
   });
 
   it('when ps cannot answer, a live PID reads as unknown (kept) and a dead one as gone', () => {
