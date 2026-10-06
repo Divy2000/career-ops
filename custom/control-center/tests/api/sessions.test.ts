@@ -187,6 +187,38 @@ describe('Claude sessions', () => {
     expect((await settle(fork.id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
   });
 
+  it('a stray .DS_Store in the sessions folder neither stops the app from starting nor breaks the sessions list (SW2-claude-01)', async () => {
+    const dataRoot = copyFixtureRoot();
+    const sessions = path.join(dataRoot, 'data', 'control-center', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(path.join(sessions, '.DS_Store'), 'finder');
+    fs.writeFileSync(path.join(sessions, 'notes'), 'x');
+    const app = await makeTestApp({ dataRoot });
+    try {
+      const res = await call(app, 'GET', '/api/sessions');
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('an evaluation\'s follow-up turn after its report ends done, also in a fork; one that asks waits (SW2-claude-03)', async () => {
+    const report = '# Evaluation: Follow Corp\n\n**Date:** 2026-10-05\n**Score:** 3.6/5\n**URL:** https://jobs.example.com/follow/1\n\n## A) Role Summary\nx\n';
+    const scenario = scenarioFile({
+      events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/098-follow-corp-2026-10-05.md', content: report } }, result('Scored 3.6/5.', 0.01)],
+      resume: [INIT, result('Block D scored low because the stack overlaps only partly.', 0.01)],
+    });
+    await withScenario(scenario, async () => {
+      const { id } = (await post('/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/follow/1' }, prompt: 'Evaluate https://jobs.example.com/follow/1' })).json();
+      expect((await settle(id)).meta.status).toBe('done');
+      expect((await post(`/api/sessions/${id}/turns`, { prompt: 'Why did Block D score low?' })).statusCode).toBe(202);
+      expect((await settle(id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
+      const fork = (await post(`/api/sessions/${id}/fork`, { prompt: 'Why did Block D score low?' })).json();
+      expect((await settle(fork.id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
+    });
+  });
+
   it('cancel kills the turn and leaves the session cancelled', async () => {
     const { id } = (await post('/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json();
     const deadline = Date.now() + 15_000;
@@ -248,6 +280,38 @@ describe('Claude sessions', () => {
       const pipeline = (await call(other, 'GET', '/api/pipeline')).json();
       expect(pipeline.rows.filter((r: { section: string; done: boolean }) => r.section === 'pending' && !r.done).map((r: { url: string }) => r.url)).not.toContain(url);
       expect(settled.meta.lastReason).toContain(`pipeline row moved to Processed as #${num}`);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('a report written on a turn that did not end done still moves the pipeline row once a later turn ends done (SW2-claude-03 review)', async () => {
+    const other = await makeTestApp();
+    try {
+      const cases = [
+        { url: 'https://careers.example.com/soylent/42', num: '097', first: { type: 'result', subtype: 'success', result: '', total_cost_usd: 0.01, usage: {}, num_turns: 1, is_error: false }, firstStatus: 'awaiting_user' },
+        { url: 'https://careers.example.com/globex/777', num: '096', first: { type: 'result', subtype: 'error_during_execution', result: 'Interrupted.', total_cost_usd: 0.01, usage: {}, num_turns: 1, is_error: true }, firstStatus: 'error' },
+      ];
+      for (const c of cases) {
+        const report = `# Evaluation: Pending Corp\n\n**Date:** 2026-10-05\n**Score:** 3.9/5\n**URL:** ${c.url}\n\n## A) Role Summary\nx\n`;
+        const scenario = scenarioFile({ events: [INIT, { __write: { path: `{{DATA_ROOT}}/reports/${c.num}-pending-corp-2026-10-05.md`, content: report } }, c.first], resume: [INIT, result('Done: the report is written.', 0.01)] });
+        await withScenario(scenario, async () => {
+          const { id } = (await call(other, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: c.url }, prompt: `Evaluate ${c.url}` })).json();
+          expect((await settleOn(other, id)).meta.status, c.url).toBe(c.firstStatus);
+          // The row stays pending until a turn ends done.
+          expect(fs.readFileSync(path.join(other.cfg.dataRoot, 'data', 'pipeline.md'), 'utf8')).toContain(`- [ ] ${c.url}`);
+          expect((await call(other, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Finish up' })).statusCode).toBe(202);
+          const second = await settleOn(other, id);
+          expect(second.meta.status, c.url).toBe('done');
+          expect(second.meta.lastReason, c.url).toContain(`pipeline row moved to Processed as #${c.num}`);
+          const md = fs.readFileSync(path.join(other.cfg.dataRoot, 'data', 'pipeline.md'), 'utf8');
+          expect(md, c.url).not.toContain(`- [ ] ${c.url}`);
+          expect(md, c.url).toContain(`#${c.num} | ${c.url}`);
+          // A later done turn does not move or re-mark it.
+          expect((await call(other, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Thanks' })).statusCode).toBe(202);
+          expect((await settleOn(other, id)).meta.lastReason, c.url).not.toContain('pipeline row');
+        });
+      }
     } finally {
       await other.close();
     }
@@ -786,6 +850,29 @@ describe('read confinement (BUG-06)', () => {
     expect((await get('/api/runs')).json()).toHaveLength(runsBefore);
   });
 
+  it('a turn that cannot start ends its event stream with a terminal error status, after the error itself', async () => {
+    const dataRoot = copyFixtureRoot();
+    const other = await makeTestApp({ dataRoot }, { homeDir: dataRoot });
+    try {
+      const res = await call(other, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'x' });
+      expect(res.json().status).toBe('error');
+      const events = other.sessions.store.readEvents(res.json().id).map((e) => e.event);
+      expect(events.at(-1)).toEqual({ type: 'status', status: 'error', reason: expect.stringMatching(/is or contains your home directory/) });
+      expect(events.findIndex((e) => e.type === 'error')).toBeLessThan(events.length - 1);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('a session whose run record is gone after a restart ends its event stream with a terminal error status', () => {
+    const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    t.sessions.store.beginTurn(meta.id, { runId: 'r-gone-after-restart', userText: 'x' });
+    t.sessions.store.setStatus(meta.id, 'running');
+    t.sessions.reconcile();
+    expect(t.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
+    expect(t.sessions.store.readEvents(meta.id).map((e) => e.event).at(-1)).toEqual({ type: 'status', status: 'error', reason: 'run record missing after a restart', turn: 1 });
+  });
+
   it('new sessions and forks carry the current policy version', () => {
     expect(SESSION_POLICY_VERSION).toBe(2);
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
@@ -912,6 +999,31 @@ describe('projects-ingest sessions read the document text the app extracted', ()
   });
 });
 
+
+describe('a separate data root: user files go there, never into the code checkout (SW2-claude-02)', () => {
+  type Ev = { type: string; tool?: string; input?: { file_path?: string; command?: string } };
+  const evs = (events: Settled['events']) => events.map((e) => e.event as unknown as Ev);
+
+  it('an evaluation that writes its report relative to the repo root is refused there, and its data-root report is credited', async () => {
+    // The tests' app runs split: the code root is this checkout, the data root a copy of the fixture.
+    expect(fs.realpathSync(t.cfg.dataRoot)).not.toBe(fs.realpathSync(t.cfg.codeRoot));
+    const report = '# Evaluation: Split Corp\n\n**Date:** 2026-10-05\n**Score:** 4.0/5\n**URL:** https://jobs.example.com/split/1\n\n## A) Role Summary\nx\n';
+    const scenario = scenarioFile({
+      events: [
+        INIT,
+        // Never performed even if the guard let it through: it would land in this checkout.
+        { __write: { path: 'reports/099-split-corp-2026-10-05.md', content: report }, expectDenied: true },
+        { __write: { path: '{{DATA_ROOT}}/reports/099-split-corp-2026-10-05.md', content: report } },
+        result('Wrote report 099.', 0.01),
+      ],
+    });
+    const { meta, events } = await withScenario(scenario, async () => settle((await post('/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/split/1' }, prompt: 'Evaluate https://jobs.example.com/split/1' })).json().id));
+    expect(evs(events).filter((e) => e.type === 'permission.denied').map((e) => e.input?.file_path)).toEqual([path.join(t.cfg.codeRoot, 'reports', '099-split-corp-2026-10-05.md')]);
+    expect(meta).toMatchObject({ status: 'done', lastReason: expect.stringMatching(/099-split-corp-2026-10-05\.md created/) });
+    expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', '099-split-corp-2026-10-05.md'))).toBe(true);
+    expect(fs.existsSync(path.join(t.cfg.codeRoot, 'reports', '099-split-corp-2026-10-05.md'))).toBe(false);
+  });
+});
 
 describe('scripts a session runs write only inside its write scope', () => {
   type Ev = { type: string; tool?: string; ok?: boolean; summary?: string; input?: { command?: string } };

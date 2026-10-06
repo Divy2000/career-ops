@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALWAYS_DENIED_WRITES, READ_DENY, englishModeOf, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, READ_DENY, englishModeOf, writeGlobsByRoot, type ModePolicy } from './modes.js';
 import { buildReadDenyRules, guardHookCommand, guardHooks, spellings, writeGuardPolicy } from './confinement.mjs';
 
 // Shared with the daily job's policy pass (custom/immigration/run-daily.sh).
@@ -39,14 +39,26 @@ export function editRule(codeRoot: string, glob: string): string {
   return `Edit(//${path.join(codeRoot, glob).replace(/^\/+/, '')})`;
 }
 
+/** The data root is the code checkout itself (one folder), compared by real path when both are on disk. */
+export function oneRoot(codeRoot: string, dataRoot: string): boolean {
+  return codeRoot === dataRoot || spellings(codeRoot).some((c) => spellings(dataRoot).includes(c));
+}
+
 /**
- * Allow rules for the per-turn settings file: write rules on the code root and, when the user data lives
- * elsewhere, the data root; the class's Bash rules and network tools; the Playwright MCP for apply. Read, Glob
- * and Grep need none (reads inside the working directories run in dontAsk mode), and neither does Agent.
+ * Allow rules for the per-turn settings file: write rules (with a separate data root, the user-layer globs on the
+ * data root and the code-checkout globs on the code root, SW2-claude-02); the class's Bash rules and network tools;
+ * the Playwright MCP for apply. Read, Glob and Grep need none (reads inside the working directories run in dontAsk
+ * mode), and neither does Agent.
  */
 export function buildAllowedTools(policy: ModePolicy, codeRoot: string, dataRoot: string = codeRoot): string[] {
   const tools: string[] = [...policy.network];
-  for (const root of [...new Set([codeRoot, dataRoot])]) for (const g of policy.writeGlobs) tools.push(editRule(root, g));
+  if (oneRoot(codeRoot, dataRoot)) {
+    for (const root of [...new Set([codeRoot, dataRoot])]) for (const g of policy.writeGlobs) tools.push(editRule(root, g));
+  } else {
+    const { data, code } = writeGlobsByRoot(policy.writeGlobs);
+    for (const g of data) tools.push(editRule(dataRoot, g));
+    for (const g of code) tools.push(editRule(codeRoot, g));
+  }
   tools.push(...policy.bashRules);
   if (policy.mcp === 'playwright') tools.push('mcp__playwright');
   return tools;
@@ -209,7 +221,13 @@ function webRule(p: ModePolicy): string {
 /** Spec 4.1 preamble, nine numbered rules, no em dash anywhere. */
 export function buildPreamble(input: PreambleInput): string {
   const p = input.policy;
-  const scope = p.writeGlobs.length ? p.writeGlobs.join(', ') : 'none (read-only session)';
+  const split = Boolean(input.codeRoot && input.dataRoot && !oneRoot(input.codeRoot, input.dataRoot));
+  const { data, code } = writeGlobsByRoot(p.writeGlobs);
+  const scope = !p.writeGlobs.length
+    ? '(paths relative to the repo root): none (read-only session)'
+    : !split
+      ? `(paths relative to the repo root): ${p.writeGlobs.join(', ')}`
+      : [data.length ? `${data.join(', ')} relative to the data root ${input.dataRoot} (user files: write there by absolute path, never in the repo)` : '', code.length ? `${code.join(', ')} relative to the repo root ${input.codeRoot}` : ''].filter(Boolean).join('; and ');
   const lines = [
     '1. This is a headless career-ops Control Center session. Nobody is watching the terminal; the user reads your output in a web page.',
     // A --restricted session loads no CLAUDE.md (probe C9), so AGENTS.md is read explicitly.
@@ -219,12 +237,12 @@ export function buildPreamble(input: PreambleInput): string {
     `5. Write user-facing content in the language code "${input.outputLanguage}" (profile.yml language.output).`,
     webRule(p),
     '7. When the mode needs the user to confirm or choose, ask exactly one question and end the turn. The app shows it and resumes you with the answer.',
-    `8. Allowed write scope (paths relative to the repo root): ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
+    `8. Allowed write scope ${scope}. Bash is limited to: ${p.bashPrefixes.length ? `${p.bashPrefixes.map((b) => b.join(' ')).join('; ')} (one command per call, no shell operators, expansions, globs or line breaks; path arguments stay inside the repo and data roots and files a script writes stay inside the write scope)` : 'none'}. Writes to data/blacklist.md and direct edits to data/applications.md are always denied${input.blacklistAllowed ? ' (blacklist unlocked by the user for this turn)' : ''}.`,
     // A localized mode (de/bewerben is apply) has the contract of the English mode it stands for.
     `9. Envelope contract: ${envelopeContractOf(p.id) ?? 'none for this mode; report results as markdown.'}`,
   ];
   if (input.reportNum !== undefined) lines.push(`10. Report number ${input.reportNum} is reserved for this evaluation. Use it for the report file name and the tracker row; do not call reserve-report-num.`);
-  if (input.dataRoot && input.codeRoot && input.dataRoot !== input.codeRoot) lines.push(`User data lives in ${input.dataRoot}; read user files there by absolute path.`);
+  if (split) lines.push(`User data lives in ${input.dataRoot}; read and write user files there by absolute path.`);
   return lines.join('\n');
 }
 
@@ -233,6 +251,7 @@ export interface PolicyFile {
   /** User data root; equals codeRoot unless CAREER_OPS_ROOT redirects it. */
   dataRoot: string;
   sessionDir: string;
+  /** Write globs; with a separate data root the guard applies the code-checkout ones there and the rest in the data root. */
   allow: string[];
   deny: string[];
   bash: string[][];

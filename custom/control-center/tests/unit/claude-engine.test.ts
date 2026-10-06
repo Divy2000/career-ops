@@ -29,7 +29,9 @@ describe('invocation builder', () => {
     expect(argv).not.toContain('--mcp-config');
     // Requirement change (BUG-06): allow rules live in the per-turn settings file, so a path with a space or comma is never split as an argument.
     expect(argv).not.toContain('--allowedTools');
-    expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).toEqual(expect.arrayContaining(['Edit(//repo/career-ops/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch']));
+    // Requirement change (SW2-claude-02): with a separate data root, user-layer write rules name the data root only.
+    expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).toEqual(expect.arrayContaining(['Edit(//data/root/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch']));
+    expect(buildAllowedTools(policy, codeRoot, base.dataRoot)).not.toContain('Edit(//repo/career-ops/reports/**)');
     const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!;
     expect(disallowed.split(',')).toContain('Task');
   });
@@ -98,6 +100,17 @@ describe('invocation builder', () => {
     // A localized evaluation still has no envelope contract.
     expect(contract('de/angebot')).toMatch(/none for this mode/);
   });
+  it('rule 8 names where the write scope lives: the data root when it is separate, by absolute path (SW2-claude-02)', () => {
+    const rule8 = (id: string, roots: { codeRoot?: string; dataRoot?: string }) => buildPreamble({ policy: getModePolicy(id)!, outputLanguage: 'en', ...roots }).split('\n').find((l) => l.startsWith('8. '))!;
+    expect(rule8('oferta', { codeRoot: '/code', dataRoot: '/code' })).toContain('Allowed write scope (paths relative to the repo root): reports/**');
+    const split = rule8('oferta', { codeRoot: '/code', dataRoot: '/data' });
+    expect(split).toContain('relative to the data root /data');
+    expect(split).toMatch(/write there by absolute path/);
+    expect(split).not.toContain('relative to the repo root):');
+    const devchat = rule8('devchat', { codeRoot: '/code', dataRoot: '/data' });
+    expect(devchat).toContain('relative to the data root /data');
+    expect(devchat).toMatch(/custom\/\*\* relative to the repo root \/code/);
+  });
   it('rule 6 names only the web tools the session has: never WebFetch to a session without it', () => {
     const rule6 = (policy: ReturnType<typeof getModePolicy>) => buildPreamble({ policy: policy!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('6. '))!;
     const { mcp: _mcp, ...applyWithoutPlaywright } = getModePolicy('apply')!;
@@ -153,7 +166,9 @@ describe('invocation: read confinement', () => {
     const file = writeSettingsFile(guard, { permissions: perms });
     const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as { permissions: { additionalDirectories: string[]; allow: string[]; deny: string[] }; hooks: unknown };
     expect(settings.permissions.additionalDirectories).toEqual(['/data root']);
-    expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Edit(//code/reports/**)', 'Edit(//data root/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch', 'WebSearch']));
+    // Requirement change (SW2-claude-02): user-layer write rules name the data root only.
+    expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Edit(//data root/reports/**)', 'Bash(node set-status.mjs:*)', 'WebFetch', 'WebSearch']));
+    expect(settings.permissions.allow).not.toContain('Edit(//code/reports/**)');
     const deny = settings.permissions.deny;
     for (const p of HOME_READ_DENY) expect(deny).toContain(`Read(${p})`);
     expect(deny).toContain('Read(//guard/**)');
@@ -227,7 +242,8 @@ describe('invocation: read confinement', () => {
   it('the preamble tells the session to read AGENTS.md first (restricted sessions load no CLAUDE.md) and where user data lives', () => {
     const text = buildPreamble({ policy: oferta, outputLanguage: 'en', codeRoot: '/code', dataRoot: '/data root' });
     expect(text).toMatch(/2\. Read AGENTS\.md before anything else/);
-    expect(text).toContain('User data lives in /data root; read user files there by absolute path.');
+    // Requirement change (SW2-claude-02): user files are written there too.
+    expect(text).toContain('User data lives in /data root; read and write user files there by absolute path.');
     expect(buildPreamble({ policy: oferta, outputLanguage: 'en', codeRoot: '/code', dataRoot: '/code' })).not.toContain('User data lives in');
   });
 });
@@ -270,17 +286,85 @@ describe('guard hook', () => {
     const run = (event: string, tool: string, input: Record<string, unknown>) => hookRun(dir, pf, { hook_event_name: event, tool_name: tool, tool_input: input, cwd: realRoot, session_id: 's' });
     expect(run('PreToolUse', 'Write', { file_path: path.join(dataRoot, 'reports', '009-x.md'), content: 'x' }).status).toBe(0);
     expect(run('PreToolUse', 'Write', { file_path: path.join(dataRoot, 'cv.md'), content: 'x' }).status).toBe(2);
-    expect(run('PreToolUse', 'Write', { file_path: path.join(realRoot, 'reports', '009-x.md'), content: 'x' }).status).toBe(0);
+    // Requirement change (SW2-claude-02): with a separate data root, user-layer folders are written there only.
+    expect(run('PreToolUse', 'Write', { file_path: path.join(realRoot, 'reports', '009-x.md'), content: 'x' }).status).toBe(2);
     expect(run('PostToolUse', 'Write', { file_path: path.join(dataRoot, 'reports', '009-x.md') }).status).toBe(0);
     const rec = JSON.parse(fs.readFileSync(path.join(dir, 'files.ndjson'), 'utf8').trim()) as { path: string; abs: string; root: string };
     expect(rec).toMatchObject({ path: 'reports/009-x.md', abs: path.join(dataRoot, 'reports', '009-x.md'), root: 'data' });
-    expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/data')).toEqual(expect.arrayContaining(['Edit(//code/reports/**)', 'Edit(//data/reports/**)']));
+    expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/data')).toEqual(expect.arrayContaining(['Edit(//data/reports/**)']));
+    expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/data')).not.toContain('Edit(//code/reports/**)');
     expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/code').filter((t) => t.includes('reports/**'))).toHaveLength(1);
   });
+  it('with a separate data root, user-layer writes go to the data root only and custom/** and templates to the code root only (SW2-claude-02)', () => {
+    const code = fs.realpathSync(tempDir('cc-split-code-'));
+    const data = fs.realpathSync(tempDir('cc-split-data-'));
+    const policyIn = (mode: string) => {
+      const dir = fs.realpathSync(tempDir(`cc-split-guard-${mode.replace('/', '-')}-`));
+      return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: mode === 'devchat' ? [...DEVCHAT_DENIED_WRITES] : [...ALWAYS_DENIED_WRITES] }) };
+    };
+    const write = (p: { dir: string; pf: { file: string; sha256: string } }, file: string) => hookRun(p.dir, p.pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: code, session_id: 's' }).status;
+    const oferta = policyIn('oferta');
+    expect(write(oferta, path.join(data, 'reports', '012-x.md'))).toBe(0);
+    for (const rel of ['reports/012-x.md', 'batch/tracker-additions/012-x.tsv', 'jds/x.md', 'output/x.pdf']) expect(write(oferta, path.join(code, rel)), rel).toBe(2);
+    // A relative path resolves against the session cwd, the code root.
+    expect(write(oferta, 'reports/012-x.md')).toBe(2);
+    const devchat = policyIn('devchat');
+    for (const rel of ['cv.md', 'modes/_custom.md', 'data/notes/x.md', 'reports/x.md']) {
+      expect(write(devchat, path.join(data, rel)), `data ${rel}`).toBe(0);
+      expect(write(devchat, path.join(code, rel)), `code ${rel}`).toBe(2);
+    }
+    expect(write(devchat, path.join(code, 'custom', 'projects', 'lib.mjs'))).toBe(0);
+    expect(write(devchat, path.join(data, 'custom', 'projects', 'lib.mjs'))).toBe(2);
+    const pdf = policyIn('pdf');
+    expect(write(pdf, path.join(code, 'templates', 'cv-mine.html'))).toBe(0);
+    expect(write(pdf, path.join(data, 'templates', 'cv-mine.html'))).toBe(2);
+    expect(write(pdf, path.join(data, 'output', 'x.pdf'))).toBe(0);
+    // Scripts' output arguments follow the same split.
+    const bash = { codeRoot: code, dataRoot: data, allow: getModePolicy('pdf')!.writeGlobs, deny: [...ALWAYS_DENIED_WRITES], bash: getModePolicy('pdf')!.bashPrefixes };
+    fs.mkdirSync(path.join(data, 'output'), { recursive: true });
+    expect(checkBash('node generate-pdf.mjs output/x.html output/x.pdf', bash, code)).toMatch(/outside the write scope/);
+    expect(checkBash(`node generate-pdf.mjs ${data}/output/x.html ${data}/output/x.pdf`, bash, code)).toBeNull();
+    // The CLI's own Edit rules carry the same split.
+    const tools = buildAllowedTools(getModePolicy('devchat')!, code, data);
+    expect(tools).toEqual(expect.arrayContaining([`Edit(/${data}/reports/**)`, `Edit(/${data}/cv.md)`, `Edit(/${code}/custom/**)`]));
+    for (const t of [`Edit(/${code}/reports/**)`, `Edit(/${code}/cv.md)`, `Edit(/${data}/custom/**)`]) expect(tools).not.toContain(t);
+  });
+
+  it('a documents session (pdf, text, latex, latex-tex, cover) can save the JD its mode needs as jds/<slug>.md, in the data root, and nothing else there (SW3-libs-01)', () => {
+    const code = fs.realpathSync(tempDir('cc-jd-code-'));
+    const data = fs.realpathSync(tempDir('cc-jd-data-'));
+    for (const mode of ['pdf', 'text', 'latex', 'latex-tex', 'cover']) {
+      const dir = fs.realpathSync(tempDir(`cc-jd-guard-${mode}-`));
+      const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] });
+      const write = (file: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: code, session_id: 's' }).status;
+      expect(write(path.join(data, 'jds', 'acme-backend.md')), mode).toBe(0);
+      expect(write(path.join(code, 'jds', 'acme-backend.md')), `${mode} code root`).toBe(2);
+      expect(write(path.join(data, 'jds', 'acme', 'nested.md')), `${mode} nested`).toBe(2);
+      expect(write(path.join(data, 'jds', 'acme.pdf')), `${mode} pdf`).toBe(2);
+      expect(buildAllowedTools(getModePolicy(mode)!, code, data), mode).toContain(`Edit(/${data}/jds/*.md)`);
+    }
+  });
+
+  it('every policy gets the split, one written by the daily job or before this change included (SW2-claude-02)', () => {
+    const code = fs.realpathSync(tempDir('cc-split-old-code-'));
+    const data = fs.realpathSync(tempDir('cc-split-old-data-'));
+    const dir = fs.realpathSync(tempDir('cc-split-old-guard-'));
+    // The daily job's policy pass writes its policy itself (run-daily.sh): data/immigration/** and nothing else.
+    const bytes = JSON.stringify({ codeRoot: code, dataRoot: data, sessionDir: dir, allow: ['data/immigration/**'], deny: [], bash: [], playwright: false, readDeny: [...READ_DENY], readOnlyRoots: [], allowsAgent: false, search: true });
+    fs.writeFileSync(path.join(dir, 'policy.json'), bytes);
+    const pf = { file: path.join(dir, 'policy.json'), sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+    const write = (file: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: code, session_id: 's' }).status;
+    expect(write(path.join(data, 'data', 'immigration', 'digest.md'))).toBe(0);
+    const out = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(code, 'data', 'immigration', 'digest.md'), content: 'x' }, cwd: code, session_id: 's' });
+    expect(out.status).toBe(2);
+    // The refusal says where the file belongs.
+    expect(out.stderr).toContain(`so write ${path.join(data, 'data', 'immigration', 'digest.md')}`);
+  });
+
   it('denies writes outside the scope, outside the code root, and always the blacklist and the tracker', () => {
     const out = pre('Write', { file_path: path.join(realRoot, 'cv.md'), content: 'x' });
     expect(out.status).toBe(2);
-    expect(out.stderr).toMatch(/not in the write scope/);
+    expect(out.stderr).toMatch(/cv\.md is outside the write scope/);
     expect(pre('Write', { file_path: '/etc/hosts', content: 'x' }).status).toBe(2);
     expect(pre('Write', { file_path: path.join(realRoot, 'data', 'blacklist.md'), content: 'x' }).status).toBe(2);
     expect(pre('Edit', { file_path: path.join(realRoot, 'data', 'applications.md'), old_string: 'a', new_string: 'b' }).status).toBe(2);
@@ -552,6 +636,35 @@ describe('guard hook', () => {
       expect(files, rel).toContain(rel);
       expect(write(rel), rel).toBe(0);
     }
+  });
+
+  it('Dev Chat cannot write any file the supervisor loads at startup, so a bad edit never stops /__recovery (SW2-claude-05)', () => {
+    const root = fs.realpathSync(tempDir('cc-hook-devchat-supervisor-'));
+    const dir = fs.realpathSync(tempDir('cc-hook-devchat-supervisor-guard-'));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    // Static and dynamic imports alike: running editable code at all lets it hang or kill the supervisor (SW2-claude-05 review).
+    const STATIC = /(?:^|\n)\s*(?:import|export)\s[^;'"]*?\sfrom\s*['"](\.[^'"]+)['"]|(?:^|\n)\s*import\s*['"](\.[^'"]+)['"]|\bimport\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+    const seen = new Set<string>();
+    const stack = ['supervisor/index.ts', 'supervisor/preflight-cli.ts'].map((f) => path.join(PACKAGE_ROOT, f));
+    while (stack.length) {
+      const file = stack.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (file.endsWith('.json')) continue;
+      for (const m of fs.readFileSync(file, 'utf8').matchAll(STATIC)) {
+        const spec = path.resolve(path.dirname(file), (m[1] ?? m[2] ?? m[3])!);
+        const found = [spec, spec.replace(/\.js$/, '.ts'), spec.replace(/\.js$/, '.tsx'), `${spec}.ts`].find((f) => fs.existsSync(f));
+        expect(found, `${file} imports ${spec}`).toBeDefined();
+        stack.push(found!);
+      }
+    }
+    const loaded = [...seen].map((f) => `custom/control-center/${path.relative(PACKAGE_ROOT, f).split(path.sep).join('/')}`).sort();
+    expect(loaded).toEqual(expect.arrayContaining(['custom/control-center/supervisor/recovery.ts', 'custom/control-center/server/claude/guard-policy.mjs']));
+    for (const rel of loaded) expect(write(rel), rel).toBe(2);
+    // server/core holds contract.json, whose claude.approvedVersions is the confinement gate: never Dev Chat's to change.
+    expect(write('custom/control-center/server/core/contract.json')).toBe(2);
+    expect(write('custom/control-center/server/core/adapter.ts')).toBe(2);
   });
 
   it('a tampered or unverifiable policy fails closed for every tool call', () => {

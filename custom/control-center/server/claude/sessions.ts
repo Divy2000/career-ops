@@ -60,6 +60,10 @@ export interface SessionMeta {
   conversationStarted?: boolean;
   /** A turn delivered a valid answers envelope (apply): later turns of the conversation, forks included, may fill in prose. */
   answersSeen?: boolean;
+  /** The first report a turn was credited (evaluations): later turns, forks included, answer without owing another. */
+  creditedReport?: { num: number; file: string };
+  /** The session's pipeline URL was moved to Processed (or had no Pending row): no later turn moves it again. */
+  pipelineMarked?: boolean;
 }
 
 /** Whether the CLI has a conversation to resume under the session's claudeSessionId. */
@@ -76,6 +80,8 @@ export interface StoredEvent {
 export function sessionsDir(dataRoot: string): string {
   return path.join(dataRoot, 'data', 'control-center', 'sessions');
 }
+
+const SESSION_ID = /^[\w-]+$/;
 
 function newId(): string {
   const ts = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
@@ -101,7 +107,7 @@ export class SessionStore {
   }
 
   dirOf(id: string): string {
-    if (!/^[\w-]+$/.test(id)) throw new Error('bad session id');
+    if (!SESSION_ID.test(id)) throw new Error('bad session id');
     return path.join(sessionsDir(this.dataRoot), id);
   }
 
@@ -143,9 +149,26 @@ export class SessionStore {
   fork(id: string): SessionMeta {
     const src = this.mustRead(id);
     const forked = this.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, claudeSessionId: src.claudeSessionId, forkedFrom: src.id, forkPending: true });
-    if (src.answersSeen !== true) return forked;
-    this.markAnswersSeen(forked.id);
+    if (src.answersSeen === true) this.markAnswersSeen(forked.id);
+    if (src.creditedReport) this.setCreditedReport(forked.id, src.creditedReport);
+    if (src.pipelineMarked === true) this.markPipelineMarked(forked.id);
     return this.mustRead(forked.id);
+  }
+
+  /** Records the first report a turn was credited (later ones keep it). */
+  setCreditedReport(id: string, report: { num: number; file: string }): void {
+    const meta = this.mustRead(id);
+    if (meta.creditedReport) return;
+    meta.creditedReport = { num: report.num, file: report.file };
+    this.write(meta);
+  }
+
+  /** Records that the session's pipeline URL is settled (written once). */
+  markPipelineMarked(id: string): void {
+    const meta = this.mustRead(id);
+    if (meta.pipelineMarked === true) return;
+    meta.pipelineMarked = true;
+    this.write(meta);
   }
 
   /** Records that a turn delivered a valid answers envelope (written once). */
@@ -211,8 +234,10 @@ export class SessionStore {
 
   list(): SessionMeta[] {
     const out: SessionMeta[] = [];
-    for (const name of fs.readdirSync(sessionsDir(this.dataRoot))) {
-      const meta = this.read(name);
+    // Only session folders: Finder drops .DS_Store here, and anything else stray is not a session either.
+    for (const entry of fs.readdirSync(sessionsDir(this.dataRoot), { withFileTypes: true })) {
+      if (!entry.isDirectory() || !SESSION_ID.test(entry.name)) continue;
+      const meta = this.read(entry.name);
       if (meta) out.push(meta);
     }
     return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));

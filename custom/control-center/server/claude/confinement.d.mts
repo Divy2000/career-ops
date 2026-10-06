@@ -22,3 +22,4 @@ export function writeGuardPolicy(dir: string, policy: object): { file: string; s
 export function parseClaudeVersion(out: string): string | null;
 export function contractApprovedVersions(contractFile?: string): string[];
 export function claudeVersionGate(bin: string, approved?: string[]): { version: string; identity: string; problem: string | null };
+export const CODE_ROOT_WRITE_GLOBS: readonly string[];

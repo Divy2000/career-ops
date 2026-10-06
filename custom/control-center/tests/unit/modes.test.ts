@@ -4,7 +4,7 @@ import path from 'node:path';
 import { deriveModes } from '../../scripts/derive-mode-policies.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { ALWAYS_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
-import { AGENT_SPAWNING_SCRIPTS } from '../../server/claude/guard-policy.mjs';
+import { AGENT_SPAWNING_SCRIPTS, matches } from '../../server/claude/guard-policy.mjs';
 import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
 
 describe('mode registry', () => {
@@ -103,6 +103,18 @@ describe('mode registry', () => {
     }
     // A profile session cannot write output/**, so a PDF render there could only fail.
     expect(getModePolicy('master-profile')?.scripts).not.toContain('custom/cv/render-pdf.mjs');
+  });
+
+  it('the documents class grants the JD file its modes write: pdf.md\'s jds/{slug}.md, which the projects house rule ranks for pdf, text, latex and cover (SW3-libs-01)', () => {
+    expect(fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'modes', 'pdf.md'), 'utf8')).toContain('write the JD to `jds/{slug}.md` first');
+    const houseRule = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'install', 'templates', '_custom-projects.md'), 'utf8');
+    expect(houseRule).toContain('after the JD is saved under `jds/`, run `node custom/projects/rank.mjs jds/<slug>.md --json`');
+    for (const mode of ['pdf', 'text', 'latex', 'latex-tex', 'cover']) {
+      const policy = getModePolicy(mode)!;
+      expect(policy.policyClass, mode).toBe('documents');
+      expect(matches('jds/acme-backend.md', policy.writeGlobs), mode).toBe(true);
+      expect(policy.scripts, mode).toContain('custom/projects/rank.mjs');
+    }
   });
 
   it('projects-ingest is a read-only virtual mode whose turn ends in an envelope', () => {

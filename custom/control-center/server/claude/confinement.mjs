@@ -45,6 +45,13 @@ export function claudeVersionGate(bin, approved = contractApprovedVersions()) {
   return { version, identity: `${real}@${version}`, problem: approved.includes(version) ? null : `Claude Code ${version} is not approved for the confined pass (approved: ${list}); install an approved one (claude install ${approved[0] ?? '<version>'}) or approve it with npm --prefix custom/control-center run probe:reads -- --record` };
 }
 
+/**
+ * Write globs that name files of the code checkout (System Layer: the app's own custom/ code and the CV and cover
+ * templates cv-templates.mjs reads from templates/). Every other write glob names user files (User Layer), which live
+ * in the data root: with a separate data root the guard allows them there and nowhere else, whoever wrote the policy.
+ */
+export const CODE_ROOT_WRITE_GLOBS = Object.freeze(['custom/**', 'templates/cv-*.html', 'templates/cover-*.html']);
+
 /** Denied for every non Dev Chat session and for the daily policy pass, regardless of class (enforced by the hook). */
 export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
 

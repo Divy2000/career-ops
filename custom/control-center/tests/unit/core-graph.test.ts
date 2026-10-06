@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { coreImportGraph, watchCoreGraph } from '../../supervisor/core-graph.js';
+import { coreImportGraph, serverLoads, watchCoreGraph } from '../../supervisor/core-graph.js';
 import { CONTRACT } from '../../server/core/adapter.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -44,6 +44,14 @@ describe('the import graph of the core modules the server loads', () => {
     expect(graph).toContain('tracker-parse.mjs');
     expect(graph).toContain('skill-extract.mjs');
     expect(graph.every((f) => !f.includes('node_modules'))).toBe(true);
+  });
+
+  it('what a server child loads: the package\'s server/ and shared/ trees and the core graph, nothing else (SW2-claude-05 review)', () => {
+    const root = scratchRoot();
+    const serverDir = path.dirname(put(root, 'custom/control-center/server/index.ts', 'export {};\n'));
+    const loads = serverLoads(root, path.dirname(serverDir), ['custom/projects/lib.mjs']);
+    for (const rel of ['custom/control-center/server/app.ts', 'custom/control-center/server/claude/manager.ts', 'custom/control-center/shared/page-theme.ts', 'custom/projects/lib.mjs', 'tracker-parse.mjs', 'lib/text.mjs']) expect(loads(rel), rel).toBe(true);
+    for (const rel of ['cv.md', 'data/notes/x.md', 'custom/control-center/web/src/main.tsx', 'custom/control-center/serverless/x.ts', 'custom/immigration/watch.mjs', 'unrelated.mjs']) expect(loads(rel), rel).toBe(false);
   });
 });
 

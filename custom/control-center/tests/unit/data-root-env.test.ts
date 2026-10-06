@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { dataRootFromEnv } from '../../shared/data-root.js';
+import { dataRootFromEnv } from '../../supervisor/data-root.js';
 import { configFromEnv } from '../../server/config.js';
 
 describe('dataRootFromEnv: did the data root come from the environment?', () => {

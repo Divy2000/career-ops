@@ -6,7 +6,7 @@ import { parseReservedRange, readOutputLanguage } from '../../server/claude/mana
 import { applyRememberedFact, NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 import { copyFixtureRoot } from '../helpers/app.js';
 
-const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false, answersSeen: false };
+const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false, answersSeen: false, reportProduced: false };
 
 describe('evaluation honesty gate', () => {
   it('snapshots real reports only and detects new ones with their header score', () => {
@@ -43,8 +43,22 @@ describe('evaluation honesty gate', () => {
     expect(decideTurnOutcome({ ...base, cancelled: true, exitCode: null }).status).toBe('cancelled');
   });
 
+  it('regional/eu-swe is advisory and writes no report: its turns end on the question rule (SW2-claude-04)', () => {
+    const euSwe = { ...base, modeId: 'regional/eu-swe' };
+    expect(decideTurnOutcome({ ...euSwe, finalText: 'Calibration addendum: target Berlin and Amsterdam first.' })).toMatchObject({ status: 'done', reason: 'clean exit with output' });
+    expect(decideTurnOutcome({ ...euSwe, finalText: 'Which country is the role in?' }).status).toBe('awaiting_user');
+  });
+
+  it('an evaluation owes its report once: a follow-up turn after it answers like any turn (SW2-claude-03)', () => {
+    const followUp = { ...base, reportProduced: true };
+    expect(decideTurnOutcome({ ...followUp, finalText: 'Block D scored low because the stack overlaps only partly.' })).toMatchObject({ status: 'done', reason: 'clean exit with output' });
+    expect(decideTurnOutcome({ ...followUp, finalText: 'Shall I also save the JD?' }).status).toBe('awaiting_user');
+    // Until a report exists, every turn still owes it.
+    expect(decideTurnOutcome({ ...base, finalText: 'Block D scored low.' })).toMatchObject({ status: 'awaiting_user', reason: expect.stringMatching(/no new report/) });
+  });
+
   it('a localized evaluation is report-gated like oferta, whatever its file is called', () => {
-    for (const modeId of ['de/angebot', 'fr/offre', 'ja/kyujin', 'tr/is-ilani', 'es/oferta', 'regional/eu-swe']) {
+    for (const modeId of ['de/angebot', 'fr/offre', 'ja/kyujin', 'tr/is-ilani', 'es/oferta']) {
       expect(decideTurnOutcome({ ...base, modeId }), modeId).toMatchObject({ status: 'awaiting_user', reason: expect.stringMatching(/no new report/) });
       expect(decideTurnOutcome({ ...base, modeId, newReports: [{ num: 8, file: '008-x.md', score: 4.1 }] }).status, modeId).toBe('done');
     }

@@ -47,6 +47,7 @@ export function tokenize(command: string): string[] | null;
 export const AGENT_SPAWNING_SCRIPTS: readonly string[];
 /** Scripts modelled on their own parsers because their arguments choose files they write. */
 export const WRITER_SCRIPT_NAMES: readonly string[];
+export function writeScopeReason(policy: BashPolicy, found: { rel: string; root: 'code' | 'data' }, label: string): string | null;
 export function checkBash(command: string, policy: BashPolicy, cwd?: string): string | null;
 export const PLAYWRIGHT_TOOL_PREFIX: string;
 export function checkPlaywright(policy: ReadPolicy & { playwright?: boolean }, tool: string, input: unknown, cwd?: string, lookup?: DnsLookup): Promise<string | null>;

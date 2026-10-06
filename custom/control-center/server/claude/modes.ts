@@ -3,7 +3,7 @@
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
 import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
-import { ALWAYS_DENIED_WRITES } from './confinement.mjs';
+import { ALWAYS_DENIED_WRITES, CODE_ROOT_WRITE_GLOBS } from './confinement.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -74,7 +74,8 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
     ],
   },
   documents: {
-    writeGlobs: ['output/**', 'templates/cv-*.html', 'templates/cover-*.html', '*.tex'],
+    // jds/<slug>.md: modes/pdf.md saves the JD there before anything else, and the projects house rule ranks it from there.
+    writeGlobs: ['output/**', 'jds/*.md', 'templates/cv-*.html', 'templates/cover-*.html', '*.tex'],
     network: ['WebSearch'],
     extraBash: ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'build-cv-latex.mjs', 'generate-latex.mjs', 'mark-pdf-ready.mjs', 'jd-skill-gap.mjs', 'keyword-match.mjs', 'custom/projects/rank.mjs', 'custom/cv/build-html.mjs', 'custom/cv/render-pdf.mjs'],
   },
@@ -209,6 +210,8 @@ export { ALWAYS_DENIED_WRITES };
 export const DEVCHAT_DENIED_WRITES = [
   ...ALWAYS_DENIED_WRITES,
   'custom/control-center/server/claude/**',
+  // The core adapter and contract.json: its claude.approvedVersions is the confinement gate, and the supervisor loads both.
+  'custom/control-center/server/core/**',
   'custom/control-center/supervisor/**',
   'custom/control-center/package.json',
   'custom/control-center/package-lock.json',
@@ -231,6 +234,11 @@ export const DEVCHAT_DENIED_WRITES = [
   '**/node_modules/**',
   'writing-samples/README.md',
 ];
+
+/** A class's write globs split by the root their files live in (CODE_ROOT_WRITE_GLOBS, in confinement.mjs). */
+export function writeGlobsByRoot(globs: readonly string[]): { data: string[]; code: string[] } {
+  return { data: globs.filter((g) => !CODE_ROOT_WRITE_GLOBS.includes(g)), code: globs.filter((g) => CODE_ROOT_WRITE_GLOBS.includes(g)) };
+}
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {

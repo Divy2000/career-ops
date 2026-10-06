@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
-import { locate, matches, resolveReal } from '../server/claude/guard-policy.mjs';
+import { locate, matches, relativeToRoot, resolveReal } from '../server/claude/guard-policy.mjs';
 
 export interface ChangeRecord {
   path: string;
@@ -281,6 +281,8 @@ function planRevert(turnDir: string, abs: string, ctx: RevertContext): RevertPla
   if (!found || !path.isAbsolute(abs)) throw new RevertRefused(403, `${abs} is outside the code and data roots; refusing to revert it`);
   const policy = readJson<{ allow?: string[]; deny?: string[] }>(path.join(turnDir, 'policy.json'));
   if (!policy || !Array.isArray(policy.allow) || !Array.isArray(policy.deny)) throw new RevertRefused(409, `turn ${n} has no recorded policy, so ${found.rel} cannot be checked against its write scope`);
+  // The turn's recorded scope in either root: a revert only puts back the turn's own snapshot, so a turn recorded before
+  // the guard split the roots (which may have written a user file into the code checkout) can still be undone.
   if (!matches(found.rel, policy.allow) || matches(found.rel, policy.deny)) throw new RevertRefused(403, `${found.rel} is outside turn ${n}'s write scope; refusing to revert it`);
   const key = snapshotKey(turnDir, abs);
   const hadSnapshot = fs.existsSync(key);
@@ -364,6 +366,48 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     if (err instanceof RevertRefused) return { status: err.status, text: err.message };
     return { status: 500, text: `revert failed: ${(err as Error).message}` };
   }
+}
+
+/**
+ * Whether a Dev Chat turn's change to a file the server loads is still on disk: only then can a server that will not
+ * start be blamed on one. Still on disk means the file holds the bytes the turn left (its after.json hash, the check a
+ * revert makes), so a reverted or since-rewritten change does not count. A turn with no readable post-turn record for
+ * the file (it never finished), or a file that cannot be read, cannot rule the change out, so it counts.
+ * Where a record lives is decided by its real path against the real code root, not by its root label: a data root
+ * that is the code root under another spelling (a symlink, /tmp for /private/tmp) labels code writes 'data'. A record
+ * whose path cannot be resolved (ELOOP, EACCES, EIO) cannot be ruled out either, so it counts too.
+ */
+export function devChatChangeInEffect(sessionsDir: string, guardRoot: string, serverLoads: (rel: string) => boolean, codeRoot: string): boolean {
+  return listDevSessions(sessionsDir).some((meta) => {
+    const sessionDir = guardSessionDir(guardRoot, meta.id);
+    return changesByTurn(sessionDir, meta).some((t) => {
+      const loaded: ChangeRecord[] = [];
+      for (const r of t.records) {
+        let rel: string | null;
+        try {
+          rel = relativeToRoot(codeRoot, r.abs);
+        } catch {
+          return true;
+        }
+        if (rel !== null && serverLoads(rel)) loaded.push(r);
+      }
+      if (!loaded.length) return false;
+      let after: Record<string, string | null> | undefined;
+      try {
+        after = readJson<{ files?: Record<string, string | null> }>(path.join(sessionDir, 'turns', String(t.n), 'after.json'))?.files;
+      } catch {
+        return true;
+      }
+      return loaded.some((r) => {
+        if (!after || !(r.abs in after)) return true;
+        try {
+          return fileHash(r.abs) === after[r.abs];
+        } catch {
+          return true;
+        }
+      });
+    });
+  });
 }
 
 /** Dev Chat sessions on disk, newest first, for the recovery page. */

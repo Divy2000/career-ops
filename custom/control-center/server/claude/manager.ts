@@ -248,7 +248,9 @@ export class SessionManager {
       const turn = meta.turns.at(-1);
       const run = turn ? this.runner.store.read(turn.runId) : null;
       if (!turn || !run) {
-        this.store.setStatus(meta.id, 'error', 'run record missing after a restart');
+        const reason = 'run record missing after a restart';
+        this.store.setStatus(meta.id, 'error', reason);
+        this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
       }
       const policy = this.effectivePolicy(meta.mode);
@@ -314,6 +316,8 @@ export class SessionManager {
       this.store.setReportNum(meta.id, null);
       await this.releaseReportNum(num, false);
     }
+    // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
+    this.emit(meta.id, { type: 'status', status: 'error', reason: message });
     this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
     return this.store.read(meta.id)!;
   }
@@ -487,8 +491,10 @@ export class SessionManager {
       resumed: state.resumed ?? n > 1,
       // Read before this turn's own answers are recorded: a turn that delivers them is done by its envelope.
       answersSeen: meta.answersSeen === true,
+      reportProduced: meta.creditedReport !== undefined,
     });
     if (r.answers > 0) this.store.markAnswersSeen(id);
+    if (newReports[0]) this.store.setCreditedReport(id, newReports[0]);
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;
     const num = meta.reportNum;
@@ -505,9 +511,12 @@ export class SessionManager {
       reason += `; ${await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch)}`;
     }
     // A completed evaluation of a pipeline URL leaves Pending, as pipeline mode moves it (modes/pipeline.md, Workflow 2f).
-    if (outcome.status === 'done' && isReportGated(meta.mode) && meta.target.type === 'url' && meta.target.value && newReports[0]) {
-      const note = await this.markEvaluated(meta.target.value, newReports[0]);
-      if (note) reason += `; ${note}`;
+    // The report may have come on an earlier turn that did not end done: the first done turn moves the URL with it.
+    const credited = newReports[0] ?? meta.creditedReport;
+    if (outcome.status === 'done' && isReportGated(meta.mode) && meta.target.type === 'url' && meta.target.value && credited && meta.pipelineMarked !== true) {
+      const moved = await this.markEvaluated(meta.target.value, credited);
+      if (moved.note) reason += `; ${moved.note}`;
+      if (moved.settled) this.store.markPipelineMarked(id);
     }
     if (this.turnEnded(id, n)) return;
     this.store.endTurn(id, n, {
@@ -542,13 +551,17 @@ export class SessionManager {
     return [...out];
   }
 
-  /** What the move did, or null when the pipeline does not list the URL as pending (a posting evaluated from elsewhere). */
-  private async markEvaluated(url: string, report: NewReport): Promise<string | null> {
+  /**
+   * Moves the URL's Pending row to Processed. `note` says what happened (null when the pipeline does not list the URL
+   * as pending, a posting evaluated from elsewhere); `settled` is false only when the move failed, so a later done turn
+   * tries again.
+   */
+  private async markEvaluated(url: string, report: { file: string }): Promise<{ note: string | null; settled: boolean }> {
     try {
       const moved = await markPipelineEvaluated(this.cfg.codeRoot, this.cfg.dataRoot, url, report.file);
-      return moved ? `pipeline row moved to Processed as #${report.file.match(/^\d+/)![0]}` : null;
+      return { note: moved ? `pipeline row moved to Processed as #${report.file.match(/^\d+/)![0]}` : null, settled: true };
     } catch (err) {
-      return `could not move the pipeline row to Processed: ${(err as Error).message}`;
+      return { note: `could not move the pipeline row to Processed: ${(err as Error).message}`, settled: false };
     }
   }
 
