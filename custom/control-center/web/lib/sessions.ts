@@ -133,8 +133,9 @@ const ends = (e: StoredEvent) => (e.event.type === 'status' && isTerminal(e.even
 /**
  * Replays a session's stored events, then follows it on the app's one event stream (session.event frames), applying
  * each event once, in seq order. No session holds a connection of its own, so finished and running sessions alike cost
- * nothing beyond the page's one stream. Frames that arrive while the stored events load wait for them; after the stream
- * reconnects the stored events are read again, since the stream keeps no replay of what it sent while it was down.
+ * nothing beyond the page's one stream. Frames that arrive while the stored events load wait for them; each time the
+ * stream opens, and whenever a frame skips a seq, the stored events are read again, since the stream keeps no replay of
+ * what it sent while it was not attached.
  * The meta decides how the session stands (one marked failed after a restart can end on a running event), but only a
  * meta answer that counts the last turn start the stream delivered: an older one was asked before that turn started.
  */
@@ -149,7 +150,8 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     let loading = true;
     let pending: StoredEvent[] = [];
     const apply = (events: StoredEvent[]) => {
-      const fresh = events.filter((e) => e.seq > last).sort((a, b) => a.seq - b.seq);
+      // The stored events and the frames that waited for them overlap: one event per seq.
+      const fresh = [...new Map(events.filter((e) => e.seq > last).map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
       if (fresh.length === 0) return false;
       last = fresh.at(-1)!.seq;
       for (const e of fresh) if (e.event.type === 'status' && e.event.status === 'running') lastStart = e.seq;
@@ -196,6 +198,13 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
         pending.push(frame.stored);
         return;
       }
+      if (frame.stored.seq > last + 1) {
+        // An event in between never arrived (sent while the stream was not attached): the store has it.
+        pending.push(frame.stored);
+        loading = true;
+        load();
+        return;
+      }
       if (apply([frame.stored])) {
         // The turn ended: the meta says how (and its totals); the Sessions list moves on.
         loading = true;
@@ -203,8 +212,10 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
         void qc.invalidateQueries({ queryKey: ['sessions'] });
       }
     });
-    const offOpen = onAppStreamOpen((reconnect) => {
-      if (!reconnect || closed) return;
+    // Every open follows a load this panel already asked for (on mount, or before a reconnect), and whatever the server
+    // sent between that answer and the open reached no subscriber: read the stored events again.
+    const offOpen = onAppStreamOpen(() => {
+      if (closed) return;
       loading = true;
       load();
     });

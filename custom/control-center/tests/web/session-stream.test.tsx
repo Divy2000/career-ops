@@ -258,6 +258,32 @@ describe('one session across its turns', () => {
     expect(latest.transcript.turns.map((t) => t.text)).toEqual(['first answer', 'second answer']);
   });
 
+  it('events the server sent after the stored events were read, but before the app stream opened, are not lost', async () => {
+    state = 'running';
+    events = [TURN_1[0]!, stored(2, { type: 'text.delta', text: 'a' })];
+    await mount();
+    await until(() => latest.transcript.turns[0]?.text === 'a', 'the stored events');
+    // The stream is still connecting: this event reaches the store but no subscriber.
+    events = [...events, stored(3, { type: 'text.delta', text: 'b' })];
+    await act(async () => appStream().open());
+    events = [...events, stored(4, { type: 'text.delta', text: 'c' })];
+    await frames([events[3]!]);
+    await until(() => latest.transcript.turns[0]?.text === 'abc', 'every event, in order');
+  });
+
+  it('a frame past a gap in the seqs reads the stored events instead of applying over the gap', async () => {
+    state = 'running';
+    events = [TURN_1[0]!, stored(2, { type: 'text.delta', text: 'a' })];
+    await mount();
+    await act(async () => appStream().open());
+    await until(() => latest.transcript.turns[0]?.text === 'a', 'the stored events');
+    await settle();
+    // Seq 3 never arrives on the stream (sent by another server process on the same data, say).
+    events = [...events, stored(3, { type: 'text.delta', text: 'b' }), stored(4, { type: 'text.delta', text: 'c' })];
+    await frames([events[3]!]);
+    await until(() => latest.transcript.turns[0]?.text === 'abc', 'every event, in order');
+  });
+
   it('a session that failed before its turn could start (only an error event) shows the error, and a later turn clears it (SW3-web-a-01 review 2)', async () => {
     state = 'error';
     events = [stored(1, { type: 'error', message: 'Keychain item not found' })];
