@@ -382,7 +382,7 @@ test('sync.sh stops the run through verify_merge before it pushes', () => {
  * one commit ahead. `conflict` makes upstream edit scan.mjs too. The sync branch merges upstream; `claude(repo)` then
  * stands in for the headless pass. Returns what sync.sh's own lines decide is an unexpected upstream edit.
  */
-function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => snap, failing = false } = {}) {
+function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => snap, failing = false, forkFiles = {} } = {}) {
   const base = mkdtempSync(path.join(tmpdir(), 'sync-held-'));
   const repo = path.join(base, 'repo');
   const state = path.join(base, 'state');
@@ -398,6 +398,7 @@ function heldUpstream({ conflict = false, claude = () => {}, tamper = (snap) => 
     git(repo, 'update-ref', 'refs/remotes/upstream/main', 'up');
     git(repo, 'checkout', '-q', 'main');
     commitFile(repo, 'scan.mjs', 'fork scan\n', 'an earlier sync kept a fork edit');
+    for (const [rel, text] of Object.entries(forkFiles)) commitFile(repo, rel, text, `fork ${rel}`);
     git(repo, 'checkout', '-q', '-b', 'sync/x');
     const merged = spawnSync('git', ['merge', '-q', '--no-ff', '--no-edit', 'upstream/main'], { cwd: repo, env: GIT_ENV, encoding: 'utf8' });
     assert.equal(merged.status === 0, !conflict, merged.stderr);
@@ -875,4 +876,35 @@ test('sync.sh provides the browser after the baseline install and after the post
   const custom = at('custom_tests ');
   const secondBrowser = at('ensure_playwright_browser || fail ', refresh);
   assert.ok(refresh > -1 && secondBrowser > refresh && secondBrowser < custom, `refresh=${refresh} browser=${secondBrowser} custom=${custom}`);
+});
+
+// ---- the confinement gate data in contract.json (SW5-scripts-01) ----
+
+const CONTRACT = 'custom/control-center/server/core/contract.json';
+const contractDoc = (over = {}) => `${JSON.stringify({
+  clis: [{ id: 'scan', script: 'scan.mjs', flags: ['--quiet'] }],
+  claude: { approvedVersions: ['2.1.289'], flags: ['--restricted'] },
+  playwrightMcp: { probed: false },
+  ...over,
+}, null, 2)}\n`;
+/** heldUpstream with the fork's contract.json on main before the merge, then `edit` committed by the stand-in Claude. */
+const contractRun = (edit) => heldUpstream({ forkFiles: { [CONTRACT]: contractDoc() }, claude: (repo) => commitFile(repo, CONTRACT, edit, 'fix(custom): follow upstream') });
+
+test('an edit to the Claude versions or flags the confinement gate approves holds the PR (SW5-scripts-01)', () => {
+  const r = contractRun(contractDoc({ claude: { approvedVersions: ['2.1.289', '2.1.300'], flags: ['--restricted'] } }));
+  assert.equal(r.protectedEdits, CONTRACT);
+});
+
+test('turning the Playwright probe on for apply sessions holds the PR (SW5-scripts-01)', () => {
+  assert.equal(contractRun(contractDoc({ playwrightMcp: { probed: true } })).protectedEdits, CONTRACT);
+});
+
+test('following an upstream flag rename in the CLI contract still auto-merges (SW5-scripts-01)', () => {
+  const r = contractRun(contractDoc({ clis: [{ id: 'scan', script: 'scan.mjs', flags: ['--silent'] }] }));
+  assert.equal(r.protectedEdits, '');
+  assert.equal(r.unexpected, '');
+});
+
+test('a contract.json the gate cannot parse after the merge holds the PR (SW5-scripts-01)', () => {
+  assert.equal(contractRun('{ not json\n').protectedEdits, CONTRACT);
 });

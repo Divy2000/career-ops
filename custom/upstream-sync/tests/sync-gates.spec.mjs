@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
@@ -326,6 +327,25 @@ test('protected_paths keeps every path Dev Chat may not write under custom/, and
 test('sync.sh holds on protected edits found in the same snapshot comparison', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const changed = sync.indexOf('CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")"');
-  const guarded = sync.indexOf('PROTECTED_EDITS="$(protected_paths "$CHANGED_SINCE_MERGE")"');
+  const guarded = sync.indexOf('PROTECTED_EDITS="$({ protected_paths "$CHANGED_SINCE_MERGE"; contract_gate_edits "$MERGE_SNAPSHOT"; }');
   assert.ok(changed > -1 && guarded > changed && guarded < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `protected at ${guarded}`);
+});
+
+test('every file the guard code loads from server/core is gated: adapter code as a protected path, contract.json by its gate sections (SW5-scripts-01)', () => {
+  // The drift check above only compares this list with Dev Chat's, so a gap both share went unseen: neither named
+  // server/core, though the guard reads its approved Claude versions and the Playwright probe from there.
+  const dir = path.join(HERE, '../../control-center/server/claude');
+  const refs = new Set();
+  for (const f of fs.readdirSync(dir).filter((n) => /\.(ts|mjs)$/.test(n))) {
+    const src = readFileSync(path.join(dir, f), 'utf8');
+    for (const m of src.matchAll(/['"]\.\.\/core\/([^'"]+)['"]/g)) refs.add(m[1].replace(/\.js$/, '.ts'));
+    for (const m of src.matchAll(/'core', '([^']+)'/g)) refs.add(m[1]);
+  }
+  assert.ok(refs.size >= 2, [...refs].join(', '));
+  const lib = readFileSync(LIB, 'utf8');
+  for (const ref of refs) {
+    const rel = `custom/control-center/server/core/${ref}`;
+    if (ref.endsWith('.json')) assert.ok(lib.includes(`local f=${rel}`), `${rel} is checked by contract_gate_edits`);
+    else assert.equal(isProtected(rel), rel, `${rel} is a protected path`);
+  }
 });
