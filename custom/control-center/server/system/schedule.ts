@@ -53,15 +53,12 @@ export interface ScheduleInput {
   enabled: boolean;
 }
 
-// A per-shell link: fnm makes one folder per shell under fnm_multishells and removes it when that shell exits.
-const PER_SHELL_LINK = /[\\/]fnm_multishells[\\/]/;
-
 /**
- * The node the jobs are pinned to (CC_NODE_BIN, which custom/launchd/pinned-node.sh puts first on the job's PATH).
- * process.execPath is the real binary (/opt/homebrew/Cellar/node/<version>/bin/node), which a Homebrew upgrade
- * removes, so the pin is the first node on PATH that leads to it, kept as given (/opt/homebrew/bin/node), unless that
- * is a per-shell link gone after logout (fnm's multishell folders): then, and when no node on PATH leads to it, the
- * real binary.
+ * The node the jobs are pinned to (CC_NODE_BIN, which custom/launchd/pinned-node.sh puts first on the job's PATH), by
+ * the rule custom/launchd/install.sh uses: the first node on PATH (what `command -v node` finds) as written, such as
+ * /opt/homebrew/bin/node, which outlives an upgrade where the versioned binary it links to does not. It is the real
+ * binary (process.execPath) when that entry is relative, is an fnm per-shell link (fnm_multishells, gone with its
+ * shell), or does not resolve to the node that runs (a shim, another install).
  */
 export function pinnedNodeBin(execPath: string = process.execPath, pathEnv: string = process.env.PATH ?? ''): string {
   const real = (p: string) => {
@@ -72,13 +69,19 @@ export function pinnedNodeBin(execPath: string = process.execPath, pathEnv: stri
     }
   };
   const self = real(execPath) ?? execPath;
-  for (const dir of pathEnv.split(path.delimiter)) {
-    if (!path.isAbsolute(dir)) continue;
-    const candidate = path.join(dir, 'node');
-    if (real(candidate) !== self) continue;
-    return PER_SHELL_LINK.test(candidate) ? self : candidate;
-  }
-  return self;
+  const found = pathEnv
+    .split(path.delimiter)
+    .map((dir) => path.join(dir || '.', 'node'))
+    .find((candidate) => {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return fs.statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    });
+  const keep = found !== undefined && path.isAbsolute(found) && !found.includes('fnm_multishells') && real(found) === self;
+  return keep ? found : self;
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

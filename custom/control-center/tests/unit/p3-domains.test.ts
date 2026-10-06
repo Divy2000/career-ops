@@ -203,16 +203,24 @@ describe('launchd schedule helpers', () => {
       expect(pinnedNodeBin(real, pathEnv)).toBe(real);
     });
 
-    it('skips a node on PATH that is another binary, and takes the first one that leads to this node', () => {
+    it('looks only at the first node on PATH, as install.sh\'s `command -v node` does: one that is another binary (a shim) pins the real binary', () => {
       const other = tempDir('cc-node-other-');
       fs.writeFileSync(path.join(other, 'node'), '#!/bin/sh\n', { mode: 0o755 });
-      const { pathEnv, dir } = onPath({ older: path.join(other, 'node'), 'homebrew/bin': process.execPath, later: process.execPath });
-      expect(pinnedNodeBin(real, pathEnv)).toBe(path.join(dir('homebrew/bin'), 'node'));
+      const shimFirst = onPath({ shim: path.join(other, 'node'), 'homebrew/bin': process.execPath });
+      expect(pinnedNodeBin(real, shimFirst.pathEnv)).toBe(real);
+      // A folder with no node is passed over, like command -v does.
+      const gapFirst = onPath({ empty: null, 'homebrew/bin': process.execPath });
+      expect(pinnedNodeBin(real, gapFirst.pathEnv)).toBe(path.join(gapFirst.dir('homebrew/bin'), 'node'));
     });
 
-    it('falls back to the binary itself when no node on PATH leads to it, and skips relative PATH entries', () => {
-      expect(pinnedNodeBin(real, `node_modules/.bin${path.delimiter}`)).toBe(real);
+    it('pins the real binary when no node is on PATH, or the first one is reached through a relative entry', () => {
       expect(pinnedNodeBin(real, onPath({ empty: null }).pathEnv)).toBe(real);
+      // A relative entry (node_modules/.bin, say) found first, written relative to the current folder.
+      const rel = tempDir('cc-node-rel-');
+      fs.symlinkSync(process.execPath, path.join(rel, 'node'));
+      const relative = path.relative(process.cwd(), rel);
+      expect(path.isAbsolute(relative)).toBe(false);
+      expect(pinnedNodeBin(real, `${relative}${path.delimiter}${onPath({ 'homebrew/bin': process.execPath }).pathEnv}`)).toBe(real);
     });
   });
   it('reads the persistent disabled state from launchctl print-disabled (both output styles)', () => {
