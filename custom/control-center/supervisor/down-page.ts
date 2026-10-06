@@ -18,6 +18,25 @@ export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 }
 
+/** A failed start's error, with the stderr tail when the error does not already end with it. */
+function errorText(status: Extract<ReloadState, { state: 'failed' }>): string {
+  return status.stderrTail && !status.error.includes(status.stderrTail) ? `${status.error}\n${status.stderrTail}` : status.error;
+}
+
+/** The recovery page's status block: what the last start or reload did, in words, and a failure's error as text. */
+export function renderStatus(status: ReloadState): string {
+  switch (status.state) {
+    case 'idle':
+      return '<p>No reload since the server started.</p>';
+    case 'reloading':
+      return `<p>A reload is under way (started ${escapeHtml(status.startedAt)}).</p>`;
+    case 'ok':
+      return `<p>The last reload came up at ${escapeHtml(status.at)} (pid ${status.pid}).</p>`;
+    case 'failed':
+      return `<p>The last start failed at ${escapeHtml(status.at)}.</p><pre>${escapeHtml(errorText(status))}</pre>`;
+  }
+}
+
 /**
  * `viewer` is null for a request without the session cookie or token: it gets
  * the way to /__recovery but not the startup error, which can carry paths and
@@ -30,7 +49,7 @@ export function renderDownPage(status: ReloadState, viewer: { devChatChanged: bo
   } else if (status.state !== 'failed') {
     body = `<p>The server is starting. Reload this page in a few seconds, or open the <a href="/__recovery">recovery page</a>.</p>`;
   } else {
-    const detail = status.stderrTail && !status.error.includes(status.stderrTail) ? `${status.error}\n${status.stderrTail}` : status.error;
+    const detail = errorText(status);
     const advice = viewer.devChatChanged
       ? `<p>The last Dev Chat change to its code may have broken it. <a href="/__recovery">Open the recovery page</a> to revert the Dev Chat turn that made it, or to restart the server; the app comes back by itself once the server starts.</p>`
       : `<p>It stopped with the error below. Once its cause is fixed, <a href="/__recovery">open the recovery page</a> and restart the server.</p>`;

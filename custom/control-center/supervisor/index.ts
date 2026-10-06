@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import chokidar from 'chokidar';
 import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates } from './preflight.js';
-import { BlueGreen, type ChildHandle } from './bluegreen.js';
+import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
 import { SERVER_TREES, serverLoads, watchCoreGraph } from './core-graph.js';
@@ -21,7 +21,7 @@ import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
 import { serverChildCommand } from './child-command.js';
-import { escapeHtml, renderDownPage, stripAnsi } from './down-page.js';
+import { escapeHtml, renderDownPage, renderStatus, stripAnsi } from './down-page.js';
 import { RECOVERY_SCRIPT } from './recovery-script.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -142,7 +142,7 @@ function safeEqual(a: string, b: string): boolean {
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
-export function renderRecovery(sessionsDir: string, guardRoot: string, status: unknown): string {
+export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState): string {
   const sessions = listDevSessions(sessionsDir);
   const blocks = sessions.map((meta) => {
     const turns = listChanges(guardSessionDir(guardRoot, meta.id), meta);
@@ -168,11 +168,11 @@ h1{font-size:22px}h2{font-size:16px;margin-top:32px}h3{font-size:14px}a{color:va
 pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px}
 .s{color:var(--text-muted)}button{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);border-radius:6px;padding:4px 10px;min-height:32px;cursor:pointer}
 form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:12px}
-#revert-status{margin:12px 0}#revert-status details{margin-top:6px}#revert-status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}
+#revert-status{margin:12px 0}.status p{margin:8px 0}.status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}#revert-status details{margin-top:6px}#revert-status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}
 </style></head><body><h1>Control Center recovery</h1>
 <p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
 <div id="revert-status" role="alert"></div>
-<div class="status"><strong>Server reload status</strong><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
+<div class="status"><strong>Server reload status</strong>${renderStatus(status)}<form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
 ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 <script>${RECOVERY_SCRIPT}</script>
 </body></html>`;

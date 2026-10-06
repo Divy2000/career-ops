@@ -424,6 +424,24 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('the recovery page shows a failed start as the error text, its lines wrapped, not as JSON with \\n escapes', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      const page = (await request(port, 'GET', '/__recovery', { cookie: await signIn(port) })).body;
+      const block = page.slice(page.indexOf('<div class="status">'), page.indexOf('</div>', page.indexOf('<div class="status">')));
+      expect(block).toMatch(/<pre>server child exited before listening \(code 1, signal null\)\n[\s\S]*Error: listen EADDRINUSE/);
+      expect(block).not.toContain('\\n');
+      expect(block).not.toMatch(/(&quot;|")(state|error|stderrTail)(&quot;|")/);
+      expect(page).toMatch(/\.status pre\{[^}]*white-space:pre-wrap[^}]*overflow-x:hidden/);
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
   it('a first start that fails after a Dev Chat turn changed files points at reverting that turn (SW2-claude-05 review)', async () => {
     const root = copyFixtureRoot();
     const guardRoot = tempDir('cc-sup-guard-devchat-');

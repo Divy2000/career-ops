@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { changesByTurn, devChatChangeInEffect, diffFile, listChanges, MAX_DIFF_BYTES, recordTurnAfter, recoveryRequestAllowed, recoveryRevert, revertFile, revertTurn, RevertRefused, snapshotKey } from '../../supervisor/recovery.js';
-import { renderDownPage, stripAnsi } from '../../supervisor/down-page.js';
+import { renderDownPage, renderStatus, stripAnsi } from '../../supervisor/down-page.js';
 import { BlueGreen, type ChildHandle } from '../../supervisor/bluegreen.js';
 import { defaultGuardRoot, resolveGuardRoot } from '../../supervisor/guard-root.js';
 import { foldsCase } from '../helpers/case.js';
@@ -446,6 +446,16 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
   it('a turn that never finished (no post-turn record) cannot be ruled out, so it is still blamed', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts'], { finalized: false });
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
+  });
+
+  it('the recovery page\'s status block says what the last start or reload did in words, with a failure\'s error as escaped text', () => {
+    expect(renderStatus({ state: 'idle' })).toBe('<p>No reload since the server started.</p>');
+    expect(renderStatus({ state: 'reloading', startedAt: '2026-10-06T05:00:00.000Z' })).toBe('<p>A reload is under way (started 2026-10-06T05:00:00.000Z).</p>');
+    expect(renderStatus({ state: 'ok', at: '2026-10-06T05:00:01.000Z', pid: 4242 })).toBe('<p>The last reload came up at 2026-10-06T05:00:01.000Z (pid 4242).</p>');
+    expect(renderStatus({ ...failed, at: '2026-10-06T05:00:02.000Z' })).toBe(
+      '<p>The last start failed at 2026-10-06T05:00:02.000Z.</p><pre>server child exited before listening (code 1, signal null)\nError: listen EADDRINUSE &lt;127.0.0.1&gt;</pre>',
+    );
+    expect(renderStatus({ state: 'failed', at: 't', error: 'healthz did not return 200 in time', stderrTail: 'warning: slow disk' })).toContain('<pre>healthz did not return 200 in time\nwarning: slow disk</pre>');
   });
 
   it('strips terminal escape sequences (colours, a hyperlink, a two-byte escape) and keeps the text and its line breaks', () => {
