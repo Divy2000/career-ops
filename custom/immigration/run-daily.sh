@@ -161,14 +161,17 @@ import path from "node:path";
 const c = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
 const { ROOT, DATA, IMM, DIR } = process.env;
 c.assertRootsConfinable(ROOT, DATA, os.homedir());
+const OUTPUTS = ["policy-changes.tsv", "company-alerts.tsv", "policy-digest.md"];
 const code = new Set(c.spellings(ROOT));
 const data = c.spellings(DATA);
 const permissions = {
   additionalDirectories: data.some((d) => code.has(d)) ? [] : data,
-  allow: ["WebSearch", "WebFetch", `Read(${c.absRule(IMM)}/**)`, `Edit(${c.absRule(IMM)}/**)`, `Read(${c.absRule(path.join(DATA, "config", "profile.yml"))})`],
+  // Writes only to the three files the prompt asks for: the queue, seen ids, batches, the pidfile and the cached
+  // company verdicts under data/immigration are the job state, never for the AI to change.
+  allow: ["WebSearch", "WebFetch", `Read(${c.absRule(IMM)}/**)`, ...OUTPUTS.map((f) => `Edit(${c.absRule(path.join(IMM, f))})`), `Read(${c.absRule(path.join(DATA, "config", "profile.yml"))})`],
   deny: c.buildReadDenyRules([ROOT, DATA]),
 };
-const policy = c.writeGuardPolicy(DIR, { codeRoot: ROOT, dataRoot: DATA, sessionDir: DIR, allow: ["data/immigration/**"], deny: c.ALWAYS_DENIED_WRITES, bash: [], playwright: false, readDeny: c.READ_DENY, readOnlyRoots: [], allowsAgent: false, search: false });
+const policy = c.writeGuardPolicy(DIR, { codeRoot: ROOT, dataRoot: DATA, sessionDir: DIR, allow: OUTPUTS.map((f) => `data/immigration/${f}`), deny: c.ALWAYS_DENIED_WRITES, bash: [], playwright: false, readDeny: c.READ_DENY, readOnlyRoots: [], allowsAgent: false, search: false });
 fs.writeFileSync(path.join(DIR, "settings.json"), JSON.stringify({ permissions, hooks: c.guardHooks() }, null, 2));
 process.stdout.write(policy.sha256);
 ')"; then

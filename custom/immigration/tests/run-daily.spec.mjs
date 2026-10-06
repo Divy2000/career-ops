@@ -138,7 +138,7 @@ jobTest('the policy prompt names the profile by its absolute path in the data ro
   assert.ok(r.calls[0].settings.permissions.allow.includes(`Read(/${profile})`));
 });
 
-jobTest('the settings allow reads only of the immigration folder and the profile, writes only to the immigration folder, and deny the home credential stores and secret files', async () => {
+jobTest('the settings allow reads only of the immigration folder and the profile, writes only to the three files the pass produces, and deny the home credential stores and secret files', async () => {
   const { HOME_READ_DENY, READ_DENY } = await import(CONFINEMENT);
   const w = dailyWorld();
   const r = w.run();
@@ -148,7 +148,7 @@ jobTest('the settings allow reads only of the immigration folder and the profile
   assert.deepEqual(permissions.additionalDirectories, [w.data]);
   assert.deepEqual(
     [...permissions.allow].sort(),
-    ['WebFetch', 'WebSearch', `Read(/${imm}/**)`, `Edit(/${imm}/**)`, `Read(/${path.join(w.data, 'config', 'profile.yml')})`].sort(),
+    ['WebFetch', 'WebSearch', `Read(/${imm}/**)`, `Edit(/${imm}/policy-changes.tsv)`, `Edit(/${imm}/company-alerts.tsv)`, `Edit(/${imm}/policy-digest.md)`, `Read(/${path.join(w.data, 'config', 'profile.yml')})`].sort(),
   );
   assert.equal(permissions.allow.some((rule) => /^(Read|Edit|Write|Bash)$/.test(rule) || rule.startsWith('Bash')), false);
   for (const p of HOME_READ_DENY) assert.ok(permissions.deny.includes(`Read(${p})`), `deny lacks Read(${p})`);
@@ -186,6 +186,13 @@ jobTest('the policy pass runs under the guard hook: loopback and metadata fetche
     { tool: 'WebFetch', input: { url: 'https://93.184.216.34/notice', prompt: 'x' }, want: 0 },
     { tool: 'Write', input: { file_path: path.join(imm, 'policy-digest.md'), content: 'x' }, want: 0 },
     { tool: 'Edit', input: { file_path: path.join(imm, 'policy-changes.tsv'), old_string: 'a', new_string: 'b' }, want: 0 },
+    { tool: 'Edit', input: { file_path: path.join(imm, 'company-alerts.tsv'), old_string: 'a', new_string: 'b' }, want: 0 },
+    // The job's own state and the cached sponsorship verdicts are not the pass's to write (SW7-scripts-02).
+    { tool: 'Write', input: { file_path: path.join(imm, 'pending.json'), content: '[]' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'seen.json'), content: '{}' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'companies', 'acme.md'), content: 'verdict: sponsoring' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, 'batches', 'run.json'), content: '{}' }, want: 2 },
+    { tool: 'Write', input: { file_path: path.join(imm, '.run-daily.pid'), content: '1' }, want: 2 },
     { tool: 'Write', input: { file_path: path.join(w.data, 'cv.md'), content: 'x' }, want: 2 },
     { tool: 'Write', input: { file_path: path.join(w.data, 'data', 'blacklist.md'), content: 'x' }, want: 2 },
     { tool: 'Read', input: { file_path: path.join(w.home, '.ssh', 'id_ed25519') }, want: 2 },
@@ -199,7 +206,7 @@ jobTest('the policy pass runs under the guard hook: loopback and metadata fetche
   // The hook runs only on a policy whose bytes the pass pinned, written outside both roots with the pass's settings.
   assert.equal(call.policyShaMatches, true);
   assert.ok(!call.sessionDir.startsWith(w.data) && !call.sessionDir.startsWith(w.root), call.sessionDir);
-  assert.deepEqual(call.policy.allow, ['data/immigration/**']);
+  assert.deepEqual(call.policy.allow, ['data/immigration/policy-changes.tsv', 'data/immigration/company-alerts.tsv', 'data/immigration/policy-digest.md']);
   assert.deepEqual(call.policy.bash, []);
   assert.equal(call.policy.codeRoot, w.root);
   assert.equal(call.policy.dataRoot, w.data);
