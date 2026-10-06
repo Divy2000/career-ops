@@ -77,6 +77,14 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByRole('heading', { level: 1, name: first })).toBeVisible();
   });
 
+  test('typing a tracker search adds no history entries: Back leaves the search at once (SW3-web-a-06)', async ({ page }) => {
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Tracker' }).click();
+    await page.getByLabel('Search tracker').pressSequentially('vandelay');
+    await expect(page).toHaveURL(/q=vandelay/);
+    await page.goBack();
+    await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
+  });
+
   test('Application shows the verdict, report sections, timeline and sponsorship', async ({ page }) => {
     await page.goto('/tracker/1');
     await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();
