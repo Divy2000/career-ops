@@ -101,6 +101,11 @@ describe('evaluation honesty gate', () => {
     for (const modeId of ['cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only', resumed: true, answersSeen: true }).status, modeId).toBe('awaiting_user');
   });
 
+  it('a question in Chinese, Japanese or Arabic ends with its own question mark (full-width or Arabic) and still waits for the user (SW5-claude-02)', () => {
+    for (const q of ['どの会社の面接ですか？', '你想准备哪家公司的面试？', '你想準備哪家公司的面試？\n', 'لأي شركة تستعد للمقابلة؟', '**どの会社ですか？**', '**لأي شركة؟** ']) expect(endsWithQuestion(q), q).toBe(true);
+    for (const done of ['準備ができました。', '准备好了。', 'تم التحضير.', '？は質問の記号です。']) expect(endsWithQuestion(done), done).toBe(false);
+  });
+
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply', envelopeCount: 1 }).status).toBe('done');
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply' }).status).toBe('awaiting_user');

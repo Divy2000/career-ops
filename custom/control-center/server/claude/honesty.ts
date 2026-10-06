@@ -73,7 +73,8 @@ export function endsWithQuestion(text: string): boolean {
     .map((l) => l.trim())
     .filter(Boolean);
   const last = lines.at(-1) ?? '';
-  return /\?\s*$/.test(last) || /\?\s*\**\s*$/.test(last);
+  // The ASCII question mark, the full-width one Chinese and Japanese use (U+FF1F) and the Arabic one (U+061F).
+  return /[?\uFF1F\u061F]\s*\**\s*$/.test(last);
 }
 
 export interface TurnOutcomeInput {
