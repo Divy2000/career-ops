@@ -38,14 +38,17 @@ async function mount(rows: Array<Record<string, unknown>>): Promise<YamlOp[]> {
   return ops;
 }
 
-async function typeAndBlur(label: string, text: string) {
+async function typeAndBlur(label: string, ...texts: string[]) {
   const input = host!.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
   expect(input, label).not.toBeNull();
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-  await act(async () => {
-    setter.call(input, text);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
+  // Each text is one edit, as a user's keystrokes are: typing then clearing a cell reaches the editor as two changes.
+  for (const text of texts) {
+    await act(async () => {
+      setter.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
   await act(async () => {
     input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
   });
@@ -76,8 +79,9 @@ describe('a blank cell in a structured Portals table', () => {
   it('a blank text cell still saves text, and leaving a blank cell blank saves nothing', async () => {
     const ops = await mount([acme, beta]);
     await typeAndBlur('provider of Beta', 'greenhouse');
-    await typeAndBlur('api of Beta', '');
-    await typeAndBlur('enabled of Beta', '');
+    // Typed and cleared again before leaving the cell (SW4-tests-14): the cell is still blank, so nothing is saved.
+    await typeAndBlur('api of Beta', 'x', '');
+    await typeAndBlur('enabled of Beta', 't', '');
     expect(ops).toEqual([{ op: 'set', path: ['tracked_companies', 1, 'provider'], value: 'greenhouse' }]);
   });
 
