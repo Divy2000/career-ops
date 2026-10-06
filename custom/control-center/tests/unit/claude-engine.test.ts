@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
@@ -11,6 +12,7 @@ import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
 import { tempDir } from '../helpers/tmp.js';
+import { PACKAGE_ROOT } from '../helpers/app.js';
 
 const codeRoot = '/repo/career-ops';
 const base = { claudeBin: 'claude', codeRoot, dataRoot: '/data/root', sessionDir: '/data/root/data/control-center/sessions/s1', policyFile: '/data/root/data/control-center/sessions/s1/policy.json', settingsFile: '/data/root/data/control-center/sessions/s1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: '11111111-1111-4111-8111-111111111111', preamble: 'PREAMBLE', resume: false };
@@ -230,8 +232,14 @@ describe('invocation: read confinement', () => {
   });
 });
 
+/** Names the hook's DNS stub answers (tests/fakes/dns-stub.mjs); every other name does not resolve. */
+const TEST_DNS = { 'public.test': ['93.184.215.14'], 'private.test': ['10.0.0.7'], 'mixed.test': ['93.184.215.14', '127.0.0.1'] };
+const DNS_STUB = pathToFileURL(path.join(PACKAGE_ROOT, 'tests', 'fakes', 'dns-stub.mjs')).href;
+
 function hookRun(sessionDir: string, policy: { file: string; sha256: string }, payload: Record<string, unknown>) {
-  const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir } });
+  // The hook resolves names through the DNS stub, never the machine's resolver (SW2-tests-24).
+  const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${DNS_STUB}`.trim(), CC_TEST_DNS: JSON.stringify(TEST_DNS), CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
+  const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env });
   return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
 
@@ -605,11 +613,17 @@ describe('guard hook: read confinement', () => {
     }
     expect(pre('WebFetch', { url: 'https://nothing.invalid/', prompt: 'x' }).stderr).toMatch(/could not resolve/);
     expect(pre('WebFetch', { url: 'https://93.184.216.34/', prompt: 'x' }).status).toBe(0);
+    // Names go through the DNS check: one that resolves to a private address, or to any loopback one, is refused.
+    expect(pre('WebFetch', { url: 'https://private.test/', prompt: 'x' }).stderr).toMatch(/private\.test resolves to 10\.0\.0\.7/);
+    expect(pre('WebFetch', { url: 'https://mixed.test/', prompt: 'x' }).stderr).toMatch(/mixed\.test resolves to 127\.0\.0\.1/);
+    expect(pre('WebFetch', { url: 'https://public.test/jobs/1', prompt: 'x' }).status).toBe(0);
   });
 
   it('a Bash script URL argument goes through the same DNS check', () => {
     expect(pre('Bash', { command: 'node check-liveness.mjs https://nothing.invalid/x' }).stderr).toMatch(/could not resolve/);
     expect(pre('Bash', { command: 'node check-liveness.mjs https://93.184.216.34/x' }).status).toBe(0);
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://private.test/x' }).stderr).toMatch(/resolves to 10\.0\.0\.7/);
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://public.test/x' }).status).toBe(0);
     expect(pre('Bash', { command: 'node check-liveness.mjs file:///etc/passwd' }).status).toBe(2);
   });
 
@@ -645,6 +659,8 @@ describe('guard hook: read confinement', () => {
     expect(liveness(list('scheme.txt', 'file:///etc/passwd\n')).stderr).toMatch(/not an http/);
     expect(liveness(list('word.txt', 'https://93.184.216.34/a\nnot-a-url\n')).stderr).toMatch(/not an http/);
     expect(liveness(list('dns.txt', 'https://nothing.invalid/x\n')).stderr).toMatch(/could not resolve/);
+    expect(liveness(list('private-name.txt', 'https://public.test/1\nhttps://private.test/2\n')).stderr).toMatch(/resolves to 10\.0\.0\.7/);
+    expect(liveness(list('public-name.txt', 'https://public.test/1\n')).status).toBe(0);
     expect(liveness(list('big.txt', `https://93.184.216.34/${'x'.repeat(URL_LIST_MAX_BYTES)}\n`)).stderr).toMatch(/larger than/);
     expect(liveness('missing.txt').stderr).toMatch(/cannot read/);
     expect(liveness(path.join(outside, 's.txt')).status).toBe(2);
