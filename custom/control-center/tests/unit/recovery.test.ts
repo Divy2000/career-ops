@@ -555,7 +555,8 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
   });
 
-  it('a record under a directory that cannot be read (EACCES) cannot be ruled out either, so it counts', () => {
+  // chmod 000 does not stop root, so as root the directory is readable and there is no EACCES to provoke (SW4-tests-25).
+  it.skipIf(process.getuid?.() === 0)('a record under a directory that cannot be read (EACCES) cannot be ruled out either, so it counts', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts']);
     revertTurn(t.sessionDir, t.meta, 1, { codeRoot: t.root, dataRoot: t.root });
     const locked = path.join(t.root, 'custom', 'control-center', 'server', 'locked');

@@ -39,6 +39,8 @@ async function untilDone(page: Page, base: string, id: string) {
 
 test.describe('a session that errors without running shows the error on its open page', () => {
   test('a follow-up turn that fails before it starts: the page shows the error status live, from /api/events', async ({ page }) => {
+    // A read-only folder is how the turn is made to fail; chmod does not stop root (SW4-tests-25).
+    test.skip(process.getuid?.() === 0, 'chmod does not make a folder read-only for root');
     const base = `http://127.0.0.1:${E2E_PORT}`;
     const write = { 'X-CC': '1', Origin: base };
     await page.goto(`/auth?t=${E2E_TOKEN}`);
