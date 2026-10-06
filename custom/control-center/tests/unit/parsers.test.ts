@@ -242,6 +242,14 @@ describe('pipeline', () => {
     expect(rows.map((r) => r.line)).toEqual([2, 3, 4, 5, 6]);
   });
 
+  it('keeps a pending row whose posting is a local:jds/ reference, as archive-posting and the Apify provider write it (SW8-web-a-03)', () => {
+    const rows = parsePipeline('## Pending\n\n- [ ] local:jds/2026-10-06_acme_pm.pdf | Acme | PM\n- [ ] local:jds/apify-acme-staff.md | Acme | Staff Engineer | Remote\n- [ ] local:jds/../cv.md | Evil | Role\n- [ ] local:/etc/passwd | Evil | Role\n- [ ] local:reports/001-x.md | Evil | Role\n');
+    expect(rows.map((r) => r.url)).toEqual(['local:jds/2026-10-06_acme_pm.pdf', 'local:jds/apify-acme-staff.md']);
+    expect(rows[0]).toMatchObject({ company: 'Acme', role: 'PM', section: 'pending', done: false, line: 3 });
+    expect(rows[1]).toMatchObject({ company: 'Acme', role: 'Staff Engineer', location: 'Remote' });
+    expect(sourceOf('local:jds/apify-acme-staff.md', null)).toBe('local');
+  });
+
   it('keeps a bare pasted URL row and a URL row with only labeled segments, with company and role empty', () => {
     const rows = parsePipeline('## Pending\n\n- [ ] https://jobs.example.com/posting/123\n- [ ] https://jobs.example.com/posting/124 | posted: 2026-06-18 | note: from a friend\n- [ ] https://jobs.example.com/posting/125 | Acme\n- [ ] not a url\n');
     expect(rows.map((r) => r.url)).toEqual(['https://jobs.example.com/posting/123', 'https://jobs.example.com/posting/124', 'https://jobs.example.com/posting/125']);

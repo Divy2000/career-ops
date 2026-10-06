@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { importCore } from '../core/adapter.js';
-import { applyInboxSkip, postingUrl } from '../domains/inboxSkip.js';
+import { applyInboxSkip, pipelineRef, postingUrl } from '../domains/inboxSkip.js';
 import { appendOffers, editFollowups, FollowupsBusyError, PipelineBusyError } from '../domains/writers.js';
 import { readApplyDocuments, readDocuments } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
@@ -17,13 +17,14 @@ type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>,
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const url = z.string().refine((s) => postingUrl(s) !== null, 'must be an http(s) posting URL');
+const rowRef = z.string().refine((s) => pipelineRef(s) !== null, 'must be an http(s) posting URL or a local:jds/ reference');
 
 export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; daily: DailyJobWatch }): Promise<void> {
   const { cfg } = opts;
   const pipelinePath = path.join(cfg.dataRoot, 'data', 'pipeline.md');
 
   app.post<{ Body: { url?: unknown; done?: unknown } }>('/api/pipeline/skip', async (req, reply) => {
-    const parsed = z.object({ url, done: z.boolean() }).safeParse(req.body ?? {});
+    const parsed = z.object({ url: rowRef, done: z.boolean() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     const { withPipelineLock } = await importCore<PipelineLock>(cfg.codeRoot, 'pipeline-lock.mjs');
     try {

@@ -1,5 +1,7 @@
 // Port of the alpha's inbox Skip/undo: flip the checkbox of one Pending row in
-// data/pipeline.md by posting URL. The URL is a matcher, never a path.
+// data/pipeline.md by posting URL (or a saved JD's local:jds/ reference). Either is a matcher, never a path.
+import { localJdPath } from '../../shared/local-jd.js';
+
 const MAX_URL_LEN = 2048;
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX])\](.*)$/;
 const PENDING_HEADING = /^##\s+(Pending|Pendientes)\s*$/i;
@@ -38,8 +40,14 @@ export function postingUrl(raw: unknown): string | null {
   return s;
 }
 
+/** The key a Pending row is matched by: its posting URL, or the local:jds/ reference of a saved JD. */
+export function pipelineRef(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  return postingUrl(raw) ?? (localJdPath(raw) !== null ? raw.trim() : null);
+}
+
 function jobUrlFromRest(rest: string): string | null {
-  return postingUrl(unescapeMarkdownUrl(rest.split('|')[0] ?? ''));
+  return pipelineRef(unescapeMarkdownUrl(rest.split('|')[0] ?? ''));
 }
 
 function pendingRange(lines: string[]): { start: number; end: number } | null {
@@ -57,10 +65,10 @@ function pendingRange(lines: string[]): { start: number; end: number } | null {
 
 export type SkipResult = { ok: true; text: string; matched: number; changed: number } | { ok: false; error: 'invalid-url' | 'unmatched' };
 
-/** Flip `- [ ]` and `- [x]` on Pending rows whose job URL equals `url`; every other byte stays. */
+/** Flip `- [ ]` and `- [x]` on Pending rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays. */
 export function applyInboxSkip(text: string, url: string, done: boolean): SkipResult {
   // The app reads rows unescaped (parsePipeline); the file holds the escaped form, so both sides compare unescaped.
-  const parsed = postingUrl(typeof url === 'string' ? unescapeMarkdownUrl(url.trim()) : url);
+  const parsed = pipelineRef(typeof url === 'string' ? unescapeMarkdownUrl(url.trim()) : url);
   if (!parsed) return { ok: false, error: 'invalid-url' };
   const nl = text.includes('\r\n') ? '\r\n' : '\n';
   const endedWithNl = /\r?\n$/.test(text);

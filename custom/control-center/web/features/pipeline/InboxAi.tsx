@@ -9,8 +9,12 @@ import { BATCH_MAX_URLS } from '@shared/fanout';
 
 export const FANOUT_CONFIRM_ABOVE = 3;
 
-/** Pipeline AI entry points: Process inbox (pipeline mode) and Evaluate the visible pending rows as a fan-out (spec 4.2). */
-export function InboxAi({ urls }: { urls: string[] }) {
+/**
+ * Pipeline AI entry points: Process inbox (pipeline mode) and Evaluate the visible pending rows as a fan-out (spec 4.2).
+ * The fan-out evaluates posting URLs only; `savedJds` counts the visible rows that are a saved JD (local:jds/), which
+ * Process inbox reads instead.
+ */
+export function InboxAi({ urls, savedJds = 0 }: { urls: string[]; savedJds?: number }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
@@ -45,6 +49,11 @@ export function InboxAi({ urls }: { urls: string[] }) {
         <button type="button" disabled={busy || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
+        {savedJds > 0 && (
+          <span className="muted small">
+            {savedJds === 1 ? '1 row with a saved JD is left out: Process inbox reads it.' : `${savedJds} rows with a saved JD are left out: Process inbox reads them.`}
+          </span>
+        )}
         {tooMany && (
           <span className="danger-text small">
             At most {BATCH_MAX_URLS} evaluations at a time. Filter the list to {BATCH_MAX_URLS} or fewer pending rows.

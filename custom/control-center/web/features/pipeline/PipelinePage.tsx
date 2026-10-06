@@ -9,8 +9,15 @@ import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, Tabs, a
 import { InboxAi } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
+import { localJdPath } from '@shared/local-jd';
 
 const route = getRouteApi('/pipeline');
+
+/** Where a row's posting opens: the posting URL, or the saved JD a local:jds/ row points at. */
+const postingHref = (ref: string) => {
+  const jd = localJdPath(ref);
+  return jd === null ? ref : `/api/files/serve?path=${encodeURIComponent(jd)}`;
+};
 export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
 export interface PipelineSearch {
   tab: PipelineTab;
@@ -143,7 +150,7 @@ function Inbox() {
       </div>
       <Message message={message} />
       <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
-        <InboxAi urls={visible.filter((r) => !r.done).map((r) => r.url)} />
+        <InboxAi urls={visible.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url)} savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length} />
         {skipError && (
           <p role="alert" className="danger-text">
             {skipError}
@@ -200,7 +207,7 @@ function Inbox() {
                     </td>
                     <td>
                       <div className="clamp-2" title={r.role || r.url}>
-                        <a href={r.url} target="_blank" rel="noreferrer noopener">
+                        <a href={postingHref(r.url)} target="_blank" rel="noreferrer noopener">
                           {r.role || r.url}
                         </a>
                       </div>

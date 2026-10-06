@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
 import { parseTsv, readText } from './files.js';
+import { localJdPath } from '../../shared/local-jd.js';
 
 export interface PipelineRow {
   url: string;
@@ -50,6 +51,7 @@ export function seniorityOf(title: string): string | null {
 
 export function sourceOf(url: string, portal: string | null): string {
   if (portal) return portal.replace(/-full$/, '').replace(/-api$/, '');
+  if (localJdPath(url) !== null) return 'local';
   try {
     const host = new URL(url).hostname.replace(/^www\./, '');
     const known: Array<[RegExp, string]> = [
@@ -90,8 +92,9 @@ export function parsePipeline(md: string): PipelineRow[] {
     const struck = m[2]!.match(/^~~([\s\S]*?)(?:~~|$)/);
     const cells = (struck ? struck[1]! : m[2]!).split('|').map((s) => s.trim());
     // The URL leads only the rows scan.mjs appends; Processed rows put a report number (#NNN), a report link
-    // ([NNN](reports/...)) or a pre-screen marker (#--) before it, as scan.mjs extractPipelineUrl documents.
-    const urlAt = cells.findIndex((cell) => /^https?:\/\//i.test(cell));
+    // ([NNN](reports/...)) or a pre-screen marker (#--) before it, as scan.mjs extractPipelineUrl documents. A saved
+    // JD stands in for the URL as local:jds/<file> (archive-posting, the Apify provider).
+    const urlAt = cells.findIndex((cell) => /^https?:\/\//i.test(cell) || localJdPath(cell) !== null);
     if (urlAt === -1) return;
     const skipped = cells[0]!.startsWith('#--');
     const positional: string[] = [];
