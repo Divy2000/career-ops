@@ -6,7 +6,7 @@ import { describeError } from '../../lib/actions';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
 import { isPlainObject } from '../../lib/yamlOpsClient';
 import { useGuardedTab, useUnsaved } from '../../lib/unsaved';
-import { KeyEditor, type FieldRules } from './StructuredEditor';
+import { KeyEditor, type ColumnsAt, type FieldRules } from './StructuredEditor';
 import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
 import { ConfigEditor } from './RawConfigEditor';
 import type { CadenceRead } from '@shared/api';
@@ -42,6 +42,13 @@ export const PROFILE_SECTIONS: SectionDef[] = [
   { key: 'pipeline', help: 'Two-pass triage gate.', empty: { triage_threshold: 3.5, triage_min_urls: 5 } },
   { key: 're_apply_windows', help: 'Cooldown windows per company.', empty: {} },
 ];
+
+/** The lists of objects in config/profile.example.yml: their skeletons start empty, so the form needs their columns. */
+export const PROFILE_LIST_COLUMNS: ColumnsAt = {
+  'target_roles.archetypes': ['name', 'level', 'fit'],
+  'narrative.proof_points': ['name', 'url', 'hero_metric'],
+  'cover_letter.language_learning': ['language', 'current_level', 'target_level', 'target_date', 'sentence'],
+};
 
 export const PROFILE_RULES: FieldRules = {
   'language.output': (v) => (/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(v) ? null : 'ISO language code such as en or zh-CN'),
@@ -176,7 +183,7 @@ function StructuredProfile() {
                 Add {sec.key}
               </button>
             ) : (
-              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PROFILE_RULES} />
+              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PROFILE_RULES} columnsAt={PROFILE_LIST_COLUMNS} />
             )}
           </section>
         ))}

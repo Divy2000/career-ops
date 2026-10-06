@@ -244,7 +244,10 @@ function AddKeyForm({ path, onOp }: { path: JsonPath; onOp: OpSink }) {
   );
 }
 
-export function ObjectFields({ path, value, onOp, rules, depth = 0 }: { path: JsonPath; value: Record<string, unknown>; onOp: OpSink; rules?: FieldRules; depth?: number }) {
+/** The columns of a list of objects anywhere in a document, by its dotted path: an empty one still edits as a table. */
+export type ColumnsAt = Record<string, string[]>;
+
+export function ObjectFields({ path, value, onOp, rules, depth = 0, columnsAt }: { path: JsonPath; value: Record<string, unknown>; onOp: OpSink; rules?: FieldRules; depth?: number; columnsAt?: ColumnsAt }) {
   const keys = Object.keys(value);
   return (
     <div className="fields">
@@ -258,7 +261,7 @@ export function ObjectFields({ path, value, onOp, rules, depth = 0 }: { path: Js
             </button>
           </div>
           <div className="fields__value">
-            <KeyEditor path={[...path, k]} value={value[k]} onOp={onOp} rules={rules} depth={depth + 1} />
+            <KeyEditor path={[...path, k]} value={value[k]} onOp={onOp} rules={rules} depth={depth + 1} columnsAt={columnsAt} />
           </div>
         </div>
       ))}
@@ -268,7 +271,8 @@ export function ObjectFields({ path, value, onOp, rules, depth = 0 }: { path: Js
 }
 
 /** Dispatches on the value shape: scalar, list of scalars, list of objects, object, or a read-only JSON preview. */
-export function KeyEditor({ path, value, onOp, rules, depth = 0, columnsHint, rowRule }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; depth?: number; columnsHint?: string[]; rowRule?: RowRule }): ReactNode {
+export function KeyEditor({ path, value, onOp, rules, depth = 0, columnsHint: hint, columnsAt, rowRule }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; depth?: number; columnsHint?: string[]; columnsAt?: ColumnsAt; rowRule?: RowRule }): ReactNode {
+  const columnsHint = hint ?? columnsAt?.[pathLabel(path)];
   if (isScalar(value)) return <ScalarInput path={path} value={value} onOp={onOp} rules={rules} />;
   if (Array.isArray(value)) {
     // An empty list is a scalar list by shape; a section with columns is a list of objects even with no entries yet.
@@ -276,7 +280,7 @@ export function KeyEditor({ path, value, onOp, rules, depth = 0, columnsHint, ro
     if (value.every(isScalar)) return <ScalarList path={path} items={value} onOp={onOp} rules={rules} />;
     if (value.every(isPlainObject)) return <ObjectTable path={path} rows={value} onOp={onOp} rules={rules} columnsHint={columnsHint} rowRule={rowRule} />;
   }
-  if (isPlainObject(value) && depth < 3) return <ObjectFields path={path} value={value} onOp={onOp} rules={rules} depth={depth} />;
+  if (isPlainObject(value) && depth < 3) return <ObjectFields path={path} value={value} onOp={onOp} rules={rules} depth={depth} columnsAt={columnsAt} />;
   return (
     <div>
       <p className="muted small">This shape is edited in the Raw YAML tab.</p>

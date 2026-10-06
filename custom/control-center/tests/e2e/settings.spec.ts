@@ -117,6 +117,28 @@ test.describe('Settings', () => {
     await expect(page.getByRole('heading', { name: /Blacklist/ })).toBeVisible();
   });
 
+  test('Add target_roles offers the archetype columns and saves an archetype as an object (SW3-web-b-04)', async ({ page }) => {
+    const profile = path.join(process.env.CC_E2E_TMP!, 'root', 'config', 'profile.yml');
+    const original = fs.existsSync(profile) ? fs.readFileSync(profile, 'utf8') : null;
+    try {
+      if (original !== null) fs.writeFileSync(profile, original.replace(/^target_roles:[\s\S]*?(?=^\S|$(?![\s\S]))/m, ''));
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/settings?tab=profile');
+      await page.getByRole('button', { name: 'Add target_roles' }).click();
+      const roles = page.locator('section[aria-labelledby="profile-target_roles"]');
+      await roles.getByLabel('New target_roles.archetypes name').fill('AI Engineer');
+      await roles.getByLabel('New target_roles.archetypes fit').fill('primary');
+      await roles.getByRole('button', { name: 'Add row' }).click();
+      await page.getByRole('button', { name: 'Validate and save profile' }).click();
+      await expect(page.getByRole('status')).toContainText('Saved config/profile.yml');
+      const saved = await (await page.request.get('/api/config/profile')).json();
+      expect(saved.doc.target_roles.archetypes).toEqual([{ name: 'AI Engineer', fit: 'primary' }]);
+    } finally {
+      if (original === null) fs.rmSync(profile, { force: true });
+      else fs.writeFileSync(profile, original);
+    }
+  });
+
   test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');
