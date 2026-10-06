@@ -51,6 +51,8 @@ export function reduceEvent(prev: Transcript, ev: SessionEvent): Transcript {
     case 'status':
       if (ev.status === 'running' && ev.turn !== undefined) {
         if (!t.turns.some((x) => x.n === ev.turn)) t.turns.push({ n: ev.turn, text: '', tools: [], stderr: [] });
+        // An earlier turn's failure is not this turn's: its alert would sit under the new answer.
+        t.error = null;
       }
       t.status = ev.status;
       t.reason = ev.reason ?? (ev.status === 'running' ? null : t.reason);
