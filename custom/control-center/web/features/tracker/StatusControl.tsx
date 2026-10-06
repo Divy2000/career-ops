@@ -7,7 +7,8 @@ import { HiredDialog } from './HiredDialog';
 import { reasonLabel } from '../../lib/format';
 
 export const STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
-export const DISCARD_REASONS = ['comp below floor', 'no visa sponsorship', 'location mismatch', 'level mismatch', 'staffing agency', 'posting closed', 'culture concerns'];
+/** The TUI picker's codes (dashboard/internal/ui/screens/pipeline.go canonicalDiscardReasons), shown as words. */
+export const DISCARD_REASONS = ['salary_too_low', 'hybrid_required', 'tech_stack_mismatch', 'seniority_mismatch', 'geo_restriction', 'size_mismatch', 'company_culture'];
 
 /** Sets a tracker row's status through tracker.setStatus; the message says what happened, or why it did not. */
 export function useSetStatus() {
@@ -46,8 +47,8 @@ export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: {
   const [reason, setReason] = useState('');
   const [otherText, setOtherText] = useState('');
   const predicted = row.summary?.discardReasons ?? [];
-  // Reports carry the writer's codes (salary_too_low): shown as words, recorded as the code the TUI also writes, so
-  // analyze-patterns counts each reason under one key. A listed reason the report already predicts is offered once.
+  // Reasons are codes (salary_too_low), from the report and the TUI's list alike: shown as words, recorded as the code,
+  // so analyze-patterns counts each reason under one key. A listed reason the report already predicts is offered once.
   const reasons = new Map<string, string>();
   for (const value of [...predicted, ...DISCARD_REASONS]) if (!reasons.has(reasonLabel(value))) reasons.set(reasonLabel(value), value);
   const chosenReason = reason === '__other' ? otherText.trim() : reason;
