@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
@@ -433,6 +435,8 @@ test('under a real pseudo-terminal the same questions work through /dev/tty (pyt
     const r = w.runInPty(['--dir', D, ...QUIET, '--resume', resume], { steps: [{ expect: 'Proceed\\?', send: 'y\n' }, { expect: 'Replace cv\\.md\\?', send: `${answer}\n` }] });
     assert.match(r.out, /Replace cv\.md\?/);
     assert.equal(read(D, 'cv.md'), replaced ? '# New\n' : 'OLD line\n', r.out);
+    // Keeping the old cv.md leaves "replace it" as a pending action (exit 3); replacing it leaves nothing pending.
+    assert.equal(r.status, replaced ? 0 : 3, r.out);
   }
 });
 
@@ -1068,4 +1072,35 @@ test('a pull that cannot fast-forward is a pending action, not a failure', () =>
   const r = w.run(args(), { env: { FAKE_GIT_FAIL: 'pull' } });
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /git pull --ff-only failed in .*; resolve it by hand\./);
+});
+
+// ---- pty_run.py itself: a prompt that never comes, a command that never ends, an older Python (SW2-tests-32) ----
+
+const PTY_RUN = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pty_run.py');
+const ptyRun = (steps, cmd, { env = {}, pre = '' } = {}) => {
+  const args = pre
+    ? ['-c', `${pre}\nimport runpy, sys\nsys.argv = ${JSON.stringify([PTY_RUN, JSON.stringify(steps), '--', ...cmd])}\nrunpy.run_path(${JSON.stringify(PTY_RUN)}, run_name='__main__')`]
+    : [PTY_RUN, JSON.stringify(steps), '--', ...cmd];
+  return spawnSync('python3', args, { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 20_000 });
+};
+
+test('pty_run.py fails when a prompt it was told to answer never appears', () => {
+  const r = ptyRun([{ expect: 'Never asked\\?', send: 'y\n' }], ['bash', '-c', 'echo hello']);
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /pty_run: prompt never appeared: Never asked/);
+  assert.match(r.stdout, /hello/);
+});
+
+test('pty_run.py kills a command still running at its deadline, and fails', () => {
+  const started = Date.now();
+  const r = ptyRun([], ['sleep', '30'], { env: { PTY_RUN_TIMEOUT: '1' } });
+  assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /pty_run: timed out after 1 s; killed the command/);
+});
+
+test('pty_run.py exits with the command\'s own status, also on a Python without os.waitstatus_to_exitcode (before 3.9)', () => {
+  assert.equal(ptyRun([], ['bash', '-c', 'exit 3']).status, 3);
+  const old = ptyRun([], ['bash', '-c', 'exit 3'], { pre: 'import os\ndel os.waitstatus_to_exitcode' });
+  assert.equal(old.status, 3, old.stderr);
 });
