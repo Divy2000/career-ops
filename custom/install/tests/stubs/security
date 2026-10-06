@@ -8,7 +8,8 @@ case "${1:-}" in
     ;;
   add-generic-password)
     cat >/dev/null 2>&1 || true
-    : > "$STUB_KEYCHAIN"
+    # FAKE_SECURITY_ADD_NOOP: the user cancelled the hidden prompt, so nothing was stored.
+    [ -n "${FAKE_SECURITY_ADD_NOOP:-}" ] || : > "$STUB_KEYCHAIN"
     ;;
 esac
 exit 0
