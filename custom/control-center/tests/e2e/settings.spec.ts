@@ -54,6 +54,30 @@ test.describe('Settings', () => {
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
+  test('a section another writer filled while "Add job_boards" was pending survives the save after the conflict (SW2-tests-02)', async ({ page }) => {
+    const portals = path.join(process.env.CC_E2E_TMP!, 'root', 'portals.yml');
+    const original = fs.readFileSync(portals, 'utf8');
+    try {
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/settings');
+      await page.getByRole('button', { name: 'Add job_boards' }).click();
+      await page.getByRole('button', { name: 'Add search_queries' }).click();
+      await expect(page.getByText('2 pending changes')).toBeVisible();
+      // A session writes two boards meanwhile.
+      fs.writeFileSync(portals, `${original}\njob_boards:\n  - name: Board One\n    careers_url: https://boards.example.com/one\n  - name: Board Two\n    careers_url: https://boards.example.com/two\n`);
+      await expect(page.getByRole('alert').filter({ hasText: 'changed on disk since you started editing' })).toBeVisible();
+      await page.getByRole('button', { name: 'Validate and save' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'changed on disk since you loaded it' })).toBeVisible();
+      await page.getByRole('button', { name: 'Validate and save' }).click();
+      await expect(page.getByRole('status')).toContainText('Saved portals.yml');
+      const saved = await (await page.request.get('/api/config/portals')).json();
+      expect(saved.doc.job_boards.map((b: { name: string }) => b.name)).toEqual(['Board One', 'Board Two']);
+      expect(saved.doc.search_queries).toEqual([]);
+    } finally {
+      fs.writeFileSync(portals, original);
+    }
+  });
+
   test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');

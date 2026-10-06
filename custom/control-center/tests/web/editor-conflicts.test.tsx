@@ -213,6 +213,40 @@ describe('structured editors (useStructuredConfig)', () => {
     await until(() => writes().length === 2, 'the second save');
     expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', headers: expect.objectContaining({ 'If-Match': 'p2' }), body: { ops: [{ op: 'set', path: ['a'], value: 2 }] } }));
   });
+
+  it('after a 409, a whole-section set whose section another writer filled is dropped, so saving again keeps their items (SW2-tests-02)', async () => {
+    const { useStructuredConfig, EditorNoteView } = await import('@web/features/settings/useStructuredConfig');
+    function Harness() {
+      const s = useStructuredConfig('portals');
+      return createElement(
+        'div',
+        null,
+        createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['boards'], value: [] }) }, 'Add boards'),
+        createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'insert', path: ['boards'], value: 'mine' }) }, 'Add my board'),
+        createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['queries'], value: [] }) }, 'Add queries'),
+        createElement('button', { type: 'button', onClick: () => void s.save() }, 'Save'),
+        createElement('output', { 'aria-label': 'doc' }, JSON.stringify(s.doc)),
+        createElement(EditorNoteView, { note: s.note }),
+      );
+    }
+    await mount(createElement(Harness));
+    await until(() => labelled('doc')?.textContent === JSON.stringify({ a: 1, list: ['x', 'y'] }), 'the loaded doc');
+    await click(button('Add boards')!);
+    await click(button('Add my board')!);
+    await click(button('Add queries')!);
+    // Another writer adds ten boards meanwhile.
+    const theirs = Array.from({ length: 10 }, (_, i) => `board-${i}`);
+    await changeOnDisk('/api/config/portals', { raw: 'a: 1\nlist: [x, y]\nboards: [...]\n', etag: 'p2', doc: { a: 1, list: ['x', 'y'], boards: theirs } });
+    await until(() => /portals\.yml changed on disk since you started editing/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save')!);
+    await until(() => /changed on disk since you loaded it/.test(alerts()), 'the conflict note');
+    // The set would replace their ten boards with an empty list; the append and the untouched section stay.
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 1, list: ['x', 'y'], boards: [...theirs, 'mine'], queries: [] }));
+    expect(alerts()).toMatch(/1 edit to a value that also changed on disk was dropped; redo it on the current version/);
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]!.body).toEqual({ ops: [{ op: 'insert', path: ['boards'], value: 'mine' }, { op: 'set', path: ['queries'], value: [] }] });
+  });
 });
 
 describe('projects library form (Profile & CV > Projects)', () => {
