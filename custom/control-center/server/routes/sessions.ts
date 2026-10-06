@@ -11,6 +11,7 @@ import { extractSourceText } from '../domains/projects.js';
 import { PendingUnreadableError, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
+import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
 
 const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
 const prompt = z.string().min(1).max(20_000);
@@ -46,6 +47,27 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   // connection it already holds (HTTP/1.1 allows 6 per host; one stream per session stalled the page at five).
   const offBus = manager.onEvent((sessionId, stored) => opts.bus.publish('session.event', { sessionId, stored }));
   app.addHook('onClose', async () => offBus());
+  // An uploaded CV holds personal data, but any session that names it can still read it (a reply, a "re-read page 2"
+  // turn after done, a fork or a retry). It goes when the last session naming it is deleted; the startup age sweep
+  // removes any left behind. Only a regular file in the uploads folder ever goes, and a failure is logged, never
+  // thrown: the delete it follows has already happened.
+  const dropUpload = (meta: { target?: { type?: string; value?: string | null } }) => {
+    const value = meta.target?.type === 'text' ? meta.target.value : null;
+    if (!value) return;
+    try {
+      const target = uploadTarget(opts.cfg.dataRoot, value);
+      if (target.kind !== 'upload') return;
+      const names = (m: { target?: { type?: string; value?: string | null } }) => {
+        if (m.target?.type !== 'text' || !m.target.value) return false;
+        const other = uploadTarget(opts.cfg.dataRoot, m.target.value);
+        return other.kind === 'upload' && other.path === target.path;
+      };
+      if (manager.list().some(names)) return;
+      removeUpload(opts.cfg.dataRoot, target.path);
+    } catch (err) {
+      app.log.warn({ err, value }, 'could not remove an uploaded CV (or tell whether a session still reads it); the startup sweep will');
+    }
+  };
   // Unlocking data/blacklist.md for a turn is the same explicit gate as PUT /api/blacklist: Dev Chat only, and the header on that request.
   const unlockRefused = (mode: string, headers: Record<string, unknown>) =>
     manager.effectivePolicy(mode)?.policyClass !== 'devchat'
@@ -64,6 +86,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
+    // An upload is stored in its canonical form, so the delete that removes it can tell every session naming it.
+    if (parsed.data.target.type === 'text' && parsed.data.target.value) {
+      const upload = uploadTarget(opts.cfg.dataRoot, parsed.data.target.value);
+      if (upload.kind === 'refused') return reply.code(400).send({ error: upload.reason });
+      if (upload.kind === 'upload') parsed.data.target = { type: 'text', value: upload.path };
+    }
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
     let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);
     // projects-ingest runs no command: the app extracts its documents/ source (as intake does) and the text rides in the first message.
@@ -153,8 +181,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
 
   app.delete<{ Params: { id: string } }>('/api/sessions/:id', async (req, reply) =>
     mutate(reply, async () => {
-      if (!manager.read(req.params.id)) return reply.code(404).send({ error: 'no such session' });
+      const meta = manager.read(req.params.id);
+      if (!meta) return reply.code(404).send({ error: 'no such session' });
+      // Deleted first: a running session refuses, and its upload stays with it.
       manager.delete(req.params.id);
+      dropUpload(meta);
       return { ok: true };
     }),
   );
