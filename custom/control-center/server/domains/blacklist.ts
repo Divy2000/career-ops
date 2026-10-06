@@ -1,8 +1,11 @@
 // data/blacklist.md in the templates/blacklist.example.md format: a preamble
 // and one table with Company, Since, Scope and Reason columns. Legacy tables
 // (Company, Reason, Added) are read and rewritten into that format on save.
-// Everything after the table (notes, other tables) is kept byte for byte, and
-// columns the editor does not manage are carried through per row, in order.
+// The text around the table (notes) is kept byte for byte, and columns the
+// editor does not manage are carried through per row, in order. scan.mjs
+// blocks every `|` line in the file, wherever it is, so a row the table does
+// not hold (after a blank line, in a second table) is listed too, read as the
+// scanner reads it, and a save moves it into the table.
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
@@ -49,6 +52,33 @@ company label) or \`domain\` (match the posting URL hostname as a suffix, for ex
 `;
 
 const splitCells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+const TABLE_LINE = /^\s*\|/;
+
+/**
+ * A `|` line outside the table, read as scan.mjs parseBlacklist reads every one: Company, Since, Scope, Reason by
+ * position. Null for what it skips: a separator, a header (first cell Company), a line with no company.
+ */
+function scannerRow(line: string, extraColumns: number): BlacklistRow | null {
+  const cells = splitCells(line);
+  const company = cells[0] ?? '';
+  if (!company || /^[-: ]+$/.test(company) || company.toLowerCase() === 'company') return null;
+  return {
+    company,
+    since: cells[1] ?? '',
+    scope: (cells[2] || 'company').toLowerCase() === 'domain' ? 'domain' : 'company',
+    reason: cells[3] ?? '',
+    ...(extraColumns ? { extra: Array.from({ length: extraColumns }, () => '') } : {}),
+  };
+}
+
+/** Text around the table without its `|` lines, and the rows the scanner reads from them. Untouched when it has none. */
+function outsideTable(lines: string[], extraColumns: number): { text: string; rows: BlacklistRow[] } {
+  if (!lines.some((l) => TABLE_LINE.test(l))) return { text: lines.join('\n'), rows: [] };
+  const rows = lines.filter((l) => TABLE_LINE.test(l)).map((l) => scannerRow(l, extraColumns)).filter((r): r is BlacklistRow => r !== null);
+  // The removed lines leave their blank neighbours behind: at most one blank line in a row, and none at the end.
+  const text = lines.filter((l) => !TABLE_LINE.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '\n');
+  return { text, rows };
+}
 
 export function parseBlacklist(md: string): BlacklistParsed {
   const lines = md.split(/\r?\n/);
@@ -80,8 +110,9 @@ export function parseBlacklist(md: string): BlacklistParsed {
       ...(extraIdx.length ? { extra: extraIdx.map((i) => cells[i] ?? '') } : {}),
     });
   }
-  const preamble = lines.slice(0, headerIdx).join('\n');
-  return { rows: rows.filter((r) => r.company), preamble: preamble.trim() ? preamble : null, postamble: lines.slice(end).join('\n'), extraColumns: extraIdx.map((i) => headerCells[i]!) };
+  const before = outsideTable(lines.slice(0, headerIdx), extraIdx.length);
+  const after = outsideTable(lines.slice(end), extraIdx.length);
+  return { rows: [...before.rows, ...rows.filter((r) => r.company), ...after.rows], preamble: before.text.trim() ? before.text : null, postamble: after.text, extraColumns: extraIdx.map((i) => headerCells[i]!) };
 }
 
 export function renderBlacklist(rows: BlacklistRow[], preamble: string | null, postamble = '', extraColumns: string[] = []): string {

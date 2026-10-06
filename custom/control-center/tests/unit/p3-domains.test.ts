@@ -179,9 +179,9 @@ Some intro text about the file.
     const parsed = parseBlacklist('# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Spam Staffing Ltd | body-shop | 2026-09-01 |\n');
     expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop' }]);
   });
-  it('keeps everything after the table verbatim and never merges a second table into the rows', () => {
+  it('keeps the notes after the table verbatim', () => {
     const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme Corp | 2026-01-15 | company | x |\n';
-    const tail = '\n## Notes\n\nKeep this paragraph.\n\n| Other | Table |\n|---|---|\n| a | b |\n';
+    const tail = '\n## Notes\n\nKeep this paragraph.\n';
     const md = `# Blacklist\n\nIntro.\n\n${table}${tail}`;
     const parsed = parseBlacklist(md);
     expect(parsed.rows).toEqual([{ company: 'Acme Corp', since: '2026-01-15', scope: 'company', reason: 'x' }]);
@@ -189,6 +189,20 @@ Some intro text about the file.
     expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble)).toBe(md);
     const added = renderBlacklist([...parsed.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'y' }], parsed.preamble, parsed.postamble);
     expect(added).toBe(`# Blacklist\n\nIntro.\n\n${table}| Initech | 2026-10-03 | company | y |\n${tail}`);
+  });
+
+  it('lists every | line after the table as scan.mjs blocks it, a second table header included, and a save moves them into the table (SW5-tests-03)', () => {
+    const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme Corp | 2026-01-15 | company | x |\n';
+    const md = `# Blacklist\n\nIntro.\n\n${table}\n## Notes\n\nKeep this paragraph.\n\n| Other | Table |\n|---|---|\n| a | b |\n`;
+    const parsed = parseBlacklist(md);
+    // scan.mjs parseBlacklist skips only separators and a first cell of Company: "| Other | Table |" blocks "Other".
+    expect(parsed.rows).toEqual([
+      { company: 'Acme Corp', since: '2026-01-15', scope: 'company', reason: 'x' },
+      { company: 'Other', since: 'Table', scope: 'company', reason: '' },
+      { company: 'a', since: 'b', scope: 'company', reason: '' },
+    ]);
+    expect(parsed.postamble).toBe('\n## Notes\n\nKeep this paragraph.\n');
+    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble)).toBe(`# Blacklist\n\nIntro.\n\n${table}| Other | Table | company |  |\n| a | b | company |  |\n\n## Notes\n\nKeep this paragraph.\n`);
   });
 
   it('carries columns it does not manage through every row, in order, and leaves them empty on new rows', () => {

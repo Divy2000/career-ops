@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
@@ -133,6 +135,42 @@ describe('blacklist saves keep what the editor does not manage', () => {
       const bad = await req('PUT', { confirm: true, rows: [...rows, { company: 'Globex', since: 'yesterday', scope: 'company', reason: '' }] }, { 'if-match': saved.json().etag, ...EXPLICIT });
       expect(bad.statusCode).toBe(400);
       expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('the blacklist editor shows exactly the entries the scanner blocks (SW5-tests-03)', () => {
+  // scan.mjs is a writer and never loads into the app, so its parser runs in a child.
+  function scannerEntries(file: string): Array<{ company: string; since: string; scope: string; reason: string }> {
+    const code = `const { loadBlacklist } = await import(${JSON.stringify(pathToFileURL(path.join(PACKAGE_ROOT, '..', '..', 'scan.mjs')).href)}); process.stdout.write(JSON.stringify([...loadBlacklist(${JSON.stringify(file)}).values()]));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: path.join(PACKAGE_ROOT, '..', '..'), env: { ...process.env, CAREER_OPS_ROOT: tempDir('cc-blacklist-scan-'), NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout);
+  }
+  it('rows after a blank line in the table and in a second table are listed, and a save that removes one stops the scanner blocking it', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      fs.writeFileSync(file, [
+        '# Blacklist', '', 'Intro.', '',
+        '| Company | Since | Scope | Reason |', '|---------|-------|-------|--------|', '| Acme Corp | 2026-01-15 | company | ghosted |', '',
+        '| Spam Staffing Ltd | 2026-02-01 | company | body-shop |', '',
+        '## Added by hand', '', 'Keep this paragraph.', '',
+        '| Company | Since | Scope | Reason |', '|---|---|---|---|', '| ibm.com | 2026-03-01 | domain | IBM-owned ATS hosts |', '| Initech | 2026-04-01 | company | reposts |', '',
+      ].join('\n'));
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      const blocked = scannerEntries(file);
+      expect(blocked.map((e) => e.company)).toEqual(['Acme Corp', 'Spam Staffing Ltd', 'ibm.com', 'Initech']);
+      expect(current.rows).toEqual(blocked);
+      const rows = current.rows.filter((r: { company: string }) => r.company !== 'Initech');
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(scannerEntries(file).map((e) => e.company)).toEqual(['Acme Corp', 'Spam Staffing Ltd', 'ibm.com']);
+      expect((await req('GET')).json().rows).toEqual(scannerEntries(file));
+      expect(fs.readFileSync(file, 'utf8')).toContain('## Added by hand\n\nKeep this paragraph.\n');
     } finally {
       await app.close();
     }
