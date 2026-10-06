@@ -203,38 +203,66 @@ test('suite_failures records a crash when the suite exits non-zero with no failu
   assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 1, /m);
 });
 
-const NODE_TEST_RED = (ms) => `  ✔ inline check\n✔ upstream fine (1.2ms)\n✖ upstream known red (${ms}ms)\n✖ failing tests:\n\ntest at tests/url-identity.test.mjs:12:1\n✖ upstream known red (${ms}ms)\n  AssertionError: x\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)`;
+// test-all runs each node:test suite as a child and reports a failing one as a ❌ line, then the last lines of the
+// child's output indented by six spaces (test-all.mjs: "Surface the runner's own summary").
+const NODE_TEST_CHILD = (tests, ms = '3.25') => [
+  '  ✅ tests/providers/private-address-guard.test.mjs — node:test suite passed (8 tests)',
+  '  ❌ tests/providers/proxy-egress.test.mjs — node:test suite failed (exit 1)',
+  ...tests.map((name) => `      ✖ ${name} (${ms}ms)`),
+  '      ℹ tests 9',
+  '      ℹ fail 1',
+  '',
+  'Provider — pythonorg',
+  '  ✅ pythonorg.id is "pythonorg"',
+  '📊 Results: 10 passed, 1 failed, 0 warnings',
+].join('\n');
 
-test('a node:test suite failing inside test-all is recorded by test name, stable across runs, never as a crash (review of SW3-tests-02)', () => {
-  const w = suiteWorld({ exit: 1, output: NODE_TEST_RED('3.25') });
+const failuresOf = (exit, output) => {
+  const w = suiteWorld({ exit, output });
   w.run(`suite_failures "${w.dir}/f.txt"`);
-  assert.equal(w.read('f.txt'), 'node:test ✖ upstream known red\n');
+  return w.read('f.txt');
+};
+
+test('a failing node:test child suite is recorded with each failing test under it, the same on every run (review of SW3-tests-02)', () => {
+  assert.equal(failuresOf(1, NODE_TEST_CHILD(['upstream known red'])), [
+    '❌ tests/providers/proxy-egress.test.mjs — node:test suite failed (exit 1)',
+    '❌ tests/providers/proxy-egress.test.mjs — node:test ✖ upstream known red',
+    '',
+  ].join('\n'));
 });
 
-test('a node:test failure already in the baseline is not a new failure, whatever its timing or output path', () => {
-  const base = suiteWorld({ exit: 1, output: NODE_TEST_RED('3.25') });
-  base.run(`suite_failures "${base.dir}/base.txt"`);
-  const after = suiteWorld({ exit: 1, output: NODE_TEST_RED('41.7') });
-  after.run(`suite_failures "${after.dir}/after.txt"`);
-  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${after.dir}/after.txt"`], { env: { PATH: '/usr/bin:/bin', B: base.read('base.txt') }, encoding: 'utf8' });
-  assert.equal(r.status, 0, r.stderr);
+test('a known-red node:test test is not a new failure, whatever its timing', () => {
+  const base = failuresOf(1, NODE_TEST_CHILD(['upstream known red'], '3.25'));
+  const w = suiteWorld({ exit: 1, output: NODE_TEST_CHILD(['upstream known red'], '41.7') });
+  w.run(`suite_failures "${w.dir}/after.txt"`);
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${w.dir}/after.txt"`], { env: { PATH: '/usr/bin:/bin', B: base }, encoding: 'utf8' });
   assert.equal(r.stdout, '');
 });
 
-test('node:test failures printed as TAP (Node 22) are recorded by name too', () => {
-  const w = suiteWorld({ exit: 1, output: 'ok 1 - upstream fine\nnot ok 2 - upstream known red\n  ---\n  duration_ms: 3.2\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)' });
-  w.run(`suite_failures "${w.dir}/f.txt"`);
-  assert.equal(w.read('f.txt'), 'node:test ✖ upstream known red\n');
+test('a new failing test in a node:test suite that was already red is a new failure', () => {
+  const base = failuresOf(1, NODE_TEST_CHILD(['upstream known red']));
+  const w = suiteWorld({ exit: 1, output: NODE_TEST_CHILD(['upstream known red', 'a regression the merge brought']) });
+  w.run(`suite_failures "${w.dir}/after.txt"`);
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" "${w.dir}/after.txt"`], { env: { PATH: '/usr/bin:/bin', B: base }, encoding: 'utf8' });
+  assert.equal(r.stdout, '❌ tests/providers/proxy-egress.test.mjs — node:test ✖ a regression the merge brought\n');
 });
 
-test('node:test failures whose names cannot be read still give one line that is the same on every run', () => {
-  const lines = ['a', 'b'].map((tag) => {
-    const w = suiteWorld({ exit: 1, output: `noise ${tag}\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)` });
-    w.run(`suite_failures "${w.dir}/f.txt"`);
-    return w.read('f.txt');
-  });
-  assert.equal(lines[0], lines[1]);
-  assert.match(lines[0], /^node:test suite failed \(no test names in the output\)\n$/);
+test('✖ lines under another kind of ❌ entry are not taken as node:test failures', () => {
+  const out = '  ❌ tests/agent-inbox-tests.mjs failed:\n      ✖ echoed from a child (2ms)\n📊 Results: 10 passed, 1 failed, 0 warnings';
+  assert.equal(failuresOf(1, out), '❌ tests/agent-inbox-tests.mjs failed:\n');
+});
+
+test('the in-process node:test suffix with no failing node:test suite listed holds as a crash, unique to the run (review of SW3-tests-02)', () => {
+  const out = '  ✅ ok one\n📊 Results: 10 passed, 0 failed, 0 warnings — plus failures in a discovered node:test suite (see above)';
+  const a = failuresOf(1, out);
+  const b = failuresOf(1, out);
+  assert.match(a, /^SUITE CRASHED \(exit 1, .*see .*f\.txt\.raw\)$/m);
+  assert.notEqual(a, b, 'the line names the run, so it never matches a baseline');
+});
+
+test('the in-process suffix next to a failing node:test suite is accounted for by it', () => {
+  const out = NODE_TEST_CHILD(['upstream known red']).replace('0 warnings', '0 warnings — plus failures in a discovered node:test suite (see above)');
+  assert.doesNotMatch(failuresOf(1, out), /SUITE CRASHED/);
 });
 
 test('a clean run of the suite records no failures', () => {

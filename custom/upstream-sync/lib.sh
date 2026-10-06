@@ -228,24 +228,35 @@ suite_failures() {
   node test-all.mjs --quick > "$out" 2>&1
   local code=$?
   # Only test-all's own closing line counts as a summary: a failing child suite's stdout, echoed into its failure
-  # message, carries an indented "Results:" of its own. A discovered node:test suite reports through node's runner,
-  # not as ❌ lines: its failing tests are recorded by name (spec "✖ name (12ms)" or TAP "not ok N - name", the timing
-  # and number dropped so the line is the same on every run), or as one fixed line when no name can be read. A
-  # non-zero exit with neither is a crash.
-  local node_test=""
-  if grep -qE '^📊 Results: .* plus failures in a discovered node:test suite' "$out"; then
-    node_test="$({
-      grep -E '^[[:space:]]*✖ ' "$out" | grep -v '✖ failing tests:' | sed -E 's/^[[:space:]]*✖ //; s/ \([0-9.]+m?s\)$//'
-      grep -E '^[[:space:]]*not ok [0-9]+ - ' "$out" | sed -E 's/^[[:space:]]*not ok [0-9]+ - //; s/ # .*$//'
-    } | sed 's/^/node:test ✖ /' | sort -u)"
-    [ -n "$node_test" ] || node_test="node:test suite failed (no test names in the output)"
-  fi
+  # message, carries an indented "Results:" of its own. test-all runs each node:test suite as a child and reports a
+  # failing one as "❌ <suite> — node:test suite failed (exit N)" followed by the tail of its output indented six
+  # spaces: the failing tests named there (spec "✖ name (12ms)", TAP "not ok N - name") are recorded under that
+  # suite, timing and number dropped, so a new failure in an already-red suite still shows. The "plus failures in a
+  # discovered node:test suite" suffix comes from process.exitCode, which any imported module can set: with no
+  # failing node:test suite listed it is a crash, recorded with this run's path so it never matches a baseline. A
+  # non-zero exit with no failure at all is a crash too.
+  local named
+  named="$(awk '
+    /^[[:space:]]*❌ .* — node:test suite failed \(exit [^)]*\)$/ {
+      suite = $0; sub(/^[[:space:]]*❌ /, "", suite); sub(/ — node:test suite failed \(exit [^)]*\)$/, "", suite); next
+    }
+    suite != "" && /^      / {
+      line = $0; sub(/^[[:space:]]+/, "", line)
+      if (line ~ /^✖ / && line != "✖ failing tests:") { sub(/^✖ /, "", line); sub(/ \([0-9.]+m?s\)$/, "", line); print "❌ " suite " — node:test ✖ " line }
+      else if (line ~ /^not ok [0-9]+ - /) { sub(/^not ok [0-9]+ - /, "", line); sub(/ # .*$/, "", line); print "❌ " suite " — node:test ✖ " line }
+      next
+    }
+    { suite = "" }
+  ' "$out")"
   {
     grep -E '^\s*❌' "$out" | sed -E 's/^[[:space:]]+//'
-    [ -z "$node_test" ] || printf '%s\n' "$node_test"
+    [ -z "$named" ] || printf '%s\n' "$named"
     if ! grep -qE '^📊 Results: [0-9]+ passed' "$out"; then
       echo "SUITE CRASHED (exit $code, no Results summary; see $out)"
-    elif [ "$code" != 0 ] && ! grep -qE '^\s*❌' "$out" && [ -z "$node_test" ]; then
+    elif grep -qE '^📊 Results: .* plus failures in a discovered node:test suite' "$out" &&
+      ! grep -qE '^[[:space:]]*❌ .* — node:test suite failed \(exit [^)]*\)$' "$out"; then
+      echo "SUITE CRASHED (exit $code, test-all reports node:test failures but lists no failing node:test suite; see $out)"
+    elif [ "$code" != 0 ] && ! grep -qE '^\s*❌' "$out"; then
       echo "SUITE CRASHED (exit $code, but no failing test listed; see $out)"
     fi
   } | sort -u > "$1"
