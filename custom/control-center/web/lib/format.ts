@@ -4,3 +4,8 @@ const COUNT = new Intl.NumberFormat('en-US');
 export function formatCount(n: number): string {
   return COUNT.format(n);
 }
+
+/** A conversion rate as a percentage; null (no denominator yet) reads "n/a", never "n/a%". */
+export function formatRate(rate: number | null): string {
+  return rate === null ? 'n/a' : `${rate}%`;
+}

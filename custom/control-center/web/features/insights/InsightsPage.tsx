@@ -4,6 +4,7 @@ import { Bar, DataState, Empty, Tabs } from '../../components/ui';
 import { EmptyTracker } from '../../components/EmptyTracker';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { ScriptTab } from './ScriptTab';
+import { formatRate } from '../../lib/format';
 
 const route = getRouteApi('/insights');
 export type InsightsTab = 'overview' | 'progress' | 'breakdown' | 'velocity' | 'patterns' | 'salary' | 'skills' | 'legitimacy' | 'ai';
@@ -126,11 +127,11 @@ export function InsightsPage() {
                 <h2>Rates</h2>
                 <dl className="kv">
                   <dt>Evaluated to applied</dt>
-                  <dd>{d.rates.evaluatedToApplied ?? 'n/a'}%</dd>
+                  <dd>{formatRate(d.rates.evaluatedToApplied)}</dd>
                   <dt>Applied to interview</dt>
-                  <dd>{d.rates.appliedToInterview ?? 'n/a'}%</dd>
+                  <dd>{formatRate(d.rates.appliedToInterview)}</dd>
                   <dt>Interview to offer</dt>
-                  <dd>{d.rates.interviewToOffer ?? 'n/a'}%</dd>
+                  <dd>{formatRate(d.rates.interviewToOffer)}</dd>
                 </dl>
               </div>
               <div className="card">
