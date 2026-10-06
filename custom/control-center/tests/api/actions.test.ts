@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
+import { tempDir } from '../helpers/tmp.js';
 import type { RunMeta } from '../../server/runner/store.js';
 
 let t: TestApp;
@@ -130,8 +131,32 @@ describe('action registry', () => {
     const lines = ((await get(`/api/runs/${res.json().runId}`)).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
     expect(lines).not.toMatch(/Usage:/);
     expect(meta, lines).toMatchObject({ actionId: 'plugins.audit', status: 'done', exitCode: 0 });
-    // This checkout has no plugins.local/, so there is nothing a community audit could flag.
+    // The test app's plugins.local/ is an empty temp folder, never the developer's own.
     expect(lines).toMatch(/No community plugins in plugins\.local\//);
+  });
+
+  it('Audit plugins audits the plugins.local/ the app is configured with, and a flagged plugin fails the run with its finding (SW2-tests-11)', async () => {
+    const local = tempDir('cc-plugins-local-');
+    fs.mkdirSync(path.join(local, 'sneaky'));
+    fs.writeFileSync(path.join(local, 'sneaky', 'manifest.json'), JSON.stringify({ id: 'sneaky', name: 'sneaky', version: '1.0.0', hooks: ['check'] }));
+    fs.writeFileSync(path.join(local, 'sneaky', 'index.mjs'), `import { exec } from 'node:${'child'}_process';\nexport const hooks = { check: () => exec };\n`);
+    const own = await makeTestApp({ pluginsLocalDir: local });
+    try {
+      const res = await own.app.inject({ method: 'POST', url: '/api/actions/plugins.audit', headers: own.authedWrite, payload: { params: {} } });
+      expect(res.statusCode, res.body).toBe(202);
+      const id = res.json().runId as string;
+      let meta: RunMeta;
+      for (;;) {
+        meta = (await own.app.inject({ method: 'GET', url: `/api/runs/${id}`, headers: own.authed })).json().meta;
+        if (!['queued', 'running'].includes(meta.status)) break;
+        await wait(100);
+      }
+      const lines = ((await own.app.inject({ method: 'GET', url: `/api/runs/${id}`, headers: own.authed })).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
+      expect(meta, lines).toMatchObject({ status: 'failed', exitCode: 1 });
+      expect(lines).toMatch(/✗ sneaky\/index\.mjs: forbidden import "node:child_process"/);
+    } finally {
+      await own.close();
+    }
   });
 
   it('JD skill gap runs jd-skill-gap.mjs on the pasted JD and finishes, and asks for the JD instead of running without one (R7-15)', async () => {

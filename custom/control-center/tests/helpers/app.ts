@@ -40,6 +40,8 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     // Never the real ~/Library/LaunchAgents or ~/.claude/projects.
     launchAgentsDir: path.join(dataRoot, '.launch-agents'),
     claudeProjectsDir: path.join(dataRoot, '.claude-projects'),
+    // Never the developer's own gitignored plugins.local/.
+    pluginsLocalDir: tempDir('cc-test-plugins-local-'),
     ...overrides,
   };
 }

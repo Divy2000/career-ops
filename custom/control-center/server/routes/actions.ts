@@ -21,7 +21,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     if (!action) return reply.code(404).send({ error: `unknown action ${req.params.actionId}` });
     const parsed = action.params.safeParse(req.body?.params ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid params', issues: parsed.error.issues });
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, tmpInputs: [] as string[] };
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir };
     const problem = await action.check?.(parsed.data, ctx);
     if (problem) return reply.code(400).send({ error: problem });
     const cmd = action.build(parsed.data, ctx);

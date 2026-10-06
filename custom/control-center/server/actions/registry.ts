@@ -23,6 +23,8 @@ export interface ActionContext {
   claudeBin?: string;
   /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
   tmpInputs: string[];
+  /** The community plugins folder (default <codeRoot>/plugins.local). */
+  pluginsLocalDir?: string;
 }
 
 export interface Command {
@@ -479,7 +481,7 @@ export const ACTIONS: ActionDef[] = [
   // ---- plugins ----
   define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),
   define({ id: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }), build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]) }),
-  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
+  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), ctx.pluginsLocalDir ?? path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
   // ---- system ----
   define({ id: 'system.doctor', label: 'Doctor', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'doctor', ['--json']) }),
   define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),
