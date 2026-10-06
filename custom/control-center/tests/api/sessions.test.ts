@@ -558,15 +558,21 @@ describe('Claude sessions', () => {
     }
   });
 
+  it('a session start over HTTP cannot name a report number: only a fan-out reserves one, and a session releases it with force (SW4-tests-19)', async () => {
+    const res = await post('/api/sessions', { mode: 'oferta', prompt: 'Evaluate', reportNum: 50 });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toMatch(/report number/);
+  });
+
   it('the honesty gate never credits a session with a report another session wrote while it ran', async () => {
     const h = await makeTestApp();
     try {
       expect((await call(h, 'PUT', '/api/settings/app', { claudeConcurrency: 4 })).statusCode).toBe(200);
       // A runs until both of B's reports exist, however slow B is: the gate must see them land during A's turn.
       const silent = scenarioFile({ events: [INIT, { __waitFor: { dir: path.join(h.cfg.dataRoot, 'reports'), pattern: '-synthetic-corp\\.md$', count: 2 } }, result('Evaluation complete.', 0.02)] });
-      const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A2', reportNum: 50 })).json()]);
+      const [a, aReserved] = await withScenario(silent, async () => [(await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate A' })).json(), await h.sessions.start({ mode: 'oferta', target: { type: 'none', value: null }, prompt: 'Evaluate A2', reportNum: 50 })]);
       const b = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B' })).json();
-      const bReserved = (await call(h, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate B2', reportNum: 51 })).json();
+      const bReserved = await h.sessions.start({ mode: 'oferta', target: { type: 'none', value: null }, prompt: 'Evaluate B2', reportNum: 51 });
       const [ra, raReserved, rb, rbReserved] = (await Promise.all([a, aReserved, b, bReserved].map((x) => settleOn(h, x.id)))) as [Settled, Settled, Settled, Settled];
       expect(rb.meta.status).toBe('done');
       expect(rbReserved.meta.status).toBe('done');
@@ -648,7 +654,8 @@ describe('Claude sessions', () => {
     const a = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
     let b: TestApp | null = null;
     try {
-      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research', reportNum: 60 })).json());
+      // A report number as only a fan-out reserves it: in process, since a session start over HTTP cannot name one.
+      const { id } = await withScenario(scenarioFile(SLOW), async () => a.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 60 }));
       await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
       // The overlap the handover prevents, forced: a second server reconciles while the first still tracks.
       b = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });

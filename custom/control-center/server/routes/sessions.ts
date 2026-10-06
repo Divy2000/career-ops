@@ -81,7 +81,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listLaunchableModeIds() }));
 
   app.post<{ Body: unknown }>('/api/sessions', async (req, reply) => {
-    const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, reportNum: z.number().int().positive().nullable().optional(), blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
+    // A report number is reserved by the fan-out (reserve-report-num.mjs) and released with force when the session
+    // ends: one named here would release a number another fan-out holds, reopening a report-number collision.
+    if (req.body && typeof req.body === 'object' && 'reportNum' in req.body) {
+      return reply.code(400).send({ error: 'a session cannot name a report number; Batch evaluate reserves one per posting' });
+    }
+    const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
@@ -113,7 +118,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       userPrompt = pass.prompt;
     }
     try {
-      const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: parsed.data.reportNum ?? null, policyBatch: pass?.batch ?? null });
+      const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: null, policyBatch: pass?.batch ?? null });
       return reply.code(202).send(meta);
     } catch (err) {
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
