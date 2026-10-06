@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { applyYamlOps, parseYamlDoc, YamlOpsError } from '../../server/domains/yamlOps.js';
@@ -316,6 +316,58 @@ describe('usage meter from ~/.claude/projects jsonl', () => {
     expect(usage.fiveHour).toMatchObject({ tokens: 160, input: 100, output: 50, cacheCreation: 10, messages: 1 });
     expect(usage.sevenDay).toMatchObject({ tokens: 1360, messages: 2 });
     expect(computeUsage(path.join(dir, 'nope'), now).kind).toBe('missing');
+  });
+});
+
+describe('usage meter reads only what the transcripts gained (SW5-server-04)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const line = (ts: number, input: number, requestId: string) => JSON.stringify({ type: 'assistant', timestamp: new Date(ts).toISOString(), requestId, message: { usage: { input_tokens: input, output_tokens: 0, cache_creation_input_tokens: 0 } } });
+  /** Bytes the next call reads from transcript files, however it reads them. */
+  function bytesRead(fn: () => void): number {
+    let n = 0;
+    const whole = vi.spyOn(fs, 'readFileSync');
+    const part = vi.spyOn(fs, 'readSync');
+    try {
+      fn();
+      for (const r of whole.mock.results) if (r.type === 'return') n += Buffer.byteLength(r.value as string | Buffer);
+      for (const r of part.mock.results) if (r.type === 'return') n += r.value as number;
+    } finally {
+      whole.mockRestore();
+      part.mockRestore();
+    }
+    return n;
+  }
+
+  it('a refresh with nothing new reads no transcript bytes, and an append reads only the appended bytes', () => {
+    const dir = tempDir('cc-usage-incr-');
+    fs.mkdirSync(path.join(dir, 'proj'));
+    const file = path.join(dir, 'proj', 's.jsonl');
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    fs.writeFileSync(file, `${line(now - 60_000, 100, 'a')}\n${'{"type":"user","text":"' + 'x'.repeat(50_000) + '"}'}\n`);
+    expect(computeUsage(dir, now).fiveHour.tokens).toBe(100);
+    let again!: ReturnType<typeof computeUsage>;
+    expect(bytesRead(() => (again = computeUsage(dir, now + 1000)))).toBe(0);
+    expect(again.fiveHour.tokens).toBe(100);
+    const added = `${line(now - 30_000, 7, 'b')}\n`;
+    fs.appendFileSync(file, added);
+    let after!: ReturnType<typeof computeUsage>;
+    expect(bytesRead(() => (after = computeUsage(dir, now + 2000)))).toBe(Buffer.byteLength(added));
+    expect(after.fiveHour).toMatchObject({ tokens: 107, messages: 2 });
+  });
+
+  it('a line still being written is counted once it is whole, and a rewritten (shorter) file is read again from the start', () => {
+    const dir = tempDir('cc-usage-partial-');
+    const file = path.join(dir, 's.jsonl');
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    const whole = line(now - 60_000, 40, 'p');
+    fs.writeFileSync(file, whole.slice(0, 30));
+    expect(computeUsage(dir, now).fiveHour.tokens).toBe(0);
+    fs.appendFileSync(file, `${whole.slice(30)}\n`);
+    expect(computeUsage(dir, now + 1000).fiveHour).toMatchObject({ tokens: 40, messages: 1 });
+    fs.writeFileSync(file, `${line(now - 10_000, 3, 'q')}\n`);
+    expect(computeUsage(dir, now + 2000).fiveHour).toMatchObject({ tokens: 3, messages: 1 });
+    // Time passing ages lines out of the windows without a read.
+    expect(computeUsage(dir, now + 6 * 3_600_000).fiveHour.tokens).toBe(0);
   });
 });
 
