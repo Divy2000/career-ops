@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_TOKEN } from '../../playwright.config.js';
@@ -48,6 +50,56 @@ test.describe('Profile > Projects library', () => {
     await page.getByRole('button', { name: 'Delete Kite Tracker' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
     await expect(list.getByRole('heading', { name: 'Kite Tracker' })).toHaveCount(0);
+  });
+
+  test('a bullet another writer added while the form was open survives the save after the conflict (SW2-tests-01)', async ({ page }) => {
+    const digest = path.join(process.env.CC_E2E_TMP!, 'root', 'article-digest.md');
+    const original = fs.readFileSync(digest, 'utf8');
+    try {
+      await page.goto('/profile');
+      await page.getByRole('tab', { name: 'Projects' }).click();
+      await page.getByRole('button', { name: 'Edit Event Router' }).click();
+      const form = page.getByRole('form', { name: 'Edit Event Router' });
+      await form.getByLabel('Title').fill('Event Router v2');
+      // A session adds a bullet to this very entry while the user renames it.
+      fs.writeFileSync(digest, original.replace('- Added replay tooling for failed deliveries.\n', '- Added replay tooling for failed deliveries.\n- Added elsewhere.\n'));
+      await expect(page.getByText('article-digest.md changed on disk since you opened this form')).toBeVisible();
+      await page.getByRole('button', { name: 'Save project' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'changed on disk' })).toBeVisible();
+      await page.getByRole('button', { name: 'Save project' }).click();
+      await expect(page.getByRole('list', { name: 'Projects in the library' }).getByRole('heading', { name: 'Event Router v2' })).toBeVisible();
+      const saved = await (await page.request.get('/api/projects')).json();
+      const entry = saved.entries.find((e: { title: string }) => e.title === 'Event Router v2');
+      expect(entry.bullets).toEqual(['Built a Python event router that handles 2,000 messages per second.', 'Added replay tooling for failed deliveries.', 'Added elsewhere.']);
+    } finally {
+      fs.writeFileSync(digest, original);
+    }
+  });
+
+  test('an entry renamed on disk while its form is open is saved under its new name, not added a second time (SW2-tests-01)', async ({ page }) => {
+    const digest = path.join(process.env.CC_E2E_TMP!, 'root', 'article-digest.md');
+    const original = fs.readFileSync(digest, 'utf8');
+    try {
+      await page.goto('/profile');
+      await page.getByRole('tab', { name: 'Projects' }).click();
+      await page.getByRole('button', { name: 'Edit Event Router' }).click();
+      const form = page.getByRole('form', { name: 'Edit Event Router' });
+      await form.getByLabel('Tags').fill('python, kafka, go');
+      // Another writer renames the entry; its id comes from the title, so the form's id is gone and the PUT gets a 404.
+      fs.writeFileSync(digest, original.replace('## Event Router -- https://github.com/alex-example/event-router', '## Event Routing -- https://github.com/alex-example/event-router'));
+      await page.getByRole('button', { name: 'Save project' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'renamed on disk to "Event Routing"' })).toBeVisible();
+      await expect(page.getByLabel('Title')).toHaveValue('Event Routing');
+      await page.getByRole('button', { name: 'Save project' }).click();
+      const list = page.getByRole('list', { name: 'Projects in the library' });
+      await expect(list.getByRole('heading', { name: 'Event Routing' })).toBeVisible();
+      const saved = await (await page.request.get('/api/projects')).json();
+      const titles = saved.entries.map((e: { title: string }) => e.title);
+      expect(titles.filter((t: string) => t.startsWith('Event Rout'))).toEqual(['Event Routing']);
+      expect(saved.entries.find((e: { title: string }) => e.title === 'Event Routing').tags).toEqual(['python', 'kafka', 'go']);
+    } finally {
+      fs.writeFileSync(digest, original);
+    }
   });
 
   test('a project with no bullets is refused before saving and the draft stays', async ({ page }) => {

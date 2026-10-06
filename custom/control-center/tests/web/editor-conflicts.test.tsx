@@ -51,6 +51,9 @@ function serve() {
       const doc = files[key];
       if (!doc) return json(404, { error: 'not stubbed' });
       if (method === 'GET') return json(200, doc);
+      // As server/routes/projects.ts: a PUT or DELETE of an id the current library lacks is a 404 before the ETag is compared.
+      const id = url.match(/^\/api\/projects\/([^/?]+)$/)?.[1];
+      if (id && (method === 'PUT' || method === 'DELETE') && !(doc.entries as Array<{ id: string }>).some((e) => e.id === id)) return json(404, { error: `no project ${id}` });
       if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
       const etag = `${doc.etag}-saved`;
       files[key] = { ...doc, etag };
@@ -238,10 +241,139 @@ describe('projects library form (Profile & CV > Projects)', () => {
     expect(writes()).toEqual([expect.objectContaining({ method: 'PUT', url: '/api/projects/event-router', headers: expect.objectContaining({ 'If-Match': 'e1' }) })]);
     expect(files['/api/projects']!.etag).toBe('e2');
     expect(labelled<HTMLInputElement>('Title')!.value).toBe('Event Router v2');
-    // The 409 told the user; saving again applies the draft over the version they were shown.
+    // After the 409 the draft is rebased on the version on disk: the title the user changed stays theirs, and the
+    // bullet the other writer added (a field the user did not touch) is taken in, so the second save keeps it (SW2-tests-01).
     await click(button('Save project')!);
     await until(() => writes().length === 2, 'the second save');
     expect(writes()[1]!.headers['If-Match']).toBe('e2');
+    expect(writes()[1]!.body).toMatchObject({ title: 'Event Router v2', bullets: ['One.', 'Added elsewhere.'] });
+  });
+
+  it('when both the user and the other writer changed the bullets, the form keeps the draft and shows the bullets on disk beside it', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLTextAreaElement>('Bullet 1'), 'the bullet field'), 'One, reworded.');
+    const entries = files['/api/projects']!.entries as Array<Record<string, unknown>>;
+    await changeOnDisk('/api/projects', { etag: 'e2', entries: [{ ...entries[0], bullets: ['One.', 'Added elsewhere.'] }] });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save project')!);
+    await until(() => /Bullets changed both here and on disk/.test(alerts()), 'the conflict message');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')!.value).toBe('One, reworded.');
+    expect(labelled('Version on disk')!.textContent).toContain('Added elsewhere.');
+  });
+
+  it('when another writer renamed the entry (its id comes from the title), the save after the conflict updates it under its new id, never adds a duplicate', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Tags'), 'the tags field'), 'kafka');
+    const entries = files['/api/projects']!.entries as Array<Record<string, unknown>>;
+    await changeOnDisk('/api/projects', { etag: 'e2', entries: [{ ...entries[0], id: 'event-routing', title: 'Event Routing' }] });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save project')!);
+    await until(() => /renamed on disk to "Event Routing"/.test(alerts()), 'the renamed message');
+    expect(labelled<HTMLInputElement>('Title')!.value).toBe('Event Routing');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e2' }), body: expect.objectContaining({ title: 'Event Routing', tags: ['kafka'] }) }));
+  });
+
+  it('when the entry is gone from disk, a plain Save posts nothing; only "Save as new project" adds the draft', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    const other = { id: 'kite-tracker', title: 'Kite Tracker', url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['Kites.'], line: 1, editProblem: null, inCv: false };
+    await changeOnDisk('/api/projects', { etag: 'e2', entries: [other] });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save project')!);
+    await until(() => /renamed or removed on disk/.test(alerts()), 'the renamed-or-removed message');
+    expect(labelled('Entries on disk now')!.textContent).toContain('Kite Tracker');
+    expect(button('Save project')!.disabled).toBe(true);
+    await click(button('Save project')!);
+    expect(writes()).toHaveLength(1);
+    await click(button('Save as new project')!);
+    await until(() => writes().length === 2, 'the explicit add');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'POST', url: '/api/projects', headers: expect.objectContaining({ 'If-Match': 'e2' }), body: expect.objectContaining({ title: 'Event Router v2', bullets: ['One.'] }) }));
+  });
+
+  it('when the entry comes back on disk after the save found it gone, the form picks it up again and Save updates it', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    const original = files['/api/projects']!.entries;
+    // Removed with no watcher event yet (a rewrite in two steps): the save gets the 404 and the form has nothing to update.
+    files['/api/projects'] = { ...files['/api/projects']!, etag: 'e2', entries: [] };
+    await click(button('Save project')!);
+    await until(() => /renamed or removed on disk/.test(alerts()), 'the renamed-or-removed message');
+    expect(button('Save project')!.disabled).toBe(true);
+    // The second step puts it back, and the watcher's frame refetches the list.
+    await changeOnDisk('/api/projects', { etag: 'e3', entries: original });
+    await until(() => button('Save project')?.disabled === false, 'Save enabled again');
+    expect(button('Save as new project')).toBeUndefined();
+    expect(labelled<HTMLInputElement>('Title')!.value).toBe('Event Router v2');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-router', headers: expect.objectContaining({ 'If-Match': 'e3' }) }));
+  });
+
+  it('what the user types while the save is on its way is kept when the conflict rebases the draft', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    const entries = files['/api/projects']!.entries as Array<Record<string, unknown>>;
+    await changeOnDisk('/api/projects', { etag: 'e2', entries: [{ ...entries[0], bullets: ['One.', 'Added elsewhere.'] }] });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (init?.method === 'PUT') await held;
+      return real(input, init);
+    });
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await act(async () => release());
+    await until(() => /changes to this entry are now in the form/.test(alerts()), 'the rebase message');
+    expect(labelled<HTMLInputElement>('Dates')!.value).toBe('2024');
+    expect(labelled<HTMLInputElement>('Title')!.value).toBe('Event Router v2');
+    expect(labelled<HTMLTextAreaElement>('Bullet 2')!.value).toBe('Added elsewhere.');
+  });
+
+  it('the conflict message stays when the save is refused (404 for the removed id) before the list refresh moves the form', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    // Removed on disk with no watcher event: the list still shows the entry when Save gets the 409.
+    files['/api/projects'] = { ...files['/api/projects']!, etag: 'e2', entries: [] };
+    await click(button('Save project')!);
+    await until(() => /renamed or removed on disk/.test(alerts()), 'the renamed-or-removed message');
+    expect(labelled<HTMLInputElement>('Title')!.value).toBe('Event Router v2');
+  });
+
+  it('when reloading the library after the conflict fails, the form says so and keeps the draft', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    const entries = files['/api/projects']!.entries as Array<Record<string, unknown>>;
+    await changeOnDisk('/api/projects', { etag: 'e2', entries: [{ ...entries[0], bullets: ['One.', 'Added elsewhere.'] }] });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let conflicted = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (conflicted && String(input) === '/api/projects' && (init?.method ?? 'GET') === 'GET') return json(500, { error: 'article-digest.md is unreadable' });
+      const res = await real(input, init);
+      if (res.status === 409) conflicted = true;
+      return res;
+    });
+    await click(button('Save project')!);
+    await until(() => /reloading it failed: .*Try again/.test(alerts()), 'the reload failure message');
+    expect(labelled<HTMLInputElement>('Title')!.value).toBe('Event Router v2');
   });
 });
 

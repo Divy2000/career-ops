@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, hostOf, moveItem } from '@web/features/profile/projectsDraft';
+import { describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, findRenamed, hostOf, moveItem, rebaseDraft } from '@web/features/profile/projectsDraft';
 import type { ProjectView } from '@shared/api';
 
 const entry: ProjectView = {
@@ -64,6 +64,41 @@ describe('project drafts', () => {
     ];
     expect(describeIssues(issues)).toEqual(['Tag 2: Too big: expected string to have <=60 characters', 'Bullet 1: one line', 'Title: Too big: expected string to have <=300 characters', 'kind: Invalid option']);
     expect(describeIssues(undefined)).toEqual([]);
+  });
+
+  it('rebases a draft on the version on disk after a conflict: fields only the other writer changed are taken in (SW2-tests-01)', () => {
+    const base = draftFromEntry(entry);
+    const draft = { ...base, title: 'Event Router v2' };
+    const current = { ...base, bullets: ['One.', 'Two.', 'Added elsewhere.'], tags: 'python, kafka, go' };
+    expect(rebaseDraft(base, draft, current)).toEqual({ draft: { ...current, title: 'Event Router v2' }, conflicts: [] });
+  });
+
+  it('keeps the draft where both sides changed a field, and names that field', () => {
+    const base = draftFromEntry(entry);
+    const draft = { ...base, bullets: ['One, reworded.', 'Two.'] };
+    const current = { ...base, bullets: ['One.', 'Two.', 'Added elsewhere.'] };
+    expect(rebaseDraft(base, draft, current)).toEqual({ draft, conflicts: ['bullets'] });
+    // The same change on both sides is no conflict.
+    expect(rebaseDraft(base, { ...base, title: 'Same' }, { ...base, title: 'Same' })).toEqual({ draft: { ...base, title: 'Same' }, conflicts: [] });
+  });
+
+  it('finds an entry another writer renamed: a new id with the same bullets, or a new id at the same position', () => {
+    const e = (id: string, bullets: string[]) => ({ id, bullets });
+    const origin = { ids: ['a', 'b', 'c'], index: 1, bullets: ['B one.'] };
+    // Same bullets under a new id.
+    expect(findRenamed(origin, [e('a', ['A.']), e('c', ['C.']), e('b-renamed', ['B one.'])])?.id).toBe('b-renamed');
+    // Bullets changed too, but a new id sits where the entry was, the library kept its size, and a bullet is still there.
+    expect(findRenamed(origin, [e('a', ['A.']), e('b2', ['B one.', 'B two.']), e('c', ['C.'])])?.id).toBe('b2');
+    // A new id at its position with nothing in common is a removal plus an addition, not a rename.
+    expect(findRenamed(origin, [e('a', ['A.']), e('kites', ['Kites.']), e('c', ['C.'])])).toBeNull();
+    // Removed: one entry fewer, nothing with its bullets.
+    expect(findRenamed(origin, [e('a', ['A.']), e('c', ['C.'])])).toBeNull();
+    // An article with no bullets, removed while an unrelated bullet-less one was added: no bullets prove nothing.
+    const article = { ids: ['a', 'paper'], index: 1, bullets: [] };
+    expect(findRenamed(article, [e('a', ['A.']), e('other-paper', [])])).toBeNull();
+    expect(findRenamed(article, [e('other-paper', []), e('a', ['A.'])])).toBeNull();
+    // Two new entries with its bullets is no proof of which one it became.
+    expect(findRenamed(origin, [e('a', ['A.']), e('x', ['B one.']), e('y', ['B one.']), e('c', ['C.'])])).toBeNull();
   });
 
   it('moves a bullet up or down and ignores moves past either end', () => {
