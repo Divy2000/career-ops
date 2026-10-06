@@ -138,6 +138,24 @@ describe('tracker', () => {
     expect(t.kind === 'ok' && t.rows.map((x) => x.status)).toEqual(['Applied', 'Applied', 'SKIP', 'Evaluated', 'Mystery']);
   });
 
+  it('on a tracker with a URL column, an empty or non-URL cell falls back to the report\'s posting URL, and a real one is cleaned (SW3-server-02)', async () => {
+    const r = copyFixtureRoot();
+    // merge-tracker.mjs --backfill-urls adds the column; a later addition with no url writes an empty cell.
+    const row = (n: number, url: string) => `| ${n} | 2026-09-2${n} | Acme Robotics | - | Engineer | 4.0/5 | Applied | - | [1](../reports/001-acme-robotics.md) | | ${url} |`;
+    fs.writeFileSync(
+      path.join(r, 'data', 'applications.md'),
+      `# Applications Tracker\n\n| # | Date | Company | Via | Role | Score | Status | PDF | Report | Notes | URL |\n|---|---|---|---|---|---|---|---|---|---|---|\n${[row(1, ''), row(2, 'N/A'), row(3, EM_DASH), row(4, '<https://boards.example.com/acme/9>'), row(5, 'https://boards.example.com/acme/10')].join('\n')}\n`,
+    );
+    const t = await readTracker(DEFAULT_CODE_ROOT, r);
+    expect(t.kind === 'ok' && t.rows.map((x) => x.url)).toEqual([
+      'https://jobs.example.com/acme/123',
+      'https://jobs.example.com/acme/123',
+      'https://jobs.example.com/acme/123',
+      'https://boards.example.com/acme/9',
+      'https://boards.example.com/acme/10',
+    ]);
+  });
+
   it('returns missing for an absent tracker and malformed for a tracker without a table', async () => {
     const empty = copyFixtureRoot();
     fs.rmSync(path.join(empty, 'data', 'applications.md'));
