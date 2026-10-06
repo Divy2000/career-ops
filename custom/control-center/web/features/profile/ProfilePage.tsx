@@ -8,6 +8,7 @@ import { useEditBase } from '../../lib/editBase';
 import { describeError } from '../../lib/actions';
 import { ProjectsLibrary } from './ProjectsLibrary';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { UnsavedProvider, useGuardedTab, useUnsaved } from '../../lib/unsaved';
 
 interface UserFile {
   key: string;
@@ -57,6 +58,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const [conflict, setConflict] = useState<UserFile | null>(null);
   const text = draft ?? q.data?.text ?? '';
+  useUnsaved(label, draft !== null && draft !== (q.data?.text ?? ''));
   const onEdit = (value: string) => {
     edit.pin();
     latestDraft.current = value;
@@ -98,7 +100,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
           Save
         </button>
       </div>
-      <DataState query={q}>
+      <DataState query={q} editable>
         <textarea aria-label={`${label} contents`} className="mono editor" rows={14} value={text} onChange={(e) => onEdit(e.target.value)} />
       </DataState>
       {edit.drifted && (
@@ -236,8 +238,18 @@ const PROFILE_TABS: Array<{ id: ProfileTab; label: string }> = [
 ];
 
 export function ProfilePage() {
-  const [tab, setTab] = useState<ProfileTab>('cv');
-  const [file, setFile] = useState(USER_FILE_KEYS[0]!.key);
+  return (
+    <UnsavedProvider>
+      <ProfileSections />
+    </UnsavedProvider>
+  );
+}
+
+function ProfileSections() {
+  const [tab, setTabState] = useState<ProfileTab>('cv');
+  const setTab = useGuardedTab(setTabState);
+  const [file, setFileState] = useState(USER_FILE_KEYS[0]!.key);
+  const setFile = useGuardedTab(setFileState);
   const chosen = USER_FILE_KEYS.find((f) => f.key === file) ?? USER_FILE_KEYS[0]!;
   return (
     <section aria-labelledby="page-title">

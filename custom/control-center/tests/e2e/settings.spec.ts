@@ -54,6 +54,91 @@ test.describe('Settings', () => {
     expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
   });
 
+  test('a section another writer filled while "Add job_boards" was pending survives the save after the conflict (SW2-tests-02)', async ({ page }) => {
+    const portals = path.join(process.env.CC_E2E_TMP!, 'root', 'portals.yml');
+    const original = fs.readFileSync(portals, 'utf8');
+    try {
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/settings');
+      await page.getByRole('button', { name: 'Add job_boards' }).click();
+      await page.getByRole('button', { name: 'Add search_queries' }).click();
+      await expect(page.getByText('2 pending changes')).toBeVisible();
+      // A session writes two boards meanwhile.
+      fs.writeFileSync(portals, `${original}\njob_boards:\n  - name: Board One\n    careers_url: https://boards.example.com/one\n  - name: Board Two\n    careers_url: https://boards.example.com/two\n`);
+      await expect(page.getByRole('alert').filter({ hasText: 'changed on disk since you started editing' })).toBeVisible();
+      await page.getByRole('button', { name: 'Validate and save' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'changed on disk since you loaded it' })).toBeVisible();
+      await page.getByRole('button', { name: 'Validate and save' }).click();
+      await expect(page.getByRole('status')).toContainText('Saved portals.yml');
+      const saved = await (await page.request.get('/api/config/portals')).json();
+      expect(saved.doc.job_boards.map((b: { name: string }) => b.name)).toEqual(['Board One', 'Board Two']);
+      expect(saved.doc.search_queries).toEqual([]);
+    } finally {
+      fs.writeFileSync(portals, original);
+    }
+  });
+
+  test('with no data/blacklist.md yet, the add-to-blacklist link opens the editor and saving creates the file (SW3-web-b-01)', async ({ page }) => {
+    const file = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'blacklist.md');
+    const original = fs.readFileSync(file, 'utf8');
+    fs.rmSync(file);
+    try {
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/settings?tab=blacklist&add=Acme%20Staffing');
+      await expect(page.getByText('data/blacklist.md not created yet')).toBeVisible();
+      await expect(page.getByText('File missing')).toHaveCount(0);
+      await expect(page.getByLabel('Blacklist company or domain')).toHaveValue('Acme Staffing');
+      await page.getByLabel('Blacklist reason').fill('spam postings');
+      await page.getByRole('button', { name: 'Add row' }).click();
+      await page.getByRole('button', { name: 'Save blacklist' }).click();
+      await page.getByRole('dialog', { name: 'Write data/blacklist.md?' }).getByRole('button', { name: 'Write blacklist' }).click();
+      await expect(page.getByRole('status').filter({ hasText: 'Blacklist written.' })).toBeVisible();
+      expect(fs.readFileSync(file, 'utf8')).toContain('| Acme Staffing |');
+    } finally {
+      fs.writeFileSync(file, original);
+    }
+  });
+
+  test('switching a tab with unsaved edits asks first, and Cancel keeps them (SW3-web-b-02)', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/settings');
+    await page.getByRole('button', { name: 'Add job_boards' }).click();
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    await page.getByRole('tab', { name: 'Raw YAML' }).click();
+    const ask = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await expect(ask).toContainText('portals.yml');
+    await ask.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    // A top-level tab asks too.
+    await page.getByRole('tab', { name: 'Blacklist' }).click();
+    await expect(ask).toBeVisible();
+    await ask.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page).toHaveURL(/tab=blacklist/);
+    await expect(page.getByRole('heading', { name: /Blacklist/ })).toBeVisible();
+  });
+
+  test('Add target_roles offers the archetype columns and saves an archetype as an object (SW3-web-b-04)', async ({ page }) => {
+    const profile = path.join(process.env.CC_E2E_TMP!, 'root', 'config', 'profile.yml');
+    const original = fs.existsSync(profile) ? fs.readFileSync(profile, 'utf8') : null;
+    try {
+      if (original !== null) fs.writeFileSync(profile, original.replace(/^target_roles:[\s\S]*?(?=^\S|$(?![\s\S]))/m, ''));
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/settings?tab=profile');
+      await page.getByRole('button', { name: 'Add target_roles' }).click();
+      const roles = page.locator('section[aria-labelledby="profile-target_roles"]');
+      await roles.getByLabel('New target_roles.archetypes name').fill('AI Engineer');
+      await roles.getByLabel('New target_roles.archetypes fit').fill('primary');
+      await roles.getByRole('button', { name: 'Add row' }).click();
+      await page.getByRole('button', { name: 'Validate and save profile' }).click();
+      await expect(page.getByRole('status')).toContainText('Saved config/profile.yml');
+      const saved = await (await page.request.get('/api/config/profile')).json();
+      expect(saved.doc.target_roles.archetypes).toEqual([{ name: 'AI Engineer', fit: 'primary' }]);
+    } finally {
+      if (original === null) fs.rmSync(profile, { force: true });
+      else fs.writeFileSync(profile, original);
+    }
+  });
+
   test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');

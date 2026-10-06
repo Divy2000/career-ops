@@ -107,6 +107,37 @@ test.describe('Command palette actions with params', () => {
   });
 });
 
+test.describe('Command palette confirm gate (SW2-tests-06)', () => {
+  test('Roll back update runs only after Run in its confirm: Cancel posts nothing, Run posts once, marked confirmed', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/runs');
+    // The real rollback would rewrite the checkout: the request is captured and answered with the 202 the route sends.
+    const sent: unknown[] = [];
+    await page.route('**/api/actions/system.rollback', async (route) => {
+      sent.push(route.request().postDataJSON());
+      await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ runId: '20261005000000-e2e001' }) });
+    });
+    const pick = async () => {
+      await page.keyboard.press('Control+k');
+      await page.getByPlaceholder('Go to a page, run an action or start a mode').fill('Roll back update');
+      await page.locator('[cmdk-item]', { hasText: 'Roll back update' }).click();
+    };
+    await pick();
+    const confirm = page.getByRole('dialog', { name: 'Roll back update' });
+    await expect(confirm).toContainText('Rolls back the last applied update. Continue?');
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+    await expect(confirm).toHaveCount(0);
+    await page.waitForTimeout(300);
+    expect(sent).toEqual([]);
+    await pick();
+    await confirm.getByRole('button', { name: 'Run' }).click();
+    await expect.poll(() => sent.length).toBe(1);
+    await page.waitForTimeout(300);
+    expect(sent).toEqual([{ params: {}, confirmed: true }]);
+    await page.unrouteAll();
+  });
+});
+
 test.describe('Command palette shows what a sync action returned (R8-22)', () => {
   test('Reserve report numbers shows the reserved range', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);

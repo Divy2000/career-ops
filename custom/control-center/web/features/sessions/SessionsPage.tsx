@@ -10,6 +10,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
 import { formatLocalMinute } from '../../lib/time';
+import { forgetDevSession } from '../../lib/devchatSession';
 
 const detailRoute = getRouteApi('/sessions/$id');
 
@@ -160,6 +161,7 @@ export function SessionDetailPage() {
       return;
     }
     toast.success('Session deleted');
+    forgetDevSession(id);
     setDeletedId(id);
   };
   return (

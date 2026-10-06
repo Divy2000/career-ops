@@ -42,6 +42,15 @@ export function ScorePill({ score }: { score: number | null }) {
 }
 
 /** A DOL tier, or a company check's verdict (sponsoring | paused | stopped | restricted | unclear, the sponsorship check template). */
+/** A shortlist score: the rank plus the sponsorship adjustment, so it can pass 5 or go below 0; no "/5" scale. */
+export function ShortlistScore({ score }: { score: number | null }) {
+  return (
+    <Pill tone={scoreTone(score)} title={score === null ? 'No score recorded' : `Shortlist score ${score}: the rank plus the sponsorship adjustment`}>
+      {score === null ? 'no score' : score.toFixed(1)}
+    </Pill>
+  );
+}
+
 export function sponsorTone(tier: string | null | undefined): 'ok' | 'info' | 'neutral' | 'warn' | 'danger' {
   switch ((tier ?? '').toLowerCase()) {
     case 'strong':
@@ -88,7 +97,8 @@ export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs:
 
 /** Loading, error, missing-file and malformed-file states, kept distinct on purpose. */
 /** `emptyState` replaces the generic missing-file card when an absent file is the normal first-run state. */
-export function DataState({ query, missing, emptyState, children }: { query: UseQueryResult<unknown>; missing?: ReactNode; emptyState?: ReactNode; children?: ReactNode }) {
+/** `editable`: the children are the way to create the file, so a missing file renders them like an empty one. */
+export function DataState({ query, missing, emptyState, editable, children }: { query: UseQueryResult<unknown>; missing?: ReactNode; emptyState?: ReactNode; editable?: boolean; children?: ReactNode }) {
   if (query.isPending) {
     return (
       <div className="card skeleton" aria-busy="true">
@@ -112,6 +122,7 @@ export function DataState({ query, missing, emptyState, children }: { query: Use
   }
   const data = query.data as { kind?: string; path?: string; error?: string } | undefined;
   if (data?.kind === 'missing' && emptyState) return <>{emptyState}</>;
+  if (data?.kind === 'missing' && editable) return <>{children}</>;
   if (data?.kind === 'missing') {
     return (
       <div className="card">

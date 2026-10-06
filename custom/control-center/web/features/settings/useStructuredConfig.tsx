@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { applyOpsJs } from '../../lib/yamlOpsClient';
 import { useEditBase } from '../../lib/editBase';
+import { useUnsaved } from '../../lib/unsaved';
 import type { ConfigRead, YamlOp } from '@shared/api';
 
 export interface EditorNote {
@@ -17,9 +18,14 @@ export interface EditorNote {
  * disk never moves them onto another version silently (index-based ops would land on other items), it is announced
  * and the save gets the 409. A 409 swaps the base for the server's current version and keeps the ops that address
  * keys on top, so "save again" is the merge. Ops that address a list item by position are dropped there: replayed on
- * a list another writer changed they would edit or delete someone else's item, so the user redoes them.
+ * a list another writer changed they would edit or delete someone else's item, so the user redoes them. So is a set
+ * or delete whose target another writer changed: "Add tracked_companies" would replace the companies they wrote.
+ * An insert only appends, so it is kept.
  */
 const byPosition = (op: YamlOp) => op.path.some((seg) => typeof seg === 'number');
+const valueAt = (doc: unknown, path: YamlOp['path']): unknown => path.reduce<unknown>((node, seg) => (node !== null && typeof node === 'object' ? (node as Record<string | number, unknown>)[seg] : undefined), doc);
+const changedOnDisk = (op: YamlOp, base: unknown, current: unknown) => op.op !== 'insert' && JSON.stringify(valueAt(base, op.path)) !== JSON.stringify(valueAt(current, op.path));
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
 export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const qc = useQueryClient();
@@ -29,6 +35,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const [note, setNote] = useState<EditorNote | null>(null);
   const [saving, setSaving] = useState(false);
   const edit = useEditBase(q.data);
+  useUnsaved(fileKey === 'portals' ? 'portals.yml' : 'config/profile.yml', pending.length > 0);
   const server = edit.base ?? q.data ?? null;
   const doc = useMemo(() => applyOpsJs(server?.doc ?? null, pending), [server, pending]);
   const addOp = (op: YamlOp) => {
@@ -58,12 +65,17 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         const current = (err.body as { current: ConfigRead }).current;
-        const kept = pending.filter((op) => !byPosition(op));
-        const dropped = pending.length - kept.length;
+        const positional = pending.filter(byPosition);
+        const overwritten = pending.filter((op) => !byPosition(op) && changedOnDisk(op, server?.doc ?? null, current.doc));
+        const kept = pending.filter((op) => !positional.includes(op) && !overwritten.includes(op));
         setConflict(current);
         edit.rebase(current);
         setPending(kept);
-        const redo = dropped === 0 ? '' : ` ${dropped} edit${dropped === 1 ? '' : 's'} to a list item ${dropped === 1 ? 'was' : 'were'} dropped because the list changed; redo ${dropped === 1 ? 'it' : 'them'} on the current version.`;
+        const p = positional.length;
+        const o = overwritten.length;
+        const redo =
+          (p === 0 ? '' : ` ${p} ${plural(p, 'edit', 'edits')} to a list item ${plural(p, 'was', 'were')} dropped because the list changed; redo ${plural(p, 'it', 'them')} on the current version.`) +
+          (o === 0 ? '' : ` ${o} ${plural(o, 'edit', 'edits')} to a value that also changed on disk ${plural(o, 'was', 'were')} dropped; redo ${plural(o, 'it', 'them')} on the current version.`);
         setNote({ tone: 'danger', text: `${current.path} changed on disk since you loaded it. Your ${kept.length} pending edit(s) are shown on top of the current version below; review them, then save again or discard.${redo}` });
       } else if (err instanceof ApiError && (err.status === 422 || err.status === 400)) {
         const b = err.body as { error: string; findings?: unknown; stderr?: string };

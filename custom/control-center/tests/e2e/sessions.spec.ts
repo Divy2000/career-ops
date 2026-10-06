@@ -22,15 +22,20 @@ test.describe('AI sessions through the fake Claude', () => {
     await page.getByLabel('Posting URL to evaluate').fill('https://jobs.example.com/synthetic/8');
     await page.getByRole('button', { name: 'Evaluate URL' }).click();
     await expect(page).toHaveURL(/\/sessions\/s/);
+    const id = new URL(page.url()).pathname.split('/').pop()!;
     await expect(page.getByText('Evaluation complete: Synthetic Corp scored 4.1/5')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('done', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('008-synthetic-corp.md').first()).toBeVisible();
-    await expect(page.getByText('4.1/5').first()).toBeVisible();
     await axeClean(page);
+    // The merged tracker row, not just a row with the company's name (SW2-tests-29).
     const tracker = await (await page.request.get('/api/tracker')).json();
-    expect(tracker.rows.some((r: { company: string }) => r.company === 'Synthetic Corp')).toBe(true);
+    expect(tracker.rows.find((r: { company: string }) => r.company === 'Synthetic Corp')).toMatchObject({ report: 8, reportState: 'ok', score: 4.1, status: 'Evaluated' });
+    expect((await (await page.request.get(`/api/sessions/${id}`)).json()).meta.status).toBe('done');
+    // This session's row in the list, not the first "done" cell, which older sessions from other specs also have.
     await page.getByRole('link', { name: 'Sessions', exact: true }).click();
-    await expect(page.getByRole('cell', { name: 'done' }).first()).toBeVisible();
+    const row = page.getByRole('row').filter({ has: page.locator(`a[href="/sessions/${id}"]`) });
+    await expect(row.getByRole('cell').first()).toHaveText('done');
+    await expect(row).toContainText('oferta');
   });
 
   test('Pipeline > Batch asks first, then starts one oferta session per URL through the fan-out', async ({ page }) => {

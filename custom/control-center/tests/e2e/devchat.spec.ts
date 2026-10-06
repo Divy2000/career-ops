@@ -4,6 +4,24 @@ import { test, expect } from '@playwright/test';
 import { axeBuilder } from './helpers.js';
 import { E2E_PORT, E2E_TOKEN } from '../../playwright.config.js';
 
+/**
+ * The files the fake Dev Chat turn writes, as they are now; the returned function puts them back. A test that runs a turn
+ * and does not revert it calls this, or the next test's identical turn changes nothing and has nothing to revert.
+ */
+function keepTurnFiles(): () => void {
+  const root = path.join(process.env.CC_E2E_TMP!, 'root');
+  const saved = ['modes/_custom.md', 'data/notes/devchat.md'].map((rel) => {
+    const abs = path.join(root, rel);
+    return { abs, text: fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null };
+  });
+  return () => {
+    for (const f of saved) {
+      if (f.text === null) fs.rmSync(f.abs, { force: true });
+      else fs.writeFileSync(f.abs, f.text);
+    }
+  };
+}
+
 test.describe('Dev Chat', () => {
   test('a fake Dev Chat turn shows per-turn diffs, revert restores the bytes, and out-of-scope writes are denied', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
@@ -39,6 +57,52 @@ test.describe('Dev Chat', () => {
     await expect(page.getByText(/^Reverted: /)).toBeVisible();
     const restored = await (await page.request.get('/api/files/user/customMd')).json();
     expect(restored.text).not.toContain('Added by Dev Chat');
+  });
+
+  test('leaving Dev Chat and coming back reopens the conversation and its Changes (SW3-web-b-03)', async ({ page }) => {
+    const restore = keepTurnFiles();
+    try {
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/dev');
+      await page.getByLabel('Prompt for devchat').fill('Add a scoring rule, then look away');
+      await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+      await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
+      await expect(page).toHaveURL(/\/dev\?session=s/);
+      const changes = page.getByLabel('Changes');
+      await expect(changes.getByRole('heading', { name: 'Turn 1' })).toBeVisible();
+      await page.getByRole('link', { name: 'Runs & Schedule' }).click();
+      await expect(page.getByRole('heading', { level: 1, name: /Runs/ })).toBeVisible();
+      await page.goBack();
+      await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible();
+      await expect(changes.getByRole('heading', { name: 'Turn 1' })).toBeVisible();
+      await expect(changes.getByText('data/notes/devchat.md', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'New conversation' }).click();
+      await expect(page).toHaveURL(/\/dev$/);
+      await expect(page.getByLabel('Prompt for devchat')).toBeVisible();
+    } finally {
+      restore();
+    }
+  });
+
+  test('the sidebar Dev Chat link reopens the same session in the transcript and in Changes (SW3-web-b-03 review)', async ({ page }) => {
+    const restore = keepTurnFiles();
+    try {
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/dev');
+      await page.getByLabel('Prompt for devchat').fill('Add a scoring rule, then follow the nav link');
+      await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+      await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
+      const id = new URL(page.url()).searchParams.get('session');
+      expect(id).toMatch(/^s/);
+      await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Dev Chat' }).click();
+      await expect(page).toHaveURL(new RegExp(`/dev\\?session=${id}$`));
+      await expect(page.locator(`[data-session-id="${id}"]`)).toBeVisible();
+      await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible();
+      await expect(page.getByLabel('Changes').getByRole('heading', { name: 'Turn 1' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'New conversation' })).toBeVisible();
+    } finally {
+      restore();
+    }
   });
 
   test('a second turn shows up in Changes with its own revert, and the turns revert newest first', async ({ page }) => {

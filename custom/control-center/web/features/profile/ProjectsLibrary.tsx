@@ -1,17 +1,18 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
 // parser session for PDF) and a rank preview against a pasted JD.
-import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useUnsaved } from '../../lib/unsaved';
 import { SessionPanel } from '../../components/SessionPanel';
 import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
 import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
-import { KIND_OPTIONS, describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, hostOf, moveItem, type ProjectDraft } from './projectsDraft';
+import { KIND_OPTIONS, describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, findRenamed, hostOf, moveItem, rebaseDraft, type DraftField, type EntryOrigin, type ProjectDraft } from './projectsDraft';
 
 const QUERY_KEY = ['config', 'projects'];
 const useProjects = () => useQuery({ queryKey: QUERY_KEY, queryFn: () => apiGet<ProjectsRead>('/api/projects') });
@@ -21,10 +22,55 @@ const ifMatch = (etag: string | null | undefined): Record<string, string> => (et
 interface Editing {
   id: string | null;
   draft: ProjectDraft;
+  /** The entry as the form opened on it (or last rebased on): what the user's edits are measured against after a 409. */
+  base: ProjectDraft;
   tagline: string | null;
   source: string | null;
   /** The library version the form opened on: the save sends it, so a change on disk meanwhile gets the 409, not an overwrite. */
   baseEtag: string | null;
+  /** Where the entry was when the form opened (null for a new project), to tell a rename on disk from a removal. */
+  origin: EntryOrigin | null;
+  /** Problems and conflict notes. Kept here, not in the form, so they survive the form moving in the list. */
+  messages: string[];
+  /** After a 409 where both sides changed a field: the version on disk of those fields, shown beside the draft. */
+  onDisk: { fields: DraftField[]; entry: ProjectDraft } | null;
+  /** The entry was renamed or removed on disk beyond recognition: Save has nothing to update, only "Save as new project". */
+  orphaned: boolean;
+}
+
+const FIELD_LABELS: Record<DraftField, string> = { title: 'Title', url: 'Link', tags: 'Tags', kind: 'Kind', dates: 'Dates', bullets: 'Bullets' };
+const fieldLabel = (f: DraftField) => FIELD_LABELS[f];
+
+const newEditing = (fields: Pick<Editing, 'id' | 'draft' | 'tagline' | 'source' | 'baseEtag' | 'origin'>): Editing => ({ ...fields, base: fields.draft, messages: [], onDisk: null, orphaned: false });
+
+/** The form rebased on the library as it is now after a 409, so a second save never quietly undoes another writer's edit. */
+function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
+  const next = { ...e, baseEtag: fresh.etag, onDisk: null };
+  if (e.id === null) return { ...next, messages: ['article-digest.md changed on disk since it was loaded. The list is refreshed; save again to add this project.'] };
+  const byId = fresh.entries.find((x) => x.id === e.id);
+  const now = byId ?? (e.origin ? findRenamed(e.origin, fresh.entries) : null);
+  if (!now) {
+    return { ...next, orphaned: true, messages: ['article-digest.md changed on disk and this entry was renamed or removed on disk, so Save project has nothing to update. "Save as new project" adds your draft as a new entry; Cancel drops it. The entries on disk now are listed below.'] };
+  }
+  const current = draftFromEntry(now);
+  const merged = rebaseDraft(e.base, e.draft, current);
+  const renamed = byId ? '' : `It was renamed on disk to "${now.title}". `;
+  return {
+    ...next,
+    id: now.id,
+    orphaned: false,
+    draft: merged.draft,
+    base: current,
+    tagline: now.tagline,
+    source: now.source,
+    origin: { ids: fresh.entries.map((x) => x.id), index: fresh.entries.indexOf(now), bullets: now.bullets },
+    onDisk: merged.conflicts.length ? { fields: merged.conflicts, entry: current } : null,
+    messages: [
+      merged.conflicts.length
+        ? `article-digest.md changed on disk since it was loaded. ${renamed}${merged.conflicts.map(fieldLabel).join(', ')} changed both here and on disk: the form keeps yours, the version on disk is shown below. Save again to replace it, or Cancel.`
+        : `article-digest.md changed on disk since it was loaded. ${renamed}Its changes to this entry are now in the form, with yours on top; review them, then save again.`,
+    ],
+  };
 }
 
 export function ProjectsLibrary() {
@@ -32,7 +78,15 @@ export function ProjectsLibrary() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<Editing | null>(null);
+  useUnsaved('the open project form', editing !== null && JSON.stringify(editing.draft) !== JSON.stringify(editing.base));
   const data = q.data;
+  // A form left with nothing to update (its entry renamed or removed on disk) is rebased again on every new version of
+  // the library, so it picks the entry back up when a rewrite in two steps restores it. Adjusted while rendering.
+  const [seenEtag, setSeenEtag] = useState<string | null | undefined>(undefined);
+  if (data && data.etag !== seenEtag) {
+    setSeenEtag(data.etag);
+    if (editing?.orphaned) setEditing(rebaseOn(editing, data));
+  }
   const refresh = () => qc.invalidateQueries({ queryKey: QUERY_KEY });
 
   const remove = async (entry: ProjectView) => {
@@ -61,7 +115,7 @@ export function ProjectsLibrary() {
               <span className="mono">article-digest.md</span>: every project with copy-paste bullets. Tailored CVs pick 2 to 4 from here.
             </p>
           </div>
-          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing({ id: null, draft: emptyDraft(), tagline: null, source: null, baseEtag: data?.etag ?? null })}>
+          <button type="button" className="button--primary" disabled={!data || editing !== null} title={editing ? 'Save or cancel the open form first' : undefined} onClick={() => setEditing(newEditing({ id: null, draft: emptyDraft(), tagline: null, source: null, baseEtag: data?.etag ?? null, origin: null }))}>
             <Plus size={16} aria-hidden="true" /> Add project
           </button>
         </div>
@@ -72,9 +126,10 @@ export function ProjectsLibrary() {
             <Pill tone={inCv > 0 ? 'ok' : 'neutral'}>{inCv} in cv.md</Pill>
           </div>
         )}
-        <DataState query={q}>
+        <DataState query={q} editable>
           {data && <ValidationPanel validation={data.validation} />}
-          {editing?.id === null && <ProjectForm editing={editing} liveEtag={data?.etag ?? null} onChange={setEditing} onDone={() => setEditing(null)} />}
+          {/* A new project, or an entry removed on disk while its form was open: the form stays up, above the list. */}
+          {editing && (editing.id === null || !data?.entries.some((e) => e.id === editing.id)) && <ProjectForm editing={editing} liveEtag={data?.etag ?? null} onDiskTitles={data?.entries.map((e) => e.title) ?? []} update={setEditing} onDone={() => setEditing(null)} />}
           {data && data.entries.length === 0 && editing === null && (
             <Empty>{data.kind === 'missing' ? 'No article-digest.md yet. Add a project or import a list below; the file is created on the first save.' : 'The library has no entries yet.'}</Empty>
           )}
@@ -83,10 +138,10 @@ export function ProjectsLibrary() {
               {data.entries.map((entry) =>
                 editing?.id === entry.id ? (
                   <li key={entry.id} className="project-row project-row--editing">
-                    <ProjectForm editing={editing} liveEtag={data.etag} onChange={setEditing} onDone={() => setEditing(null)} />
+                    <ProjectForm editing={editing} liveEtag={data.etag} onDiskTitles={data.entries.map((e) => e.title)} update={setEditing} onDone={() => setEditing(null)} />
                   </li>
                 ) : (
-                  <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline, source: entry.source, baseEtag: data.etag })} onDelete={() => void remove(entry)} />
+                  <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing(newEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline, source: entry.source, baseEtag: data.etag, origin: { ids: data.entries.map((e) => e.id), index: data.entries.indexOf(entry), bullets: entry.bullets } }))} onDelete={() => void remove(entry)} />
                 ),
               )}
             </ul>
@@ -164,46 +219,64 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
   );
 }
 
-function ProjectForm({ editing, liveEtag, onChange, onDone }: { editing: Editing; liveEtag: string | null; onChange: (e: Editing) => void; onDone: () => void }) {
+function ProjectForm({ editing, liveEtag, onDiskTitles, update, onDone }: { editing: Editing; liveEtag: string | null; onDiskTitles: string[]; update: Dispatch<SetStateAction<Editing | null>>; onDone: () => void }) {
   const qc = useQueryClient();
-  const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const { draft } = editing;
-  const set = (patch: Partial<ProjectDraft>) => onChange({ ...editing, draft: { ...draft, ...patch } });
-  const setBullet = (i: number, value: string) => set({ bullets: draft.bullets.map((b, j) => (j === i ? value : b)) });
+  const { draft, messages, onDisk } = editing;
+  // Every change goes through the latest state: typing during a save is not overwritten by what the save captured.
+  const patch = (fn: (e: Editing) => Editing) => update((prev) => (prev ? fn(prev) : prev));
+  const set = (p: Partial<ProjectDraft>) => patch((e) => ({ ...e, draft: { ...e.draft, ...p } }));
+  const setBullet = (i: number, value: string) => patch((e) => ({ ...e, draft: { ...e.draft, bullets: e.draft.bullets.map((b, j) => (j === i ? value : b)) } }));
+  const say = (m: string[]) => patch((e) => ({ ...e, messages: m }));
   const label = editing.id === null ? 'Add a project' : `Edit ${draft.title || 'project'}`;
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (asNew: boolean) => {
     const problems = draftProblems(draft);
-    setErrors(problems);
+    say(problems);
     if (problems.length) return;
+    // Only the explicit "Save as new project" adds an entry the form was editing.
+    if (editing.orphaned && !asNew) return;
     setSaving(true);
     try {
       const body = entryFromDraft(draft, { tagline: editing.tagline, source: editing.source });
-      if (editing.id === null) await apiSend('POST', '/api/projects', body, ifMatch(editing.baseEtag));
+      if (editing.id === null || asNew) await apiSend('POST', '/api/projects', body, ifMatch(editing.baseEtag));
       else await apiSend('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
       toast.success(`Saved ${body.title}`);
       await qc.invalidateQueries({ queryKey: QUERY_KEY });
       onDone();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 422) setErrors((err.body as { errors?: string[] }).errors ?? [describeError(err)]);
-      else if (err instanceof ApiError && err.status === 409) {
-        setErrors(['article-digest.md changed on disk since it was loaded. The list is refreshed; your draft is kept, so save again to apply it.']);
-        // Told and shown the refreshed list, the user may now save the draft over the version the server has.
-        onChange({ ...editing, baseEtag: (err.body as { current?: { etag: string | null } }).current?.etag ?? null });
-        await qc.invalidateQueries({ queryKey: QUERY_KEY });
-      } else {
+      if (err instanceof ApiError && err.status === 422) say((err.body as { errors?: string[] }).errors ?? [describeError(err)]);
+      // The route answers a PUT for an id the library no longer has (renamed or removed on disk) with 404, before it
+      // compares the ETag: that is a change on disk too.
+      else if (err instanceof ApiError && (err.status === 409 || (err.status === 404 && editing.id !== null && !asNew))) await rebase();
+      else {
         const issues = err instanceof ApiError && err.status === 400 ? describeIssues((err.body as { issues?: Parameters<typeof describeIssues>[0] }).issues) : [];
-        setErrors(issues.length ? issues : [`Could not save: ${describeError(err)}`]);
+        say(issues.length ? issues : [`Could not save: ${describeError(err)}`]);
       }
     } finally {
       setSaving(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save(false);
+  };
+
+  const rebase = async () => {
+    let fresh: ProjectsRead;
+    try {
+      fresh = await apiGet<ProjectsRead>('/api/projects');
+    } catch (err) {
+      patch((e) => ({ ...e, onDisk: null, messages: [`article-digest.md changed on disk and reloading it failed: ${describeError(err)}. Your draft is kept. Try again.`] }));
+      return;
+    }
+    // The form's state first, then the list: the list refresh can move the form, and its state lives in the parent.
+    patch((e) => rebaseOn(e, fresh));
+    qc.setQueryData(QUERY_KEY, fresh);
+  };
 
   return (
-    <form className="project-form" aria-label={label} onSubmit={(e) => void submit(e)} noValidate>
+    <form className="project-form" aria-label={label} onSubmit={submit} noValidate>
       <h3 className="project-form__title">{editing.id === null ? 'New project' : `Editing ${editing.draft.title || 'project'}`}</h3>
       <div className="project-form__grid">
         <label className="project-field project-field--wide">
@@ -260,22 +333,48 @@ function ProjectForm({ editing, liveEtag, onChange, onDone }: { editing: Editing
           <Plus size={16} aria-hidden="true" /> Add bullet
         </button>
       </fieldset>
-      {liveEtag !== editing.baseEtag && errors.length === 0 && (
+      {liveEtag !== editing.baseEtag && messages.length === 0 && (
         <ul className="form-errors" role="alert">
           <li>article-digest.md changed on disk since you opened this form. Your draft is kept; Save project shows the conflict before anything is written.</li>
         </ul>
       )}
-      {errors.length > 0 && (
+      {messages.length > 0 && (
         <ul className="form-errors" role="alert">
-          {errors.map((m) => (
+          {messages.map((m) => (
             <li key={m}>{m}</li>
           ))}
         </ul>
       )}
+      {editing.orphaned && (
+        <details open className="project-ondisk">
+          <summary>Entries on disk now</summary>
+          <ul aria-label="Entries on disk now">
+            {onDiskTitles.length ? onDiskTitles.map((t) => <li key={t}>{t}</li>) : <li className="faint">none</li>}
+          </ul>
+        </details>
+      )}
+      {onDisk && (
+        <details open className="project-ondisk">
+          <summary>Version on disk</summary>
+          <dl className="kv" aria-label="Version on disk">
+            {onDisk.fields.map((f) => (
+              <div key={f} className="kv__pair">
+                <dt>{fieldLabel(f)}</dt>
+                <dd>{f === 'bullets' ? <ol>{onDisk.entry.bullets.map((b, i) => <li key={i}>{b}</li>)}</ol> : String(onDisk.entry[f] || 'none')}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      )}
       <div className="row gap project-form__actions">
-        <button type="submit" className="button--primary" disabled={saving}>
+        <button type="submit" className="button--primary" disabled={saving || editing.orphaned}>
           Save project
         </button>
+        {editing.orphaned && (
+          <button type="button" disabled={saving} onClick={() => void save(true)}>
+            Save as new project
+          </button>
+        )}
         <button type="button" onClick={onDone}>
           Cancel
         </button>

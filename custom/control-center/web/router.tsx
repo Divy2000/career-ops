@@ -12,7 +12,7 @@ import { DiscoverPage, type DiscoverTab } from './features/discover/DiscoverPage
 import { SessionsPage, SessionDetailPage } from './features/sessions/SessionsPage';
 import { ApplyPage, ApplyRowPage } from './features/apply/ApplyPage';
 import { ProfilePage } from './features/profile/ProfilePage';
-import { DevChatPage } from './features/dev/DevChatPage';
+import { DevChatPage, validateDevSearch } from './features/dev/DevChatPage';
 import { InterviewsPage } from './features/interviews/InterviewsPage';
 import { TutorialsPage } from './features/tutorials/TutorialsPage';
 import { SettingsPage, SETTINGS_TABS, type SettingsTab } from './features/settings/SettingsPage';
@@ -127,7 +127,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/profile', component: ProfilePage }),
   settingsRoute,
-  createRoute({ getParentRoute: () => rootRoute, path: '/dev', component: DevChatPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/dev', component: DevChatPage, validateSearch: validateDevSearch }),
   tutorialsRoute,
 ]);
 

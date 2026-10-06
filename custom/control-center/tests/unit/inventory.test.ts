@@ -122,6 +122,27 @@ const INVENTORY: Array<[id: string, reach: Reach]> = [
   ['projects.tab', { web: 'ProjectsLibrary', e2e: 'Profile > Projects library' }],
 ];
 
+/**
+ * Parameters the palette's params dialog (web/components/CommandPalette.tsx) cannot ask for: it renders a checkbox, a
+ * select for an enum or a union of consts, a number field, a one-per-line list of scalars, or a text field.
+ */
+type ParamProp = { type?: string | string[]; enum?: unknown[]; anyOf?: Array<{ const?: unknown }>; items?: { type?: string } };
+function unaskable(params: unknown): string[] {
+  const props = ((params as { properties?: Record<string, ParamProp> }).properties ?? {}) as Record<string, ParamProp>;
+  const typeOf = (p: ParamProp) => (Array.isArray(p.type) ? (p.type.find((t) => t !== 'null') ?? 'string') : (p.type ?? 'string'));
+  const choices = (p: ParamProp) => Boolean(p.enum) || Boolean(p.anyOf?.length && p.anyOf.every((o) => 'const' in o));
+  const scalar = (t: string | undefined) => t === 'string' || t === 'number' || t === 'integer';
+  return Object.entries(props)
+    .filter(([, p]) => !(choices(p) || ['string', 'number', 'integer', 'boolean'].includes(typeOf(p)) || (typeOf(p) === 'array' && scalar(p.items?.type))))
+    .map(([k]) => k);
+}
+
+describe('the palette params check', () => {
+  it('names a parameter the dialog cannot ask for (an object, a list of objects) and passes the field kinds it renders', () => {
+    expect(unaskable({ properties: { filters: { type: 'object' }, rows: { type: 'array', items: { type: 'object' } }, dryRun: { type: 'boolean' }, ats: { type: 'array', items: { type: 'string' } }, sinceDays: { anyOf: [{ const: 7 }, { const: 30 }] }, row: { type: 'integer' } } })).toEqual(['filters', 'rows']);
+  });
+});
+
 describe('spec section 1 inventory reaches its new location', () => {
   it('lists every capability exactly once', () => {
     const ids = INVENTORY.map(([id]) => id);
@@ -138,10 +159,11 @@ describe('spec section 1 inventory reaches its new location', () => {
     }
     if (reach.action) {
       expect(ACTIONS.map((a) => a.id), `action ${reach.action} is registered`).toContain(reach.action);
-      // The palette lists what GET /api/actions lists; an action with required params opens its params dialog there.
+      // An action no page hosts is launched from the palette, which lists every registered action; it can only launch one
+      // whose every parameter its params dialog can ask for (SW2-tests-26: "listed" alone was always true).
       const hosted = webSrc.includes(`'${reach.action}'`);
-      const listed = actionMetadata().some((a) => a.id === reach.action);
-      expect(hosted || listed, `action ${reach.action} is launched from a page or from the palette`).toBe(true);
+      const meta = actionMetadata().find((a) => a.id === reach.action)!;
+      expect(hosted || unaskable(meta.params).length === 0, `action ${reach.action} is launched from a page, or the palette can ask for ${unaskable(meta.params).join(', ')}`).toBe(true);
     }
     if (reach.mode) expect(modeIds.has(reach.mode) || webSrc.includes(`'${reach.mode}'`), `mode ${reach.mode} is registered`).toBe(true);
     if (reach.web) expect(webSrc, `web source mentions ${reach.web}`).toContain(reach.web);

@@ -175,12 +175,14 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
       es.close();
       if (seen.current.id === id) seen.current.open = false;
     };
+    // A session that cannot be read (deleted, or never there) leaves meta null: the page that names the session says why.
     // A session can end without a finished status event (an error before the turn spawned, or a restart that marked a
     // running turn failed), so the meta decides, and only once the stream has every event it counted. A turn start
     // (running) after those events is a new turn the meta did not know about: the stream stays open for it.
     const loadMeta = () =>
-      void apiGet<{ meta: SessionMeta; events?: StoredEvent[] }>(`/api/sessions/${id}`).then((r) => {
-        if (closed) return;
+      void apiGet<{ meta?: SessionMeta; events?: StoredEvent[] }>(`/api/sessions/${id}`).then((r) => {
+        // No meta: not a session at all (another route under /api/sessions/, such as engine).
+        if (closed || !r.meta) return;
         dispatch({ type: 'meta', id, meta: r.meta });
         const c = seen.current;
         const last = Math.max(0, ...(r.events ?? []).map((e) => e.seq));
@@ -188,7 +190,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
         if (!isTerminal(r.meta.status) || c.lastRunning > last) return;
         if (c.seq >= last) close();
         else c.closeAt = last;
-      });
+      }, () => undefined);
     const onEvent = (raw: Event) => {
       // The EventSource "error" event (connection drop) shares a name with our error event and carries no data.
       if (!(raw instanceof MessageEvent) || typeof raw.data !== 'string') return;

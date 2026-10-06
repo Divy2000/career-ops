@@ -5,7 +5,8 @@ import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
 import { isPlainObject } from '../../lib/yamlOpsClient';
-import { KeyEditor, type FieldRules } from './StructuredEditor';
+import { useGuardedTab, useUnsaved } from '../../lib/unsaved';
+import { KeyEditor, type ColumnsAt, type FieldRules } from './StructuredEditor';
 import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
 import { ConfigEditor } from './RawConfigEditor';
 import type { CadenceRead } from '@shared/api';
@@ -42,6 +43,13 @@ export const PROFILE_SECTIONS: SectionDef[] = [
   { key: 're_apply_windows', help: 'Cooldown windows per company.', empty: {} },
 ];
 
+/** The lists of objects in config/profile.example.yml: their skeletons start empty, so the form needs their columns. */
+export const PROFILE_LIST_COLUMNS: ColumnsAt = {
+  'target_roles.archetypes': ['name', 'level', 'fit'],
+  'narrative.proof_points': ['name', 'url', 'hero_metric'],
+  'cover_letter.language_learning': ['language', 'current_level', 'target_level', 'target_date', 'sentence'],
+};
+
 export const PROFILE_RULES: FieldRules = {
   'language.output': (v) => (/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(v) ? null : 'ISO language code such as en or zh-CN'),
   spend_tier: (v) => (['economy', 'standard', 'premium'].includes(v) ? null : 'economy, standard or premium'),
@@ -66,6 +74,7 @@ export function CadenceForm() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', 'cadence'], queryFn: () => apiGet<CadenceRead>('/api/followups/cadence') });
   const [draft, setDraft] = useState<Record<string, string>>({});
+  useUnsaved('the follow-up cadence', Object.keys(draft).length > 0);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const value = (k: string) => draft[k] ?? (q.data?.cadence[k] !== undefined ? String(q.data.cadence[k]) : '');
   const save = async () => {
@@ -92,7 +101,7 @@ export function CadenceForm() {
     <div className="card" aria-labelledby="cadence-heading">
       <h2 id="cadence-heading">Follow-up cadence</h2>
       <p className="muted small">Used by followup-cadence.mjs. Empty removes the key so the script default applies.</p>
-      <DataState query={q}>
+      <DataState query={q} editable>
         {q.data?.kind === 'missing' && <Pill tone="warn">config/profile.yml is missing; saving creates it with just these keys</Pill>}
         <div className="fields">
           {(q.data?.keys ?? Object.keys(CADENCE_HELP)).map((k) => (
@@ -174,7 +183,7 @@ function StructuredProfile() {
                 Add {sec.key}
               </button>
             ) : (
-              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PROFILE_RULES} />
+              <KeyEditor path={[sec.key]} value={doc[sec.key]} onOp={s.addOp} rules={PROFILE_RULES} columnsAt={PROFILE_LIST_COLUMNS} />
             )}
           </section>
         ))}
@@ -195,9 +204,10 @@ function StructuredProfile() {
 
 export function ProfileTab() {
   const [sub, setSub] = useState<'form' | 'cadence' | 'raw'>('form');
+  const switchTo = useGuardedTab(setSub);
   return (
     <div className="stack">
-      <Tabs label="Profile views" tabs={[{ id: 'form', label: 'Form' }, { id: 'cadence', label: 'Follow-up cadence' }, { id: 'raw', label: 'Raw YAML' }]} value={sub} onChange={setSub} />
+      <Tabs label="Profile views" tabs={[{ id: 'form', label: 'Form' }, { id: 'cadence', label: 'Follow-up cadence' }, { id: 'raw', label: 'Raw YAML' }]} value={sub} onChange={switchTo} />
       {sub === 'form' && <StructuredProfile />}
       {sub === 'cadence' && <CadenceForm />}
       {sub === 'raw' && <ConfigEditor fileKey="profile" label="config/profile.yml" validator="validate-profile.mjs" />}

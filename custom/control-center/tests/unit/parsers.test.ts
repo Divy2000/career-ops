@@ -258,7 +258,7 @@ describe('shortlist', () => {
     if (s.kind !== 'ok') return;
     expect(s.date).toBe('2026-10-03');
     expect(s.rows).toHaveLength(3);
-    expect(s.rows[0]).toMatchObject({ rank: 1, score: 5.3, relevance: 4.8, sponsor: 'strong', company: 'Globex Payments', role: 'Staff Software Engineer', url: 'https://careers.example.com/globex/777', posted: '2026-09-24' });
+    expect(s.rows[0]).toMatchObject({ rank: 1, score: 5.3, relevance: 4.8, sponsor: 'strong; resumed 2026-09-25', sponsorTier: 'strong', sponsorNote: 'resumed 2026-09-25', company: 'Globex Payments', role: 'Staff Software Engineer', url: 'https://careers.example.com/globex/777', posted: '2026-09-24' });
     expect(s.rows[2]).toMatchObject({ posted: null, sponsor: 'unknown' });
     expect(s.excluded).toEqual([
       { company: 'Initech Cloud', role: 'Backend Engineer II', url: 'https://jobs.example.com/initech/9', alert: 'paused', date: '2026-09-29', headline: 'Initech pauses visa sponsorship for new hires' },

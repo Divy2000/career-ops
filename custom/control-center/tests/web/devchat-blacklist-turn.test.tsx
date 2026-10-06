@@ -63,6 +63,8 @@ async function click(el: HTMLElement) {
 
 beforeEach(async () => {
   sent = [];
+  // Dev Chat reopens the tab's last session from sessionStorage; each test starts a new conversation.
+  sessionStorage.clear();
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
