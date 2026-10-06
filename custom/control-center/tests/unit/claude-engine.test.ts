@@ -263,7 +263,9 @@ const DNS_STUB = pathToFileURL(path.join(PACKAGE_ROOT, 'tests', 'fakes', 'dns-st
 
 function hookRun(sessionDir: string, policy: { file: string; sha256: string }, payload: Record<string, unknown>) {
   // The hook resolves names through the DNS stub, never the machine's resolver (SW2-tests-24).
-  const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${DNS_STUB}`.trim(), CC_TEST_DNS: JSON.stringify(TEST_DNS), CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${DNS_STUB}`.trim(), CC_TEST_DNS: JSON.stringify(TEST_DNS), CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
+  // Snapshots go to the session dir given here, never to a turn dir the suite's own environment names (SW4-tests-02).
+  delete env.CC_TURN_DIR;
   const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env });
   return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
@@ -286,6 +288,38 @@ describe('guard hook', () => {
     expect(pre('Edit', { file_path: path.join(realRoot, 'reports', '001-existing.md'), old_string: 'old', new_string: 'new' }).status).toBe(0);
     expect(fs.readFileSync(snapshotKey(sessionDir, path.join(realRoot, 'reports', '001-existing.md')), 'utf8')).toBe('old\n');
   });
+  it('snapshots a file whose encoded path is longer than a file name may be (CJK names), so the write is allowed and revertable (SW5-claude-03)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-longname-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('interview-prep')! });
+    const file = path.join(realRoot, 'interview-prep', '北京字节跳动科技有限公司-高级机器学习平台研发工程师-面试准备笔记.md');
+    expect(encodeURIComponent(file).length).toBeGreaterThan(255);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'notes before\n');
+    const r = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file, old_string: 'notes', new_string: 'Notes' }, cwd: realRoot, session_id: 's' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readFileSync(snapshotKey(dir, file), 'utf8')).toBe('notes before\n');
+    expect(path.basename(snapshotKey(dir, file)).length).toBeLessThanOrEqual(255);
+  });
+
+  it('a payload with no cwd fails closed: a relative Read, a Glob or Grep with no path and any Bash command are refused (SW4-tests-24)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-nocwd-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
+    const pre = (tool: string, input: Record<string, unknown>, cwd?: unknown) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, ...(cwd === undefined ? {} : { cwd }), session_id: 's' });
+    for (const cwd of [undefined, null, '']) {
+      const label = JSON.stringify(cwd) ?? 'missing';
+      const read = pre('Read', { file_path: 'cv.md' }, cwd);
+      expect(read.status, `Read ${label}`).toBe(2);
+      expect(read.stderr, `Read ${label}`).toMatch(/working directory/);
+      expect(pre('Bash', { command: 'node merge-tracker.mjs' }, cwd).status, `Bash ${label}`).toBe(2);
+      expect(pre('Glob', { pattern: '**/*.md' }, cwd).status, `Glob ${label}`).toBe(2);
+      expect(pre('Grep', { pattern: 'Acme' }, cwd).status, `Grep ${label}`).toBe(2);
+    }
+    // The same calls from the repo root pass, and an absolute Read needs no cwd at all.
+    expect(pre('Read', { file_path: 'reports/001-existing.md' }, realRoot).status).toBe(0);
+    expect(pre('Bash', { command: 'node merge-tracker.mjs' }, realRoot).status).toBe(0);
+    expect(pre('Read', { file_path: path.join(realRoot, 'reports', '001-existing.md') }).status).toBe(0);
+  });
+
   it('resolves writes against a separate data root and records which root a changed file belongs to', () => {
     const dataRoot = fs.mkdtempSync(path.join(realRoot, 'data-root-'));
     fs.mkdirSync(path.join(dataRoot, 'reports'));

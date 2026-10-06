@@ -232,7 +232,8 @@ describe('follow-up edits that cannot write (SW2-tests-23)', () => {
     }
   }, 30_000);
 
-  it('a write error whose message happens to contain "lock" (a data root under a folder named clock) is a 500 with the real error, not "busy"', async () => {
+  // chmod 000 does not stop root, so as root the write succeeds and there is no EACCES to provoke (SW4-tests-25).
+  it.skipIf(process.getuid?.() === 0)('a write error whose message happens to contain "lock" (a data root under a folder named clock) is a 500 with the real error, not "busy"', async () => {
     const dataRoot = path.join(tempDir('cc-clock-'), 'root');
     fs.cpSync(path.join(t.cfg.dataRoot), dataRoot, { recursive: true });
     const own = await makeTestApp({ dataRoot });

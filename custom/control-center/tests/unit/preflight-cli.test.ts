@@ -59,12 +59,25 @@ describe('npm run preflight entry point', () => {
   const tsx = path.join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx');
   // tsx keeps its IPC dir (tsx-<uid>) in the temp dir; give it one that is removed with the file.
   const tmp = tempDir('cc-pfcli-tsx-');
+  // A pinned host (NODE_ENV=test only), so the entry point never passes or fails with this machine's platform or MDM settings.
+  const pinnedHost = { CC_FAKE_PLATFORM: 'darwin', CC_FAKE_MANAGED_SETTINGS_DIR: tempDir('cc-pfcli-managed-') };
   const run = (env: Record<string, string>) =>
     spawnSync(tsx, [path.join(PACKAGE_ROOT, 'supervisor', 'preflight-cli.ts')], {
-      env: { ...process.env, NODE_ENV: 'test', TMPDIR: tmp, TEMP: tmp, TMP: tmp, ...env },
+      env: { ...process.env, NODE_ENV: 'test', TMPDIR: tmp, TEMP: tmp, TMP: tmp, ...pinnedHost, ...env },
       encoding: 'utf8',
       timeout: 60_000,
     });
+
+  it('checks the pinned host, not this machine: a pinned Linux or an unconfinable managed setting is refused (SW4-tests-22)', () => {
+    const linux = run({ CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), CC_FAKE_PLATFORM: 'linux' });
+    expect(linux.status, linux.stdout + linux.stderr).toBe(1);
+    expect(linux.stderr).toMatch(/runs on macOS only \(this is linux\)/);
+    const managed = tempDir('cc-pfcli-managed-bad-');
+    fs.writeFileSync(path.join(managed, 'managed-settings.json'), JSON.stringify({ disableAllHooks: true }));
+    const mdm = run({ CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), CC_FAKE_MANAGED_SETTINGS_DIR: managed });
+    expect(mdm.status, mdm.stdout + mdm.stderr).toBe(1);
+    expect(mdm.stderr).toContain('set disableAllHooks');
+  });
 
   it('really exits non-zero for CC_CLAUDE_BIN=/nonexistent', () => {
     const r = run({ CC_CLAUDE_BIN: '/nonexistent' });

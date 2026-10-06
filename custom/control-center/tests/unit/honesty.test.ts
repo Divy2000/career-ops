@@ -101,6 +101,20 @@ describe('evaluation honesty gate', () => {
     for (const modeId of ['cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only', resumed: true, answersSeen: true }).status, modeId).toBe('awaiting_user');
   });
 
+  it('a question in Chinese, Japanese or Arabic ends with its own question mark (full-width or Arabic) and still waits for the user (SW5-claude-02)', () => {
+    for (const q of ['どの会社の面接ですか？', '你想准备哪家公司的面试？', '你想準備哪家公司的面試？\n', 'لأي شركة تستعد للمقابلة؟', '**どの会社ですか？**', '**لأي شركة؟** ']) expect(endsWithQuestion(q), q).toBe(true);
+    for (const done of ['準備ができました。', '准备好了。', 'تم التحضير.', '？は質問の記号です。']) expect(endsWithQuestion(done), done).toBe(false);
+  });
+
+  it('a turn with no output at all in a mode with no report gate and no envelope waits for the user instead of reading as done (SW4-tests-23)', () => {
+    for (const finalText of ['', '  \n\n ']) {
+      expect(decideTurnOutcome({ ...base, modeId: 'pdf', policyClass: 'documents', finalText }), JSON.stringify(finalText)).toEqual({ status: 'awaiting_user', reason: 'clean exit but the turn produced no output' });
+    }
+    // Envelopes are output: an AI search that answers only with offer lines (no prose left once they are taken out) is done.
+    expect(decideTurnOutcome({ ...base, modeId: 'ai-search', policyClass: 'read-only', finalText: '', envelopeCount: 2 }).status).toBe('done');
+    expect(decideTurnOutcome({ ...base, modeId: 'pdf', policyClass: 'documents', finalText: 'CV written to output/cv-acme.pdf.' })).toMatchObject({ status: 'done', reason: 'clean exit with output' });
+  });
+
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply', envelopeCount: 1 }).status).toBe('done');
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply' }).status).toBe('awaiting_user');

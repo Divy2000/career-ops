@@ -171,6 +171,29 @@ describe('Dev Chat change sets', () => {
   });
 });
 
+describe('snapshot names (SW5-claude-03)', () => {
+  it('a turn snapshotted before snapshots were named by hash (URL-encoded path names) still diffs and reverts', () => {
+    const root = fs.realpathSync(tempDir('cc-legacy-snap-'));
+    const turnDir = fs.realpathSync(tempDir('cc-legacy-snap-turn-'));
+    const file = path.join(root, 'custom', 'notes.md');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.mkdirSync(path.join(turnDir, 'before'));
+    fs.writeFileSync(path.join(turnDir, 'before', encodeURIComponent(file)), 'before\n');
+    fs.writeFileSync(path.join(turnDir, 'policy.json'), JSON.stringify({ allow: ['custom/**'], deny: [] }));
+    fs.writeFileSync(file, 'after\n');
+    fs.writeFileSync(path.join(turnDir, 'after.json'), JSON.stringify({ files: { [file]: sha('after\n') } }));
+    const rec = { path: 'custom/notes.md', abs: file, root: 'code' as const, tool: 'Edit', ts: 't' };
+    expect(diffFile(turnDir, rec)).toMatchObject({ status: 'modified', canRevert: true });
+    expect(revertFile(turnDir, file, { codeRoot: root, dataRoot: root })).toBe('restored');
+    expect(fs.readFileSync(file, 'utf8')).toBe('before\n');
+  });
+
+  it('new snapshots are named by a hash of the path, short enough for any file name', () => {
+    const name = path.basename(snapshotKey('/t', `/Users/li/Documents/career-data/interview-prep/${'北京字节跳动科技有限公司'.repeat(3)}.md`));
+    expect(name).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
 describe('diffs stay bounded, so /__recovery and the Changes panel never freeze the supervisor or the API', () => {
   /** A turn that replaced `before` with `after` in custom/big.txt, as the hook records it. */
   function turnOf(before: Buffer | string, after: Buffer | string) {
@@ -532,7 +555,8 @@ describe('the page a down server answers with (SW2-claude-05 review)', () => {
     expect(devChatChangeInEffect(t.sessionsDir, t.guardRoot, serverTree, t.root)).toBe(true);
   });
 
-  it('a record under a directory that cannot be read (EACCES) cannot be ruled out either, so it counts', () => {
+  // chmod 000 does not stop root, so as root the directory is readable and there is no EACCES to provoke (SW4-tests-25).
+  it.skipIf(process.getuid?.() === 0)('a record under a directory that cannot be read (EACCES) cannot be ruled out either, so it counts', () => {
     const t = finishedTurn(['custom/control-center/server/app.ts']);
     revertTurn(t.sessionDir, t.meta, 1, { codeRoot: t.root, dataRoot: t.root });
     const locked = path.join(t.root, 'custom', 'control-center', 'server', 'locked');

@@ -1,6 +1,7 @@
 // Pure path and command policy shared by the guard hook (guard-hook.mjs) and
 // the change-set reverts (supervisor/recovery.ts). Plain .mjs with no side
 // effects on import, so the hook entry itself can run unconditionally.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
@@ -98,6 +99,16 @@ function isCodeRoot(policy, cwd) {
 }
 
 /**
+ * Whether the session's working directory is the code root: 'missing' when the hook payload has none (fails closed:
+ * relative paths and searches resolve against it), 'elsewhere' when it is another directory, null when it is the root.
+ */
+function cwdProblem(policy, cwd) {
+  if (typeof cwd !== 'string' || cwd === '') return 'missing';
+  return isCodeRoot(policy, cwd) ? null : 'elsewhere';
+}
+const NO_CWD = "the hook did not say the session's working directory";
+
+/**
  * Where a read lands, by its real path: inside the data root, the code root or a read-only root (the
  * session's own oversized tool results), the root itself included. Relative paths resolve against the
  * code root (the session cwd). A symlink that leads outside every root is null.
@@ -127,7 +138,10 @@ export function checkRead(policy, input, cwd, label = 'Read') {
   if (typeof target !== 'string' || !target) return `${label}: no file path`;
   const unresolved = unresolvedPathReason(target, label);
   if (unresolved) return unresolved;
-  if (!path.isAbsolute(target) && cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${label}: ${target} is a relative path, it resolves against the repo root and the session is not running from it; use the absolute path`;
+  if (!path.isAbsolute(target)) {
+    const why = cwdProblem(policy, cwd);
+    if (why) return `${label}: ${target} is a relative path, it resolves against the repo root and ${why === 'missing' ? NO_CWD : 'the session is not running from it'}; use the absolute path`;
+  }
   const found = locateRead(policy, target);
   if (!found) return `${label}: ${target} is outside the repo and data roots; sessions read only inside them`;
   if (matches(found.rel, policy.readDeny)) return `${label}: ${found.rel} is a protected secret file (.env, keys, credentials) and sessions never read it`;
@@ -162,7 +176,8 @@ export function checkSearch(policy, tool, input, cwd) {
     if (why) return why;
   } else {
     if (!Array.isArray(policy.readDeny)) return `${tool}: the session policy predates read confinement, so every search is refused`;
-    if (cwd !== undefined && cwd !== null && !isCodeRoot(policy, cwd)) return `${tool}: the session must run from the repo root`;
+    const why = cwdProblem(policy, cwd);
+    if (why) return why === 'missing' ? `${tool}: a search with no path runs in the session's working directory, and ${NO_CWD}` : `${tool}: the session must run from the repo root`;
   }
   const key = tool === 'Glob' ? 'pattern' : 'glob';
   const value = input?.[key];
@@ -800,7 +815,8 @@ export function checkBash(command, policy, cwd) {
   const first = tokens[0];
   if (!first) return 'Bash: empty command';
   if (NETWORK_BINS.has(first)) return `Bash: ${first} is not allowed (network tools are denied)`;
-  if (cwd !== undefined && cwd !== null && resolveReal(path.resolve(String(cwd))) !== fs.realpathSync.native(policy.codeRoot)) return 'Bash: the session must run from the repo root';
+  const cwdWhy = cwdProblem(policy, cwd);
+  if (cwdWhy) return cwdWhy === 'missing' ? `Bash: ${NO_CWD}; no command runs without it` : 'Bash: the session must run from the repo root';
   const spawner = agentSpawningScript(tokens);
   if (spawner) return `Bash: ${spawner} starts agent CLIs outside the session guard, so no session may run it`;
   const candidates = allowed.filter((prefix) => prefix.every((p, i) => tokens[i] === p));
@@ -892,6 +908,24 @@ export async function checkPlaywright(policy, tool, input, cwd, lookup = lookupA
 }
 
 /** First-touch snapshot keyed by the absolute path, so code-root and data-root files never collide. */
+/**
+ * Where a turn keeps a file's bytes from before its first write: named by a hash of the absolute path, so any path
+ * fits in a file name (an encoded long or CJK path is past the 255 bytes a name may have, and the write was refused).
+ */
 export function snapshotKey(sessionDir, abs) {
+  return path.join(sessionDir, 'before', crypto.createHash('sha256').update(abs).digest('hex'));
+}
+
+/** The name snapshots had before: the URL-encoded path. Still read, so turns snapshotted then diff and revert. */
+export function legacySnapshotKey(sessionDir, abs) {
   return path.join(sessionDir, 'before', encodeURIComponent(abs));
+}
+
+/** The turn's snapshot of `abs` under either name, the current one first: its key and whether the file was absent; null if none. */
+export function findSnapshot(sessionDir, abs) {
+  for (const key of [snapshotKey(sessionDir, abs), legacySnapshotKey(sessionDir, abs)]) {
+    if (fs.existsSync(key)) return { key, absent: false };
+    if (fs.existsSync(`${key}.absent`)) return { key, absent: true };
+  }
+  return null;
 }

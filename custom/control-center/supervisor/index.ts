@@ -410,9 +410,9 @@ async function main(): Promise<void> {
     };
     watcher.on('all', (_event, file) => changed(file));
     const core = await watchCoreGraph(CODE_ROOT, CORE_ENTRIES, changed);
-    // The new code may import files the old one did not.
+    // The new code may import files the old one did not: recomputed after every attempt, a failed one included.
     bg.onStatus((st) => {
-      if (st.state === 'ok') void core.refresh();
+      if (st.state === 'ok' || st.state === 'failed') void core.refresh();
     });
   }
 

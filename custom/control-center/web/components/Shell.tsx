@@ -13,7 +13,7 @@ import { CommandPalette } from './CommandPalette';
 import { ThemeSwitcher } from './ThemeSwitcher';
 import { ConfirmProvider } from './ConfirmDialog';
 import { UsageMeter } from '../features/settings/UsageMeter';
-import { useReloadStatus } from '../features/dev/DevChatPage';
+import { serverDown, useReloadStatus } from '../features/dev/DevChatPage';
 import type { SystemStatus } from '@shared/types';
 import type { DailyStatus, RunMeta, ScheduleLogs, SessionMeta } from '@shared/api';
 
@@ -69,10 +69,18 @@ function HealthChip() {
   );
 }
 
-function ReloadBanner() {
+export function ReloadBanner() {
   const q = useReloadStatus();
   const s = q.data;
   if (!s || s.state !== 'failed') return null;
+  // With no server running, Dev Chat cannot load either: only /__recovery (served by the supervisor) can revert or restart.
+  if (serverDown(s)) {
+    return (
+      <div className="banner" role="alert">
+        The server stopped: {s.error}. Nothing serves the app until it runs again: open <a href="/__recovery">/__recovery</a> to revert the change or restart the server.
+      </div>
+    );
+  }
   return (
     <div className="banner" role="alert">
       Server reload failed: {s.error}. The previous server keeps running. Review the change in <Link to="/dev">Dev Chat</Link> or open <a href="/__recovery">/__recovery</a>.

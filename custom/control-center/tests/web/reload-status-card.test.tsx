@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ReloadStatusCard } from '@web/features/dev/DevChatPage';
+import { ReloadBanner } from '@web/components/Shell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,12 +18,16 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function card(status: unknown): Promise<string> {
+async function render(status: unknown, component: () => ReturnType<typeof createElement> | null): Promise<void> {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(status), { status: 200, headers: { 'content-type': 'application/json' } })));
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ReloadStatusCard))));
+  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(component))));
+}
+
+async function card(status: unknown): Promise<string> {
+  await render(status, ReloadStatusCard);
   for (let i = 0; i < 20 && !/reload/.test(host.querySelector('p')?.textContent ?? ''); i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
   return host.querySelector('p')?.textContent ?? '';
 }
@@ -39,5 +44,30 @@ describe('the Server reload card', () => {
 
   it('given no reload yet, then it says so', async () => {
     expect(await card({ state: 'idle' })).toBe('idle no reload yet; server edits trigger a blue/green restart');
+  });
+
+  it('given a server that stopped after it started (no active child), then it says the server stopped and points to /__recovery, not that a previous one still serves (SW5-claude-04)', async () => {
+    const stopped = { state: 'failed', at: '2026-10-06T09:00:00.000Z', error: 'server child exited (code 1, signal null) after it started', stderrTail: 'TypeError: runner.reconcil is not a function', crashed: true, activePid: null, activePort: null };
+    await render(stopped, ReloadStatusCard);
+    for (let i = 0; i < 20 && !/stopped/.test(host.textContent ?? ''); i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(host.textContent).toContain('server stopped');
+    expect(host.textContent).toContain('No server is running');
+    expect(host.textContent).not.toMatch(/previous server/i);
+    expect(host.querySelector('a[href="/__recovery"]')).not.toBeNull();
+    await act(async () => root.unmount());
+    host.remove();
+    await render(stopped, ReloadBanner);
+    for (let i = 0; i < 20 && !/stopped/.test(host.textContent ?? ''); i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(host.textContent).toContain('The server stopped: server child exited (code 1, signal null) after it started.');
+    expect(host.textContent).not.toMatch(/previous server/i);
+    expect(host.querySelector('a[href="/__recovery"]')).not.toBeNull();
+  });
+
+  it('given a failed reload while the old server still runs, then the card keeps saying so', async () => {
+    await render({ state: 'failed', at: '2026-10-06T09:00:00.000Z', error: 'healthz did not return 200 in time', stderrTail: '', activePid: 4242, activePort: 50123 }, ReloadStatusCard);
+    for (let i = 0; i < 20 && !/failed/.test(host.textContent ?? ''); i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(host.textContent).toContain('reload failed');
+    expect(host.textContent).toContain('The previous server is still serving.');
+    expect(host.textContent).not.toContain('server stopped');
   });
 });

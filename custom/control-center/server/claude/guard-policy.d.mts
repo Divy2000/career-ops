@@ -52,3 +52,5 @@ export function checkBash(command: string, policy: BashPolicy, cwd?: string): st
 export const PLAYWRIGHT_TOOL_PREFIX: string;
 export function checkPlaywright(policy: ReadPolicy & { playwright?: boolean }, tool: string, input: unknown, cwd?: string, lookup?: DnsLookup): Promise<string | null>;
 export function snapshotKey(sessionDir: string, abs: string): string;
+export function legacySnapshotKey(sessionDir: string, abs: string): string;
+export function findSnapshot(sessionDir: string, abs: string): { key: string; absent: boolean } | null;

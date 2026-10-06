@@ -73,7 +73,8 @@ export function endsWithQuestion(text: string): boolean {
     .map((l) => l.trim())
     .filter(Boolean);
   const last = lines.at(-1) ?? '';
-  return /\?\s*$/.test(last) || /\?\s*\**\s*$/.test(last);
+  // The ASCII question mark, the full-width one Chinese and Japanese use (U+FF1F) and the Arabic one (U+061F).
+  return /[?\uFF1F\u061F]\s*\**\s*$/.test(last);
 }
 
 export interface TurnOutcomeInput {
@@ -111,6 +112,8 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
   if (ENVELOPE_MODES.has(mode) && !(i.resumed && i.answersSeen && ONCE_PER_CONVERSATION_ENVELOPE_MODES.has(mode))) {
     return i.envelopeCount > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
   }
+  // Envelopes are output too (an AI search may answer only with offer lines); a turn with neither said nothing.
+  if (!i.finalText.trim() && i.envelopeCount === 0) return { status: 'awaiting_user', reason: 'clean exit but the turn produced no output' };
   if (endsWithQuestion(i.finalText)) return { status: 'awaiting_user', reason: 'the turn ended with a question' };
   return { status: 'done', reason: 'clean exit with output' };
 }
