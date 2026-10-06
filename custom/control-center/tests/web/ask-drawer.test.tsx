@@ -165,6 +165,24 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
   });
 
+  it('any action missing a required param fails before asking, naming the param, and runs nothing (review fix 2)', async () => {
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ['generatePdf', {}, 'generatePdf needs "row"'],
+      ['research', { topic: '  ' }, 'research needs "topic"'],
+      ['evaluateCompany', {}, 'evaluateCompany needs "company"'],
+      ['setStatus', { row: 3 }, 'setStatus needs "state"'],
+    ];
+    for (const [action, params, note] of cases) {
+      await act(async () => emitEnvelope!('act', { action, params }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog__title'), action).toBeNull();
+      expect(item.dataset.proposalState, action).toBe('failed');
+      expect(item.textContent, action).toContain(note);
+    }
+    expect(posts).toEqual([]);
+  });
+
   it('confirming runs the write with the proposed params', async () => {
     const item = await propose();
     await act(async () => bodyButton('Do it')!.click());

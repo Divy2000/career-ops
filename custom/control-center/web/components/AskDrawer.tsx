@@ -8,7 +8,7 @@ import { apiGet, apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
 import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
 import { afterFocusSettles } from '../lib/focus';
-import { ASK_ACTION_SPECS, type AskActionName } from '@shared/ask-actions';
+import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@shared/ask-actions';
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import type { PipelineRead } from '@shared/api';
@@ -72,13 +72,22 @@ export function useAskHotkey(toggle: () => void): void {
   }, [toggle]);
 }
 
-/** Why a proposal's params cannot run, or null. A navigate stays in the app: `//host` or `/\\host` would leave it. */
+// Older keys the run switch still reads in place of a param's name (row or n, topic or company, q or query).
+const PARAM_ALIASES: Record<string, string> = { row: 'n', topic: 'company', q: 'query' };
+
+/**
+ * Why a proposal's params cannot run, or null: every param the advisor's contract marks required must be there, not
+ * blank. A navigate stays in the app (`//host` or `/\\host` would leave it) and an evaluate takes a posting URL.
+ */
 function invalidParams(p: { action: string; params: Record<string, unknown> }): string | null {
-  if (p.action === 'navigate') {
-    const to = typeof p.params.to === 'string' ? p.params.to.trim() : '';
-    if (!to.startsWith('/') || /^\/[/\\]/.test(to)) return 'navigate needs "to", an app path such as /tracker/12';
+  const spec = (ASK_ACTION_SPECS as readonly AskActionSpec[]).find((a) => a.name === p.action);
+  for (const param of spec?.params ?? []) {
+    const alias = PARAM_ALIASES[param.name];
+    const value = p.params[param.name] ?? (alias ? p.params[alias] : undefined);
+    if (param.required && (value === undefined || value === null || String(value).trim() === '')) return `${p.action} needs "${param.name}", ${param.about}`;
   }
-  if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(typeof p.params.url === 'string' ? p.params.url.trim() : '')) return 'evaluate needs "url", the job posting URL';
+  if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
+  if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
   return null;
 }
 
