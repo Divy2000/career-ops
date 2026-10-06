@@ -137,3 +137,28 @@ describe('config/profile.yml is written only when validate-profile exits 0', () 
     }
   });
 });
+
+describe('Follow-up cadence save on a profile with no cadence map (SW5-server-03)', () => {
+  it('a cleared field and a set in one save, with no followup_cadence map, saves the set instead of failing with 500', async () => {
+    const file = path.join(t.cfg.dataRoot, 'config', 'profile.yml');
+    const before = fs.readFileSync(file, 'utf8');
+    try {
+      fs.writeFileSync(file, 'language:\n  output: en\n# followup_cadence:\n#   applied_first_days: 7\n');
+      const etag = async () => (await t.app.inject({ method: 'GET', url: '/api/followups/cadence', headers: t.authed })).json().etag as string;
+      const res = await put('/api/followups/cadence', { cadence: { applied_first_days: null, applied_subsequent_days: 5 } }, await etag());
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toMatch(/followup_cadence:\n {2}applied_subsequent_days: 5/);
+      // An empty map (only commented children) takes a set too.
+      fs.writeFileSync(file, 'language:\n  output: en\nfollowup_cadence:\n  # applied_first_days: 7\n');
+      const set = await put('/api/followups/cadence', { cadence: { applied_first_days: 9 } }, await etag());
+      expect(set.statusCode, set.body).toBe(200);
+      // A profile whose cadence is not a map gets a 400 that says why.
+      fs.writeFileSync(file, 'followup_cadence: 3\n');
+      const bad = await put('/api/followups/cadence', { cadence: { applied_first_days: 9 } }, await etag());
+      expect(bad.statusCode, bad.body).toBe(400);
+      expect(bad.json().error).toMatch(/followup_cadence\.applied_first_days/);
+    } finally {
+      fs.writeFileSync(file, before);
+    }
+  });
+});

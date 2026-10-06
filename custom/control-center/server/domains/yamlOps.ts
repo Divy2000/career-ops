@@ -1,6 +1,6 @@
 // Structured edits to user YAML files through the yaml Document API, so
 // comments, key order and unknown keys survive every save (spec 3.4).
-import { parseDocument, isSeq } from 'yaml';
+import { parseDocument, isScalar, isSeq, type Document } from 'yaml';
 import { z } from 'zod';
 
 export const yamlPathSchema = z.array(z.union([z.string().min(1).max(100), z.number().int().nonnegative()])).min(1).max(12);
@@ -31,25 +31,54 @@ export function applyYamlOps(raw: string, ops: YamlOp[]): string {
     throw new YamlOpsError(`current file is not valid YAML: ${first.message.split('\n')[0]}`, 'malformed');
   }
   if (ops.length === 0) return raw;
+  let changed = false;
   for (const op of ops) {
     const label = op.path.join('.');
-    if (op.op === 'set') {
-      doc.setIn(op.path, doc.createNode(op.value));
-    } else if (op.op === 'delete') {
-      doc.deleteIn(op.path);
-    } else {
-      const parent = doc.getIn(op.path, true);
-      if (parent === undefined) {
-        doc.setIn(op.path, doc.createNode([op.value]));
-      } else if (isSeq(parent)) {
-        const at = Math.min(op.index ?? parent.items.length, parent.items.length);
-        parent.items.splice(at, 0, doc.createNode(op.value));
-      } else {
-        throw new YamlOpsError(`insert target ${label} is not a list`, 'bad-op');
-      }
+    try {
+      if (applyOne(doc, op, label)) changed = true;
+    } catch (err) {
+      if (err instanceof YamlOpsError) throw err;
+      // A path through a value that is not a map or list (yaml's own "Expected YAML collection"): a 400 with the reason.
+      throw new YamlOpsError(`cannot ${op.op} ${label}: ${(err as Error).message.split('\n')[0]}`, 'bad-op');
     }
   }
-  return doc.toString();
+  // Only no-op deletes: the file is left exactly as it was, comments and layout included.
+  return changed ? doc.toString() : raw;
+}
+
+/**
+ * An empty value on the way (a key with only commented children, `followup_cadence:`) is no map yet: it becomes the
+ * map or list the next path step needs, as a missing key would.
+ */
+function fillEmptyParents(doc: Document, path: Array<string | number>): void {
+  for (let i = 1; i < path.length; i++) {
+    const node = doc.getIn(path.slice(0, i), true);
+    if (isScalar(node) && node.value === null) doc.setIn(path.slice(0, i), doc.createNode(typeof path[i] === 'number' ? [] : {}));
+  }
+}
+
+/** Applies one op; false when it had nothing to do (a delete of something absent). */
+function applyOne(doc: Document, op: YamlOp, label: string): boolean {
+  if (op.op === 'set') {
+    fillEmptyParents(doc, op.path);
+    doc.setIn(op.path, doc.createNode(op.value));
+  } else if (op.op === 'delete') {
+    // Nothing there (no file, no map, an empty value): nothing to delete.
+    if (!doc.hasIn(op.path)) return false;
+    doc.deleteIn(op.path);
+  } else {
+    fillEmptyParents(doc, op.path);
+    const parent = doc.getIn(op.path, true);
+    if (parent === undefined) {
+      doc.setIn(op.path, doc.createNode([op.value]));
+    } else if (isSeq(parent)) {
+      const at = Math.min(op.index ?? parent.items.length, parent.items.length);
+      parent.items.splice(at, 0, doc.createNode(op.value));
+    } else {
+      throw new YamlOpsError(`insert target ${label} is not a list`, 'bad-op');
+    }
+  }
+  return true;
 }
 
 /** Parsed JS view of a YAML text, or null with the parse error when it is malformed. */

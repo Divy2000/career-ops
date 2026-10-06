@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { applyYamlOps, YamlOpsError } from '../../server/domains/yamlOps.js';
+import { applyYamlOps, parseYamlDoc, YamlOpsError } from '../../server/domains/yamlOps.js';
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
 import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, pinnedNodeBin, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
@@ -66,6 +66,41 @@ describe('applyYamlOps (yaml Document API)', () => {
     ]);
     expect(out).toContain('followup_cadence:\n  applied_first_days: 10');
     expect(out).toContain('search_queries:\n  - staff engineer');
+  });
+
+  it('a delete under a missing map, or in an empty file, changes nothing instead of throwing (SW5-server-03)', () => {
+    const profile = 'candidate:\n  full_name: Alex\n# followup_cadence:\n#   applied_first_days: 7\n';
+    expect(applyYamlOps(profile, [{ op: 'delete', path: ['followup_cadence', 'applied_first_days'] }])).toBe(profile);
+    expect(applyYamlOps('', [{ op: 'delete', path: ['followup_cadence', 'applied_first_days'] }])).toBe('');
+    // A cleared field and a set in one save: the set lands, the delete is a no-op.
+    const out = applyYamlOps(profile, [
+      { op: 'delete', path: ['followup_cadence', 'applied_first_days'] },
+      { op: 'set', path: ['followup_cadence', 'applied_subsequent_days'], value: 5 },
+    ]);
+    expect(parseYamlDoc(out).doc).toEqual({ candidate: { full_name: 'Alex' }, followup_cadence: { applied_subsequent_days: 5 } });
+  });
+
+  it('a set or insert under a key whose value is empty (only commented children) fills it in (SW5-server-03)', () => {
+    const empty = 'followup_cadence:\n  # applied_first_days: 7\nsearch:\n';
+    const out = applyYamlOps(empty, [
+      { op: 'set', path: ['followup_cadence', 'applied_first_days'], value: 9 },
+      { op: 'insert', path: ['search', 'queries'], value: 'staff engineer' },
+    ]);
+    expect(parseYamlDoc(out).doc).toEqual({ followup_cadence: { applied_first_days: 9 }, search: { queries: ['staff engineer'] } });
+    expect(applyYamlOps(empty, [{ op: 'delete', path: ['followup_cadence', 'applied_first_days'] }])).toBe(empty);
+  });
+
+  it('a set through a value that is not a map or list is refused as a bad op, not a crash; a delete there has nothing to delete (SW5-server-03)', () => {
+    let err: unknown;
+    try {
+      applyYamlOps('followup_cadence: 3\n', [{ op: 'set', path: ['followup_cadence', 'applied_first_days'], value: 9 }]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(YamlOpsError);
+    expect((err as YamlOpsError).code).toBe('bad-op');
+    expect((err as YamlOpsError).message).toMatch(/followup_cadence\.applied_first_days/);
+    expect(applyYamlOps('followup_cadence: 3\n', [{ op: 'delete', path: ['followup_cadence', 'x', 'y'] }])).toBe('followup_cadence: 3\n');
   });
 
   it('refuses malformed YAML and inserts into something that is not a list', () => {
@@ -281,6 +316,58 @@ describe('usage meter from ~/.claude/projects jsonl', () => {
     expect(usage.fiveHour).toMatchObject({ tokens: 160, input: 100, output: 50, cacheCreation: 10, messages: 1 });
     expect(usage.sevenDay).toMatchObject({ tokens: 1360, messages: 2 });
     expect(computeUsage(path.join(dir, 'nope'), now).kind).toBe('missing');
+  });
+});
+
+describe('usage meter reads only what the transcripts gained (SW5-server-04)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const line = (ts: number, input: number, requestId: string) => JSON.stringify({ type: 'assistant', timestamp: new Date(ts).toISOString(), requestId, message: { usage: { input_tokens: input, output_tokens: 0, cache_creation_input_tokens: 0 } } });
+  /** Bytes the next call reads from transcript files, however it reads them. */
+  function bytesRead(fn: () => void): number {
+    let n = 0;
+    const whole = vi.spyOn(fs, 'readFileSync');
+    const part = vi.spyOn(fs, 'readSync');
+    try {
+      fn();
+      for (const r of whole.mock.results) if (r.type === 'return') n += Buffer.byteLength(r.value as string | Buffer);
+      for (const r of part.mock.results) if (r.type === 'return') n += r.value as number;
+    } finally {
+      whole.mockRestore();
+      part.mockRestore();
+    }
+    return n;
+  }
+
+  it('a refresh with nothing new reads no transcript bytes, and an append reads only the appended bytes', () => {
+    const dir = tempDir('cc-usage-incr-');
+    fs.mkdirSync(path.join(dir, 'proj'));
+    const file = path.join(dir, 'proj', 's.jsonl');
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    fs.writeFileSync(file, `${line(now - 60_000, 100, 'a')}\n${'{"type":"user","text":"' + 'x'.repeat(50_000) + '"}'}\n`);
+    expect(computeUsage(dir, now).fiveHour.tokens).toBe(100);
+    let again!: ReturnType<typeof computeUsage>;
+    expect(bytesRead(() => (again = computeUsage(dir, now + 1000)))).toBe(0);
+    expect(again.fiveHour.tokens).toBe(100);
+    const added = `${line(now - 30_000, 7, 'b')}\n`;
+    fs.appendFileSync(file, added);
+    let after!: ReturnType<typeof computeUsage>;
+    expect(bytesRead(() => (after = computeUsage(dir, now + 2000)))).toBe(Buffer.byteLength(added));
+    expect(after.fiveHour).toMatchObject({ tokens: 107, messages: 2 });
+  });
+
+  it('a line still being written is counted once it is whole, and a rewritten (shorter) file is read again from the start', () => {
+    const dir = tempDir('cc-usage-partial-');
+    const file = path.join(dir, 's.jsonl');
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    const whole = line(now - 60_000, 40, 'p');
+    fs.writeFileSync(file, whole.slice(0, 30));
+    expect(computeUsage(dir, now).fiveHour.tokens).toBe(0);
+    fs.appendFileSync(file, `${whole.slice(30)}\n`);
+    expect(computeUsage(dir, now + 1000).fiveHour).toMatchObject({ tokens: 40, messages: 1 });
+    fs.writeFileSync(file, `${line(now - 10_000, 3, 'q')}\n`);
+    expect(computeUsage(dir, now + 2000).fiveHour).toMatchObject({ tokens: 3, messages: 1 });
+    // Time passing ages lines out of the windows without a read.
+    expect(computeUsage(dir, now + 6 * 3_600_000).fiveHour.tokens).toBe(0);
   });
 });
 

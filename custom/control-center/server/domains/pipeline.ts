@@ -34,7 +34,7 @@ const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*${RANK_DASH}?\\s*
 // `trust: <score>[ flag,flag]`, `note: <text>`) and rank-pipeline.mjs formatRankSegment (`rank: <n>/5 <dash> <reason>`).
 // So a company or title like `Rank: Senior Engineer` or `posted: soon` stays text, and so does a location such as
 // `Remote: US` (scan.mjs keeps colons in it): only those written forms are labels, in any column.
-const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
+export const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
 
 export function seniorityOf(title: string): string | null {
   const t = title.toLowerCase();
@@ -86,16 +86,29 @@ export function parsePipeline(md: string): PipelineRow[] {
     }
     const m = line.match(CHECKBOX_RE);
     if (!m) return;
-    const cells = m[2]!.split('|').map((s) => s.trim());
+    // An expired entry is struck out whole (`~~URL | Company | Role~~ <dash> posting expired`): read inside the strike.
+    const struck = m[2]!.match(/^~~([\s\S]*?)(?:~~|$)/);
+    const cells = (struck ? struck[1]! : m[2]!).split('|').map((s) => s.trim());
+    // The URL leads only the rows scan.mjs appends; Processed rows put a report number (#NNN), a report link
+    // ([NNN](reports/...)) or a pre-screen marker (#--) before it, as scan.mjs extractPipelineUrl documents.
+    const urlAt = cells.findIndex((cell) => /^https?:\/\//i.test(cell));
+    if (urlAt === -1) return;
+    const skipped = cells[0]!.startsWith('#--');
     const positional: string[] = [];
     const labels = new Map<string, string>();
-    cells.forEach((cell, idx) => {
+    cells.slice(urlAt).forEach((cell, idx) => {
       const lm = idx >= 1 && WRITTEN_SEGMENT.test(cell) ? cell.match(LABELED) : null;
       if (lm) labels.set(lm[1]!.toLowerCase(), lm[2]!.trim());
       else positional.push(cell);
     });
-    // Upstream rows are 1 to 5 columns: a bare pasted URL is valid, its company and role are just unknown.
-    if (!/^https?:\/\//i.test(positional[0]!)) return;
+    // Upstream rows are 1 to 5 columns: a bare pasted URL is valid, its company and role are just unknown. After a
+    // leading report cell the columns are company, role, score and PDF: no location or compensation there, and a
+    // pre-screen skip carries only its reason.
+    if (skipped) {
+      const reason = positional.slice(1).join(' | ');
+      positional.length = 1;
+      if (reason && !labels.has('note')) labels.set('note', reason);
+    } else if (urlAt > 0) positional.length = Math.min(positional.length, 3);
     const rankCell = labels.get('rank');
     const { rank, reason } = rankCell ? parseRankCell(rankCell) : { rank: null, reason: null };
     const posted = labels.get('posted');

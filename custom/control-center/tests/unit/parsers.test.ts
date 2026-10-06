@@ -214,8 +214,31 @@ describe('pipeline', () => {
     const acme = rows[0]!;
     expect(acme).toMatchObject({ company: 'Acme Robotics', location: 'Austin, TX', rank: 4.4, rankReason: 'strong backend match, sponsors visas', postedAt: '2026-09-15', done: false, section: 'pending', seniority: 'senior' });
     expect(rows.find((r) => r.company === 'Initech Cloud')).toMatchObject({ done: true, rank: null, section: 'pending' });
-    expect(rows.find((r) => r.company === 'Old Corp')).toMatchObject({ section: 'done', done: true });
+    // The Processed row is in the shape the app writes when it moves an evaluated posting (#NNN | URL | ...).
+    expect(rows.find((r) => r.company === 'Old Corp')).toMatchObject({ url: 'https://jobs.example.com/oldcorp/1', role: 'Engineer', location: null, section: 'done', done: true });
     expect(rows.some((r) => r.url === 'not a checkbox line')).toBe(false);
+  });
+
+  it('reads every documented Processed row shape: #NNN, a report link, a #-- pre-screen skip and a struck-out expired row (SW5-server-01)', () => {
+    const rows = parsePipeline([
+      '## Processed',
+      '- [x] #042 | https://jobs.example.com/acme/42 | Acme | Backend Engineer | 4.2/5 | PDF ❌',
+      '- [x] [043](reports/043-globex-2026-10-01.md) | https://jobs.example.com/globex/43 | Globex | SRE | 3.9/5 | PDF ✅',
+      '- [x] #-- | https://jobs.example.com/skip/1 | skipped (pre-screen mismatch: no visa)',
+      `- [x] ~~https://jobs.example.com/gone/7 | Gone Inc | PM~~ ${String.fromCharCode(0x2014)} posting expired (liveness sweep)`,
+      '- [x] https://jobs.example.com/plain/8 | Plain | Dev | Remote',
+      '- [x] ~~Dead Co | Role~~ - oferta nieaktywna',
+      '',
+    ].join('\n'));
+    expect(rows.map((r) => [r.url, r.company, r.role, r.location, r.compensation, r.done, r.section])).toEqual([
+      ['https://jobs.example.com/acme/42', 'Acme', 'Backend Engineer', null, null, true, 'done'],
+      ['https://jobs.example.com/globex/43', 'Globex', 'SRE', null, null, true, 'done'],
+      ['https://jobs.example.com/skip/1', '', '', null, null, true, 'done'],
+      ['https://jobs.example.com/gone/7', 'Gone Inc', 'PM', null, null, true, 'done'],
+      ['https://jobs.example.com/plain/8', 'Plain', 'Dev', 'Remote', null, true, 'done'],
+    ]);
+    expect(rows[2]!.note).toBe('skipped (pre-screen mismatch: no visa)');
+    expect(rows.map((r) => r.line)).toEqual([2, 3, 4, 5, 6]);
   });
 
   it('keeps a bare pasted URL row and a URL row with only labeled segments, with company and role empty', () => {
