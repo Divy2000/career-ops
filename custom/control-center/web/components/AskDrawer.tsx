@@ -72,6 +72,16 @@ export function useAskHotkey(toggle: () => void): void {
   }, [toggle]);
 }
 
+/** Why a proposal's params cannot run, or null. A navigate stays in the app: `//host` or `/\\host` would leave it. */
+function invalidParams(p: { action: string; params: Record<string, unknown> }): string | null {
+  if (p.action === 'navigate') {
+    const to = typeof p.params.to === 'string' ? p.params.to.trim() : '';
+    if (!to.startsWith('/') || /^\/[/\\]/.test(to)) return 'navigate needs "to", an app path such as /tracker/12';
+  }
+  if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(typeof p.params.url === 'string' ? p.params.url.trim() : '')) return 'evaluate needs "url", the job posting URL';
+  return null;
+}
+
 export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -95,6 +105,12 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     if (!def) return;
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
+    // Checked before the question: a proposal that cannot run is not offered to the user as a write to approve.
+    const invalid = invalidParams(p);
+    if (invalid) {
+      update(p.id, { state: 'failed', note: invalid });
+      return;
+    }
     // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
     const company = String(p.params.company ?? '').trim();
     let companyUrls: string[] = [];
@@ -119,9 +135,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     try {
       switch (p.action) {
         case 'navigate': {
-          const to = typeof p.params.to === 'string' ? p.params.to.trim() : '';
-          if (!to.startsWith('/')) throw new Error('navigate needs "to", an app path such as /tracker/12');
-          await router.navigate({ to: to as '/' });
+          await router.navigate({ to: String(p.params.to).trim() as '/' });
           break;
         }
         case 'filterPipeline': {
@@ -136,7 +150,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await router.navigate({ to: '/apply/$n', params: { n: String(p.params.row ?? p.params.n ?? '') } });
           break;
         case 'evaluate': {
-          const m = await startSession({ mode: 'oferta', target: { type: 'url', value: String(p.params.url) }, prompt: `Evaluate this job posting following the mode file: ${String(p.params.url)}` });
+          const url = String(p.params.url).trim();
+          const m = await startSession({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }

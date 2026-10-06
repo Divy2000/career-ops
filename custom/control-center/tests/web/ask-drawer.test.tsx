@@ -91,6 +91,17 @@ describe('Ask drawer: proposed actions', () => {
     expect(navigations).toEqual([]);
   });
 
+  it('navigate to a protocol-relative path (another site) fails without navigating (review fix)', async () => {
+    for (const to of ['//attacker.example/path', '/\\attacker.example/path']) {
+      await act(async () => emitEnvelope!('act', { action: 'navigate', params: { to } }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(item.dataset.proposalState, to).toBe('failed');
+      expect(item.textContent, to).toContain('navigate needs "to"');
+      expect(navigations, to).toEqual([]);
+    }
+  });
+
   it('Filter the pipeline opens the Inbox filtered by the proposed query (SW-web-a-07)', async () => {
     await act(async () => emitEnvelope!('act', { action: 'filterPipeline', params: { q: 'Stripe' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
@@ -142,6 +153,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('rejected');
     expect(item.textContent).toContain('declined');
+  });
+
+  it('an evaluate without a posting URL fails before asking, and starts nothing (review fix)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: {} }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog__title')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('evaluate needs "url"');
+    expect(posts).toEqual([]);
   });
 
   it('confirming runs the write with the proposed params', async () => {
