@@ -24,6 +24,11 @@ describe('describeError', () => {
     expect(describeError(refused({ error: 'invalid body', issues: [{ code: 'invalid_type', path: [], message: 'Invalid input: expected object, received null' }] }))).toBe('invalid body: Invalid input: expected object, received null');
   });
 
+  it('an error that already describes the issues in its own words is shown once, not followed by them again (SW3-web-a-04 review)', () => {
+    const issues = [{ code: 'invalid_format', path: ['bullets', 1], message: 'one line' }, { code: 'too_big', path: ['name'], maximum: 120, origin: 'string', message: 'Too big: expected string to have <=120 characters' }];
+    expect(describeError(refused({ error: 'bullet 2 must be one line; name must be at most 120 characters', issues }))).toBe('bullet 2 must be one line; name must be at most 120 characters');
+  });
+
   it('keeps the plain error, the stderr tail and the fallbacks as they were', () => {
     expect(describeError(new ApiError(500, '500 Internal Server Error', { error: 'exited 2', stderr: 'boom\n' }))).toBe('exited 2 (boom)');
     expect(describeError(new ApiError(502, '502 Bad Gateway', null))).toBe('502 Bad Gateway');

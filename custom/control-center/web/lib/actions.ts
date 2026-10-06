@@ -44,7 +44,10 @@ function describeIssues(issues: unknown): string {
 export function describeError(err: unknown): string {
   const e = err as ApiError;
   const body = e?.body as { error?: string; stderr?: string; issues?: unknown } | null | undefined;
-  return `${body?.error ?? e?.message ?? 'unknown error'}${describeIssues(body?.issues)}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
+  // Only a bare schema label ("invalid params", "invalid body") lacks the details; a route that already wrote the
+  // issues into its error in its own words (the projects routes) would otherwise show them twice.
+  const issues = /^invalid \w+$/.test(body?.error ?? '') ? describeIssues(body?.issues) : '';
+  return `${body?.error ?? e?.message ?? 'unknown error'}${issues}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
 }
 
 /**
