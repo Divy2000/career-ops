@@ -303,6 +303,26 @@ describe('Runner', () => {
     }
   });
 
+  it('on that disagreement, a PID that answers kill(pid, 0) only with EPERM is another user\'s process now, so the run is lost (seed review 2)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...run, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 1_700_000_000 });
+      // ps finds no such process, and kill(pid, 0) is refused: the PID exists but is not ours, so it is not our wrapper.
+      const eperm = () => {
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      };
+      const runner = new Runner(root, new EventBus(), { pollMs: 50, procStart: () => null, kill: eperm });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(run.id)?.status).toBe('lost');
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
   it('when ps cannot answer, a live PID reads as unknown (kept) and a dead one as gone', () => {
     const noPs = () => {
       throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });

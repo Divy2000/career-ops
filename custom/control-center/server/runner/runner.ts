@@ -80,7 +80,7 @@ export class Runner {
   constructor(
     private dataRoot: string,
     private bus: EventBus,
-    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart } = {},
+    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void } = {},
   ) {
     this.store = new RunStore(dataRoot, opts.retention);
     this.procStart = opts.procStart ?? processStartTime;
@@ -94,13 +94,23 @@ export class Runner {
    * read the start now.
    */
   private identity(pid: number | null | undefined, startedAt: RunMeta['wrapperStartedAt']): boolean | null {
-    if (!pid || !pidAlive(pid)) return false;
+    if (!pid || this.liveness(pid) === 'gone') return false;
     if (typeof startedAt !== 'number') return null;
     const now = this.procStart(pid);
-    // ps says "no such process" although kill(pid, 0) just found it: gone only if it is gone by now too, else the start
-    // cannot be compared and liveness alone decides.
-    if (now === null) return pidAlive(pid) ? null : false;
+    // ps says "no such process" although the PID just answered: liveness alone decides, and only a kill(pid, 0) that
+    // succeeds counts. Our wrapper and child run as this user, so EPERM means the PID is now another user's process.
+    if (now === null) return this.liveness(pid) === 'own' ? null : false;
     return now === 'unknown' ? null : now === startedAt;
+  }
+
+  /** kill(pid, 0): 'own' when it succeeds, 'other' when refused (EPERM: the PID runs as another user), 'gone' otherwise. */
+  private liveness(pid: number): 'own' | 'other' | 'gone' {
+    try {
+      (this.opts.kill ?? ((p: number, signal: 0) => process.kill(p, signal)))(pid, 0);
+      return 'own';
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'EPERM' ? 'other' : 'gone';
+    }
   }
 
   /** The start to record for a new PID: a number, or null when it cannot be read. */
