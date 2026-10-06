@@ -53,7 +53,7 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
   );
 }
 
-function ApplyBody({ n, company, postingUrl }: { n: string | null; company: string | null; postingUrl: string }) {
+export function ApplyBody({ n, company, postingUrl }: { n: string | null; company: string | null; postingUrl: string }) {
   const navigate = useNavigate();
   const engine = useEngine();
   const [url, setUrl] = useState(postingUrl);
@@ -87,13 +87,18 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
     if (out && 'result' in out) setSummary(String(out.result).trim());
   };
 
+  // Each click starts a paid session, so the button waits for the first start to answer.
+  const [generating, setGenerating] = useState(false);
   const generatePdf = async () => {
     if (!n) return;
+    setGenerating(true);
     try {
       const m = await startTailoredCvSession(n);
       await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       actions.setMessage({ tone: 'danger', text: `Could not start the tailored CV session: ${describeError(err)}` });
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -178,7 +183,7 @@ function ApplyBody({ n, company, postingUrl }: { n: string | null; company: stri
                 ))}
                 {blockers.needsPdf && n && (
                   <div>
-                    <button type="button" onClick={() => void generatePdf()}>
+                    <button type="button" disabled={generating} onClick={() => void generatePdf()}>
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
                   </div>

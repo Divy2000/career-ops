@@ -176,12 +176,15 @@ function ActionOutputDialog({ label, text, onClose }: { label: string; text: str
   );
 }
 
-function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () => void }) {
+export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () => void }) {
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState('');
   const [target, setTarget] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Each click starts a paid session, so the button waits for the first start to answer.
+  const [busy, setBusy] = useState(false);
   const start = async () => {
+    setBusy(true);
     try {
       const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
       toast.success(`Started ${mode} session`);
@@ -189,6 +192,8 @@ function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () => void
       await navigate({ to: '/sessions/$id', params: { id: meta.id } });
     } catch (err) {
       setError(describeError(err));
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -214,7 +219,7 @@ function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () => void
             <button type="button" onClick={onClose}>
               Cancel
             </button>
-            <button type="button" className="button--primary" disabled={!prompt.trim()} onClick={() => void start()}>
+            <button type="button" className="button--primary" disabled={busy || !prompt.trim()} onClick={() => void start()}>
               Start (uses tokens)
             </button>
           </div>

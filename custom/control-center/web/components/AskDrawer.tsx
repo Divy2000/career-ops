@@ -13,7 +13,7 @@ export interface Proposal {
   id: number;
   action: string;
   params: Record<string, unknown>;
-  state: 'pending' | 'done' | 'rejected' | 'failed' | 'unsupported';
+  state: 'pending' | 'running' | 'done' | 'rejected' | 'failed' | 'unsupported';
   note: string | null;
 }
 
@@ -73,6 +73,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const run = async (p: Proposal) => {
     const def = askAction(p.action);
     if (!def) return;
+    // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
+    update(p.id, { state: 'running', note: null });
     if (def.confirm && !(await confirm({ title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true }))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
