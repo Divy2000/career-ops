@@ -294,6 +294,35 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     return pkg;
   }
 
+  /** A copy of the package whose server never answers a request (a hook that never settles), /healthz included. */
+  function packageThatNeverAnswers(): string {
+    const pkg = path.join(tempDir('cc-sup-pkg-hang-'), 'control-center');
+    for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
+    fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    const app = path.join(pkg, 'server', 'app.ts');
+    const text = fs.readFileSync(app, 'utf8');
+    const healthz = "  app.get('/healthz', async () => ({ ok: true, pid: process.pid }));\n";
+    expect(text).toContain(healthz);
+    fs.writeFileSync(app, text.replace(healthz, `  app.addHook('onRequest', () => new Promise<void>(() => undefined));\n${healthz}`));
+    return pkg;
+  }
+
+  it('a server child that listens but never answers /healthz fails its start after the health timeout instead of hanging the supervisor (SW4-claude-01)', async () => {
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageThatNeverAnswers(), reload: true });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen after the health check gives up', 50_000);
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      expect(s.output()).toMatch(/healthz did not return 200 in time/);
+      const cookie = await signIn(port);
+      const status = JSON.parse((await request(port, 'GET', '/__supervisor/status', { cookie })).body) as { state: string; error: string; activePid: number | null };
+      expect(status).toMatchObject({ state: 'failed', error: 'healthz did not return 200 in time', activePid: null });
+      expect((await request(port, 'GET', '/__recovery', { cookie })).status).toBe(200);
+    } finally {
+      await stop(s);
+    }
+  }, 70_000);
+
   it('a server child that dies after it passed its health check (activate throws) leaves the supervisor and /__recovery up (SW3-claude-01)', async () => {
     const port = await freePort();
     const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageWhoseActivateThrows(), reload: true });

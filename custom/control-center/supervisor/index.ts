@@ -21,6 +21,7 @@ import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
 import { serverChildCommand } from './child-command.js';
+import { waitHealthy } from './health.js';
 import { escapeHtml, plainTail, renderDownPage, renderStatus } from './down-page.js';
 import { RECOVERY_SCRIPT } from './recovery-script.js';
 
@@ -110,25 +111,6 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       clearTimeout(timer);
       reject(new Error(`server child exited before listening (code ${code}, signal ${signal})\n${tail.text()}`));
     });
-  });
-}
-
-function waitHealthy(port: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      const req = http.get({ host: '127.0.0.1', port, path: '/healthz', headers: { host: `127.0.0.1:${PORT}` } }, (res) => {
-        res.resume();
-        if (res.statusCode === 200) return resolve();
-        retry();
-      });
-      req.on('error', retry);
-    };
-    const retry = () => {
-      if (Date.now() > deadline) return reject(new Error('healthz did not return 200 in time'));
-      setTimeout(tick, 250);
-    };
-    tick();
   });
 }
 
@@ -222,7 +204,7 @@ async function main(): Promise<void> {
   let startError: { error: string; stderrTail: string } | null = null;
   try {
     first = await spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' });
-    await waitHealthy(first.port, 20_000);
+    await waitHealthy(first.port, 20_000, `127.0.0.1:${PORT}`);
   } catch (err) {
     startError = { error: (err as Error).message, stderrTail: first?.stderrTail() ?? '' };
     first?.kill();
@@ -232,7 +214,7 @@ async function main(): Promise<void> {
     if (process.env.CC_NO_RELOAD) process.exit(1);
     console.error('Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).');
   }
-  const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000), { drainMs: 2000 });
+  const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000, `127.0.0.1:${PORT}`), { drainMs: 2000 });
   if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
 
   // Drained children exit on purpose, and so does the active one when the supervisor stops. An active child that exits on
