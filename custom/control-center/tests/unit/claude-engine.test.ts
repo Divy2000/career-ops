@@ -365,6 +365,23 @@ describe('guard hook', () => {
     }
   });
 
+  it('scan mode may add what it finds to the pipeline, as modes/scan.md step 8 says; discover may not (SW8-web-a-02)', () => {
+    const code = fs.realpathSync(tempDir('cc-scan-code-'));
+    const data = fs.realpathSync(tempDir('cc-scan-data-'));
+    const policyIn = (mode: string) => {
+      const dir = fs.realpathSync(tempDir(`cc-scan-guard-${mode}-`));
+      return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] }) };
+    };
+    const write = (p: { dir: string; pf: { file: string; sha256: string } }, file: string) => hookRun(p.dir, p.pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: code, session_id: 's' }).status;
+    // A found posting is a Pending line in data/pipeline.md and a scan-history row; a private one saves its JD to jds/.
+    const adds = ['data/pipeline.md', 'data/scan-history.tsv', 'jds/acme-pm.md'];
+    const scan = policyIn('scan');
+    for (const rel of [...adds, 'portals.yml']) expect(write(scan, path.join(data, rel)), `scan ${rel}`).toBe(0);
+    for (const rel of ['data/applications.md', 'jds/nested/acme.md']) expect(write(scan, path.join(data, rel)), `scan ${rel}`).toBe(2);
+    const discover = policyIn('discover');
+    for (const rel of adds) expect(write(discover, path.join(data, rel)), `discover ${rel}`).toBe(2);
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));
