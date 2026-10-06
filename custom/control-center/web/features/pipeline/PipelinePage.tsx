@@ -5,7 +5,7 @@ import { usePipeline, useShortlist } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
-import { DataState, Empty, Pill, ScorePill, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
+import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
 import { InboxAi } from './InboxAi';
 import { BatchTab } from './BatchTab';
 
@@ -253,12 +253,17 @@ function Shortlist() {
                   <tr key={r.rank}>
                     <td className="mono">{r.rank}</td>
                     <td>
-                      <ScorePill score={r.score} />
+                      <ShortlistScore score={r.score} />
                     </td>
                     <td className="mono">{r.relevance ?? ''}</td>
                     <td>
                       <SponsorPill tier={r.sponsorTier} />
-                      {r.sponsorNote && <span className="faint small"> {r.sponsorNote}</span>}
+                      {r.sponsorNote && (
+                        <>
+                          {' '}
+                          <span className="faint small sponsor-note">{r.sponsorNote}</span>
+                        </>
+                      )}
                     </td>
                     <td>{r.company}</td>
                     <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>

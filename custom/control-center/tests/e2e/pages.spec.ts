@@ -145,6 +145,9 @@ test.describe('read-only pages render fixture data', () => {
     const globex = page.getByRole('row', { name: /Globex Payments/ });
     await expect(globex.getByText('sponsor: strong', { exact: true })).toHaveClass(/chip--ok/);
     await expect(globex).toContainText('resumed 2026-09-25');
+    // The shortlist score is rank plus the sponsorship adjustment, so 5.3 is a plain number, not "5.3/5" (SW3-libs-02).
+    await expect(globex.getByText('5.3', { exact: true })).toBeVisible();
+    await expect(globex).not.toContainText('/5');
   });
 
   test('Today: a shortlist row with a non-blocking sponsorship alert keeps its tier color (SW2-tests-09)', async ({ page }) => {
@@ -152,6 +155,8 @@ test.describe('read-only pages render fixture data', () => {
     const globex = shortlist.getByRole('row', { name: /Globex Payments/ });
     await expect(globex.getByText('sponsor: strong', { exact: true })).toHaveClass(/chip--ok/);
     await expect(globex).toContainText('resumed 2026-09-25');
+    await expect(globex.getByText('5.3', { exact: true })).toBeVisible();
+    await expect(globex).not.toContainText('5.3/5');
   });
 
   test('Sponsorship tabs', async ({ page }) => {

@@ -920,3 +920,9 @@ textarea {
 .import-card textarea + .row {
   margin-top: var(--space-3);
 }
+
+/* A shortlist row's alert note ("resumed 2026-09-25") beside its sponsor pill: one line, never split inside the date. */
+.sponsor-note {
+  display: inline-block;
+  white-space: nowrap;
+}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useWhatsNew } from '../../lib/queries';
-import { DataState, Empty, Pill, ScorePill, SponsorPill, alertTone, TableScroll } from '../../components/ui';
+import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, alertTone, TableScroll } from '../../components/ui';
 import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
 import { localDate } from '@shared/local-date';
@@ -194,9 +194,9 @@ export function TodayPage() {
                             <tr key={r.rank}>
                               <td>
                                 <div className="stack-tight">
-                                  <ScorePill score={r.score} />
+                                  <ShortlistScore score={r.score} />
                                   <SponsorPill tier={r.sponsorTier} />
-                                  {r.sponsorNote && <span className="faint small">{r.sponsorNote}</span>}
+                                  {r.sponsorNote && <span className="faint small sponsor-note">{r.sponsorNote}</span>}
                                 </div>
                               </td>
                               <td>

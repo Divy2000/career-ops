@@ -42,6 +42,15 @@ export function ScorePill({ score }: { score: number | null }) {
 }
 
 /** A DOL tier, or a company check's verdict (sponsoring | paused | stopped | restricted | unclear, the sponsorship check template). */
+/** A shortlist score: the rank plus the sponsorship adjustment, so it can pass 5 or go below 0; no "/5" scale. */
+export function ShortlistScore({ score }: { score: number | null }) {
+  return (
+    <Pill tone={scoreTone(score)} title={score === null ? 'No score recorded' : `Shortlist score ${score}: the rank plus the sponsorship adjustment`}>
+      {score === null ? 'no score' : score.toFixed(1)}
+    </Pill>
+  );
+}
+
 export function sponsorTone(tier: string | null | undefined): 'ok' | 'info' | 'neutral' | 'warn' | 'danger' {
   switch ((tier ?? '').toLowerCase()) {
     case 'strong':
