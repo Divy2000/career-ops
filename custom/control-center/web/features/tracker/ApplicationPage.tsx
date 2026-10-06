@@ -11,6 +11,8 @@ import { useSessions } from '../../lib/sessions';
 import type { ReportFull } from '@shared/api';
 import { formatLocalMinute } from '../../lib/time';
 import { reasonLabel } from '../../lib/format';
+import { useRememberedSession } from '../../lib/useRememberedSession';
+import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -214,7 +216,7 @@ export function ApplicationPage() {
                     <Pill tone={alertTone(String(q.data.sponsorship.alert.status))}>{String(q.data.sponsorship.alert.status)}</Pill> {String(q.data.sponsorship.alert.headline)}
                   </p>
                 )}
-                <SessionPanel mode="sponsorship-check" title="Refresh sponsorship check" target={{ type: 'company', value: q.data.row.company }} initialPrompt={`Check visa sponsorship for ${q.data.row.company} following the procedure in modes/_custom.md, then write the company file under data/immigration/companies/.`} startLabel="Refresh check" />
+                <SponsorshipRefresh company={q.data.row.company} />
               </div>
             )}
 
@@ -326,6 +328,24 @@ function ReportTab({ report }: { report: NonNullable<ReturnType<typeof useApplic
           One global 1 to 5 score decided from CV match, North Star alignment, compensation, cultural signals and red flags. Blocks A to H are sections, not inputs to average. The apply line is {APPLY_LINE.toFixed(1)}; posting legitimacy is a separate judgment.
         </p>
       </details>
+    </div>
+  );
+}
+
+/**
+ * The paid sponsorship check for this row's company, kept under the same key as Sponsorship > Lookup's: it survives a
+ * tab switch, and while one runs (started here or there) the button stays off, so no second check writes the file.
+ */
+function SponsorshipRefresh({ company }: { company: string }) {
+  const check = useRememberedSession(sponsorCheckKey(company));
+  return (
+    <div className="stack">
+      <div className="row gap">
+        <button type="button" className="button--primary" disabled={check.busy} onClick={check.start}>
+          {check.busy ? 'Sponsorship check running' : 'Refresh check'} <Pill tone="warn">Uses tokens</Pill>
+        </button>
+      </div>
+      {check.shown && <SessionPanel key={check.panelKey} {...check.panel} mode="sponsorship-check" title="Refresh sponsorship check" target={{ type: 'company', value: company }} initialPrompt={sponsorCheckPrompt(company)} />}
     </div>
   );
 }
