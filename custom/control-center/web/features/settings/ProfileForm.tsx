@@ -92,7 +92,7 @@ export function CadenceForm() {
     <div className="card" aria-labelledby="cadence-heading">
       <h2 id="cadence-heading">Follow-up cadence</h2>
       <p className="muted small">Used by followup-cadence.mjs. Empty removes the key so the script default applies.</p>
-      <DataState query={q}>
+      <DataState query={q} editable>
         {q.data?.kind === 'missing' && <Pill tone="warn">config/profile.yml is missing; saving creates it with just these keys</Pill>}
         <div className="fields">
           {(q.data?.keys ?? Object.keys(CADENCE_HELP)).map((k) => (

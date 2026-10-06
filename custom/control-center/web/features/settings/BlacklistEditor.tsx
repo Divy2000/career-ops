@@ -89,7 +89,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
         </div>
       </div>
       <p className="muted small">Format follows templates/blacklist.example.md: Company, Since, Scope (company or domain), Reason. Nothing is written until you confirm.</p>
-      <DataState query={q}>
+      <DataState query={q} editable>
         {current.length === 0 ? (
           <Empty>No blacklisted companies. Add one below.</Empty>
         ) : (

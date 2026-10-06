@@ -78,6 +78,27 @@ test.describe('Settings', () => {
     }
   });
 
+  test('with no data/blacklist.md yet, the add-to-blacklist link opens the editor and saving creates the file (SW3-web-b-01)', async ({ page }) => {
+    const file = path.join(process.env.CC_E2E_TMP!, 'root', 'data', 'blacklist.md');
+    const original = fs.readFileSync(file, 'utf8');
+    fs.rmSync(file);
+    try {
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/settings?tab=blacklist&add=Acme%20Staffing');
+      await expect(page.getByText('data/blacklist.md not created yet')).toBeVisible();
+      await expect(page.getByText('File missing')).toHaveCount(0);
+      await expect(page.getByLabel('Blacklist company or domain')).toHaveValue('Acme Staffing');
+      await page.getByLabel('Blacklist reason').fill('spam postings');
+      await page.getByRole('button', { name: 'Add row' }).click();
+      await page.getByRole('button', { name: 'Save blacklist' }).click();
+      await page.getByRole('dialog', { name: 'Write data/blacklist.md?' }).getByRole('button', { name: 'Write blacklist' }).click();
+      await expect(page.getByRole('status').filter({ hasText: 'Blacklist written.' })).toBeVisible();
+      expect(fs.readFileSync(file, 'utf8')).toContain('| Acme Staffing |');
+    } finally {
+      fs.writeFileSync(file, original);
+    }
+  });
+
   test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');

@@ -98,7 +98,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
           Save
         </button>
       </div>
-      <DataState query={q}>
+      <DataState query={q} editable>
         <textarea aria-label={`${label} contents`} className="mono editor" rows={14} value={text} onChange={(e) => onEdit(e.target.value)} />
       </DataState>
       {edit.drifted && (

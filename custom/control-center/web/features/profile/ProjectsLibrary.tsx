@@ -124,7 +124,7 @@ export function ProjectsLibrary() {
             <Pill tone={inCv > 0 ? 'ok' : 'neutral'}>{inCv} in cv.md</Pill>
           </div>
         )}
-        <DataState query={q}>
+        <DataState query={q} editable>
           {data && <ValidationPanel validation={data.validation} />}
           {/* A new project, or an entry removed on disk while its form was open: the form stays up, above the list. */}
           {editing && (editing.id === null || !data?.entries.some((e) => e.id === editing.id)) && <ProjectForm editing={editing} liveEtag={data?.etag ?? null} onDiskTitles={data?.entries.map((e) => e.title) ?? []} update={setEditing} onDone={() => setEditing(null)} />}

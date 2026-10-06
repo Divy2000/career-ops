@@ -102,6 +102,26 @@ test.describe('Profile > Projects library', () => {
     }
   });
 
+  test('with no article-digest.md yet, Add project opens its form and the first save creates the file (SW3-web-b-01)', async ({ page }) => {
+    const digest = path.join(process.env.CC_E2E_TMP!, 'root', 'article-digest.md');
+    const original = fs.readFileSync(digest, 'utf8');
+    fs.rmSync(digest);
+    try {
+      await page.goto('/profile');
+      await page.getByRole('tab', { name: 'Projects' }).click();
+      await expect(page.getByText('No article-digest.md yet')).toBeVisible();
+      await page.getByRole('button', { name: 'Add project' }).click();
+      const form = page.getByRole('form', { name: 'Add a project' });
+      await form.getByLabel('Title').fill('First Project');
+      await form.getByLabel('Bullet 1', { exact: true }).fill('Built the first thing.');
+      await form.getByRole('button', { name: 'Save project' }).click();
+      await expect(page.getByRole('list', { name: 'Projects in the library' }).getByRole('heading', { name: 'First Project' })).toBeVisible();
+      expect(fs.readFileSync(digest, 'utf8')).toContain('First Project');
+    } finally {
+      fs.writeFileSync(digest, original);
+    }
+  });
+
   test('a project with no bullets is refused before saving and the draft stays', async ({ page }) => {
     await page.goto('/profile');
     await page.getByRole('tab', { name: 'Projects' }).click();
