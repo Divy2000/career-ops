@@ -149,10 +149,14 @@ suite_failures() {
   } | sort -u > "$1"
 }
 
-# new_failures <baseline> <after>: the lines of <after> that are not in
-# <baseline>, both as suite_failures wrote them (sorted).
+# new_failures <baseline-text> <after-file>: the lines of <after-file> that are
+# not in <baseline-text>, both as suite_failures wrote them (sorted). The
+# baseline is text that sync.sh read before Claude ran, never a file Claude
+# could rewrite. Fails closed: an unreadable <after-file> is an error, not
+# "no new failures".
 new_failures() {
-  comm -13 "$1" "$2"
+  if [ ! -r "$2" ]; then echo "new_failures: cannot read $2" >&2; return 1; fi
+  comm -13 <(printf '%s\n' "$1" | sed '/^$/d') "$2"
 }
 
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
@@ -187,22 +187,66 @@ test('suite_failures records a run with no Results summary as a crash, never as 
   assert.match(w.read('f.txt'), /^SUITE CRASHED \(exit 3, no Results summary; see .*f\.txt\.raw\)$/m);
 });
 
-test('new_failures counts only failures that are not in the baseline, and a crash after the merge is one', () => {
+test('new_failures counts only failures that are not in the baseline text, and a crash after the merge is one', () => {
   const w = suiteWorld({ output: '' });
-  writeFileSync(path.join(w.dir, 'base.txt'), '❌ alpha broke\n');
+  const newOnes = (base) => spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "$B" after.txt`], { cwd: w.dir, env: { PATH: '/usr/bin:/bin', B: base }, encoding: 'utf8' });
   writeFileSync(path.join(w.dir, 'after.txt'), '❌ alpha broke\n❌ beta broke\n');
-  assert.equal(w.run('new_failures base.txt after.txt').stdout, '❌ beta broke\n');
+  assert.equal(newOnes('❌ alpha broke').stdout, '❌ beta broke\n');
+  assert.equal(newOnes('').stdout, '❌ alpha broke\n❌ beta broke\n', 'an empty baseline: every failure is new');
   writeFileSync(path.join(w.dir, 'after.txt'), '❌ alpha broke\n');
-  assert.equal(w.run('new_failures base.txt after.txt').stdout, '');
+  assert.equal(newOnes('❌ alpha broke').stdout, '');
   writeFileSync(path.join(w.dir, 'after.txt'), 'SUITE CRASHED (exit 1, no Results summary; see x)\n');
-  assert.match(w.run('new_failures base.txt after.txt').stdout, /^SUITE CRASHED/);
+  assert.match(newOnes('❌ alpha broke').stdout, /^SUITE CRASHED/);
 });
 
-test('sync.sh compares the upstream suite through suite_failures and new_failures', () => {
+test('new_failures fails, never prints nothing, when the after-merge failures cannot be read', () => {
+  const w = suiteWorld({ output: '' });
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nnew_failures "" missing.txt`], { cwd: w.dir, env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.equal(r.stdout, '');
+});
+
+test('sync.sh reads the baseline once, before Claude runs, and compares against that copy in memory', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.baseline-failures\.txt"$/m);
+  const read = sync.indexOf('BASELINE_FAILURES="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" || fail ');
+  const claude = sync.indexOf('claude -p');
+  assert.ok(read > sync.indexOf('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"') && read < claude, `baseline read at ${read}`);
+  assert.equal(sync.indexOf('baseline-failures.txt', claude), -1, 'nothing after Claude reads the baseline file');
   assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.after-failures\.txt"$/m);
-  assert.match(sync, /^NEW_FAILURES="\$\(new_failures "\$STATE_DIR\/\$TODAY\.baseline-failures\.txt" "\$STATE_DIR\/\$TODAY\.after-failures\.txt"\)"$/m);
+  assert.match(sync, /^NEW_FAILURES="\$\(new_failures "\$BASELINE_FAILURES" "\$STATE_DIR\/\$TODAY\.after-failures\.txt"\)" \|\| fail /m);
+});
+
+/** sync.sh's own baseline lines, then (after `between`, standing in for Claude) its after-merge comparison, with test-all stubbed. */
+function baselineGate({ before, after, between }) {
+  const w = suiteWorld({ output: '' });
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const slice = (first, last) => {
+    const from = lines.findIndex((l) => l.startsWith(first));
+    const to = lines.findIndex((l, i) => i >= from && l.startsWith(last));
+    assert.ok(from > -1 && to >= from, `${first} .. ${last} not found in sync.sh`);
+    return lines.slice(from, to + 1).join('\n');
+  };
+  const bin = path.join(w.dir, 'bin');
+  const shell = (body, output, env = {}) => {
+    stub(bin, 'node', `printf '%s\\n' "${output}"\nexit 1`);
+    return spawnSync('bash', ['-c', `source "${LIB}"\nSTATE_DIR="${w.dir}" TODAY=t\nfail() { echo "!!! $1" >&2; exit 1; }\n${body}`], { cwd: w.dir, env: { PATH: `${bin}:/usr/bin:/bin`, ...env }, encoding: 'utf8' });
+  };
+  const first = shell(`${slice('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"', 'BASELINE_FAILURES=')}\nprintf '%s' "$BASELINE_FAILURES"`, before);
+  assert.equal(first.status, 0, first.stderr);
+  between(path.join(w.dir, 't.baseline-failures.txt'));
+  const second = shell(`${slice('suite_failures "$STATE_DIR/$TODAY.after-failures.txt"', 'NEW_FAILURES=')}\nprintf '%s' "$NEW_FAILURES"`, after, { BASELINE_FAILURES: first.stdout });
+  return second;
+}
+
+test('a baseline file deleted or edited after it was read cannot hide a new upstream-suite failure', () => {
+  const before = '  ❌ alpha broke\nResults: 1 failed';
+  const after = '  ❌ alpha broke\n  ❌ beta broke\nResults: 2 failed';
+  const deleted = baselineGate({ before, after, between: (file) => rmSync(file) });
+  assert.equal(deleted.status, 0, deleted.stderr);
+  assert.equal(deleted.stdout, '❌ beta broke');
+  const edited = baselineGate({ before, after, between: (file) => writeFileSync(file, '❌ alpha broke\n❌ beta broke\n') });
+  assert.equal(edited.status, 0, edited.stderr);
+  assert.equal(edited.stdout, '❌ beta broke');
 });
 
 test('the sync prompt carries the baseline failures and conflicts verbatim, even when they hold $ replacement patterns', () => {
@@ -211,9 +255,9 @@ test('the sync prompt carries the baseline failures and conflicts verbatim, even
   const to = lines.findIndex((l, i) => i > from && l.includes('sync-prompt.md")"'));
   const snippet = lines.slice(from, to + 1).join('\n').replace('"$LIVE/custom/upstream-sync/sync-prompt.md"', `"${path.join(HERE, '..', 'sync-prompt.md')}"`);
   const baseline = "❌ cost check: expected $& got $$5 ($` and $')";
-  // cat stands in for reading the baseline-failures file.
-  const script = `STATE_DIR=/s TODAY=2026-10-04 BEHIND=3 CONFLICTS='a $& b'\ncat() { printf '%s' "$BASELINE_TEXT"; }\n${snippet}\nprintf '%s' "$PROMPT"`;
-  const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, BASELINE_TEXT: baseline }, encoding: 'utf8' });
+  // The baseline as sync.sh holds it, in memory since before Claude runs.
+  const script = `STATE_DIR=/s TODAY=2026-10-04 BEHIND=3 CONFLICTS='a $& b'\n${snippet}\nprintf '%s' "$PROMPT"`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, BASELINE_FAILURES: baseline }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes(baseline), r.stdout.slice(0, 3000));
   assert.ok(r.stdout.includes('a $& b'));
