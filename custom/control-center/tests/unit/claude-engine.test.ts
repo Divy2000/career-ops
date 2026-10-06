@@ -111,6 +111,15 @@ describe('invocation builder', () => {
     expect(devchat).toContain('relative to the data root /data');
     expect(devchat).toMatch(/custom\/\*\* relative to the repo root \/code/);
   });
+  it('rule 4 names the router files where they live: _profile.md and _custom.md in the data root when it is separate, by absolute path (SW3-claude-03)', () => {
+    const rule4 = (roots: { codeRoot?: string; dataRoot?: string }) => buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'en', ...roots }).split('\n').find((l) => l.startsWith('4. '))!;
+    const one = rule4({ codeRoot: '/code', dataRoot: '/code' });
+    expect(one).toContain('read modes/_shared.md when the mode file references it, then modes/_profile.md and modes/_custom.md, then the mode file for oferta');
+    const split = rule4({ codeRoot: '/code', dataRoot: '/data root' });
+    expect(split).toContain('then /data root/modes/_profile.md and /data root/modes/_custom.md (the data root), then the mode file for oferta');
+    expect(split).toContain('read modes/_shared.md when the mode file references it');
+    expect(split).not.toMatch(/then modes\/_profile\.md/);
+  });
   it('rule 6 names only the web tools the session has: never WebFetch to a session without it', () => {
     const rule6 = (policy: ReturnType<typeof getModePolicy>) => buildPreamble({ policy: policy!, outputLanguage: 'en' }).split('\n').find((l) => l.startsWith('6. '))!;
     const { mcp: _mcp, ...applyWithoutPlaywright } = getModePolicy('apply')!;
