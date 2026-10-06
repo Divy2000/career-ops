@@ -127,6 +127,23 @@ export const SPEC_ACTION_IDS = [
   'daily.runNow', 'devchat.installDeps',
 ];
 
+describe('output/ file names the prefill and re-render accept (seed: SW3-web-a-03)', () => {
+  const prefill = () => findAction('docs.prepareApplication')!;
+  const render = () => findAction('docs.renderPdf')!;
+  const url = 'https://boards.greenhouse.io/acme/jobs/1';
+  it('accepts names people give the files they drop into output/: spaces, parentheses, accents, an apostrophe', () => {
+    for (const pdf of ['output/Acme Resume.pdf', "output/Jane O'Neil CV (2).pdf", 'output/résumé final.PDF', 'output/my folder/cv.pdf', 'output/001-acme/cv/tailored/v001/cv.pdf']) {
+      expect(prefill().params.safeParse({ url, pdf }).success, pdf).toBe(true);
+    }
+    expect(render().params.safeParse({ row: 1, report: 1, html: 'output/Acme Resume.html', pdf: 'output/Acme Resume.pdf' }).success).toBe(true);
+  });
+  it('still refuses anything that is not a file under output/ with the right extension', () => {
+    for (const pdf of ['Acme Resume.pdf', 'output/', 'output//cv.pdf', 'output/../cv.pdf', 'output/a/./cv.pdf', 'output/cv.html', 'output/a\nb.pdf', 'output/a\u0000b.pdf', 'output/a\u0007b.pdf', '/etc/cv.pdf', `output/${'x'.repeat(520)}.pdf`]) {
+      expect(prefill().params.safeParse({ url, pdf }).success, JSON.stringify(pdf)).toBe(false);
+    }
+  });
+});
+
 describe('action registry covers section 3.3', () => {
   // Builders may stage ephemeral input files under the data root, so it must exist.
   const ctx = { codeRoot: '/code', dataRoot: copyFixtureRoot(), tmpInputs: [] as string[] };

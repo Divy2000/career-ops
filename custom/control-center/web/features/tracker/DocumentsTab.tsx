@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../../lib/api';
-import { paramAccepts, useActions, useRunAction } from '../../lib/actions';
+import { useActions, useRunAction } from '../../lib/actions';
+import { outputFileProblem } from '@shared/output-path';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import type { DocumentsRead } from '@shared/api';
@@ -35,8 +36,9 @@ export function DocumentsTab({ n }: { n: number }) {
                   </thead>
                   <tbody>
                     {q.data.files.map((f) => {
-                      // A file dropped into output/ by hand can have a name the re-render action's schema refuses ("Acme Resume.html").
-                      const nameAccepted = Boolean(f.html) && paramAccepts(render, 'html', f.html!) && paramAccepts(render, 'pdf', f.path);
+                      // The re-render action's own rule for output/ names (shared/output-path.ts), so a file it refuses is not offered.
+                      const nameProblem = f.html ? (outputFileProblem(f.html, /\.html$/i, 'an .html file') ?? outputFileProblem(f.path, /\.pdf$/i, 'a .pdf file')) : null;
+                      const nameAccepted = Boolean(f.html) && nameProblem === null;
                       return (
                         <tr key={f.path}>
                           <td>
@@ -57,7 +59,7 @@ export function DocumentsTab({ n }: { n: number }) {
                                 </a>
                               )}
                               {f.html && f.rerenderBlock && <span className="faint small">{f.rerenderBlock}</span>}
-                              {f.html && !f.rerenderBlock && !nameAccepted && <span className="faint small">Re-render needs a file name with only letters, digits and . _ -. Rename {f.html} and its PDF in output/.</span>}
+                              {f.html && !f.rerenderBlock && !nameAccepted && <span className="faint small">Re-render can't take {f.html}: {nameProblem}. Rename it and its PDF in output/.</span>}
                               {f.html && !f.rerenderBlock && nameAccepted && (
                                 <ActionButton meta={render} disabled={q.data.report === null} params={{ row: n, report: q.data.report, html: f.html, pdf: f.path, format: f.format === 'a4' ? 'a4' : 'letter' }} onRun={(p) => void run('docs.renderPdf', p, 'Re-render started (see Runs)')}>
                                   Re-render from HTML

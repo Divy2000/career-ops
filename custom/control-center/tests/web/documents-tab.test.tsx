@@ -69,15 +69,24 @@ describe('DocumentsTab re-render', () => {
     expect(host.textContent).toContain('Re-render needs an evaluation report for this application, because the PDF index files every PDF under its report number.');
   });
 
-  it('does not offer re-render for a file whose name the re-render action refuses, and says to rename it (SW3-web-a-03)', async () => {
-    const OUTPUT_FILE = { type: 'string', maxLength: 512, pattern: '^output\\/(?:[\\w.-]+\\/)*[\\w.-]+$' };
-    const strict = { ...RENDER_META, params: { type: 'object', properties: { html: OUTPUT_FILE, pdf: OUTPUT_FILE } } };
+  it('does not offer re-render for a file whose name the re-render action refuses, and says to rename it, by the shared output/ rule (SW3-web-a-03)', async () => {
+    const original = files;
+    files = () => [{ path: 'output/odd\u0007name.pdf', html: 'output/odd\u0007name.html', kind: 'cv', format: 'letter', date: null, source: 'output', rerenderBlock: null }];
+    try {
+      await mount(1, 1, null);
+      expect(rerenderButton()).toBeUndefined();
+      expect(host.textContent).toContain("Re-render can't take output/odd\u0007name.html: a file name with a control character. Rename it and its PDF in output/.");
+    } finally {
+      files = original;
+    }
+  });
+
+  it('offers re-render for a file dropped into output/ under a name with spaces (seed: SW3-web-a-03)', async () => {
     const original = files;
     files = () => [{ path: 'output/Acme Resume.pdf', html: 'output/Acme Resume.html', kind: 'cv', format: 'letter', date: null, source: 'output', rerenderBlock: null }];
     try {
-      await mount(1, 1, null, strict);
-      expect(rerenderButton()).toBeUndefined();
-      expect(host.textContent).toContain('Re-render needs a file name with only letters, digits and . _ -. Rename output/Acme Resume.html and its PDF in output/.');
+      await mount(1, 1, null);
+      expect(rerenderButton()).toBeDefined();
     } finally {
       files = original;
     }
