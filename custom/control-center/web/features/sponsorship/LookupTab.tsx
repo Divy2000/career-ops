@@ -11,6 +11,7 @@ import { Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
 import { MAX_COMPANY_QUERY_LENGTH, parseCompanyQuery } from '@shared/companyQuery';
 import type { H1bCheck, LookupResult, SearchResult } from '@shared/api';
 import { useRememberedSession } from '../../lib/useRememberedSession';
+import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 
 const route = getRouteApi('/sponsorship');
 
@@ -75,16 +76,10 @@ function Totals({ check }: { check: H1bCheck }) {
   );
 }
 
-/**
- * The storage key of a company's last check: one per company, so another company's check is never re-attached. Encoded,
- * not slugged: a slug folds "AT&T" and "AT T" together, and every all-non-ASCII name into the same empty key.
- */
-const checkKey = (company: string) => `cc.sponsorship.check:${encodeURIComponent(company.trim().toLowerCase())}`;
-
 export function SponsorCheckLauncher({ company }: { company: string }) {
   // A paid session that writes the company file and alert rows: it survives leaving the tab, and the button stays off
   // while it runs, so a second check of the same company cannot run beside it.
-  const check = useRememberedSession(checkKey(company));
+  const check = useRememberedSession(sponsorCheckKey(company));
   return (
     <div className="card stack">
       <div className="row gap" style={{ justifyContent: 'space-between' }}>
@@ -108,7 +103,7 @@ export function SponsorCheckLauncher({ company }: { company: string }) {
           mode="sponsorship-check"
           title="Sponsorship check"
           target={{ type: 'company', value: company }}
-          initialPrompt={`Check visa sponsorship for ${company} following the procedure in modes/_custom.md, then write the company file under data/immigration/companies/.`}
+          initialPrompt={sponsorCheckPrompt(company)}
         />
       )}
     </div>

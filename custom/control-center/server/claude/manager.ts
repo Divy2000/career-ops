@@ -19,6 +19,7 @@ import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, ge
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
+import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass } from '../domains/policyPass.js';
 
@@ -518,9 +519,11 @@ export class SessionManager {
       reason += `; ${await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch)}`;
     }
     // A completed evaluation of a pipeline URL leaves Pending, as pipeline mode moves it (modes/pipeline.md, Workflow 2f).
+    // So does one of a saved JD (Evaluate JD on a local:jds/ row), whose text target is the row's reference.
     // The report may have come on an earlier turn that did not end done: the first done turn moves the URL with it.
     const credited = newReports[0] ?? meta.creditedReport;
-    if (outcome.status === 'done' && isReportGated(meta.mode) && meta.target.type === 'url' && meta.target.value && credited && meta.pipelineMarked !== true) {
+    const pipelineKey = meta.target.type === 'url' || (meta.target.type === 'text' && localJdPath(meta.target.value ?? '') !== null);
+    if (outcome.status === 'done' && isReportGated(meta.mode) && pipelineKey && meta.target.value && credited && meta.pipelineMarked !== true) {
       const moved = await this.markEvaluated(meta.target.value, credited);
       if (moved.note) reason += `; ${moved.note}`;
       if (moved.settled) this.store.markPipelineMarked(id);

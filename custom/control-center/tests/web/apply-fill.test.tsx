@@ -33,6 +33,8 @@ function json(body: unknown) {
 }
 
 beforeEach(async () => {
+  // The page remembers its last apply session in this tab; each test starts as a fresh tab.
+  sessionStorage.clear();
   turns = [];
   turnAnswer = null;
   vi.stubGlobal(

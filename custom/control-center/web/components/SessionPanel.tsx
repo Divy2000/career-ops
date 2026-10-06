@@ -125,6 +125,8 @@ export interface SessionPanelProps {
   onSent?: () => void;
   /** Called when a start is refused or the session fails to start, so a host waiting for its id stops waiting. */
   onStartFailed?: () => void;
+  /** Called as the panel sends a start, before the server answers (onSessionId or onStartFailed follows). */
+  onStarting?: () => void;
 }
 
 /** Prompt box plus live session for one mode. Host pages embed it; the Sessions page shows the same thing standalone. */
@@ -151,6 +153,7 @@ export function SessionPanel(props: SessionPanelProps) {
     onStatus?.(gone ? 'gone' : transcript.status, gone ? null : transcript.reason);
   }, [gone, transcript.status, transcript.reason, onStatus]);
   const start = async (text: string) => {
+    props.onStarting?.();
     setBusy(true);
     setError(null);
     try {

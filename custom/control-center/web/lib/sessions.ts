@@ -272,6 +272,17 @@ export function startSession(input: { mode: string; target?: Target; prompt: str
 export function startEvaluateSession(url: string): Promise<SessionMeta> {
   return startSession({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
 }
+/**
+ * An oferta session on a saved JD (a `local:jds/<file>` pipeline row): the file is the posting, so there is no URL to
+ * check for liveness or fetch.
+ */
+export function startSavedJdSession(ref: string, jd: string): Promise<SessionMeta> {
+  return startSession({
+    mode: 'oferta',
+    target: { type: 'text', value: ref },
+    prompt: `Evaluate the job description saved at ${jd} (pipeline row ${ref}) following the mode file. It is a saved file, not a posting URL: read it as the JD, and skip the liveness check and any fetch of the posting.`,
+  });
+}
 /** The pdf-mode session that writes the tailored CV PDF for one tracker row. */
 export function startTailoredCvSession(n: string): Promise<SessionMeta> {
   return startSession({ mode: 'pdf', target: { type: 'app', value: n }, prompt: `Generate the tailored CV PDF for tracker row #${n}.` });

@@ -11,6 +11,7 @@ import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
 import { tempDir } from '../helpers/tmp.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { StreamParser } from '../../server/claude/stream-parse.js';
+import { NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -280,6 +281,32 @@ describe('Claude sessions', () => {
       const pipeline = (await call(other, 'GET', '/api/pipeline')).json();
       expect(pipeline.rows.filter((r: { section: string; done: boolean }) => r.section === 'pending' && !r.done).map((r: { url: string }) => r.url)).not.toContain(url);
       expect(settled.meta.lastReason).toContain(`pipeline row moved to Processed as #${num}`);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('an Evaluate JD session on a local:jds/ row moves exactly that row to Processed, keeping the reference as the file writes it', async () => {
+    const other = await makeTestApp();
+    try {
+      const pipelinePath = path.join(other.cfg.dataRoot, 'data', 'pipeline.md');
+      // The file holds the reference escaped as scan.mjs writes it; the Inbox reads and sends it unescaped.
+      const written = 'local:jds/acme-pm\\[2\\].md';
+      const ref = 'local:jds/acme-pm[2].md';
+      const sibling = 'local:jds/acme-pm.md';
+      fs.writeFileSync(pipelinePath, fs.readFileSync(pipelinePath, 'utf8').replace('## Pending\n\n', `## Pending\n\n- [ ] ${written} | Acme Saved | Product Manager\n- [ ] ${sibling} | Acme Other | Designer\n`));
+      const report = '# Evaluation: Acme Saved\n\n**Date:** 2026-10-06\n**Score:** 3.8/5\n**URL:** local:jds/acme-pm[2].md\n\n## A) Role Summary\nx\n';
+      const scenario = scenarioFile({ events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/095-acme-saved-2026-10-06.md', content: report } }, result('Done: the report is written.', 0.01)] });
+      await withScenario(scenario, async () => {
+        const { id } = (await call(other, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'text', value: ref }, prompt: 'Evaluate the job description saved at jds/acme-pm[2].md following the mode file.' })).json();
+        const settled = await settleOn(other, id);
+        expect(settled.meta.status).toBe('done');
+        expect(settled.meta.lastReason).toContain('pipeline row moved to Processed as #095');
+      });
+      const md = fs.readFileSync(pipelinePath, 'utf8');
+      expect(md).not.toContain(`- [ ] ${written}`);
+      expect(md).toContain(`## Processed\n\n- [x] #095 | ${written} | Acme Saved | Product Manager | 3.8/5 | PDF ❌\n`);
+      expect(md).toContain(`- [ ] ${sibling} | Acme Other | Designer`);
     } finally {
       await other.close();
     }
@@ -694,7 +721,13 @@ describe('Claude sessions', () => {
     expect((await get(`/api/sessions/${id}`)).statusCode).toBe(404);
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'ok' });
     expect((await post('/api/memory', { fact: 'Prefers remote roles' })).json()).toEqual({ result: 'deduped' });
-    expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_profile.md'), 'utf8')).toContain('- Prefers remote roles');
+    // The fixture profile already holds a notes block: the fact joins it, beside the note there, and no second block is added.
+    const profile = fs.readFileSync(path.join(t.cfg.dataRoot, 'modes', '_profile.md'), 'utf8');
+    expect(profile.split(NOTES_START)).toHaveLength(2);
+    expect(profile.split('## Notes from the web assistant')).toHaveLength(2);
+    const block = profile.slice(profile.indexOf(NOTES_START), profile.indexOf(NOTES_END));
+    expect(block).toContain('\n- Prefers hybrid roles in Texas.\n');
+    expect(block).toContain('\n- Prefers remote roles\n');
   });
 
   it('refuses to remember a fact before onboarding created modes/_profile.md, and creates nothing that would hide the missing profile', async () => {

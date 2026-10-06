@@ -9,8 +9,16 @@ import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, Tabs, a
 import { InboxAi } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
+import { localJdPath } from '@shared/local-jd';
+import { startSavedJdSession } from '../../lib/sessions';
 
 const route = getRouteApi('/pipeline');
+
+/** Where a row's posting opens: the posting URL, or the saved JD a local:jds/ row points at. */
+const postingHref = (ref: string) => {
+  const jd = localJdPath(ref);
+  return jd === null ? ref : `/api/files/serve?path=${encodeURIComponent(jd)}`;
+};
 export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
 export interface PipelineSearch {
   tab: PipelineTab;
@@ -143,7 +151,7 @@ function Inbox() {
       </div>
       <Message message={message} />
       <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
-        <InboxAi urls={visible.filter((r) => !r.done).map((r) => r.url)} />
+        <InboxAi urls={visible.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url)} savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length} />
         {skipError && (
           <p role="alert" className="danger-text">
             {skipError}
@@ -200,7 +208,7 @@ function Inbox() {
                     </td>
                     <td>
                       <div className="clamp-2" title={r.role || r.url}>
-                        <a href={r.url} target="_blank" rel="noreferrer noopener">
+                        <a href={postingHref(r.url)} target="_blank" rel="noreferrer noopener">
                           {r.role || r.url}
                         </a>
                       </div>
@@ -223,9 +231,12 @@ function Inbox() {
                     </td>
                     <td>
                       {!r.done ? (
-                        <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
-                          Skip
-                        </button>
+                        <div className="row gap">
+                          {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} />}
+                          <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
+                            Skip
+                          </button>
+                        </div>
                       ) : r.section !== 'done' ? (
                         <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>
                           Back to queue
@@ -239,6 +250,39 @@ function Inbox() {
           </div>
         )}
       </DataState>
+    </>
+  );
+}
+
+/** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
+function EvaluateJd({ reference, label }: { reference: string; label: string }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const go = async () => {
+    const jd = localJdPath(reference);
+    if (jd === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const m = await startSavedJdSession(reference, jd);
+      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+    } catch (err) {
+      setError(`Could not start the evaluation: ${describeError(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" aria-label={`Evaluate JD for ${label}`} disabled={busy} onClick={() => void go()}>
+        Evaluate JD <Pill tone="warn">Uses tokens</Pill>
+      </button>
+      {error && (
+        <span role="alert" className="danger-text small">
+          {error}
+        </span>
+      )}
     </>
   );
 }

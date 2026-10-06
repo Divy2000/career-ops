@@ -247,10 +247,12 @@ export function writeGlobsByRoot(globs: readonly string[]): { data: string[]; co
 /**
  * Writes one mode needs beyond its class, keyed by its English mode id (a localized copy gets the same). Pipeline mode
  * resolves its own inbox rows (modes/pipeline.md: a finished row moves to Processed, a pre-screen discard is logged), which
- * no other evaluate-class mode may touch.
+ * no other evaluate-class mode may touch. Scan mode adds the postings it finds (modes/scan.md step 8: a Pending line, a
+ * scan-history row, a private posting's JD under jds/), which discover, the other scan-class mode, does not.
  */
 const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   pipeline: ['data/pipeline.md', 'data/discard.log'],
+  scan: ['data/pipeline.md', 'data/scan-history.tsv', 'jds/*.md'],
 };
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */

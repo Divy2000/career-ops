@@ -2,6 +2,7 @@
 
 Target: senior backend roles in the US with visa sponsorship.
 
-<!-- cc:memory:start -->
+## Notes from the web assistant
+<!-- co-web-notes:start -->
 - Prefers hybrid roles in Texas.
-<!-- cc:memory:end -->
+<!-- co-web-notes:end -->

@@ -66,6 +66,21 @@ describe('pipeline writes', () => {
     }
   });
 
+  it('skip flips a pending local:jds/ row, and refuses a local reference outside jds/ (SW8-web-a-03)', async () => {
+    const pipeline = path.join(t.cfg.dataRoot, 'data', 'pipeline.md');
+    const before = readData('data/pipeline.md');
+    try {
+      fs.writeFileSync(pipeline, before.replace(/## Pending\n/, '## Pending\n\n- [ ] local:jds/2026-10-06_acme_pm.pdf | Acme | PM\n'));
+      const r = await post('/api/pipeline/skip', { url: 'local:jds/2026-10-06_acme_pm.pdf', done: true });
+      expect(r.statusCode, r.body).toBe(200);
+      expect(readData('data/pipeline.md')).toContain('- [x] local:jds/2026-10-06_acme_pm.pdf | Acme | PM');
+      expect((await post('/api/pipeline/skip', { url: 'local:jds/../cv.md', done: true })).statusCode).toBe(400);
+      expect((await post('/api/pipeline/skip', { url: 'local:reports/001-x.md', done: true })).statusCode).toBe(400);
+    } finally {
+      fs.writeFileSync(pipeline, before);
+    }
+  });
+
   it('skip rejects unknown and invalid URLs without touching the file', async () => {
     const before = readData('data/pipeline.md');
     expect((await post('/api/pipeline/skip', { url: 'https://nowhere.example/x', done: true })).statusCode).toBe(404);

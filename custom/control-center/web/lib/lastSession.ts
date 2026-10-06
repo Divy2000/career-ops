@@ -1,12 +1,17 @@
 // The last session a page started in this browser tab, so coming back to the page re-attaches it instead of losing it.
 // Kept in sessionStorage: a storage that throws (a private window) only loses that re-attaching.
 const SESSION_ID = /^[\w-]{1,80}$/;
+// Marks a start as this page load's: a reload drops the request, so a mark left by an earlier load means nothing.
+const LOAD = Math.random().toString(36).slice(2);
 
 export interface LastSession {
   read(): string | null;
   write(id: string | null): void;
   /** Called when the session is deleted, so it is not re-attached. */
   forget(id: string): void;
+  /** A start this page load sent that has not reported its session or its failure yet. */
+  starting(): boolean;
+  setStarting(on: boolean): void;
 }
 
 export function lastSession(key: string): LastSession {
@@ -26,5 +31,21 @@ export function lastSession(key: string): LastSession {
       // storage refused: only the re-attaching is lost
     }
   };
-  return { read, write, forget: (id) => void (read() === id && write(null)) };
+  const startKey = `${key}:starting`;
+  const starting = (): boolean => {
+    try {
+      return sessionStorage.getItem(startKey) === LOAD;
+    } catch {
+      return false;
+    }
+  };
+  const setStarting = (on: boolean): void => {
+    try {
+      if (on) sessionStorage.setItem(startKey, LOAD);
+      else sessionStorage.removeItem(startKey);
+    } catch {
+      // storage refused: a page mounted mid-start only misses that the start is under way
+    }
+  };
+  return { read, write, forget: (id) => void (read() === id && write(null)), starting, setStarting };
 }
