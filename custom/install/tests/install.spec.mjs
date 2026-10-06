@@ -1268,3 +1268,21 @@ test('a data root that is the home directory spelled in another case is refused 
     h.cleanup();
   }
 });
+
+test('a marker naming the --data-root folder in another letter case is the same folder, not a conflict (SW4-tests-28)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
+  try {
+    const { w, D, args } = fresh();
+    const data = path.join(h.home, 'career-data');
+    fs.mkdirSync(data);
+    const marker = `${path.join(h.flipped, 'Career-Data')}\n`;
+    w.makeCheckout(D, { files: { '.career-ops-data': marker } });
+    const r = w.run(args('--data-root', data));
+    assert.doesNotMatch(r.out, /already points at/, r.out);
+    assert.equal(r.status, 3, r.out);
+    assert.equal(read(D, '.career-ops-data'), marker);
+  } finally {
+    h.cleanup();
+  }
+});

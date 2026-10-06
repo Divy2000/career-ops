@@ -587,7 +587,8 @@ else
   fi
   DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
   mkdir -p "$DATA"
-  if [ -n "$DATA_ROOT_ARG" ] && [ "$(cd "$DATA" && pwd -P)" != "$(cd "$DATA_REQ" && pwd -P)" ]; then
+  # same-path resolves letter case too (realpathSync.native), as pwd -P does not on a case-insensitive volume.
+  if [ -n "$DATA_ROOT_ARG" ] && ! lib same-path "$DATA" "$DATA_REQ"; then
     die 1 "the data root resolves to $DATA (CAREER_OPS_ROOT or CAREER_OPS_DATA_DIR is set in your environment) instead of $DATA_REQ. Unset it and re-run."
   fi
   say "  data root: $DATA"

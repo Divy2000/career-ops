@@ -195,7 +195,8 @@ export function canonicalPath(p) {
   let cur = abs;
   for (;;) {
     try {
-      return path.join(fs.realpathSync(cur), ...tail.reverse());
+      // .native, as the confinement resolves roots: it also returns the folder's real letter case.
+      return path.join(fs.realpathSync.native(cur), ...tail.reverse());
     } catch {
       const parent = path.dirname(cur);
       if (parent === cur) return abs;

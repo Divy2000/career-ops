@@ -6,9 +6,9 @@ import { spawnSync } from 'node:child_process';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
-  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput,
-} from '../lib.mjs';
+  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput, canonicalPath } from '../lib.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { caseFlippedHome } from '../../test-support/case-home.mjs';
 
 const tmp = () => tempDir('ci-lib-');
 const write = (dir, name, data) => {
@@ -252,5 +252,19 @@ test('summarizeUnifiedDiff counts the real diff -u output for a removed CV rule'
     const out = spawnSync('diff', ['-u', 'a.md', 'b.md'], { cwd: dir, encoding: 'utf8' }).stdout;
     const s = summarizeUnifiedDiff(out);
     assert.deepEqual([s.added, s.removed], [0, 1], out);
+  }
+});
+
+test('canonicalPath resolves letter case as the confinement does, so one folder spelled two ways is the same path (SW4-tests-28)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
+  try {
+    const data = path.join(h.home, 'career-data');
+    fs.mkdirSync(data);
+    const flippedData = path.join(h.flipped, 'Career-Data');
+    assert.equal(canonicalPath(flippedData), canonicalPath(data));
+    assert.equal(canonicalPath(path.join(flippedData, 'not-yet')), path.join(canonicalPath(data), 'not-yet'));
+  } finally {
+    h.cleanup();
   }
 });
