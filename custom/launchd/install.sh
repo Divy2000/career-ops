@@ -32,19 +32,28 @@ AGENTS="$HOME/Library/LaunchAgents"
 # script to point them at the new root.
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 # The confinement refuses a data root that is the filesystem root or is (or contains) the home directory: a session
-# could read every file under it (assertRootsConfinable in custom/control-center/server/claude/confinement.mjs). Real
-# paths are compared, so a symlink to home is caught; a root that does not exist yet cannot contain home. Exits 1.
+# could read every file under it (assertRootsConfinable in custom/control-center/server/claude/confinement.mjs). Both
+# paths are resolved the way it resolves them (fs.realpathSync.native, which also fixes the letter case on a
+# case-insensitive volume), with pwd -P when node is not there yet; a root that does not exist yet cannot contain
+# home. Exits 1.
+real_path() {
+  if command -v node >/dev/null 2>&1 &&
+    node -e 'process.stdout.write(require("fs").realpathSync.native(process.argv[1]))' "$1" 2>/dev/null; then
+    return 0
+  fi
+  (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+}
 refuse_unconfinable_root() { # path
   local real home
-  real="$(cd "$1" 2>/dev/null && pwd -P)" || real="$1"
-  home="$(cd "$HOME" 2>/dev/null && pwd -P)" || home="$HOME"
+  real="$(real_path "$1")"
+  home="$(real_path "$HOME")"
   if [ "$real" = / ]; then
-    echo "error: the data root $1 is the filesystem root; sessions and the daily job would refuse it. Choose a dedicated folder (for example ~/career-ops-data) with --data-root or CAREER_OPS_ROOT." >&2
+    echo "error: the data root $1 is the filesystem root; sessions and the daily job would refuse it. Choose a dedicated folder (for example ~/career-ops-data) with CAREER_OPS_ROOT or the checkout's .career-ops-data marker." >&2
     exit 1
   fi
   case "$home/" in
     "$real/"*)
-      echo "error: the data root $1 is your home directory or contains it; sessions and the daily job would refuse it. Choose a dedicated folder (for example ~/career-ops-data) with --data-root or CAREER_OPS_ROOT." >&2
+      echo "error: the data root $1 is your home directory or contains it; sessions and the daily job would refuse it. Choose a dedicated folder (for example ~/career-ops-data) with CAREER_OPS_ROOT or the checkout's .career-ops-data marker." >&2
       exit 1
       ;;
   esac

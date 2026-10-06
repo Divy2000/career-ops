@@ -552,3 +552,19 @@ test('a data root that is the home directory, or contains it, is refused before 
     assert.doesNotMatch(r.log, /^launchctl (?!print )/m);
   }
 });
+
+test('the launchd refusal names what that script reads, not install.sh\'s --data-root, and catches a home spelled in another case (review of SW3-tests-01)', () => {
+  const home = fs.realpathSync(fs.mkdtempSync('/private/tmp/ci-case-home-'));
+  try {
+    const i = home.search(/[a-z]/i);
+    const flipped = home.slice(0, i) + (home[i] === home[i].toLowerCase() ? home[i].toUpperCase() : home[i].toLowerCase()) + home.slice(i + 1);
+    const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: fs.existsSync(flipped) ? flipped : home, HOME: home } });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /error: the data root .* is your home directory or contains it/);
+    assert.match(r.stderr, /CAREER_OPS_ROOT or the checkout's \.career-ops-data marker/);
+    assert.doesNotMatch(r.stderr, /--data-root/);
+    assert.equal(fs.existsSync(path.join(home, 'Library')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
