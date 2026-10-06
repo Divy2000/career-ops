@@ -39,7 +39,9 @@ test('the token URL sets the cookie and the shell renders without serious axe vi
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Tracker' })).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
-  await expect(page.getByText(/Setup OK|Setup needs attention/)).toBeVisible();
+  // The e2e server has the fake approved CLI and a token, so setup is OK; settings.spec covers the attention state.
+  await expect(page.getByRole('link', { name: 'Setup OK' })).toBeVisible();
+  await expect(page.getByText('Setup needs attention')).toHaveCount(0);
 
   const axe = await (await axeBuilder(page)).analyze();
   const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
@@ -48,7 +50,17 @@ test('the token URL sets the cookie and the shell renders without serious axe vi
 
 test('navigation reaches every sidebar page', async ({ page }) => {
   await page.goto(`/auth?t=${E2E_TOKEN}`);
-  await page.getByRole('link', { name: 'Settings' }).click();
+  const nav = page.getByRole('navigation', { name: 'Primary' });
+  const links = await nav.locator('a.nav-link').evaluateAll((els) => els.map((el) => ({ name: (el.textContent ?? '').trim(), href: el.getAttribute('href')! })));
+  expect(links.length).toBeGreaterThan(10);
+  for (const { name, href } of links) {
+    await nav.getByRole('link', { name, exact: true }).click();
+    await expect(page, name).toHaveURL((url) => url.pathname === href);
+    await expect(nav.getByRole('link', { name, exact: true }), name).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { level: 1 }), name).toBeVisible();
+    await expect(page.getByText(/Not Found|Something went wrong/), name).toHaveCount(0);
+  }
+  await nav.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
   // Settings keeps its tab in the URL (URL is the state for tabs), defaulting to Portals.
   await expect(page).toHaveURL(/\/settings\?tab=portals$/);
