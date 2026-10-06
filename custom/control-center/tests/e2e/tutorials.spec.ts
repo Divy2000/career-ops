@@ -176,7 +176,26 @@ test.describe('Tutorials', () => {
     test.skip(lsof.error !== undefined, 'lsof is not installed');
     const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join('; ');
     const serverPid = ((await (await page.request.get('/healthz')).json()) as { pid: number }).pid;
-    const openCount = () => spawnSync('lsof', ['-p', String(serverPid)], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l.includes('padding.mp4')).length;
+    const listing = () => spawnSync('lsof', ['-p', String(serverPid)], { encoding: 'utf8' });
+    const first = listing();
+    test.skip(first.status !== 0 || !first.stdout.trim(), `lsof cannot list the server's files here: ${first.stderr.trim() || `exit ${first.status}`}`);
+    const openCount = () => listing().stdout.split('\n').filter((l) => l.includes('padding.mp4')).length;
+    // Positive control (SW3-tests-16): while a range request is held open, lsof does see the file, so a count of 0 later
+    // means the file was closed, not that lsof saw nothing at all.
+    await new Promise<void>((resolve, reject) => {
+      const held = http.get({ host: '127.0.0.1', port: E2E_PORT, path: '/api/tutorials/demo-tour/media/padding.mp4', headers: { cookie, range: 'bytes=0-' } }, (res) => {
+        res.pause();
+        void expect
+          .poll(openCount, { timeout: 10_000 })
+          .toBeGreaterThan(0)
+          .then(() => {
+            held.destroy();
+            resolve();
+          }, reject);
+      });
+      held.on('error', (err) => ((err as NodeJS.ErrnoException).code === 'ECONNRESET' ? undefined : reject(err)));
+    });
+    await expect.poll(openCount, { timeout: 10_000 }).toBe(0);
     const abortedRequest = () =>
       new Promise<void>((resolve, reject) => {
         const req = http.get({ host: '127.0.0.1', port: E2E_PORT, path: '/api/tutorials/demo-tour/media/padding.mp4', headers: { cookie, range: 'bytes=0-' } }, (res) => {
