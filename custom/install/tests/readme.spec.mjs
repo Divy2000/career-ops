@@ -168,7 +168,7 @@ test('Option 2 states the Markdown-only rule, the size limits and what happens t
   assert.match(opt2, /fork-install-v3/);
 });
 
-test('the README and bootstrap.sh pin one install tag, the one whose install.sh has every documented flag', () => {
+test('the README and bootstrap.sh pin one install tag (readme-flags.spec checks that its install.sh takes every documented flag)', () => {
   const bootstrap = readFileSync(path.join(ROOT, 'custom/install/bootstrap.sh'), 'utf8');
   const named = new Set([...readme.matchAll(/fork-install-v\d+/g), ...bootstrap.matchAll(/fork-install-v\d+/g)].map((m) => m[0]));
   assert.deepEqual([...named], ['fork-install-v3']);
