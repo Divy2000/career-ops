@@ -5,11 +5,19 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { dayIn } from '../../test-support/local-day.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WATCH = path.join(REPO, 'custom', 'immigration', 'watch.mjs');
 
 const DAY_MS = 86_400_000;
+// The zone watch.mjs runs in, given to it explicitly (TZ) so the dates it writes are computable here.
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+// Clocks where the local day differs from the UTC day: a US evening and an Indian early morning.
+const NEAR_MIDNIGHT = [
+  { zone: 'America/Los_Angeles', at: '2026-10-07T03:30:00Z' },
+  { zone: 'Asia/Kolkata', at: '2026-10-06T19:30:00Z' },
+];
 
 /**
  * A data root and a fetch preload that answers both official sources offline from feeds.json, which a test rewrites
@@ -17,16 +25,16 @@ const DAY_MS = 86_400_000;
  * matches several of them. Items are dated the world's now, never a fixed day: watch.mjs only reads the last 14 days,
  * so a fixed date would age out of the window. `daysAhead` moves watch.mjs's clock (and that now) into the future.
  */
-function watchWorld({ daysAhead = 0 } = {}) {
+function watchWorld({ daysAhead = 0, zone = ZONE, at = null } = {}) {
   const root = tempDir('imm-watch-');
   const feeds = path.join(root, 'feeds.json');
   const preload = path.join(root, 'feeds.mjs');
-  const offset = daysAhead * DAY_MS;
+  const offset = at ? Date.parse(at) - Date.now() : daysAhead * DAY_MS;
   const now = new Date(Date.now() + offset);
   const clock = offset ? `const RealDate = Date;\nglobalThis.Date = class extends RealDate {\n  constructor(...a) { super(...(a.length ? a : [RealDate.now() + ${offset}])); }\n  static now() { return RealDate.now() + ${offset}; }\n};\n` : '';
   fs.writeFileSync(preload, `import fs from 'node:fs';\n${clock}globalThis.fetch = async (url) => {\n  const f = JSON.parse(fs.readFileSync(${JSON.stringify(feeds)}, 'utf8'));\n  const u = String(url);\n  if (u.includes('federalregister')) {\n    if (f.frStatus) return new Response('unavailable', { status: f.frStatus });\n    if (f.frPages) {\n      const page = Number(new URL(u).searchParams.get('page') ?? 0);\n      const next = f.frRepeat ? u : page + 1 < f.frPages.length ? \`https://www.federalregister.gov/api/v1/documents.json?page=\${page + 1}\` : null;\n      return new Response(JSON.stringify({ results: f.frPages[page], next_page_url: next }), { status: 200 });\n    }\n    return new Response(JSON.stringify({ results: f.fr }), { status: 200 });\n  }\n  if (f.rssStatus) return new Response('unavailable', { status: f.rssStatus });\n  return new Response(\`<rss><channel>\${f.rss.join('')}</channel></rss>\`, { status: 200 });\n};\n`);
   const imm = path.join(root, 'data', 'immigration');
-  const runRaw = (...args) => spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const runRaw = (...args) => spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1', TZ: zone }, encoding: 'utf8', timeout: 60_000 });
   const run = (...args) => {
     const r = runRaw(...args);
     assert.equal(r.status, 0, r.stderr);
@@ -40,6 +48,8 @@ function watchWorld({ daysAhead = 0 } = {}) {
     watch: () => JSON.parse(run()),
     watchRaw: () => runRaw(),
     now,
+    // The local day watch.mjs dates its run by (localToday() in its zone).
+    today: dayIn(zone, now),
     seen: () => JSON.parse(fs.readFileSync(path.join(imm, 'seen.json'), 'utf8')),
     ack: (batch) => {
       const file = path.join(root, `batch-${Date.now()}-${Math.random()}.json`);
@@ -102,6 +112,8 @@ test('the feed items stay inside the watch window whatever the day: a run 40 day
 // ---- a source that fails, and paging ----
 
 const dayBefore = (at, days) => new Date(at.getTime() - days * DAY_MS).toISOString().slice(0, 10);
+// A YYYY-MM-DD day `days` days before another, by UTC-midnight arithmetic on the date itself, as newsSince counts back.
+const daysBefore = (day, days) => new Date(Date.parse(`${day}T00:00:00Z`) - days * DAY_MS).toISOString().slice(0, 10);
 const H1B = 'Modernizing H-1B Requirements';
 const OPT = 'USCIS updates Optional Practical Training guidance';
 
@@ -156,28 +168,27 @@ test('a Federal Register reply whose next page repeats fails that source instead
 
 // ---- the news window follows the last successful pass (SW8-scripts-01) ----
 
-test('acknowledging a pass records it as the last successful one, and a later run keeps that date', () => {
-  const w = watchWorld();
+for (const clock of [{}, ...NEAR_MIDNIGHT]) test(`acknowledging a pass records it as the last successful one, and a later run keeps that date${clock.zone ? ` (${clock.zone} at ${clock.at})` : ''}`, () => {
+  const w = watchWorld(clock);
   w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
   const batch = w.watch();
   w.ack(batch);
-  const today = w.now.toISOString().slice(0, 10);
-  assert.equal(w.seen().last_pass, today);
+  assert.equal(w.seen().last_pass, w.today);
   w.watch();
-  assert.equal(w.seen().last_pass, today, 'a fetch run does not drop it');
+  assert.equal(w.seen().last_pass, w.today, 'a fetch run does not drop it');
 });
 
 test('after days with no successful pass, the news window reaches back to the last one', () => {
   const w = watchWorld();
-  const lastPass = dayBefore(w.now, 8);
+  const lastPass = daysBefore(w.today, 8);
   fs.mkdirSync(w.imm, { recursive: true });
   fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: lastPass, last_pass: lastPass }));
   w.setFeeds({});
   assert.equal(w.watch().news_since, lastPass);
 });
 
-test('with no successful pass recorded, the news window is the last 3 days', () => {
-  const w = watchWorld();
+for (const clock of [{}, ...NEAR_MIDNIGHT]) test(`with no successful pass recorded, the news window is the last 3 days${clock.zone ? ` (${clock.zone} at ${clock.at})` : ''}`, () => {
+  const w = watchWorld(clock);
   w.setFeeds({});
-  assert.equal(w.watch().news_since, dayBefore(w.now, 3));
+  assert.equal(w.watch().news_since, daysBefore(w.today, 3));
 });
