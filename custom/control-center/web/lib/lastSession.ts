@@ -57,8 +57,15 @@ export interface Launch {
   id: string;
 }
 
-/** Every session a mode launcher started in this browser tab, newest first, so coming back shows each one again. */
-export function rememberedLaunches(key: string): { read(): Launch[]; write(launches: Launch[]): void } {
+// A launcher's panel may report its started session after the launcher unmounted (the page was left before
+// POST /api/sessions answered). The report is added to the store directly, and a launcher mounted under the key hears it.
+const launchListeners = new Map<string, Set<() => void>>();
+
+/**
+ * Every session a mode launcher started in this browser tab, newest first, so coming back shows each one again. `add`
+ * records one start and tells every launcher mounted under the key (`subscribe`).
+ */
+export function rememberedLaunches(key: string): { read(): Launch[]; write(launches: Launch[]): void; add(launch: Launch): void; subscribe(fn: () => void): () => void } {
   const read = (): Launch[] => {
     try {
       const parsed: unknown = JSON.parse(sessionStorage.getItem(key) ?? '[]');
@@ -76,5 +83,18 @@ export function rememberedLaunches(key: string): { read(): Launch[]; write(launc
       // storage refused: only the re-attaching is lost
     }
   };
-  return { read, write };
+  const add = (launch: Launch): void => {
+    write([launch, ...read().filter((l) => l.id !== launch.id)]);
+    for (const fn of launchListeners.get(key) ?? []) fn();
+  };
+  const subscribe = (fn: () => void) => {
+    const set = launchListeners.get(key) ?? new Set();
+    set.add(fn);
+    launchListeners.set(key, set);
+    return () => {
+      set.delete(fn);
+      if (set.size === 0) launchListeners.delete(key);
+    };
+  };
+  return { read, write, add, subscribe };
 }

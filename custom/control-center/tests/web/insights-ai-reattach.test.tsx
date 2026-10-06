@@ -91,6 +91,32 @@ describe('Insights AI analyses keep their session', () => {
     expect(lastPanel('calibrate')).toMatchObject({ sessionId: 'cal-1' });
   });
 
+  it('a start that answers after the page was left is re-attached on return (review fix)', async () => {
+    await openPage();
+    await act(async () => openPrompt().click());
+    // The panel sent its start; the page is left before POST /api/sessions answers.
+    const reportStarted = lastPanel('patterns')!.onSessionId!;
+    await leavePage();
+    reportStarted('pat-late');
+    panels = [];
+    await openPage();
+    await until(() => lastPanel('patterns'), 'the re-attached patterns panel');
+    expect(lastPanel('patterns')).toMatchObject({ sessionId: 'pat-late' });
+  });
+
+  it('a start that answers while the page is open again shows up there (review fix)', async () => {
+    await openPage();
+    await act(async () => openPrompt().click());
+    const reportStarted = lastPanel('patterns')!.onSessionId!;
+    await leavePage();
+    panels = [];
+    await openPage();
+    expect(lastPanel('patterns')).toBeUndefined();
+    await act(async () => reportStarted('pat-late'));
+    await until(() => lastPanel('patterns'), 'the patterns panel of the late start');
+    expect(lastPanel('patterns')).toMatchObject({ sessionId: 'pat-late' });
+  });
+
   it('a session deleted on the Sessions page is let go instead of re-attached', async () => {
     await openPage();
     await startCalibrate();
