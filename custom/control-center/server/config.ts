@@ -35,6 +35,8 @@ export interface ServerConfig {
   pluginsLocalDir?: string;
   /** Answers the "is run-daily.sh running" probe without looking at host processes (tests only; CC_FAKE_DAILY is honored under NODE_ENV=test). */
   fakeDaily?: 'idle' | 'running';
+  /** The built client's folder (default <package>/dist; tests point it at a temp build). */
+  distDir?: string;
 }
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
