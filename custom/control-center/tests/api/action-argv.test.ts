@@ -180,6 +180,24 @@ describe('Archive posting', () => {
   });
 });
 
+describe('Paste a reply', () => {
+  it('appends one reply candidate per paste to data/reply-candidates.json, with the pasted sender, subject and body (SW3-tests-17)', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json');
+    fs.rmSync(file, { force: true });
+    const first = await post('followups.replyPaste', { from: 'Dana Recruiter <dana@acme.example>', subject: 'Re: Platform Engineer', body: 'Thanks for applying.\n\nCan you talk Tuesday?' });
+    expect(first.statusCode, first.body).toBe(200);
+    // A body that itself starts with header-like lines, and a sender with a line break, stay in their fields.
+    const second = await post('followups.replyPaste', { from: 'Lee\nOps', subject: '', body: 'Subject: not a header\nFrom: nobody' });
+    expect(second.statusCode, second.body).toBe(200);
+    const candidates = JSON.parse(fs.readFileSync(file, 'utf8')) as Array<Record<string, unknown>>;
+    expect(candidates.map(({ from, subject, body_snippet }) => ({ from, subject, body_snippet }))).toEqual([
+      { from: 'Dana Recruiter <dana@acme.example>', subject: 'Re: Platform Engineer', body_snippet: 'Thanks for applying.\n\nCan you talk Tuesday?' },
+      { from: 'Lee Ops', subject: '', body_snippet: 'Subject: not a header\nFrom: nobody' },
+    ]);
+    expect(new Set(candidates.map((c) => c.message_id)).size).toBe(2);
+  });
+});
+
 describe('Recently funded companies', () => {
   it('offers exactly the sorts company-funded.mjs accepts', () => {
     const source = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'company-funded.mjs'), 'utf8');
