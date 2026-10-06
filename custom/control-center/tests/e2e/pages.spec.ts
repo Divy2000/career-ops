@@ -161,6 +161,9 @@ test.describe('read-only pages render fixture data', () => {
     const watcher = page.getByRole('heading', { name: 'Watcher state' }).locator('..');
     await expect(watcher.getByText('Last run')).toBeVisible();
     await expect(watcher.getByText('Items seen')).toBeVisible();
+    // seen.json in the shape watch.mjs writes: a last success per source (SW2-tests-30).
+    await expect(watcher.getByText('Last success: federal-register').locator('..')).toContainText('2026-10-02');
+    await expect(watcher.getByText('Last success: uscis').locator('..')).toContainText('2026-10-01');
     await expect(watcher.getByText('"ids"')).toBeHidden();
     await watcher.getByText('Raw seen.json').click();
     await expect(watcher.getByText('"ids"')).toBeVisible();
