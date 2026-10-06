@@ -159,3 +159,22 @@ describe('Pipeline > Inbox > Evaluate visible', () => {
     expect(button('Evaluate visible (51)')!.disabled).toBe(true);
   });
 });
+
+describe('paid fan-out confirms open on Cancel (SW6-web-a-03)', () => {
+  const focused = () => (document.activeElement as HTMLElement | null)?.textContent?.trim();
+
+  it('Batch evaluate: a held or double-pressed Enter cannot start the sessions', async () => {
+    await mount();
+    await type(textarea(), 'https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    await click(button('Batch evaluate')!);
+    expect(focused()).toBe('Cancel');
+  });
+
+  it('Evaluate visible above three rows', async () => {
+    await mount({ inboxUrls: ['https://jobs.example.com/1', 'https://jobs.example.com/2', 'https://jobs.example.com/3', 'https://jobs.example.com/4'] });
+    await click(button('Evaluate visible')!);
+    expect(document.body.textContent).toMatch(/Start 4 evaluation sessions\?/);
+    expect(focused()).toBe('Cancel');
+  });
+});
+

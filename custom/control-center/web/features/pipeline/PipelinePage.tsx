@@ -131,7 +131,8 @@ function Inbox() {
       (!text || `${r.company} ${r.role} ${r.location ?? ''}`.toLowerCase().includes(text.toLowerCase())),
   );
   return (
-    <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
+    <>
+      {/* Outside the data state: Add URLs is how a first pipeline gets created (appendToPipeline makes the file). */}
       <div className="toolbar" aria-label="Inbox actions">
         <AddUrls onDone={(n) => { setMessage({ tone: 'ok', text: `Added ${n} URL${n === 1 ? '' : 's'} to the pipeline` }); void qc.invalidateQueries({ queryKey: ['pipeline'] }); }} />
         <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} disabled={busy !== null} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
@@ -140,103 +141,105 @@ function Inbox() {
           Rank (50)
         </ActionButton>
       </div>
-      <InboxAi urls={visible.filter((r) => !r.done).map((r) => r.url)} />
       <Message message={message} />
-      {skipError && (
-        <p role="alert" className="danger-text">
-          {skipError}
-        </p>
-      )}
-      <div className="toolbar">
-        <input type="search" aria-label="Filter inbox" placeholder="Filter company, role, location" value={text} onChange={(e) => setText(e.target.value)} />
-        <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)}>
-          <option value="">All sources</option>
-          {sources.map((s) => (
-            <option key={s}>{s}</option>
-          ))}
-        </select>
-        <select aria-label="Seniority" value={seniority} onChange={(e) => setSeniority(e.target.value)}>
-          <option value="">All levels</option>
-          {seniorities.map((s) => (
-            <option key={s}>{s}</option>
-          ))}
-        </select>
-        <label className="row gap">
-          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show done
-        </label>
-        <span className="faint">{visible.length} rows</span>
-      </div>
-      {visible.length === 0 ? (
-        <Empty>Nothing matches. Clear a filter or add URLs.</Empty>
-      ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Rank</th>
-                <th scope="col">Company</th>
-                <th scope="col">Role</th>
-                <th scope="col">Location</th>
-                <th scope="col">First seen / posted</th>
-                <th scope="col">
-                  <span className="sr-only">Row actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((r) => (
-                <tr key={r.url} className={r.done ? 'is-done' : ''}>
-                  <td title={r.rankReason ?? undefined}>
-                    <ScorePill score={r.rank} />
-                    {r.rankReason && <span className="sr-only">{r.rankReason}</span>}
-                  </td>
-                  <td>
-                    <div className="clip clip--company" title={r.company}>
-                      {r.company || <span className="faint">unknown company</span>}
-                    </div>
-                    <Pill>{r.source}</Pill>
-                  </td>
-                  <td>
-                    <div className="clamp-2" title={r.role || r.url}>
-                      <a href={r.url} target="_blank" rel="noreferrer noopener">
-                        {r.role || r.url}
-                      </a>
-                    </div>
-                    <span className="faint small">
-                      {/* A checked Pending row was skipped here or evaluated in place by a batch evaluator; a Processed row is finished. */}
-                      {r.done && <Pill>{r.section === 'done' ? 'processed' : 'done'}</Pill>}
-                      {r.seniority ?? ''}
-                    </span>
-                  </td>
-                  <td className="muted">
-                    {r.location && (
-                      <div className="clip clip--location" title={r.location}>
-                        {r.location}
-                      </div>
-                    )}
-                  </td>
-                  <td className="mono muted">
-                    <div>{r.firstSeen ?? ''}</div>
-                    {r.postedAt && <div className="faint">posted {r.postedAt}</div>}
-                  </td>
-                  <td>
-                    {!r.done ? (
-                      <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
-                        Skip
-                      </button>
-                    ) : r.section !== 'done' ? (
-                      <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>
-                        Back to queue
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
+        <InboxAi urls={visible.filter((r) => !r.done).map((r) => r.url)} />
+        {skipError && (
+          <p role="alert" className="danger-text">
+            {skipError}
+          </p>
+        )}
+        <div className="toolbar">
+          <input type="search" aria-label="Filter inbox" placeholder="Filter company, role, location" value={text} onChange={(e) => setText(e.target.value)} />
+          <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)}>
+            <option value="">All sources</option>
+            {sources.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+          <select aria-label="Seniority" value={seniority} onChange={(e) => setSeniority(e.target.value)}>
+            <option value="">All levels</option>
+            {seniorities.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+          <label className="row gap">
+            <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show done
+          </label>
+          <span className="faint">{visible.length} rows</span>
         </div>
-      )}
-    </DataState>
+        {visible.length === 0 ? (
+          <Empty>Nothing matches. Clear a filter or add URLs.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Rank</th>
+                  <th scope="col">Company</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">Location</th>
+                  <th scope="col">First seen / posted</th>
+                  <th scope="col">
+                    <span className="sr-only">Row actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((r) => (
+                  <tr key={r.url} className={r.done ? 'is-done' : ''}>
+                    <td title={r.rankReason ?? undefined}>
+                      <ScorePill score={r.rank} />
+                      {r.rankReason && <span className="sr-only">{r.rankReason}</span>}
+                    </td>
+                    <td>
+                      <div className="clip clip--company" title={r.company}>
+                        {r.company || <span className="faint">unknown company</span>}
+                      </div>
+                      <Pill>{r.source}</Pill>
+                    </td>
+                    <td>
+                      <div className="clamp-2" title={r.role || r.url}>
+                        <a href={r.url} target="_blank" rel="noreferrer noopener">
+                          {r.role || r.url}
+                        </a>
+                      </div>
+                      <span className="faint small">
+                        {/* A checked Pending row was skipped here or evaluated in place by a batch evaluator; a Processed row is finished. */}
+                        {r.done && <Pill>{r.section === 'done' ? 'processed' : 'done'}</Pill>}
+                        {r.seniority ?? ''}
+                      </span>
+                    </td>
+                    <td className="muted">
+                      {r.location && (
+                        <div className="clip clip--location" title={r.location}>
+                          {r.location}
+                        </div>
+                      )}
+                    </td>
+                    <td className="mono muted">
+                      <div>{r.firstSeen ?? ''}</div>
+                      {r.postedAt && <div className="faint">posted {r.postedAt}</div>}
+                    </td>
+                    <td>
+                      {!r.done ? (
+                        <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
+                          Skip
+                        </button>
+                      ) : r.section !== 'done' ? (
+                        <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>
+                          Back to queue
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DataState>
+    </>
   );
 }
 

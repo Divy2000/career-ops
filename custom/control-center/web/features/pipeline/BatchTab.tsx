@@ -20,7 +20,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const start = async () => {
     if (list.length === 0 || tooMany) return;
     const n = list.length;
-    if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them' }))) return;
+    if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
     setBusy(true);
     setMessage(null);
     try {

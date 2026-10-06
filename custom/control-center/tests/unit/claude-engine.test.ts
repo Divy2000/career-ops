@@ -304,6 +304,37 @@ describe('guard hook', () => {
     expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/data')).not.toContain('Edit(//code/reports/**)');
     expect(buildAllowedTools(getModePolicy('oferta')!, '/code', '/code').filter((t) => t.includes('reports/**'))).toHaveLength(1);
   });
+  it('pipeline mode may resolve its own inbox rows and log its discards; no other evaluate mode may (SW6-web-a-01)', () => {
+    const code = fs.realpathSync(tempDir('cc-pipe-code-'));
+    const data = fs.realpathSync(tempDir('cc-pipe-data-'));
+    const policyIn = (mode: string) => {
+      const dir = fs.realpathSync(tempDir(`cc-pipe-guard-${mode.replace('/', '-')}-`));
+      return { dir, pf: writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] }) };
+    };
+    const write = (p: { dir: string; pf: { file: string; sha256: string } }, file: string) => hookRun(p.dir, p.pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: file, content: 'x' }, cwd: code, session_id: 's' }).status;
+    // modes/pipeline.md moves each finished row to Processed and logs pre-screen discards to data/discard.log.
+    for (const mode of ['pipeline', 'de/pipeline']) {
+      const pipeline = policyIn(mode);
+      for (const rel of ['data/pipeline.md', 'data/discard.log']) expect(write(pipeline, path.join(data, rel)), `${mode} ${rel}`).toBe(0);
+      expect(write(pipeline, path.join(data, 'data', 'applications.md')), `${mode} tracker`).toBe(2);
+    }
+    for (const mode of ['oferta', 'auto-pipeline']) {
+      const other = policyIn(mode);
+      for (const rel of ['data/pipeline.md', 'data/discard.log']) expect(write(other, path.join(data, rel)), `${mode} ${rel}`).toBe(2);
+    }
+  });
+
+  it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
+    const code = fs.realpathSync(tempDir('cc-int-code-'));
+    const data = fs.realpathSync(tempDir('cc-int-data-'));
+    for (const mode of ['interview/debrief', 'de/interview/debrief', 'interview-prep']) {
+      const dir = fs.realpathSync(tempDir(`cc-int-guard-${mode.replace(/\//g, '-')}-`));
+      const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] });
+      const status = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(data, 'data', 'salary-observations.tsv'), content: 'x' }, cwd: code, session_id: 's' }).status;
+      expect(status, mode).toBe(0);
+    }
+  });
+
   it('with a separate data root, user-layer writes go to the data root only and custom/** and templates to the code root only (SW2-claude-02)', () => {
     const code = fs.realpathSync(tempDir('cc-split-code-'));
     const data = fs.realpathSync(tempDir('cc-split-data-'));

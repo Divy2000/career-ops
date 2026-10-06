@@ -6,6 +6,7 @@ import { applyOpsJs } from '../../lib/yamlOpsClient';
 import { useEditBase } from '../../lib/editBase';
 import { useUnsaved } from '../../lib/unsaved';
 import type { ConfigRead, YamlOp } from '@shared/api';
+import { describeError } from '../../lib/actions';
 
 export interface EditorNote {
   tone: 'ok' | 'danger';
@@ -80,7 +81,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       } else if (err instanceof ApiError && (err.status === 422 || err.status === 400)) {
         const b = err.body as { error: string; findings?: unknown; stderr?: string };
         setNote({ tone: 'danger', text: b.error, details: `${typeof b.findings === 'string' ? b.findings : JSON.stringify(b.findings ?? '', null, 2)}\n${b.stderr ?? ''}`.trim() });
-      } else setNote({ tone: 'danger', text: `Could not save: ${(err as Error).message}` });
+      } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
       toast.error('Save failed');
     } finally {
       setSaving(false);

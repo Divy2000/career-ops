@@ -43,4 +43,12 @@ describe('confirm dialog focus', () => {
     await act(async () => void ask({ title: 'Start them?', confirmLabel: 'Start them' }));
     expect(focused()).toBe('Start them');
   });
+
+  it('a paid confirm opens on Cancel without the danger styling (SW6-web-a-03)', async () => {
+    await act(async () => void ask({ title: 'Start 5 evaluation sessions?', confirmLabel: 'Start them', focusCancel: true }));
+    expect(focused()).toBe('Cancel');
+    const start = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Start them')!;
+    expect(start.className).toBe('button--primary');
+  });
 });
+

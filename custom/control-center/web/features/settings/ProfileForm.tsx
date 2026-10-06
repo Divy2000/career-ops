@@ -30,7 +30,8 @@ export const PROFILE_SECTIONS: SectionDef[] = [
   { key: 'language', help: 'Output language and market modes directory.', empty: { output: 'en' } },
   { key: 'spend_tier', help: 'economy, standard or premium.', empty: 'standard' },
   { key: 'page_format', help: 'letter or a4 for every generated PDF.', empty: 'letter' },
-  { key: 'style', help: 'CV and cover-letter PDF theming tokens.', empty: { accent_color: '#2563eb' } },
+  // Starts empty: every token theme-style.mjs maps overrides the template, so a seeded value would recolor every PDF.
+  { key: 'style', help: 'CV and cover-letter PDF theming tokens. Add only the keys you want to change; the rest keep the built-in look.', empty: {} },
   { key: 'cv', help: 'Output format, template, section order.', empty: { output_format: 'html' } },
   { key: 'culture_screen', help: 'Required culture signals and the cap when they are absent.', empty: { require: [], deprioritize_if_absent: false } },
   { key: 'latex', help: 'Your own LaTeX CV for latex-tex mode.', empty: { source: 'resume.tex' } },

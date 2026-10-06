@@ -87,7 +87,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
         setConflict(current);
         edit.rebase(current);
         setNote({ tone: 'danger', text: 'The file changed on disk since you loaded it. Review the current version below, then save again to overwrite it.' });
-      } else setNote({ tone: 'danger', text: `Could not save: ${(err as Error).message}` });
+      } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
     }
   };
   return (

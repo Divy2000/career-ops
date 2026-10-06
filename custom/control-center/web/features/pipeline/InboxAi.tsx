@@ -26,7 +26,7 @@ export function InboxAi({ urls }: { urls: string[] }) {
     if (unique.length === 0 || tooMany) return;
     setBusy(true);
     try {
-      if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them' }))) return;
+      if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
       const r = await fanOut('oferta', unique);
       setNote(`Started ${r.sessions.length} evaluations with report numbers ${r.reserved.join(', ')}.`);
       await navigate({ to: '/sessions' });

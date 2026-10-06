@@ -75,7 +75,7 @@ export function RunsPage() {
       setMessage(null);
       await qc.invalidateQueries({ queryKey: ['runs'] });
     } catch (err) {
-      setMessage(`Could not start ${id}: ${(err as Error).message}`);
+      setMessage(`Could not start ${id}: ${describeError(err)}`);
     }
   };
   const cancel = async (id: string) => {

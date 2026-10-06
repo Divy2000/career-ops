@@ -2,7 +2,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { formatCount } from '../../web/lib/format';
+import { formatCount, formatRate } from '../../web/lib/format';
 
 const WEB_LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'lib');
 
@@ -26,3 +26,15 @@ describe('formatCount', () => {
     expect(formatted).toBe('1,000');
   });
 });
+
+describe('formatRate (Insights > Progress)', () => {
+  it('a rate with no denominator reads n/a, with no percent sign (SW6-web-b-05)', () => {
+    expect(formatRate(null)).toBe('n/a');
+  });
+
+  it('a number reads as a percentage, zero included', () => {
+    expect(formatRate(42.9)).toBe('42.9%');
+    expect(formatRate(0)).toBe('0%');
+  });
+});
+

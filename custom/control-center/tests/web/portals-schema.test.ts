@@ -14,6 +14,18 @@ const template = YAML.parse(fs.readFileSync(path.join(CODE_ROOT, 'templates', 'p
 const section = (key: string) => PORTAL_SECTIONS.find((s) => s.key === key)!;
 
 describe('Portals editor against the scanner schema', () => {
+  it('Add visa_filter seeds a block the scanner treats as off, so nothing is dropped until the user turns it on (SW6-web-b-01)', () => {
+    // The scanner's own buildVisaFilter (scan.mjs) judges a posting that says it does not sponsor.
+    const seed = section('visa_filter').empty;
+    const script = `import { buildVisaFilter } from ${JSON.stringify(path.join(CODE_ROOT, 'scan.mjs'))};
+process.stdout.write(JSON.stringify(buildVisaFilter(${JSON.stringify(seed)})('We are unable to sponsor visas for this role.')));`;
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { ...process.env, CAREER_OPS_ROOT: tempDir('cc-visa-') } });
+    expect(run.stderr).toBe('');
+    expect(JSON.parse(run.stdout)).toBe(true);
+    // The switch is in the seed, so the form shows it.
+    expect(seed).toMatchObject({ enabled: false });
+  });
+
   it('Add title_filter seeds the positive and negative lists the template and buildTitleFilter use', () => {
     const seed = section('title_filter').empty as Record<string, string[]>;
     expect(Object.keys(seed).sort()).toEqual(['negative', 'positive']);

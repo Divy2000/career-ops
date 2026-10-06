@@ -42,6 +42,16 @@ describe('describeError', () => {
     expect(describeError(refused({ error: 'invalid body: a YYYY-MM-DD date', issues: [{ code: 'custom', path: ['date'], message: 'a YYYY-MM-DD date' }] }))).toBe('invalid body: a YYYY-MM-DD date');
   });
 
+  it('a request the server failed unexpectedly says why: Fastify puts the reason in message, after its status name (SW6-web-a-02)', () => {
+    const err = new ApiError(500, '500 Internal Server Error', { statusCode: 500, error: 'Internal Server Error', message: 'pipeline writer exited 1: EACCES: permission denied, open data/pipeline.md' });
+    expect(describeError(err)).toBe('Internal Server Error: pipeline writer exited 1: EACCES: permission denied, open data/pipeline.md');
+  });
+
+  it('a message that only repeats the error, or a route body with no message, adds nothing', () => {
+    expect(describeError(refused({ statusCode: 400, error: 'Bad Request', message: 'Bad Request' }))).toBe('Bad Request');
+    expect(describeError(refused({ error: 'no tracker row #9' }))).toBe('no tracker row #9');
+  });
+
   it('keeps the plain error, the stderr tail and the fallbacks as they were', () => {
     expect(describeError(new ApiError(500, '500 Internal Server Error', { error: 'exited 2', stderr: 'boom\n' }))).toBe('exited 2 (boom)');
     expect(describeError(new ApiError(502, '502 Bad Gateway', null))).toBe('502 Bad Gateway');

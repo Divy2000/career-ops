@@ -6,6 +6,7 @@ import { DataState, Pill } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
 import { useUnsaved } from '../../lib/unsaved';
 import type { ConfigRead } from '@shared/api';
+import { describeError } from '../../lib/actions';
 
 /**
  * Raw YAML editor gated by the core validator; a 422 shows the findings and writes nothing, a 409 shows the current
@@ -53,7 +54,7 @@ export function ConfigEditor({ fileKey, label, validator }: { fileKey: 'portals'
         const b = err.body as { current: ConfigRead };
         edit.rebase(b.current);
         setNote({ tone: 'danger', text: 'The file changed on disk since you loaded it. Save again to overwrite it, or copy your edits from this box into the current version below.', details: b.current.raw });
-      } else setNote({ tone: 'danger', text: `Could not save: ${(err as Error).message}` });
+      } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
       toast.error(`Could not save ${label}`);
     }
   };
