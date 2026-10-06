@@ -54,6 +54,8 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     }
     const current = readBlacklist(cfg.dataRoot);
     if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'data/blacklist.md changed since you loaded it', current });
+    // Rewriting the file into one table would drop these cells: they are moved by hand first.
+    if (current.unkept.length) return reply.code(422).send({ error: `data/blacklist.md has cells the editor has no column for, which a save would drop: ${current.unkept.join('; ')}. Move them into the main table's columns by hand, then save again.` });
     // New rows need YYYY-MM-DD; a legacy cell already in the file ("Sept 2025", empty) is kept as it is.
     const legacy = new Set(current.rows.map((r) => r.since));
     const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));

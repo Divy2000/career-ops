@@ -218,6 +218,31 @@ describe('the blacklist editor reads the table by position, as the scanner does 
       await app.close();
     }
   });
+  it('a row outside the table keeps its cells after Reason on save, and a save that would drop a cell is refused (SW8 review 3, review)', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      // A second table with the main table's Ticket column: its cells move into the main table with it.
+      fs.writeFileSync(file, '# Blacklist\n\n| Company | Since | Scope | Reason | Ticket |\n|---|---|---|---|---|\n| Initech | 2026-02-01 | company | reposts | T-1 |\n\n## More\n\n| Company | Since | Scope | Reason | Ticket |\n|---|---|---|---|---|\n| Acme | 2026-01-01 | company | x | T-42 |\n');
+      let current = (await req('GET')).json();
+      expect(current.rows.find((r: { company: string }) => r.company === 'Acme').extra).toEqual(['T-42']);
+      const saved = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toContain('| Acme | 2026-01-01 | company | x | T-42 |');
+      // A second table wider than the main one: its extra cell has no column to go to, so nothing is written.
+      const wide = '# Blacklist\n\n| Company | Since | Scope | Reason |\n|---|---|---|---|\n| Initech | 2026-02-01 | company | reposts |\n\n## More\n\n| Company | Since | Scope | Reason | Ticket |\n|---|---|---|---|---|\n| Acme | 2026-01-01 | company | x | T-42 |\n';
+      fs.writeFileSync(file, wide);
+      current = (await req('GET')).json();
+      expect(current.rows.map((r: { company: string }) => r.company)).toEqual(['Initech', 'Acme']);
+      const refused = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(refused.statusCode, refused.body).toBe(422);
+      expect(refused.json().error).toContain('T-42');
+      expect(fs.readFileSync(file, 'utf8')).toBe(wide);
+    } finally {
+      await app.close();
+    }
+  });
   it('a header in the scanner order has no warning', async () => {
     const app = await makeTestApp();
     try {

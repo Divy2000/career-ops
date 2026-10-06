@@ -42,6 +42,8 @@ export interface BlacklistParsed {
   extraColumns: string[];
   /** Why the table's header does not match the positions the scanner reads; null when it does. */
   columnWarning: string | null;
+  /** Cells of listed rows that have no column to go to (a row wider than the table, a scope that is neither company nor domain): a save would drop them, so it is refused. */
+  unkept: string[];
 }
 
 export interface BlacklistRead extends BlacklistParsed {
@@ -88,10 +90,9 @@ const POSITIONS: Array<{ label: string; fits: (h: string) => boolean }> = [
 const MANAGED = new Set(['company', 'since', 'scope', 'reason']);
 
 /** Text around the table without its `|` lines, and the rows the scanner reads from them. Untouched when it has none. */
-function outsideTable(lines: string[], extraColumns: number): { text: string; rows: BlacklistRow[] } {
+function outsideTable(lines: string[], read: (line: string) => BlacklistRow | null): { text: string; rows: BlacklistRow[] } {
   if (!lines.some((l) => TABLE_LINE.test(l))) return { text: lines.join('\n'), rows: [] };
-  const blank = Array.from({ length: extraColumns }, () => '');
-  const rows = lines.filter((l) => TABLE_LINE.test(l)).map((l) => scannerRow(l, [...blank])).filter((r): r is BlacklistRow => r !== null);
+  const rows = lines.filter((l) => TABLE_LINE.test(l)).map(read).filter((r): r is BlacklistRow => r !== null);
   // The removed lines leave their blank neighbours behind: at most one blank line in a row, and none at the end.
   const text = lines.filter((l) => !TABLE_LINE.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '\n');
   return { text, rows };
@@ -100,7 +101,7 @@ function outsideTable(lines: string[], extraColumns: number): { text: string; ro
 export function parseBlacklist(md: string): BlacklistParsed {
   const lines = md.split(/\r?\n/);
   const headerIdx = lines.findIndex((l) => /^\s*\|/.test(l) && /company/i.test(l));
-  if (headerIdx === -1) return { rows: [], preamble: md.trim() ? md : null, postamble: '', extraColumns: [], columnWarning: null };
+  if (headerIdx === -1) return { rows: [], preamble: md.trim() ? md : null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] };
   const headerCells = splitCells(lines[headerIdx]!);
   const header = headerCells.map((h) => h.toLowerCase());
   const misplaced = POSITIONS.some((p, i) => i < header.length && !p.fits(header[i]!));
@@ -112,17 +113,23 @@ export function parseBlacklist(md: string): BlacklistParsed {
   const keepThird = header.length > 2 && header[2] !== 'scope';
   const thirdName = keepThird ? (MANAGED.has(header[2]!) ? `${headerCells[2]} (old column 3)` : headerCells[2]!) : null;
   const extraColumns = [...(thirdName !== null ? [thirdName] : []), ...headerCells.slice(4)];
-  const extraOf = (line: string) => {
+  // Every listed row, in the table or not, is read by position: its cells after Reason fill the table's own columns.
+  const unkept: string[] = [];
+  const read = (line: string): BlacklistRow | null => {
     const cells = splitCells(line);
-    return [...(keepThird ? [cells[2] ?? ''] : []), ...headerCells.slice(4).map((_, i) => cells[4 + i] ?? '')];
+    const row = scannerRow(line, [...(keepThird ? [cells[2] ?? ''] : []), ...headerCells.slice(4).map((_, i) => cells[4 + i] ?? '')]);
+    if (!row) return null;
+    const lost = cells.filter((c, i) => c !== '' && (i >= Math.max(4, headerCells.length) || (i === 2 && !keepThird && !['company', 'domain'].includes(c.toLowerCase()))));
+    if (lost.length) unkept.push(`${row.company} (${lost.join(', ')})`);
+    return row;
   };
   // A markdown table ends at its first line that is not a row (a blank line included).
   let end = headerIdx + 1;
   while (end < lines.length && /^\s*\|/.test(lines[end]!)) end++;
-  const rows = lines.slice(headerIdx + 1, end).map((line) => scannerRow(line, extraOf(line))).filter((r): r is BlacklistRow => r !== null);
-  const before = outsideTable(lines.slice(0, headerIdx), extraColumns.length);
-  const after = outsideTable(lines.slice(end), extraColumns.length);
-  return { rows: [...before.rows, ...rows, ...after.rows], preamble: before.text.trim() ? before.text : null, postamble: after.text, extraColumns, columnWarning };
+  const before = outsideTable(lines.slice(0, headerIdx), read);
+  const rows = lines.slice(headerIdx + 1, end).map(read).filter((r): r is BlacklistRow => r !== null);
+  const after = outsideTable(lines.slice(end), read);
+  return { rows: [...before.rows, ...rows, ...after.rows], preamble: before.text.trim() ? before.text : null, postamble: after.text, extraColumns, columnWarning, unkept };
 }
 
 export function renderBlacklist(rows: BlacklistRow[], preamble: string | null, postamble = '', extraColumns: string[] = []): string {
@@ -140,7 +147,7 @@ export function readBlacklist(dataRoot: string): BlacklistRead {
     const raw = fs.readFileSync(abs, 'utf8');
     return { kind: 'ok', path: BLACKLIST_REL, raw, etag: etagOf(raw), ...parseBlacklist(raw) };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing', path: BLACKLIST_REL, raw: '', etag: null, rows: [], preamble: null, postamble: '', extraColumns: [], columnWarning: null };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing', path: BLACKLIST_REL, raw: '', etag: null, rows: [], preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] };
     throw err;
   }
 }
