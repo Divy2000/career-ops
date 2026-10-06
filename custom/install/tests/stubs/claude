@@ -4,7 +4,7 @@
 printf 'claude %s(cwd=%s)\n' "$(printf '%s ' "$@" | tr '\n' ' ')" "$PWD" >> "$STUB_LOG"
 printf '%s\0' "$@" > "$STUB_LOG.claude.argv"
 case "${1:-}" in
-  setup-token) echo "FAKE-SECRET-123"; exit 0 ;;
+  setup-token) echo "FAKE-SECRET-123"; exit "${FAKE_CLAUDE_SETUP_TOKEN_EXIT:-0}" ;;
   --version) echo "2.0.0 (Claude Code)"; exit 0 ;;
 esac
 if [ "${1:-}" = "-p" ]; then
@@ -18,5 +18,6 @@ if [ "${1:-}" = "-p" ]; then
     mkdir -p "$draft"; echo "- stub question" > "$draft/questions.md"
   fi
   echo "stub headless run finished"
+  exit "${FAKE_CLAUDE_P_EXIT:-0}"
 fi
 exit 0

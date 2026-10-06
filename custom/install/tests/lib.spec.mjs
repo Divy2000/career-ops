@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   versionAtLeast, mergeLocalPaths, uniqueDestName, normalizeMarkdown, normalizeRepoUrl, sameRepo,
   summarizeUnifiedDiff, parseDoctorState, interactiveOnboardPrompt, renderHeadlessPrompt,
-  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput,
-} from '../lib.mjs';
+  validateMarkdownInput, validateInputs, LIMITS, insertHouseRule, validateProjectsInput, canonicalPath } from '../lib.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { caseFlippedHome } from '../../test-support/case-home.mjs';
 
 const tmp = () => tempDir('ci-lib-');
 const write = (dir, name, data) => {
@@ -234,4 +235,36 @@ test('validateProjectsInput applies the --docs byte checks to a projects .md or 
   assert.match(validateProjectsInput(big).error, /over the 2 MiB limit/);
   fs.rmSync(big);
   assert.match(validateProjectsInput(path.join(d, 'missing.md')).error, /does not exist/);
+});
+
+test('summarizeUnifiedDiff counts a removed "---" rule and an added "++x" line; only the two file headers are skipped (SW8-scripts-02)', () => {
+  const diff = ['--- cv.md', '+++ resume.md', '@@ -1,4 +1,3 @@', ' # Me', '----', '+++x', ' Experience', '-- old dash item', ''].join('\n');
+  const s = summarizeUnifiedDiff(diff);
+  assert.equal(s.removed, 2);
+  assert.equal(s.added, 1);
+});
+
+test('summarizeUnifiedDiff counts the real diff -u output for a removed CV rule', () => {
+  const dir = tempDir('diff-');
+  {
+    fs.writeFileSync(path.join(dir, 'a.md'), '# Me\n---\nExperience\n');
+    fs.writeFileSync(path.join(dir, 'b.md'), '# Me\nExperience\n');
+    const out = spawnSync('diff', ['-u', 'a.md', 'b.md'], { cwd: dir, encoding: 'utf8' }).stdout;
+    const s = summarizeUnifiedDiff(out);
+    assert.deepEqual([s.added, s.removed], [0, 1], out);
+  }
+});
+
+test('canonicalPath resolves letter case as the confinement does, so one folder spelled two ways is the same path (SW4-tests-28)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
+  try {
+    const data = path.join(h.home, 'career-data');
+    fs.mkdirSync(data);
+    const flippedData = path.join(h.flipped, 'Career-Data');
+    assert.equal(canonicalPath(flippedData), canonicalPath(data));
+    assert.equal(canonicalPath(path.join(flippedData, 'not-yet')), path.join(canonicalPath(data), 'not-yet'));
+  } finally {
+    h.cleanup();
+  }
 });

@@ -66,7 +66,7 @@ node --test custom/*/tests/*.spec.mjs
 
 Files are named `*.spec.mjs` because upstream's `test-all.mjs` rejects `*.test.mjs` files outside `tests/`.
 
-The landing README pins an install tag (`fork-install-v3`). Before pointing it at a new tag, and in CI once the tag exists, check that the tag's `install.sh` accepts every flag the README documents (a tag that cannot be read fails the check):
+The landing README pins an install tag (`fork-install-v3`). `readme-flags.spec.mjs` checks by default that both the working tree's and that tag's `install.sh` accept every flag the README documents (a tag that is not available locally fails the check). Before pointing the README at a new tag, check that one alone:
 
 ```bash
 CAREER_OPS_INSTALL_CHECK_REF=fork-install-v3 node --test custom/install/tests/readme-flags.spec.mjs

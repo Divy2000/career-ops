@@ -225,15 +225,17 @@ function runSync(world, { home, inherited = {} }) {
   // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
   // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
   const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, ...env } = { ...GIT_ENV, ...inherited };
+  // The node running these specs, pinned as the plist pins one: sync.sh puts Homebrew's folders first on its PATH.
+  const childEnv = { CC_NODE_BIN: process.execPath, ...env, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` };
   const res = spawnSync('bash', [path.join(syncDir, 'sync.sh'), '--no-merge'], {
     cwd: world.live,
-    env: { ...env, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+    env: childEnv,
     encoding: 'utf8',
     timeout: 60_000,
   });
   const logDir = path.join(world.live, 'data/upstream-sync');
   const logName = existsSync(logDir) ? readdirSync(logDir).find((n) => n.endsWith('.log')) : null;
-  return { ...res, log: logName ? readFileSync(path.join(logDir, logName), 'utf8') : '' };
+  return { ...res, env: childEnv, log: logName ? readFileSync(path.join(logDir, logName), 'utf8') : '' };
 }
 
 test('sync.sh with tag-only remotes fetches main explicitly and computes BEHIND before going on', () => {
@@ -907,4 +909,15 @@ test('following an upstream flag rename in the CLI contract still auto-merges (S
 
 test('a contract.json the gate cannot parse after the merge holds the PR (SW5-scripts-01)', () => {
   assert.equal(contractRun('{ not json\n').protectedEdits, CONTRACT);
+});
+
+test('sync.sh under test runs on the node running these specs, pinned the way the plist pins one (SW4-tests-26)', () => {
+  const w = makeWorld({ upstreamAhead: false });
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.env.CC_NODE_BIN, process.execPath, 'pinned-node.sh puts this node ahead of Homebrew on the job PATH');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
 });

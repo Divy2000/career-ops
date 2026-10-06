@@ -1,4 +1,6 @@
 #!/bin/bash
 echo "npm $* (cwd=$PWD)" >> "$STUB_LOG"
 echo "npm stub: $*"
+# FAKE_NPM_FAIL_ON: the arguments of the one npm call that fails.
+if [ -n "${FAKE_NPM_FAIL_ON:-}" ] && [ "$*" = "$FAKE_NPM_FAIL_ON" ]; then exit 1; fi
 exit "${FAKE_NPM_EXIT:-0}"

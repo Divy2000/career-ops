@@ -1,9 +1,10 @@
 // Every installer flag the landing README documents must be accepted by install.sh. By default the check runs
-// against the working tree; give a ref to check the installer a published tag ships instead, which is what the
-// README's clone and bootstrap commands pin:
+// against the working tree and against the tag bootstrap.sh pins (CAREER_OPS_INSTALL_REF:-<tag>), which is what the
+// README's clone and bootstrap commands install; give a ref to check only that one instead:
 //   CAREER_OPS_INSTALL_CHECK_REF=fork-install-v3 node --test custom/install/tests/readme-flags.spec.mjs
 //   node custom/install/tests/readme-flags.spec.mjs --ref fork-install-v3
-// A ref that cannot be read fails the check; it never passes by skipping.
+// A ref given that way fails the check when it cannot be read. The default pinned tag is skipped with a fetch hint
+// when this clone does not have it (a shallow clone, the sync worktree); the working tree is always checked.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -25,9 +26,15 @@ export function checkRef(argv = process.argv.slice(2), env = process.env) {
   return env.CAREER_OPS_INSTALL_CHECK_REF || null;
 }
 
-/** install.sh at `ref` (written under a temp checkout layout), or the working tree's. */
-function installerAt(ref) {
+/**
+ * install.sh at `ref` (written under a temp checkout layout), or the working tree's. A ref missing from this clone
+ * fails when it was given explicitly; the default pinned tag is then skipped with a fetch hint instead, so a shallow
+ * clone or the sync worktree can still run the working-tree check.
+ */
+function installerAt(ref, { explicit }) {
   if (!ref) return { file: path.join(ROOT, INSTALL_REL), label: 'the working tree' };
+  const present = spawnSync('git', ['-C', ROOT, 'rev-parse', '-q', '--verify', `${ref}^{commit}`], { encoding: 'utf8' }).status === 0;
+  if (!present && !explicit) return { skip: `${ref} is not in this clone; fetch it to check it too: git fetch origin tag ${ref}` };
   const shown = spawnSync('git', ['-C', ROOT, 'show', `${ref}:${INSTALL_REL}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   assert.equal(shown.status, 0, `could not read ${INSTALL_REL} at ${ref}: ${shown.stderr.trim()} (fetch the tag first: git fetch origin tag ${ref})`);
   const file = path.join(tempDir('readme-flags-'), INSTALL_REL);
@@ -81,10 +88,24 @@ function accepts(installer, args) {
   return { ok: r.status === 0 && /Usage:/.test(r.stdout), why: `exit ${r.status}: ${(r.stderr || r.stdout).trim().split('\n')[0]}` };
 }
 
-const ref = checkRef();
+/** The tag bootstrap.sh installs by default: the one README users get. */
+export function pinnedRef(bootstrap = readFileSync(path.join(ROOT, 'custom/install/bootstrap.sh'), 'utf8')) {
+  const m = /CAREER_OPS_INSTALL_REF:-([^}"\s]+)\}/.exec(bootstrap);
+  assert.ok(m, 'bootstrap.sh pins no CAREER_OPS_INSTALL_REF default');
+  return m[1];
+}
 
-test(`every installer flag the README documents is accepted by install.sh at ${ref ?? 'the working tree'}`, () => {
-  const { file, label } = installerAt(ref);
+/** The installers to check: the one asked for, else the working tree and the tag bootstrap.sh pins. */
+export function refsToCheck(argv = process.argv.slice(2), env = process.env) {
+  const asked = checkRef(argv, env);
+  return asked ? [asked] : [null, pinnedRef()];
+}
+
+const explicit = checkRef() !== null;
+for (const ref of refsToCheck()) test(`every installer flag the README documents is accepted by install.sh at ${ref ?? 'the working tree'}`, (t) => {
+  const at = installerAt(ref, { explicit });
+  if (at.skip) return t.skip(at.skip);
+  const { file, label } = at;
   const invocations = [...commandLines(readme), ...documentedFlags(readme)];
   const flags = new Set(invocations.flat().filter((a) => a.startsWith('--')));
   // The README's own install commands and the flag table: if these are not found, the check would prove nothing.
@@ -107,4 +128,17 @@ test('the sample invocations cover the documented value forms', () => {
   const sample = '`--resume <file.md>` `--docs <a.md> [b.md ...]` `--onboard interactive\\|headless\\|none` `--docs` `--projects projects.md` `--yes`';
   assert.deepEqual(documentedFlags(sample), [['--resume', 'file.md'], ['--docs', 'a.md'], ['--onboard', 'interactive'], ['--onboard', 'headless'], ['--onboard', 'none'], ['--projects', 'projects.md'], ['--yes']]);
   assert.deepEqual(commandLines('```bash\n~/career-ops/custom/install/install.sh --resume r.md --docs a.md   # note\nbash bootstrap.sh --resume r.md\nless bootstrap.sh\n```\n'), [['--resume', 'r.md', '--docs', 'a.md'], ['--resume', 'r.md']]);
+});
+
+test('given the pinned tag is missing locally (a shallow clone, the sync worktree), when the default check runs, then it skips with a fetch hint; a ref given explicitly still fails', () => {
+  const missing = 'no-such-install-tag-sw4';
+  assert.deepEqual(installerAt(missing, { explicit: false }), { skip: `${missing} is not in this clone; fetch it to check it too: git fetch origin tag ${missing}` });
+  assert.throws(() => installerAt(missing, { explicit: true }), new RegExp(`could not read ${INSTALL_REL} at ${missing}: .*git fetch origin tag ${missing}`));
+  assert.match(readFileSync(installerAt('HEAD', { explicit: false }).file, 'utf8'), /^#!/);
+});
+
+test('by default the check covers the working tree and the tag bootstrap.sh pins, which README users install (SW4-tests-07)', () => {
+  assert.deepEqual(refsToCheck([], {}), [null, 'fork-install-v3']);
+  assert.deepEqual(refsToCheck(['--ref', 'x'], {}), ['x']);
+  assert.equal(pinnedRef('local ref="${CAREER_OPS_INSTALL_REF:-fork-install-v9}"'), 'fork-install-v9');
 });

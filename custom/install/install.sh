@@ -82,6 +82,7 @@ LOG_BUF=""
 VALIDATED=0
 MAC_FEATURES=0
 CLAUDE_BIN=""
+PREFLIGHT_FAILED=0
 TTY_OK=0
 PROMPT_OK=0
 CV_COPY=""
@@ -587,7 +588,8 @@ else
   fi
   DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
   mkdir -p "$DATA"
-  if [ -n "$DATA_ROOT_ARG" ] && [ "$(cd "$DATA" && pwd -P)" != "$(cd "$DATA_REQ" && pwd -P)" ]; then
+  # same-path resolves letter case too (realpathSync.native), as pwd -P does not on a case-insensitive volume.
+  if [ -n "$DATA_ROOT_ARG" ] && ! lib same-path "$DATA" "$DATA_REQ"; then
     die 1 "the data root resolves to $DATA (CAREER_OPS_ROOT or CAREER_OPS_DATA_DIR is set in your environment) instead of $DATA_REQ. Unset it and re-run."
   fi
   say "  data root: $DATA"
@@ -898,7 +900,8 @@ else
   fi
   if [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ]; then
     if ! (cd "$DIR" && run_logged npm --prefix custom/control-center run preflight); then
-      pending "The Control Center preflight failed; run: npm --prefix $(shell_quote "$DIR/custom/control-center") run preflight"
+      PREFLIGHT_FAILED=1
+      pending "The Control Center preflight failed; run: npm --prefix $(shell_quote "$DIR/custom/control-center") run preflight, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")"
     fi
   elif [ "$MAC_FEATURES" = 1 ]; then
     say "  Control Center preflight skipped until the Keychain item exists"
@@ -920,7 +923,9 @@ else
   say "Done."
 fi
 
-if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ]; then
+# A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
+# above (and exit 3) stay what the run ends with.
+if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
   say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
   exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
 fi

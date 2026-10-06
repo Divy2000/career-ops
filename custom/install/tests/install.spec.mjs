@@ -1268,3 +1268,74 @@ test('a data root that is the home directory spelled in another case is refused 
     h.cleanup();
   }
 });
+
+test('a marker naming the --data-root folder in another letter case is the same folder, not a conflict (SW4-tests-28)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
+  try {
+    const { w, D, args } = fresh();
+    const data = path.join(h.home, 'career-data');
+    fs.mkdirSync(data);
+    const marker = `${path.join(h.flipped, 'Career-Data')}\n`;
+    w.makeCheckout(D, { files: { '.career-ops-data': marker } });
+    const r = w.run(args('--data-root', data));
+    assert.doesNotMatch(r.out, /already points at/, r.out);
+    assert.equal(r.status, 3, r.out);
+    assert.equal(read(D, '.career-ops-data'), marker);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// ---- installer failure branches the always-succeeding stubs never ran (SW4-tests-29) ----
+
+test('claude setup-token that fails leaves the token as a pending action and says it did not finish', () => {
+  const { w, D } = fresh();
+  const r = w.run(['--dir', D, ...QUIET], { tty: 'y\ny\n', env: { FAKE_CLAUDE_SETUP_TOKEN_EXIT: '1' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /claude setup-token did not finish\./);
+  assert.match(r.out, /\d+\. Store the Claude token yourself, in your own terminal: claude setup-token/);
+  assert.equal(w.calls('security').filter((l) => l.startsWith('security add-generic-password')).length, 0);
+});
+
+test('a token that was not stored (the Keychain prompt was cancelled) is a pending action, not "stored"', () => {
+  const { w, D } = fresh();
+  const r = w.run(['--dir', D, ...QUIET], { tty: 'y\ny\n', env: { FAKE_SECURITY_ADD_NOOP: '1' } });
+  assert.equal(r.status, 3, r.out);
+  assert.doesNotMatch(r.out, /Keychain item stored\./);
+  assert.match(r.out, /\d+\. Store the Claude token yourself/);
+});
+
+test('a headless onboarding run that fails says so and still prints how to finish interactively', () => {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_P_EXIT: '1' } });
+  assert.match(r.out, /The headless run did not finish cleanly; review any drafts in /);
+  assert.doesNotMatch(r.out, /Drafts written:/);
+  assert.match(r.out, /claude 'Read custom\/install\/ONBOARDING\.md and follow it\.'/);
+});
+
+test('a Control Center npm ci that fails stops the install with exit 1 and names it', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { FAKE_NPM_FAIL_ON: '--prefix custom/control-center ci' } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /error: npm ci for the Control Center failed\. See .*install-.*\.log/);
+  assert.equal(w.calls('cc').length, 0, 'the Control Center is not started');
+});
+
+test('a failing Control Center preflight is a pending action, and the Control Center is not started on it', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_NPM_FAIL_ON: '--prefix custom/control-center run preflight' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /\d+\. The Control Center preflight failed; run: npm --prefix .*custom\/control-center' run preflight/);
+  assert.equal(w.calls('cc').length, 0, 'the Control Center is not started after a failed preflight');
+});
+
+test('a launchd install that fails (other than a job running) is a pending action with the retry command', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_LAUNCHD_EXIT: '1' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /\d+\. The launchd install failed\. Retry: bash .*custom\/launchd\/install\.sh' --jobs daily/);
+});

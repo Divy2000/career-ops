@@ -8,14 +8,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cliScriptPath } from '../core/adapter.js';
 import { localDate } from '../../shared/local-date.js';
+import { newsSince } from '../../../immigration/lib.mjs';
 import type { Exec } from '../routes/system.js';
 
 const IMM = path.join('data', 'immigration');
 const PENDING = path.join(IMM, 'pending.json');
+const SEEN = path.join(IMM, 'seen.json');
 
+/** A queue file the pass reads (pending.json, or seen.json for the last pass) is not in the shape watch.mjs writes. */
 export class PendingUnreadableError extends Error {
-  constructor(problem: string) {
-    super(`${PENDING} ${problem}; fix or remove it, then run the pass again`);
+  constructor(problem: string, file = PENDING) {
+    super(`${file} ${problem}; fix or remove it, then run the pass again`);
     this.name = 'PendingUnreadableError';
   }
 }
@@ -45,14 +48,43 @@ function readPending(dataRoot: string): unknown[] {
   return items;
 }
 
+// The day of the last successful pass, which watch.mjs --ack records; null before the first one.
+function readLastPass(dataRoot: string): string | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(dataRoot, SEEN), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  let seen: unknown;
+  try {
+    seen = JSON.parse(text);
+  } catch {
+    throw new PendingUnreadableError('is not valid JSON', SEEN);
+  }
+  const lastPass = (seen as { last_pass?: unknown } | null)?.last_pass;
+  if (lastPass === undefined || lastPass === null) return null;
+  if (typeof lastPass !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(lastPass)) throw new PendingUnreadableError('has a last_pass that is not a YYYY-MM-DD date', SEEN);
+  return lastPass;
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const stamp = (d: Date) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 
 export function preparePolicyPass(codeRoot: string, dataRoot: string, now = new Date()): PolicyPass {
   const items = readPending(dataRoot);
   const today = localDate(now);
+  // The news window daily-prompt.md searches, as watch.mjs prints it: back to the last successful pass, at least 3 days.
+  const lastPass = readLastPass(dataRoot);
+  let since: string;
+  try {
+    since = newsSince({ lastPass, today });
+  } catch {
+    throw new PendingUnreadableError('has a last_pass that is not a YYYY-MM-DD date', SEEN);
+  }
   // The shape watch.mjs prints and --ack reads (new_items[].id).
-  const watchJson = JSON.stringify({ date: today, new_items: items }, null, 2);
+  const watchJson = JSON.stringify({ date: today, news_since: since, new_items: items }, null, 2);
   let batch: string | null = null;
   if (items.length > 0) {
     batch = path.join(IMM, 'batches', `${stamp(now)}-cc-${crypto.randomBytes(4).toString('hex')}.json`);

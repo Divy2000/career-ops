@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { caseFlippedHome } from '../../test-support/case-home.mjs';
 import { isNestedCheckout } from '../../../lib/mjs-files.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -300,4 +301,16 @@ test('projects-check and projects-seed refuse bytes that are not UTF-8 instead o
     assert.match(r.stderr, /not valid UTF-8/, args[0]);
   }
   assert.equal(fs.existsSync(path.join(data, 'article-digest.md')), false);
+});
+
+test('cli.mjs same-path treats one folder spelled in two letter cases as the same path (SW4-tests-28)', (t) => {
+  const h = caseFlippedHome();
+  if (!h) return t.skip('needs a case-insensitive temp folder (macOS)');
+  try {
+    fs.mkdirSync(path.join(h.home, 'career-data'));
+    assert.equal(run(CLI, ['same-path', path.join(h.home, 'career-data'), path.join(h.flipped, 'Career-Data')]).status, 0);
+    assert.equal(run(CLI, ['same-path', path.join(h.home, 'career-data'), path.join(h.home, 'career-data-2')]).status, 1);
+  } finally {
+    h.cleanup();
+  }
 });

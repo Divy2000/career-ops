@@ -95,8 +95,12 @@ export function summarizeUnifiedDiff(diffText, previewLines = 40) {
   if (lines[lines.length - 1] === '') lines.pop();
   let added = 0;
   let removed = 0;
+  // The "--- a" / "+++ b" file headers come before the first hunk; after it, a line starting with "---" or "+++" is
+  // content (a removed "---" rule, an added "++x" line) and counts like any other.
+  let inHunk = false;
   for (const l of lines) {
-    if (l.startsWith('+++') || l.startsWith('---')) continue;
+    if (l.startsWith('@@')) inHunk = true;
+    if (!inHunk) continue;
     if (l.startsWith('+')) added++;
     else if (l.startsWith('-')) removed++;
   }
@@ -191,7 +195,8 @@ export function canonicalPath(p) {
   let cur = abs;
   for (;;) {
     try {
-      return path.join(fs.realpathSync(cur), ...tail.reverse());
+      // .native, as the confinement resolves roots: it also returns the folder's real letter case.
+      return path.join(fs.realpathSync.native(cur), ...tail.reverse());
     } catch {
       const parent = path.dirname(cur);
       if (parent === cur) return abs;

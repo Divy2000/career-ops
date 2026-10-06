@@ -175,6 +175,18 @@ export function sinceForSource({ lastSuccess, today, lookbackDays = SOURCE_LOOKB
 }
 
 /**
+ * Where the policy pass's news search starts: the date of the last successful pass (watch.mjs --ack records it), so
+ * news from days the pass was skipped or failed is still searched, and never later than `windowDays` before today.
+ */
+export function newsSince({ lastPass, today, windowDays = 3 }) {
+  assertIsoDate(today, 'today');
+  const floor = new Date(Date.parse(`${today}T00:00:00Z`) - windowDays * 86400000).toISOString().slice(0, 10);
+  if (lastPass === null || lastPass === undefined) return floor;
+  assertIsoDate(lastPass, 'lastPass');
+  return lastPass < floor ? lastPass : floor;
+}
+
+/**
  * The digest with a dated section saying the AI pass was skipped and why, directly under the title (newest first,
  * like the pass's own sections); unchanged when today's newest section already says it. A missing title is added.
  */
