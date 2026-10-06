@@ -76,3 +76,28 @@ describe('live invalidation of the Sponsorship lookup', () => {
     expect(fetches.lookup).toBe(2);
   });
 });
+
+describe('live invalidation of what a page session writes (SW-web-a-11)', () => {
+  function PageProbe() {
+    useLiveInvalidation();
+    // Application > Sponsorship reads the company file through the row's detail; the Interviews page reads interview-prep/.
+    useQuery({ queryKey: ['tracker', 'row', '1'], queryFn: () => ((fetches.row = (fetches.row ?? 0) + 1), { ok: true }) });
+    useQuery({ queryKey: ['tracker', 'interviews'], queryFn: () => ((fetches.interviews = (fetches.interviews ?? 0) + 1), { ok: true }) });
+    return null;
+  }
+
+  beforeEach(async () => {
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }) }, createElement(PageProbe))));
+    await until(() => fetches.row === 1 && fetches.interviews === 1, 'the first fetches');
+  });
+
+  it('a sponsorship check saving its company file refetches the application it was run from', async () => {
+    await act(async () => FakeEventSource.last!.emit('data.changed', { domain: 'immigration', paths: ['data/immigration/companies/acme-robotics.md'] }));
+    await until(() => fetches.row === 2, 'the application refetch');
+  });
+
+  it('a debrief or prep session writing under interview-prep/ refetches the Interviews page', async () => {
+    await act(async () => FakeEventSource.last!.emit('data.changed', { domain: 'interviews', paths: ['interview-prep/sessions/debrief.md'] }));
+    await until(() => fetches.interviews === 2, 'the interviews refetch');
+  });
+});

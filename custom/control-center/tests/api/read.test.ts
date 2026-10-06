@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { containedPath } from '../../server/routes/read.js';
-import { formatSse } from '../../server/watch/bus.js';
-import { domainFor } from '../../server/watch/watcher.js';
+import { formatSse, type EventBus } from '../../server/watch/bus.js';
+import { domainFor, startWatcher } from '../../server/watch/watcher.js';
 import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
@@ -340,6 +340,30 @@ describe('events', () => {
     expect(domainFor('modes/_custom.md')).toBe('config');
     expect(domainFor('data/control-center/runs/x/meta.json')).toBeNull();
     expect(domainFor('random.txt')).toBeNull();
+  });
+  it('maps interview files to the interviews domain: active-interviews.md and anything under interview-prep/ (SW-web-a-11)', () => {
+    expect(domainFor('data/active-interviews.md')).toBe('interviews');
+    expect(domainFor('active-interviews.md')).toBe('interviews');
+    expect(domainFor('interview-prep/story-bank.md')).toBe('interviews');
+    expect(domainFor('interview-prep/sessions/2026-10-05-acme-debrief.md')).toBe('interviews');
+  });
+  it('the watcher reports a file a session writes under interview-prep/ (SW-web-a-11)', async () => {
+    const root = tempDir('cc-watch-');
+    fs.mkdirSync(path.join(root, 'interview-prep', 'sessions'), { recursive: true });
+    const published: Array<{ type: string; payload: unknown }> = [];
+    const watcher = startWatcher(root, { publish: (type: string, payload: unknown) => void published.push({ type, payload }) } as unknown as EventBus, 20);
+    try {
+      await new Promise<void>((resolve) => watcher.on('ready', () => resolve()));
+      // FSEvents can miss a write made right after 'ready', so the session's write is repeated until one is seen.
+      const deadline = Date.now() + 10_000;
+      for (let i = 0; published.length === 0 && Date.now() < deadline; i++) {
+        if (i % 10 === 0) fs.writeFileSync(path.join(root, 'interview-prep', 'sessions', 'debrief.md'), `# Debrief ${i}\n`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(published[0]).toEqual({ type: 'data.changed', payload: { domain: 'interviews', paths: [path.join('interview-prep', 'sessions', 'debrief.md')] } });
+    } finally {
+      await watcher.close();
+    }
   });
   it('the SSE endpoint requires the cookie', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/api/events', headers: { host: '127.0.0.1:4317' } });
