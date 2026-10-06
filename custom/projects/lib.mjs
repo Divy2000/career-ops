@@ -165,6 +165,13 @@ function layoutProblem(lines, { spans }) {
       return 'it has text or nested items between its copy-paste bullets, which the form cannot keep in place; edit article-digest.md directly';
     }
   }
+  // A nested item or a lazy continuation right after the last bullet belongs to that bullet, but a rewrite would leave
+  // it in place, under whichever bullet ends up last. A label, fence, rule or heading there starts its own block.
+  const after = lines[spans[spans.length - 1][1] + 1] ?? '';
+  const ownBlock = LABEL.test(after) || FENCE.test(after) || RULE.test(after) || /^#{1,6}(\s|$)/.test(after);
+  if (/^\s+\S/.test(after) || (after.trim() && !ownBlock)) {
+    return 'it has a nested item or text right after its last copy-paste bullet, which the form cannot keep with that bullet; edit article-digest.md directly';
+  }
   return null;
 }
 

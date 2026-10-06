@@ -401,6 +401,24 @@ test('given nested items or text between the copy-paste bullets, when parsed, th
   assert.equal(byId(DIGEST, 'fraudshield').editProblem, null);
 });
 
+test('given a nested item or a lazy continuation right after the last bullet, when parsed, then the entry cannot be edited, so the line is never reattached to another bullet (SW5-libs-02)', () => {
+  const md = '## Alpha\n- One.\n- Two.\n  - detail of two\n\n## Beta\n- One.\n- Two.\nlazy continuation of two\n\n## Gamma\n- One.\n- Two.\n\nA paragraph after a blank line.\n';
+  const [alpha, beta, gamma] = parseLibrary(md).entries;
+  assert.match(alpha.editProblem, /edit article-digest\.md directly/);
+  assert.match(beta.editProblem, /edit article-digest\.md directly/);
+  assert.equal(gamma.editProblem, null, 'a paragraph after a blank line stays editable');
+  assert.throws(() => replaceEntry(md, 'alpha', { ...entryInput(alpha), bullets: ['One.'] }), /cannot be edited here/);
+  assert.throws(() => replaceEntry(md, 'beta', { ...entryInput(beta), bullets: ['Two.', 'One.'] }), /cannot be edited here/);
+});
+
+test('given a label, a code fence, a rule or a sub-heading straight after the last bullet, when parsed, then the entry stays editable, since none of them belongs to that bullet (review of SW5-libs-02)', () => {
+  const md = '## Alpha\n- One.\n- Two.\n**Notes:** kept\n\n## Beta\n- One.\n- Two.\n```\ncode\n```\n\n## Gamma\n- One.\n- Two.\n---\n\n## Delta\n- One.\n- Two.\n### Details\n';
+  const entries = parseLibrary(md).entries;
+  assert.deepEqual(entries.map((e) => e.editProblem), [null, null, null, null]);
+  const out = replaceEntry(md, 'alpha', { ...entryInput(entries[0]), bullets: ['Two.', 'One.'] });
+  assert.equal(out, md.replace('- One.\n- Two.\n**Notes:**', '- Two.\n- One.\n**Notes:**'));
+});
+
 test('given a CRLF digest, when one proof point is edited, then every other byte stays, line endings included', () => {
   const crlf = DIGEST.replace(/\n/g, '\r\n');
   const e = byId(crlf, 'fraudshield');
