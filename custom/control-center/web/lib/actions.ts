@@ -27,10 +27,24 @@ export function paramAccepts(meta: ActionMeta | undefined, name: string, value: 
   return re.test(value);
 }
 
+const MAX_ISSUES = 3;
+
+/** A schema refusal's zod issues as "field: message" ("urls item 3: ..."), so the user sees what to fix. */
+function describeIssues(issues: unknown): string {
+  if (!Array.isArray(issues) || issues.length === 0) return '';
+  const one = (i: { path?: unknown; message?: unknown }) => {
+    const where = (Array.isArray(i.path) ? i.path : []).map((p) => (typeof p === 'number' ? `item ${p + 1}` : String(p))).join(' ');
+    return `${where ? `${where}: ` : ''}${String(i.message ?? 'invalid')}`;
+  };
+  const shown = issues.slice(0, MAX_ISSUES).map(one);
+  if (issues.length > MAX_ISSUES) shown.push(`and ${issues.length - MAX_ISSUES} more`);
+  return `: ${shown.join('; ')}`;
+}
+
 export function describeError(err: unknown): string {
   const e = err as ApiError;
-  const body = e?.body as { error?: string; stderr?: string } | null | undefined;
-  return `${body?.error ?? e?.message ?? 'unknown error'}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
+  const body = e?.body as { error?: string; stderr?: string; issues?: unknown } | null | undefined;
+  return `${body?.error ?? e?.message ?? 'unknown error'}${describeIssues(body?.issues)}${body?.stderr ? ` (${body.stderr.trim().slice(-200)})` : ''}`;
 }
 
 /**
