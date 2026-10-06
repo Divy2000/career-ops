@@ -2,6 +2,7 @@ import { createElement, useEffect } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { until } from '../helpers/until';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionPanelProps } from '@web/components/SessionPanel';
 
@@ -44,7 +45,10 @@ async function mount() {
       if (upload) {
         const name = decodeURIComponent(upload[1]!);
         const respond = () => json(200, { path: `/data/uploads/${name}`, bytes: 3 });
-        if (holdNames.has(name)) return new Promise<Response>((resolve) => held.set(name, () => resolve(respond())));
+        if (holdNames.has(name)) {
+          const response = respond();
+          return new Promise<Response>((resolve) => held.set(name, () => resolve(response)));
+        }
         return respond();
       }
       return json(404, { error: 'not stubbed' });
@@ -66,7 +70,12 @@ async function choose(name: string, type: string, text = 'abc') {
     Object.defineProperty(input, 'files', { value: [file], configurable: true });
     input.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  for (let i = 0; i < 20; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  // What the pick leads to: a held upload is in flight, a PDF gets its parser panel, a text file fills the draft, and
+  // anything else is refused with a note (SW2-tests-21: no fixed sleep before the asserts).
+  if (holdNames.has(name)) await until(() => held.has(name), `the ${name} upload request`);
+  else if (/\.pdf$/i.test(name)) await until(() => panelsShown().includes(`/data/uploads/${name}`), `the ${name} parser panel`);
+  else if (/\.(md|txt|markdown)$/i.test(name)) await until(() => draft() === text, `the ${name} text in the draft`);
+  else await until(() => host.querySelector('[role="status"]'), `the note refusing ${name}`);
 }
 
 const draft = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="CV markdown"]')!.value;
@@ -131,8 +140,13 @@ describe('Import CV: one parser session per uploaded file', () => {
     expect(host.querySelector<HTMLInputElement>('input[type="file"][aria-label="CV file"]')!.accept).toBe('.md,.txt,.markdown,.pdf');
   });
 
-  const settle = async () => {
-    for (let i = 0; i < 20; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  /**
+   * Releases a held upload and lets the page take its answer: the response, its body, and the render after it. The
+   * test then checks nothing changed, which no poll can wait for (SW2-tests-21).
+   */
+  const release = async (name: string) => {
+    await act(async () => held.get(name)!());
+    for (let i = 0; i < 3; i++) await act(async () => new Promise((r) => setImmediate(r)));
   };
 
   it('ignores a slow PDF upload that finishes after a Markdown file was picked: no parser comes back and the loaded text stays', async () => {
@@ -140,8 +154,7 @@ describe('Import CV: one parser session per uploaded file', () => {
     await mount();
     await choose('a.pdf', 'application/pdf');
     await choose('cv.md', 'text/markdown', '# Picked Markdown');
-    await act(async () => held.get('a.pdf')!());
-    await settle();
+    await release('a.pdf');
     expect(panelsShown()).toEqual([]);
     expect(panels.mounts).toEqual([]);
     expect(draft()).toBe('# Picked Markdown');
@@ -152,8 +165,7 @@ describe('Import CV: one parser session per uploaded file', () => {
     await mount();
     await choose('a.pdf', 'application/pdf');
     await choose('b.pdf', 'application/pdf');
-    await act(async () => held.get('a.pdf')!());
-    await settle();
+    await release('a.pdf');
     expect(panelsShown()).toEqual(['/data/uploads/b.pdf']);
     expect(panels.mounts).toEqual(['/data/uploads/b.pdf']);
   });
@@ -189,22 +201,26 @@ describe('Import CV: Save as cv.md', () => {
       area.dispatchEvent(new Event('input', { bubbles: true }));
     });
   }
-  const settleSave = async () => {
-    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
-  };
+  const alertText = () => host.querySelector('[role="alert"]')?.textContent ?? null;
+  /** Clicks Save as cv.md and waits for what it leads to: the Replace dialog, or a save sent without one. */
   async function clickSave() {
+    const before = puts.length;
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save as cv.md')!;
     await act(async () => button.click());
-    await settleSave();
+    await until(() => dialog() || puts.length > before, 'the Replace dialog or the save');
+    if (!dialog()) await until(() => host.querySelector('[role="status"]')?.textContent?.includes('cv.md saved') || alertText(), 'the save result');
   }
   /** The confirm dialog renders in a portal on document.body, outside the component's host. */
   const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
-  async function answer(name: 'Replace cv.md' | 'Cancel') {
+  /** Answers the Replace dialog and waits for the outcome the test expects to check: closed, saved, or refused. */
+  async function answer(name: 'Replace cv.md' | 'Cancel', outcome: 'closed' | 'saved' | 'refused' = name === 'Cancel' ? 'closed' : 'saved') {
     const button = [...dialog()!.querySelectorAll('button')].find((b) => b.textContent?.trim() === name)!;
     await act(async () => button.click());
-    await settleSave();
+    await until(
+      () => !dialog() && (outcome === 'closed' || (outcome === 'saved' ? host.querySelector('[role="status"]')?.textContent?.includes('cv.md saved') : alertText())),
+      `the dialog to close with the ${outcome} outcome`,
+    );
   }
-  const alertText = () => host.querySelector('[role="alert"]')?.textContent ?? null;
 
   it('asks before replacing a cv.md that already has text, naming what is there, and Cancel writes nothing', async () => {
     await mount();
@@ -234,7 +250,7 @@ describe('Import CV: Save as cv.md', () => {
     await typeDraft('# Imported CV');
     await clickSave();
     disk = { text: '# Edited in the cv.md editor\n', etag: 'e2' };
-    await answer('Replace cv.md');
+    await answer('Replace cv.md', 'refused');
     expect(puts).toEqual([{ text: '# Imported CV', ifMatch: 'e1' }]);
     expect(disk.text).toBe('# Edited in the cv.md editor\n');
     expect(alertText()).toMatch(/changed on disk/);
@@ -262,7 +278,7 @@ describe('Import CV: Save as cv.md', () => {
     await mount();
     await typeDraft('# Imported CV');
     await clickSave();
-    await answer('Replace cv.md');
+    await answer('Replace cv.md', 'refused');
     expect(alertText()).toContain(reason);
     expect(host.textContent).not.toContain('cv.md saved');
   });
@@ -272,7 +288,7 @@ describe('Import CV: Save as cv.md', () => {
     await typeDraft('# Imported CV');
     await clickSave();
     disk = { text: '# Edited in the cv.md editor\n', etag: 'e2' };
-    await answer('Replace cv.md');
+    await answer('Replace cv.md', 'refused');
     expect(alertText()).toMatch(/changed on disk/);
     await clickSave();
     expect(dialog()?.textContent).toContain('# Edited in the cv.md editor');

@@ -7,6 +7,7 @@ import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { until } from '../helpers/until';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginsTab } from '@web/features/settings/PluginsTab';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
@@ -39,7 +40,8 @@ async function mount() {
   root = createRoot(host);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(PluginsTab)))));
-  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  // Both rows rendered, and the actions list loaded (notion's Run button needs it).
+  await until(() => host.querySelectorAll('tbody tr').length === 2 && [...host.querySelectorAll('button')].some((b) => b.textContent?.trim().startsWith('Run ')), 'the plugin rows and their Run buttons');
 }
 
 const rowOf = (id: string) => [...host.querySelectorAll('tbody tr')].find((tr) => tr.textContent?.includes(id))!;

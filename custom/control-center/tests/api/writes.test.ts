@@ -422,8 +422,21 @@ describe('daily job awareness', () => {
     fs.writeFileSync(pidfile, '4242\n');
     jobRunning = true;
     try {
-      await new Promise((r) => setTimeout(r, 200));
-      expect((await get('/api/system/daily')).json()).toMatchObject({ running: true });
+      // The answer of a watcher poll that started after the pidfile was written: the first poll to finish after now may
+      // have started before it, the one after that did not (SW2-tests-21).
+      const since = Date.now();
+      let first: string | null = null;
+      let status: { running: boolean; checkedAt: string | null } | null = null;
+      for (let i = 0; i < 400 && !status; i++) {
+        const s = (await get('/api/system/daily')).json() as { running: boolean; checkedAt: string | null };
+        if (s.checkedAt && Date.parse(s.checkedAt) > since) {
+          if (first === null) first = s.checkedAt;
+          else if (s.checkedAt !== first) status = s;
+        }
+        if (!status) await new Promise((r) => setTimeout(r, 15));
+      }
+      expect(status, 'the daily watcher polled twice after the pidfile was written').not.toBeNull();
+      expect(status).toMatchObject({ running: true });
     } finally {
       jobRunning = false;
       fs.rmSync(pidfile);

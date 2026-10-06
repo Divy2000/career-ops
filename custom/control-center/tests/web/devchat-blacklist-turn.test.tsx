@@ -5,6 +5,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { until } from '../helpers/until';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DevChatPage } from '@web/features/dev/DevChatPage';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
@@ -86,7 +87,7 @@ beforeEach(async () => {
   const router = createRouter({ routeTree: rootRoute.addChildren([dev, session]), history: createMemoryHistory({ initialEntries: ['/dev'] }) });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(RouterProvider, { router })))));
-  await flush();
+  await until(() => host.querySelector('textarea[aria-label="Prompt for devchat"]'), 'the Dev Chat prompt');
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -100,6 +101,7 @@ describe('Dev Chat blacklist unlock', () => {
     expect(checkbox().checked).toBe(true);
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'Block Initech');
     await click(button('Send'));
+    await until(() => sent.length === 1, 'the first turn');
     expect(sent).toHaveLength(1);
     expect(sent[0]!.body.blacklistAllowed).toBe(true);
     expect(sent[0]!.headers['X-CC-Explicit']).toBe('blacklist');
@@ -110,10 +112,12 @@ describe('Dev Chat blacklist unlock', () => {
     await click(checkbox());
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'Block Initech');
     await click(button('Send'));
+    await until(() => FakeEventSource.last, 'the session event stream');
     await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
-    await flush();
+    await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the reply field');
     await type(host.querySelector('input[aria-label="Reply to the session"]')!, 'Now tidy the notes');
     await click(button('Send', 'last'));
+    await until(() => sent.length === 2, 'the second turn');
     expect(sent).toHaveLength(2);
     expect(sent[1]!.url).toBe('/api/sessions/s-1/turns');
     expect(sent[1]!.body.blacklistAllowed).toBeUndefined();
@@ -123,11 +127,13 @@ describe('Dev Chat blacklist unlock', () => {
   it('given the box is ticked after a turn, when the reply is forked, then the fork carries the unlock and the box clears (SW-web-b-12)', async () => {
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'A plain turn');
     await click(button('Send'));
+    await until(() => FakeEventSource.last, 'the session event stream');
     await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
-    await flush();
+    await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the reply field');
     await click(checkbox());
     await type(host.querySelector('input[aria-label="Reply to the session"]')!, 'Block Initech in a fork');
     await click(button('Fork'));
+    await until(() => sent.at(-1)?.url.endsWith('/fork'), 'the fork');
     expect(sent.at(-1)!.url).toBe('/api/sessions/s-1/fork');
     expect(sent.at(-1)!.body.blacklistAllowed).toBe(true);
     expect(sent.at(-1)!.headers['X-CC-Explicit']).toBe('blacklist');
@@ -139,6 +145,7 @@ describe('Dev Chat blacklist unlock', () => {
     await click(checkbox());
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'Block Initech');
     await click(button('Send'));
+    await until(() => host.textContent?.includes('only a Dev Chat turn can unlock'), 'the refusal');
     expect(host.textContent).toContain('only a Dev Chat turn can unlock data/blacklist.md');
     expect(checkbox().checked).toBe(true);
   });

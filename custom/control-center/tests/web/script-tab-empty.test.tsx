@@ -7,6 +7,7 @@ import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { until } from '../helpers/until';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScriptTab } from '@web/features/insights/ScriptTab';
 
@@ -32,7 +33,8 @@ async function mount(read: { exit: number; json: unknown; text: string }) {
   root = createRoot(host);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ScriptTab, { script: 'analyzePatterns', title: 'Patterns' }))));
-  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  // The run's timestamp shows once the read has landed.
+  await until(() => host.textContent?.includes('computed'), 'the script read');
 }
 
 describe('an insights script that exits 1 with its own "not enough data" answer', () => {

@@ -2,6 +2,7 @@ import { createElement, useEffect } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { until } from '../helpers/until';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionPanelProps } from '@web/components/SessionPanel';
 
@@ -72,8 +73,19 @@ async function choose(name: string, type: string) {
     Object.defineProperty(input, 'files', { value: [file], configurable: true });
     input.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  for (let i = 0; i < 20; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  // What the pick leads to (SW2-tests-21: no fixed sleep before the asserts): a held upload is in flight, a PDF gets its
+  // parser panel, a refused type gets its alert, and a JSON or Markdown file fills the import box.
+  if (hold.upload && /\.pdf$/i.test(name)) await until(() => held.some((h) => h.kind === 'upload' && h.url.includes(encodeURIComponent(name))), `the ${name} upload request`);
+  else if (/\.pdf$/i.test(name)) await until(() => panelsShown().includes(`projects/${name}`), `the ${name} parser panel`);
+  else if (/\.docx$/i.test(name)) await until(() => host.querySelector('[role="alert"]'), `the alert refusing ${name}`);
+  else await until(() => importText() === 'abc', `the ${name} text in the import box`);
 }
+
+/** Lets the page take a released response: its body and the render after it. What it then checks is that nothing came back. */
+async function drain() {
+  for (let i = 0; i < 3; i++) await act(async () => new Promise((r) => setImmediate(r)));
+}
+const sentTo = (url: string) => sent.filter((c) => c.url === url).length;
 
 const importText = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Projects to import"]')!.value;
 const panelsShown = () => [...host.querySelectorAll('[data-testid="session-panel"]')].map((p) => p.textContent);
@@ -130,10 +142,10 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(host.querySelector('[aria-label="Import source"]')?.textContent).toContain('documents/projects/second.pdf');
     const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(label))!;
     await act(async () => button('Preview').click());
-    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    await until(() => button('Append'), 'the preview and its Append button');
     expect(sent.find((c) => c.url === '/api/projects/convert')?.body).toEqual({ format: 'markdown', text: '## From Second\n- fresh.', source: 'projects/second.pdf' });
     await act(async () => button('Append').click());
-    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    await until(() => sentTo('/api/projects/append') === 1, 'the append');
     expect(sent.find((c) => c.url === '/api/projects/append')?.body).toEqual({ markdown: '## From Second\n- fresh.\n<!-- projects/second.pdf -->\n', source: 'projects/second.pdf' });
   });
 
@@ -144,9 +156,6 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(panelsShown()).toEqual([]);
   });
 
-  const settle = async () => {
-    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
-  };
   const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(label));
   const typeInto = async (value: string) => {
     const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Projects to import"]')!;
@@ -161,7 +170,7 @@ describe('Import projects: parser sessions per uploaded document', () => {
       Object.defineProperty(input, 'files', { value: [new File([content], name, { type })], configurable: true });
       input.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    await settle();
+    await until(() => importText() === content, `the ${name} text in the import box`);
   };
 
   it('a slow upload that finishes after a newer choice does not bring back its parser', async () => {
@@ -171,7 +180,7 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(held.map((h) => h.kind)).toEqual(['upload']);
     await fileWith('projects.json', '[{"name":"Kite"}]', 'application/json');
     await act(async () => held[0]!.release());
-    await settle();
+    await drain();
     expect(panelsShown()).toEqual([]);
     expect(importText()).toBe('[{"name":"Kite"}]');
     expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
@@ -186,14 +195,14 @@ describe('Import projects: parser sessions per uploaded document', () => {
     await choose('second.pdf', 'application/pdf');
     await act(async () => panels.onEnvelope.get('projects/second.pdf')!('projects', { markdown: '## From Second\n- b.' }, 1));
     await act(async () => held[0]!.release());
-    await settle();
+    await drain();
     expect(host.querySelector('[aria-label="Import preview"]')).toBeNull();
     expect(button('Append')).toBeUndefined();
     hold.convert = false;
     await act(async () => button('Preview')!.click());
-    await settle();
+    await until(() => button('Append'), 'the new preview and its Append button');
     await act(async () => button('Append')!.click());
-    await settle();
+    await until(() => sentTo('/api/projects/append') === 1, 'the append');
     expect(sent.filter((c) => c.url === '/api/projects/append').map((c) => c.body)).toEqual([{ markdown: '## From Second\n- b.\n<!-- projects/second.pdf -->\n', source: 'projects/second.pdf' }]);
   });
 
@@ -205,8 +214,9 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(host.querySelector('[aria-label="Import source"]')).not.toBeNull();
     await typeInto('[{"name":"Unrelated","description":"Pasted."}]');
     expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
+    const converts = sentTo('/api/projects/convert');
     await act(async () => button('Preview')!.click());
-    await settle();
+    await until(() => sentTo('/api/projects/convert') > converts, 'the preview request');
     expect(sent.filter((c) => c.url === '/api/projects/convert').at(-1)?.body).toEqual({ format: 'markdown', text: '[{"name":"Unrelated","description":"Pasted."}]' });
     await fill();
     const select = host.querySelector<HTMLSelectElement>('select[aria-label="Import format"]')!;

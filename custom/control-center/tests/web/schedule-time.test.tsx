@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { until } from '../helpers/until';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleCards } from '@web/features/runs/ScheduleCards';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
@@ -34,7 +35,7 @@ beforeEach(async () => {
   root = createRoot(host);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(ScheduleCards)))));
-  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  await until(() => host.querySelector('input[aria-label="Daily job hour"]'), 'the daily job card');
 });
 
 afterEach(async () => {
