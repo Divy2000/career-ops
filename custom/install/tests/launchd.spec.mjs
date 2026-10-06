@@ -366,3 +366,16 @@ test('a plist that passes lint replaces the installed one', () => {
   assert.deepEqual(r.plists, [`${DAILY}.plist`]);
   assert.equal(fs.statSync(path.join(r.home, 'Library', 'LaunchAgents', `${DAILY}.plist`)).mode & 0o777, 0o644, 'readable like any LaunchAgents plist, not mktemp\'s 0600');
 });
+
+test('a data root under Documents or Desktop gets a Full Disk Access note: launchd\'s bash writes the logs there (SW3-scripts-03)', () => {
+  for (const place of ['Documents', 'Desktop']) {
+    const probe = run(['--jobs', 'daily']);
+    const data = path.join(probe.home, place, 'career-data');
+    fs.mkdirSync(data, { recursive: true });
+    const r = run(['--jobs', 'daily'], { env: { CAREER_OPS_ROOT: data, HOME: probe.home } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /note: the data root .* is under Desktop or Documents; give \/bin\/bash Full Disk Access/, place);
+  }
+  const elsewhere = run(['--jobs', 'daily']);
+  assert.doesNotMatch(elsewhere.stdout, /Full Disk Access/);
+});

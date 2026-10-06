@@ -818,6 +818,23 @@ test('a daily job that is already installed is left alone: its time and on/off s
   }
 });
 
+test('a data root under Documents or Desktop gets the Full Disk Access note too, though the checkout is elsewhere (SW3-scripts-03)', () => {
+  for (const place of ['Documents', 'Desktop']) {
+    const { w, D } = fresh({ keychain: true });
+    const data = path.join(w.home, place, 'career-data');
+    w.makeCheckout(D);
+    fs.mkdirSync(data, { recursive: true });
+    for (const [rel, text] of Object.entries(READY_FILES)) {
+      fs.mkdirSync(path.dirname(path.join(data, rel)), { recursive: true });
+      fs.writeFileSync(path.join(data, rel), text);
+    }
+    const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+    assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
+    assert.match(r.out, /Note: the data root is under Desktop or Documents; give \/bin\/bash Full Disk Access \(System Settings > Privacy & Security\) so launchd can write it\./, place);
+    assert.doesNotMatch(r.out, /this checkout is under Desktop or Documents/, place);
+  }
+});
+
 test('--no-launchd and a missing Keychain item both skip the job', () => {
   const a = fresh({ keychain: true });
   a.w.makeCheckout(a.D, { files: READY_FILES });

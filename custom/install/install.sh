@@ -805,6 +805,8 @@ else
     if [ "$WITH_UPSTREAM_SYNC" = 1 ]; then jobs=all; fi
     say "  The daily job (08:00) runs headless Claude on your subscription: policy watch, scan, rank, shortlist."
     case "$DIR" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: this checkout is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can read it." ;; esac
+    # The job's bash writes its lock, day logs and launchd logs under the data root, so that needs it too.
+    case "$DATA" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: the data root is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it." ;; esac
     if [ "$PROMPT_OK" = 1 ] && ! ask "Install the daily job now?" y; then
       say "  skipped; install later: $DAILY_CMD"
     elif ! run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs"; then

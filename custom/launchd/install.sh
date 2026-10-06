@@ -2,7 +2,7 @@
 # Install (or reinstall) the fork's launchd jobs for this checkout.
 #   daily  08:00  custom/immigration/run-daily.sh   policy watch, scan, rank, shortlist
 #   weekly Sun 03:00 custom/upstream-sync/sync.sh   merge upstream main into the fork
-# /bin/bash needs Full Disk Access when the checkout lives under ~/Desktop or ~/Documents.
+# /bin/bash needs Full Disk Access when the checkout or the data root lives under ~/Desktop or ~/Documents.
 # Usage: install.sh [--jobs daily|all]   (default all; "daily" skips the weekly sync, which only the fork maintainer needs)
 set -euo pipefail
 JOBS=all
@@ -27,6 +27,12 @@ AGENTS="$HOME/Library/LaunchAgents"
 # script to point them at the new root.
 DATA="$(cd "$ROOT" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
 mkdir -p "$AGENTS" "$DATA/data/immigration/logs"
+# launchd's /bin/bash reads the checkout and writes the data root (lock, day logs, launchd.out/err.log).
+fda_note() { # what path
+  case "$2" in "$HOME/Desktop"/* | "$HOME/Documents"/*) echo "note: the $1 $2 is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security), or the jobs cannot use it." ;; esac
+}
+fda_note checkout "$ROOT"
+fda_note "data root" "$DATA"
 if [ "$JOBS" = all ]; then mkdir -p "$DATA/data/upstream-sync"; fi
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
 ENV_ROOT=0
