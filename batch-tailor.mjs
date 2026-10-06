@@ -126,6 +126,7 @@ for (let i = 0; i < toProcess.length; i++) {
   const claudeArgs = [
     '-p',
     '--dangerously-skip-permissions',
+    '--effort', 'medium',
     '--append-system-prompt-file',
     // Absolute: the state file already resolves through __dirname, so passing
     // this one bare handed the worker a cwd-relative path that only exists when

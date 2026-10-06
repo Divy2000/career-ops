@@ -776,7 +776,8 @@
       "--mcp-config",
       "--model",
       "--restricted",
-      "--tools"
+      "--tools",
+      "--effort"
     ],
     "acceptedButNotInHelp": [
       "--max-turns"

@@ -108,6 +108,15 @@ try {
   check('the first installed CLI wins', detectCli(CLI_CANDIDATES, b => b === 'codex').bin === 'codex');
   check('Hermes is excluded from batch candidates', !CLI_CANDIDATES.some(c => c.bin === 'hermes'));
   check('priority order is respected', detectCli(CLI_CANDIDATES, () => true).bin === 'claude');
+  {
+    const argsFor = (bin) => CLI_CANDIDATES.find(c => c.bin === bin).args('PROMPT');
+    const claudeArgs = argsFor('claude');
+    check('the claude call pins --effort medium', claudeArgs[claudeArgs.indexOf('--effort') + 1] === 'medium');
+    check(
+      'no other CLI is handed claude\'s --effort flag',
+      CLI_CANDIDATES.filter(c => c.bin !== 'claude').every(c => !c.args('PROMPT').includes('--effort')),
+    );
+  }
   check('no CLI installed returns null', detectCli(CLI_CANDIDATES, () => false) === null);
   check('a Pi-only shell is detected', detectCli(CLI_CANDIDATES, b => b === 'pi')?.bin === 'pi');
 

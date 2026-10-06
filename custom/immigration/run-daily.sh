@@ -193,6 +193,7 @@ process.stdout.write(policy.sha256);
     --disallowedTools "Bash,Agent,Task,NotebookEdit,PowerShell" \
     --settings "$settings_dir/settings.json" \
     --strict-mcp-config \
+    --effort medium \
     --max-turns 40 \
     --output-format text || rc=$?
   rm -rf "$settings_dir"

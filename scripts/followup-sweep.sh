@@ -17,7 +17,7 @@ PROMPT="Run the career-ops 'followup' mode (modes/followup.md) against data/appl
 
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') follow-up sweep starting ==="
-  claude -p "$PROMPT"
+  claude -p "$PROMPT" --effort medium
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') follow-up sweep done -> $DRAFT_FILE ==="
 } >> "$LOG_FILE" 2>&1
 

@@ -52,6 +52,13 @@ describe('invocation builder', () => {
     expect(argv).toEqual(expect.arrayContaining(['--resume', base.claudeSessionId, '--fork-session', '--model', 'sonnet', '--max-turns', '12']));
     expect(argv).not.toContain('--session-id');
   });
+  it('pins --effort medium on first and resumed turns, since --restricted loads no user settings to supply it', () => {
+    const policy = getModePolicy('oferta')!;
+    for (const argv of [buildArgv({ ...base, policy }), buildArgv({ ...base, policy, resume: true, fork: true })]) {
+      expect(argv[argv.indexOf('--effort') + 1]).toBe('medium');
+      expect(argv.filter((a) => a === '--effort')).toHaveLength(1);
+    }
+  });
   it('apply adds the Playwright MCP config; pdf/hm-audit keeps Task; read-only classes disallow every write tool', () => {
     expect(buildArgv({ ...base, policy: getModePolicy('apply')! })).toContain('--mcp-config');
     expect(buildDisallowedTools(getModePolicy('pdf/hm-audit')!)).not.toContain('Task');

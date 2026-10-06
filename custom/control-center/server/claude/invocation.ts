@@ -155,6 +155,9 @@ export function buildArgv(input: InvocationInput): string[] {
     '--settings',
     input.settingsFile,
     '--strict-mcp-config',
+    // --restricted loads no user settings, so nothing else would set the effort.
+    '--effort',
+    'medium',
     ...(input.policy.mcp === 'playwright' ? ['--mcp-config', input.mcpConfig ?? PLAYWRIGHT_MCP_PATH] : []),
     ...(input.model ? ['--model', input.model] : []),
     ...(input.maxTurns ? ['--max-turns', String(input.maxTurns)] : []),

@@ -57,7 +57,10 @@ export function spawnHeadlessCli(binPath, args, options, fencing) {
         "Declare what the worker needs (worker-capabilities.mjs) so its permissions can be applied.",
     );
   }
-  const { args: fencedArgs } = fenceArgs({ ...fencing, args });
+  // An explicit effort, so a run never depends on the user's own Claude Code
+  // settings. --effort is Claude Code's flag; other runtimes do not take it.
+  const runArgs = fencing.cliId === "claude" ? [...args, "--effort", "medium"] : args;
+  const { args: fencedArgs } = fenceArgs({ ...fencing, args: runArgs });
   // On Windows an npm-installed CLI is a script shim spawn() cannot run without a
   // shell, so launch the .js/.exe it wraps (a no-op elsewhere; cli-launch.mjs).
   // After fencing, so the fencers see the CLI's own argv rather than node's.

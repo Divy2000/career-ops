@@ -19,8 +19,8 @@
 // worker.
 import { pass, fail, rmSync, ROOT } from './helpers.mjs';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { join, delimiter } from 'path';
 import { tmpdir } from 'os';
 
 console.log('\nbatch-tailor.mjs — flag parsing and worker paths');
@@ -175,6 +175,30 @@ try {
       pass('the pdf mode file is not passed as a bare cwd-relative path');
     } else {
       fail('batch-tailor.mjs still passes a bare "modes/pdf.md" — breaks from any other cwd');
+    }
+  }
+
+  // ── 6. The worker runs at an explicit effort, not the user's default ──
+  // Launched for real against a fake `claude` first on PATH that records its
+  // argv, with a threshold the 4.5 job passes, so the argv observed is the one
+  // the script actually spawns.
+  if (process.platform !== 'win32') {
+    const bin = join(sandbox.dir, 'bin');
+    const argvFile = join(sandbox.dir, 'claude-argv.txt');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'claude'), `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argvFile}"\n`, { mode: 0o755 });
+    const env = { ...process.env, CAREER_OPS_BATCH_STATE: sandbox.file, CAREER_OPS_ROOT: sandbox.dir, PATH: `${bin}${delimiter}${process.env.PATH}` };
+    let out = '';
+    try {
+      out = execFileSync(NODE, [SCRIPT, '--min-score', '4.0'], { cwd: tmpdir(), env, encoding: 'utf-8', timeout: 30000 });
+    } catch (e) {
+      out = `${e.stdout || ''}${e.stderr || ''}`;
+    }
+    const argv = existsSync(argvFile) ? readFileSync(argvFile, 'utf-8').split('\n') : [];
+    if (argv[argv.indexOf('--effort') + 1] === 'medium') {
+      pass('the tailoring worker is launched with --effort medium');
+    } else {
+      fail(`worker argv lacks --effort medium: argv=${JSON.stringify(argv)} out=${out.trim().slice(0, 160)}`);
     }
   }
 } finally {
