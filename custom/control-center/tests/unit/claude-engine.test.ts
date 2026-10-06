@@ -278,6 +278,27 @@ describe('guard hook', () => {
     expect(pre('Edit', { file_path: path.join(realRoot, 'data', 'applications.md'), old_string: 'a', new_string: 'b' }).status).toBe(2);
     expect(pre('MultiEdit', { file_path: path.join(realRoot, 'reports', '..', 'cv.md'), edits: [] }).status).toBe(2);
   });
+  it('a Write through a dangling link goes where the link points: outside the roots it is refused and nothing is created (SW2-tests-04)', () => {
+    const outside = fs.realpathSync(tempDir('cc-hook-dangling-'));
+    // A file link, a folder link and a chain whose last hop leaves the roots, none of whose targets exist yet.
+    fs.symlinkSync(path.join(outside, 'new.md'), path.join(realRoot, 'reports', 'dangling.md'));
+    fs.symlinkSync(path.join(outside, 'missing-dir'), path.join(realRoot, 'reports', 'dangling-dir'));
+    fs.symlinkSync(path.join(realRoot, 'reports', 'hop.md'), path.join(realRoot, 'reports', 'chain.md'));
+    fs.symlinkSync(path.join(outside, 'chained.md'), path.join(realRoot, 'reports', 'hop.md'));
+    for (const file of ['dangling.md', 'dangling-dir/x.md', 'chain.md']) {
+      const out = pre('Write', { file_path: path.join(realRoot, 'reports', file), content: 'x' });
+      expect(out.status, file).toBe(2);
+      expect(out.stderr, file).toMatch(/outside the repo and data roots/);
+    }
+    expect(fs.readdirSync(outside)).toEqual([]);
+    // A dangling link whose target is inside the write scope is written like that target.
+    fs.symlinkSync(path.join(realRoot, 'reports', '003-later.md'), path.join(realRoot, 'reports', 'inside-link.md'));
+    expect(pre('Write', { file_path: path.join(realRoot, 'reports', 'inside-link.md'), content: 'x' }).status).toBe(0);
+    // A loop of links leads nowhere that can be checked: refused.
+    fs.symlinkSync(path.join(realRoot, 'reports', 'loop-b.md'), path.join(realRoot, 'reports', 'loop-a.md'));
+    fs.symlinkSync(path.join(realRoot, 'reports', 'loop-a.md'), path.join(realRoot, 'reports', 'loop-b.md'));
+    expect(pre('Write', { file_path: path.join(realRoot, 'reports', 'loop-a.md'), content: 'x' }).status).toBe(2);
+  });
   it('refuses a write path with a .. segment or a leading ~: after a symlink the kernel resolves .. against its target, not on paper', () => {
     const outside = fs.realpathSync(tempDir('cc-hook-outside-'));
     fs.mkdirSync(path.join(outside, 'inner'));
