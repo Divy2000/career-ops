@@ -181,6 +181,23 @@ PLIST
   echo "installed $label${kept:+ ($kept)}"
 }
 
+# A reinstall boots the job out of launchd, which kills a run in progress mid-step (a policy pass, a rank, a sync
+# half way through its checks). So when a job about to be reinstalled is running right now, nothing is changed: exit 4
+# and say to re-run once it finishes (install.sh records that as a pending action).
+job_running() { # read whole first: grep -q on a pipe could stop launchctl with SIGPIPE, and pipefail would read "idle"
+  local out
+  out="$(launchctl print "gui/$(id -u)/$1" 2>/dev/null)" || return 1
+  grep -Eq '^[[:space:]]*state = running$' <<<"$out"
+}
+labels=com.career-ops.immigration-watch
+if [ "$JOBS" = all ]; then labels="$labels com.career-ops.upstream-sync"; fi
+for label in $labels; do
+  if job_running "$label"; then
+    echo "$label is running right now; nothing was changed. Re-run this once it finishes: bash $(shell_quote "$0") --jobs $JOBS" >&2
+    exit 4
+  fi
+done
+
 write_plist com.career-ops.immigration-watch custom/immigration/run-daily.sh 8 0 "" data/immigration/logs
 if [ "$JOBS" = all ]; then
   write_plist com.career-ops.upstream-sync custom/upstream-sync/sync.sh 3 0 0 data/upstream-sync

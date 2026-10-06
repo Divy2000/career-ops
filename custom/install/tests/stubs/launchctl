@@ -1,5 +1,10 @@
 #!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
+# STUB_LAUNCHD_RUNNING lists labels (space-separated) that `print` reports as running right now.
+if [ "${1:-}" = print ]; then
+  case " ${STUB_LAUNCHD_RUNNING:-} " in *" ${2##*/} "*) printf '%s = {\n\tstate = running\n\tpid = 4242\n}\n' "$2" ;; *) printf '%s = {\n\tstate = not running\n}\n' "$2" ;; esac
+  exit 0
+fi
 # STUB_PRINT_DISABLED_OUTPUT names a file that `print-disabled` prints as is (a long list, the older "=> true" form).
 # exec, so a reader that stops early kills the printer with SIGPIPE, as it would the real launchctl.
 if [ "${1:-}" = print-disabled ] && [ -n "${STUB_PRINT_DISABLED_OUTPUT:-}" ]; then exec cat "$STUB_PRINT_DISABLED_OUTPUT"; fi

@@ -809,8 +809,15 @@ else
     case "$DATA" in "$HOME/Desktop"/* | "$HOME/Documents"/*) say "  Note: the data root is under Desktop or Documents; give /bin/bash Full Disk Access (System Settings > Privacy & Security) so launchd can write it." ;; esac
     if [ "$PROMPT_OK" = 1 ] && ! ask "Install the daily job now?" y; then
       say "  skipped; install later: $DAILY_CMD"
-    elif ! run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs"; then
-      pending "The launchd install failed. Retry: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
+    else
+      rc=0
+      run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs" || rc=$?
+      if [ "$rc" = 4 ]; then
+        # launchd/install.sh never boots out a job mid-run: it changed nothing.
+        pending "A launchd job is running right now, so it was left as it was. Once it finishes, run: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
+      elif [ "$rc" != 0 ]; then
+        pending "The launchd install failed. Retry: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
+      fi
     fi
   fi
 fi

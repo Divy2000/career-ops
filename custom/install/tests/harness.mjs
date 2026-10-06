@@ -60,7 +60,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 fs.mkdirSync(path.join(root, 'data', 'h1b'), { recursive: true });
 fs.writeFileSync(path.join(root, 'data', 'h1b', 'index.ndjson.gz'), 'x');
 `);
-  put(path.join(dir, 'custom/launchd/install.sh'), '#!/bin/bash\necho "launchd-install $*" >> "$STUB_LOG"\n', 0o755);
+  put(path.join(dir, 'custom/launchd/install.sh'), '#!/bin/bash\necho "launchd-install $*" >> "$STUB_LOG"\nexit "${FAKE_LAUNCHD_EXIT:-0}"\n', 0o755);
   put(path.join(dir, 'custom/control-center/bin/cc'), '#!/bin/sh\necho "cc $*" >> "$STUB_LOG"\n', 0o755);
   put(path.join(dir, 'custom/control-center/package.json'), '{"name":"fake-cc"}\n');
 }

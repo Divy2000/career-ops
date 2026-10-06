@@ -357,7 +357,8 @@ test('a plist that fails plutil -lint never replaces the installed one or reache
   assert.equal(plistText(r, DAILY), 'PRE-EXISTING');
   assert.deepEqual(r.plists, [`${DAILY}.plist`]);
   assert.match(r.stderr, /plist for com\.career-ops\.immigration-watch failed plutil -lint/);
-  assert.doesNotMatch(r.log, /^launchctl /m);
+  // Read-only queries (launchctl print, to see whether the job is running) may run; nothing that changes launchd may.
+  assert.doesNotMatch(r.log, /^launchctl (?!print )/m);
 });
 
 test('a plist that passes lint replaces the installed one', () => {
@@ -471,6 +472,33 @@ test('a job listed as enabled, or not listed, is turned on as usual after a rein
   const file = path.join(T, 'enabled.txt');
   fs.writeFileSync(file, `disabled services = {\n\t\t"${DAILY}" => enabled\n\t\t"${DAILY}.other" => disabled\n\t}\n`);
   const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 7, minute: 5 }) }, env: { STUB_PRINT_DISABLED_OUTPUT: file } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.log, new RegExp(`^launchctl bootstrap .*${DAILY.replaceAll('.', '\\.')}\\.plist$`, 'm'));
+});
+
+// ---- a job that is running right now is never booted out (SW5-scripts-02) ----
+
+test('a reinstall while the daily run is in progress changes nothing and says to re-run when it finishes', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const old = oldPlist(DAILY, { hour: 6, minute: 30 });
+  const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: old }, env: { STUB_LAUNCHD_RUNNING: DAILY } });
+  assert.equal(r.status, 4, r.stdout + r.stderr);
+  assert.match(r.stderr, /com\.career-ops\.immigration-watch is running right now; nothing was changed\. Re-run this once it finishes/);
+  assert.equal(plistText(r, DAILY), old.replaceAll('$T', r.T));
+  assert.doesNotMatch(r.log, /^launchctl (bootout|enable|bootstrap)/m);
+});
+
+test('with --jobs all, a running weekly sync stops the reinstall before either job is touched', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const old = oldPlist(DAILY, { hour: 6, minute: 30 });
+  const r = run(['--jobs', 'all'], { existingXml: { [DAILY]: old }, env: { STUB_LAUNCHD_RUNNING: SYNC } });
+  assert.equal(r.status, 4, r.stdout + r.stderr);
+  assert.match(r.stderr, /com\.career-ops\.upstream-sync is running right now/);
+  assert.equal(plistText(r, DAILY), old.replaceAll('$T', r.T));
+  assert.deepEqual(r.plists, [`${DAILY}.plist`]);
+  assert.doesNotMatch(r.log, /^launchctl (bootout|enable|bootstrap)/m);
+});
+
+test('a job that is loaded but idle is reinstalled as usual', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const r = run(['--jobs', 'daily'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 6, minute: 30 }) }, env: { STUB_LAUNCHD_RUNNING: 'com.example.other' } });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.log, new RegExp(`^launchctl bootstrap .*${DAILY.replaceAll('.', '\\.')}\\.plist$`, 'm'));
 });

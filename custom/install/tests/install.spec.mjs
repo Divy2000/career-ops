@@ -833,6 +833,16 @@ test('a data root under Documents or Desktop gets the Full Disk Access note too,
   }
 });
 
+test('a job running right now makes the launchd step a pending action to re-run once it finishes, not a failure (SW5-scripts-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_LAUNCHD_EXIT: '4' } });
+  assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily']);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /A launchd job is running right now, so it was left as it was\. Once it finishes, run: bash .*custom\/launchd\/install\.sh' --jobs daily/);
+  assert.doesNotMatch(r.out, /The launchd install failed/);
+});
+
 test('--no-launchd and a missing Keychain item both skip the job', () => {
   const a = fresh({ keychain: true });
   a.w.makeCheckout(a.D, { files: READY_FILES });
