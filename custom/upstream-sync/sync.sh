@@ -187,7 +187,7 @@ if [ -z "$BLOCKERS" ]; then
   LIVE_UPDATE="$(update_live_checkout)"
   case $? in
     0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
-    3) echo "$LIVE_UPDATE"; notify "Merged upstream, but npm install failed in the live checkout; run it by hand" ;;
+    3) echo "$LIVE_UPDATE"; notify "Merged upstream, but in the live checkout ${LIVE_UPDATE#*, but }" ;;
     10) echo "live checkout not updated: $LIVE_UPDATE"; notify "Merged upstream; $LIVE_UPDATE, so it was not updated. Run: git switch main && git pull --ff-only" ;;
     *) fail "$LIVE_UPDATE" ;;
   esac

@@ -241,21 +241,31 @@ merge_blockers() {
 
 # update_live_checkout: after the sync PR merged, bring the live checkout (the
 # current directory) up to the new origin/main: fetch, then fast-forward only
-# when it is on main with no tracked local changes, and reinstall its root
-# dependencies (lifecycle scripts included, as a user's own install would) when
-# the merge changed them. Prints one line saying what happened. Returns 0 when
-# updated, 3 when updated but the install failed, 10 when left alone (not on
-# main, or local changes), 1 when the fetch, the fingerprint or the
+# when it is on main with no tracked local changes. Then reinstall what the
+# merge changed, as a user's own install would: the root dependencies
+# (lifecycle scripts included) when deps_fingerprint changed, and the Control
+# Center's (npm ci) when its tracked lockfile changed, since bin/cc only checks
+# that its node_modules exists. Prints one line saying what happened. Returns 0
+# when updated, 3 when updated but an install failed, 10 when left alone (not
+# on main, or local changes), 1 when the fetch, the fingerprint or the
 # fast-forward failed.
 update_live_checkout() {
-  local deps_before
+  local deps_before cc_before failed=""
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
   deps_before="$(deps_fingerprint HEAD)" || { echo "cannot read the live checkout's dependency files"; return 1; }
+  cc_before="$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)"
   git merge -q --ff-only origin/main || { echo "live checkout could not fast-forward"; return 1; }
   if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
-    echo "live checkout now at $(git rev-parse --short HEAD), but npm install failed; run it by hand"
+    failed="npm install"
+  fi
+  if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ] &&
+    ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
+    failed="${failed:+$failed and }npm --prefix custom/control-center ci"
+  fi
+  if [ -n "$failed" ]; then
+    echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand"
     return 3
   fi
   echo "live checkout now at $(git rev-parse --short HEAD)"
