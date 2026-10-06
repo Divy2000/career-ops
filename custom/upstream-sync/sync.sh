@@ -32,6 +32,10 @@ if [ -z "$DATA" ] || [ ! -d "$DATA" ]; then
   exit 1
 fi
 STATE_DIR="$DATA/data/upstream-sync"
+# The log and reports go to STATE_DIR, resolved above. Everything after this runs code from the sync worktree
+# (installs, both upstream suite runs, the custom and control-center checks, Claude), which must never see the
+# user's data root: test-all's live archive test, for one, writes into getCareerOpsRoot()/jds.
+for v in $(compgen -e CAREER_OPS_); do unset "$v"; done
 TODAY="$(date +%Y-%m-%d)"
 BRANCH="sync/upstream-$TODAY"
 FORK="Divy2000/career-ops"
