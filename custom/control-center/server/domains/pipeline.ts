@@ -34,7 +34,7 @@ const RANK_RE = new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*\\/\\s*5\\s*${RANK_DASH}?\\s*
 // `trust: <score>[ flag,flag]`, `note: <text>`) and rank-pipeline.mjs formatRankSegment (`rank: <n>/5 <dash> <reason>`).
 // So a company or title like `Rank: Senior Engineer` or `posted: soon` stays text, and so does a location such as
 // `Remote: US` (scan.mjs keeps colons in it): only those written forms are labels, in any column.
-const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
+export const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
 
 export function seniorityOf(title: string): string | null {
   const t = title.toLowerCase();

@@ -10,6 +10,7 @@ import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReport } from './reports.js';
 import { inside } from '../lib/paths.js';
 import { unescapeMarkdownUrl } from './inboxSkip.js';
+import { WRITTEN_SEGMENT } from './pipeline.js';
 
 const PENDING_RE = /^##\s+(Pendientes|Pending)\s*$/i;
 const PROCESSED_RE = /^##\s+(Procesadas|Processed)\s*$/i;
@@ -90,7 +91,9 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     if (unescapeMarkdownUrl(cell) !== target) continue;
     remove.add(i);
     if (listed.has(target) || processedLine !== null) continue;
-    const parts = body.split('|').map((s) => s.trim());
+    // Company and role are the positional cells after the URL: a rank, posted, trust or note segment a writer appended
+    // (rank-pipeline.mjs puts the rank right after a bare URL) is not one, so the report's own values stand in.
+    const parts = body.split('|').map((s) => s.trim()).filter((cell, i) => i === 0 || !WRITTEN_SEGMENT.test(cell));
     processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
   }
   if (remove.size === 0) return { text, moved: false };

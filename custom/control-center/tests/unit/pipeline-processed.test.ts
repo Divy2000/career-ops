@@ -71,6 +71,15 @@ describe('moving an evaluated posting to Processed', () => {
     expect(moveToProcessed(md, 'https://jobs.example.com/apply?ids[0]=7', POSTING).text).toBe(`## Pending\n## Processed\n- [x] #040 | ${escaped} | Acme | Eng | 4.0/5 | PDF ✅\n`);
   });
 
+  it('a ranked bare-URL row moves with the report\'s company and role, never a rank, posted or note segment as the company (SW5-server-02)', () => {
+    const dash = String.fromCharCode(0x2014);
+    const md = `## Pending\n- [ ] ${URL} | rank: 4.0/5 ${dash} strong backend match | posted: 2026-09-15 | note: from a friend\n## Processed\n`;
+    expect(moveToProcessed(md, URL, POSTING).text).toBe(`## Pending\n## Processed\n\n- [x] #042 | ${URL} | Acme (report) | Engineer (report) | 4.2/5 | PDF ❌\n`);
+    // A row with its own company keeps it, with the segments after it ignored.
+    const named = `## Pending\n- [ ] ${URL} | Acme | rank: 4.0/5 ${dash} fit\n## Processed\n`;
+    expect(moveToProcessed(named, URL, POSTING).text).toContain(`- [x] #042 | ${URL} | Acme | Engineer (report) | 4.2/5 | PDF ❌`);
+  });
+
   it('only drops the Pending copy of a URL Processed already lists', () => {
     const md = `## Pending\n- [ ] ${URL} | Acme | Eng\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`;
     expect(moveToProcessed(md, URL, POSTING).text).toBe(`## Pending\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`);
