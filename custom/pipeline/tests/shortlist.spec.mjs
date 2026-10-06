@@ -154,3 +154,35 @@ test('a lookup that fails names check.mjs\'s reason and marks the row lookup fai
   const again = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
   assert.match(again.stdout, /\(2 tier lookups\)/, 'a failed lookup is retried on the next run, never cached as an answer');
 });
+
+// ---- rows with no usable company name (SW3-libs-03) ----
+
+/** A root with a URL-only row and a row whose company is only a legal suffix, ranked above the cut, and an old cache entry. */
+function namelessRoot() {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | rank: 4.0/5 — fit\n- [ ] https://jobs.example.com/2 | Inc. | Data Engineer | Remote | rank: 3.5/5 — fit\n');
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  // What earlier versions cached for a nameless row: the DOL tier "unknown".
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ '': { tier: 'unknown', matched: null, checked: localToday(), note: 'no usable company name' } }));
+  return root;
+}
+
+test('a row with no usable company name is labelled as such and left unadjusted, with a lookup backend present', () => {
+  const root = namelessRoot();
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, '', 'nothing was looked up');
+  assert.match(r.stdout, /\(0 tier lookups\)/);
+  assert.deepEqual(sponsorCells(root), [['4', '4', 'no company name'], ['3.5', '3.5', 'no company name']]);
+});
+
+test('a row with no usable company name reads the same without a backend, and triggers no install warning', () => {
+  const root = namelessRoot();
+  const env = rootEnv(root, { H1B_INDEX_PATH: path.join(root, 'no-index.db') });
+  delete env.H1B_API_BASE;
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, '');
+  assert.deepEqual(sponsorCells(root), [['4', '4', 'no company name'], ['3.5', '3.5', 'no company name']]);
+});

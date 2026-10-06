@@ -83,24 +83,26 @@ function lookupError(err) {
   return err.message.split('\n')[0];
 }
 
-async function loadTiers(companies, today) {
+// A URL-only row has no company, and a feed can give only a legal suffix ("Inc."): nothing to look up or score.
+const usableName = (c) => Boolean(c.replace(/\b(inc|llc|ltd|corp)\b\.?/gi, '').trim());
+
+async function loadTiers(allCompanies, today) {
   const cache = existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {};
   const fresh = (e) => e && !e.error && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
+  const nameless = allCompanies.filter((c) => !usableName(c));
+  const companies = allCompanies.filter(usableName);
+  const withNameless = (tiers) => new Map([...nameless.map((c) => [c, 'no company name']), ...tiers]);
   const stale = companies.filter((c) => !fresh(cache[c]));
   const missing = stale.length ? lookupBackendMissing() : null;
   if (missing) {
     // Nothing is cached for these, so the first run after an install looks them up.
     process.stderr.write(`shortlist: ${missing}\n`);
     const tierOf = (c) => (stale.includes(c) ? 'lookup unavailable' : cache[c].tier);
-    return { tiers: new Map(companies.map((c) => [c, tierOf(c)])), looked: 0 };
+    return { tiers: withNameless(companies.map((c) => [c, tierOf(c)])), looked: 0 };
   }
   let looked = 0;
   for (const c of companies) {
     if (fresh(cache[c])) continue;
-    if (!c.replace(/\b(inc|llc|ltd|corp)\b\.?/gi, '').trim()) {
-      cache[c] = { tier: 'unknown', matched: null, checked: today, note: 'no usable company name' };
-      continue;
-    }
     try {
       cache[c] = { ...(await lookupTier(c)), checked: today };
     } catch (err) {
@@ -112,7 +114,7 @@ async function loadTiers(companies, today) {
   // data/immigration exists only once the daily job or a sponsorship check ran.
   await mkdir(path.dirname(TIER_CACHE), { recursive: true });
   await writeFile(TIER_CACHE, JSON.stringify(cache, null, 2) + '\n');
-  return { tiers: new Map(companies.map((c) => [c, cache[c].tier])), looked };
+  return { tiers: withNameless(companies.map((c) => [c, cache[c].tier])), looked };
 }
 
 async function loadAlerts(companies) {
@@ -195,7 +197,7 @@ async function main() {
   const md = [
     `# Shortlist - ${today}`,
     '',
-    `Ranked rows with rank >= ${minRank}: ${shortlist.length + excluded.length}. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5; lookup unavailable/failed: no DOL answer, no adjustment). Sponsorship tier is DOL filing history and lags policy; full evaluation re-checks current news.`,
+    `Ranked rows with rank >= ${minRank}: ${shortlist.length + excluded.length}. Score = rank + sponsorship adjustment (strong +0.5, moderate +0.2, unknown -0.3, weak -1.0, none/staffing-shop -1.5; lookup unavailable/failed or no company name: no DOL answer, no adjustment). Sponsorship tier is DOL filing history and lags policy; full evaluation re-checks current news.`,
     '',
     '| # | Score | Rank | Sponsor | Company | Role | Location | Posted | Why |',
     '|---|---|---|---|---|---|---|---|---|',

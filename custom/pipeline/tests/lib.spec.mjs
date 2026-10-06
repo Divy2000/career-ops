@@ -81,7 +81,7 @@ test('sponsorAdjustment scores tiers from strong (boost) to none (heavy penalty)
 });
 
 test('sponsorAdjustment leaves a row with no DOL answer unadjusted and says why, never as the DOL tier unknown', () => {
-  for (const tier of ['lookup unavailable', 'lookup failed']) {
+  for (const tier of ['lookup unavailable', 'lookup failed', 'no company name']) {
     const a = sponsorAdjustment({ tier, alert: null });
     assert.equal(a.delta, 0);
     assert.equal(a.label, tier);
