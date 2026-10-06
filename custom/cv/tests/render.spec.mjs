@@ -131,6 +131,23 @@ test('given every density overflowing, when run with --strict-pages, then it exi
   assert.match(fs.readFileSync(html, 'utf8'), /<html[^>]*data-density="3"/);
 });
 
+test('given a report whose good CV is indexed, when a strict render for it overflows every density, then nothing is published and the index keeps that CV (SW6-libs-01)', { timeout: 240000 }, () => {
+  const payload = longPayload();
+  const root = dataRoot({ cv: cvMarkdownFor(payload) });
+  const html = buildInto(root, payload);
+  const index = path.join(root, 'data', 'pdf-index.tsv');
+  fs.mkdirSync(path.dirname(index), { recursive: true });
+  const indexed = '# report\tpdf\thtml\tformat\tdate\tkind - written by generate-pdf.mjs, do not edit\n12\toutput/cv-acme-v1.pdf\toutput/cv-acme-v1.html\tletter\t2026-10-01\tcv\n';
+  fs.writeFileSync(index, indexed);
+  const strict = render(root, html, ['--max-pages=1', '--strict-pages', '--report=12']);
+  assert.notEqual(strict.status, 0);
+  assert.match(strict.stderr, /does not fit 1 page/);
+  assert.equal(fs.readFileSync(index, 'utf8'), indexed);
+  const lax = render(root, html, ['--max-pages=1', '--report=12']);
+  assert.equal(lax.status, 0, lax.stderr);
+  assert.match(fs.readFileSync(index, 'utf8'), /^12\toutput\/cv-test\.pdf\toutput\/cv-test\.html\tletter\t\d{4}-\d{2}-\d{2}\tcv$/m, 'without --strict-pages the kept PDF is indexed for the report, as before');
+});
+
 test('given generate-pdf.mjs failing the fact check, when run, then it stops after one attempt and passes the message through', { timeout: 120000 }, () => {
   const cv = cvMarkdownFor(fixture).replace('saves the team lead about 5 hours every week', 'saves the team lead time every week');
   const root = dataRoot({ cv });
