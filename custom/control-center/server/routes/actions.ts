@@ -16,12 +16,17 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
 
   app.get('/api/actions', async () => actionMetadata());
 
-  app.post<{ Params: { actionId: string }; Body: { params?: unknown } }>('/api/actions/:actionId', async (req, reply) => {
+  app.post<{ Params: { actionId: string }; Body: { params?: unknown; confirmed?: unknown } }>('/api/actions/:actionId', async (req, reply) => {
     const action = findAction(req.params.actionId);
     if (!action) return reply.code(404).send({ error: `unknown action ${req.params.actionId}` });
     const parsed = action.params.safeParse(req.body?.params ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid params', issues: parsed.error.issues });
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, tmpInputs: [] as string[] };
+    // A destructive or costly action runs only when the caller says the user confirmed it (the dialog the page shows);
+    // a dry-run preview needs no confirmation.
+    if (action.confirm && !action.preview?.(parsed.data) && req.body?.confirmed !== true) {
+      return reply.code(428).send({ error: `${action.label} needs confirmation: ${action.confirm}`, confirm: action.confirm });
+    }
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir };
     const problem = await action.check?.(parsed.data, ctx);
     if (problem) return reply.code(400).send({ error: problem });
     const cmd = action.build(parsed.data, ctx);

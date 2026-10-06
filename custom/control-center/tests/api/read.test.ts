@@ -41,6 +41,68 @@ describe('read endpoints', () => {
     expect(body.companyHistory).toEqual([]);
   });
 
+  it('one malformed line in company-alerts.tsv or policy-changes.tsv degrades the sponsorship data and says why, instead of failing the Application and Sponsorship pages (SW2-server-01)', async () => {
+    const own = await makeTestApp();
+    try {
+      const imm = path.join(own.cfg.dataRoot, 'data', 'immigration');
+      // A session that writes the house rule's words ("pause") instead of the allowed status, and a non-ISO date.
+      fs.appendFileSync(path.join(imm, 'company-alerts.tsv'), '2026-10-05\tAcme Robotics\tacme-robotics\tpause\tAcme pauses H-1B\thttps://news.example/acme\n');
+      fs.appendFileSync(path.join(imm, 'policy-changes.tsv'), 'Oct 5\t\tagency\tA title\thttps://agency.example/x\tnone\n');
+      const call = (url: string) => own.app.inject({ method: 'GET', url, headers: own.authed });
+      const app = await call('/api/tracker/1');
+      expect(app.statusCode, app.body).toBe(200);
+      expect(app.json().sponsorship).toMatchObject({ companyFile: { slug: 'acme-robotics' }, alert: null, error: expect.stringMatching(/company-alerts\.tsv line 4: status must be one of/) });
+      const overview = await call('/api/immigration/overview');
+      expect(overview.statusCode, overview.body).toBe(200);
+      expect(overview.json()).toMatchObject({
+        alerts: { latest: [], history: expect.arrayContaining([expect.objectContaining({ status: 'pause' })]) },
+        alertsError: expect.stringMatching(/company-alerts\.tsv line 4/),
+        policyChanges: [],
+        policyChangesError: expect.stringMatching(/policy-changes\.tsv line 4/),
+      });
+      expect((await call('/api/immigration/companies/acme-robotics')).statusCode).toBe(200);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('GET /api/tracker/:n finds the company alert by its slug when the alert names the DOL legal name (SW2-tests-07 review)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.appendFileSync(path.join(own.cfg.dataRoot, 'data', 'immigration', 'company-alerts.tsv'), '2026-10-04\tAcme Robotics, Inc.\tacme-robotics\tpaused\tAcme pauses H-1B for new hires\thttps://news.example/acme\n');
+      const body = (await own.app.inject({ method: 'GET', url: '/api/tracker/1', headers: own.authed })).json();
+      expect(body.sponsorship.alert).toMatchObject({ slug: 'acme-robotics', company: 'Acme Robotics, Inc.', status: 'paused' });
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('GET /api/tracker/:n finds the company check by its file slug when the check is headed with the DOL legal name (SW2-tests-07)', async () => {
+    const own = await makeTestApp();
+    try {
+      // A check started from Sponsorship > Lookup names the DOL entity, so its heading carries the legal suffix.
+      const file = path.join(own.cfg.dataRoot, 'data', 'immigration', 'companies', 'acme-robotics.md');
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/^# .*$/m, '# Acme Robotics, Inc. sponsorship check'));
+      const body = (await own.app.inject({ method: 'GET', url: '/api/tracker/1', headers: own.authed })).json();
+      expect(body.row.company).toBe('Acme Robotics');
+      expect(body.sponsorship.companyFile).toMatchObject({ slug: 'acme-robotics', name: 'Acme Robotics, Inc.', verdict: 'sponsoring' });
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('GET /api/tracker/:n answers for a row whose company is only a legal suffix ("Inc."), which has no company slug, by matching names (SW2 review)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.appendFileSync(path.join(own.cfg.dataRoot, 'data', 'applications.md'), '| 7 | 2026-10-01 | Inc. | - | Data role | 3.1/5 | Applied | ❌ | - | company name lost in a paste |\n');
+      const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ row: { company: 'Inc.' }, sponsorship: { companyFile: null, alert: null } });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n gives an unknown-employer (?) row no company history, company file or alert (SW-server-05)', async () => {
     const own = await makeTestApp();
     try {
@@ -53,7 +115,7 @@ describe('read endpoints', () => {
       const body = res.json();
       expect(body.row.company).toBe('?');
       expect(body.companyHistory).toEqual([]);
-      expect(body.sponsorship).toEqual({ companyFile: null, alert: null });
+      expect(body.sponsorship).toEqual({ companyFile: null, alert: null, error: null });
     } finally {
       await own.close();
     }
@@ -361,6 +423,27 @@ describe('events', () => {
         await new Promise((r) => setTimeout(r, 50));
       }
       expect(published[0]).toEqual({ type: 'data.changed', payload: { domain: 'interviews', paths: [path.join('interview-prep', 'sessions', 'debrief.md')] } });
+    } finally {
+      await watcher.close();
+    }
+  });
+  it('the watcher reports a tracker edit for a data root inside a folder named control-center, and still ignores data/control-center/ (SW2-server-05)', async () => {
+    const root = path.join(tempDir('cc-watch-'), 'control-center', 'career-data');
+    fs.mkdirSync(path.join(root, 'data', 'control-center', 'runs'), { recursive: true });
+    const published: Array<{ type: string; payload: { domain: string; paths: string[] } }> = [];
+    const watcher = startWatcher(root, { publish: (type: string, payload: { domain: string; paths: string[] }) => void published.push({ type, payload }) } as unknown as EventBus, 20);
+    try {
+      await new Promise<void>((resolve) => watcher.on('ready', () => resolve()));
+      // FSEvents can miss a write made right after 'ready', so the edit is repeated until one is seen.
+      const deadline = Date.now() + 10_000;
+      for (let i = 0; published.length === 0 && Date.now() < deadline; i++) {
+        if (i % 10 === 0) {
+          fs.writeFileSync(path.join(root, 'data', 'control-center', 'runs', 'meta.json'), `{"i":${i}}`);
+          fs.writeFileSync(path.join(root, 'data', 'applications.md'), `# Applications ${i}\n`);
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(published).toEqual([{ type: 'data.changed', payload: { domain: 'tracker', paths: [path.join('data', 'applications.md')] } }]);
     } finally {
       await watcher.close();
     }

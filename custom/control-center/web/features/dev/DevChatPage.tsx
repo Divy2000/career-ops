@@ -179,7 +179,7 @@ export function DevChatPage() {
           <label className="row gap small">
             <input type="checkbox" checked={blacklist} onChange={(e) => setBlacklist(e.target.checked)} /> Allow data/blacklist.md this turn
           </label>
-          <ActionButton meta={actions.data?.find((a) => a.id === 'devchat.installDeps')} onRun={() => void run('devchat.installDeps', {}, 'npm install started; see Runs for its log')} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'devchat.installDeps')} onRun={(_p, o) => void run('devchat.installDeps', {}, 'npm install started; see Runs for its log', o)} />
         </div>
       </div>
       <Message message={message} />

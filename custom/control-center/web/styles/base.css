@@ -339,6 +339,10 @@ input[type='checkbox'] {
   margin: 0;
   overflow-wrap: anywhere;
 }
+/* A line after a key-value list (an error, an alert) keeps one step from its last row. */
+.kv + p {
+  margin-top: var(--space-3);
+}
 .bullets {
   margin: var(--space-1) 0;
   padding-left: var(--space-5);

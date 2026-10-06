@@ -16,6 +16,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 
 let host: HTMLElement;
 let root: Root;
+let confirmations: unknown[];
 let posts: Array<{ n: number; dryRun: boolean }>;
 let realDelete: () => Response;
 
@@ -26,13 +27,15 @@ function json(status: number, body: unknown) {
 beforeEach(async () => {
   navigations.length = 0;
   posts = [];
+  confirmations = [];
   realDelete = () => json(200, { result: { deleted: 4 } });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url !== '/api/actions/tracker.delete' || init?.method !== 'POST') return json(404, { error: 'not stubbed' });
-      const { params } = JSON.parse(String(init.body)) as { params: { n: number; dryRun: boolean } };
+      const { params, confirmed } = JSON.parse(String(init.body)) as { params: { n: number; dryRun: boolean }; confirmed?: unknown };
       posts.push(params);
+      confirmations.push(confirmed);
       return params.dryRun ? json(200, { result: 'Would delete row #4 (Initech Cloud) and renumber 5 to 6', stderr: '' }) : realDelete();
     }),
   );
@@ -69,6 +72,8 @@ describe('Danger zone delete', () => {
       { n: 4, dryRun: true },
       { n: 4, dryRun: false },
     ]);
+    // The preview needs no confirmation; "Confirm delete" is the user's confirmation, which the server requires.
+    expect(confirmations).toEqual([undefined, true]);
     expect(navigations).toEqual([{ to: '/tracker' }]);
   });
 

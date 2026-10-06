@@ -163,7 +163,7 @@ export async function configRoutes(app: FastifyInstance, opts: { cfg: ServerConf
   app.put<{ Params: { id: string }; Body: unknown }>('/api/config/plugins/:id', async (req, reply) => {
     const body = z.object({ enabled: z.boolean() }).strict().safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid body: {enabled: boolean}', issues: body.error.issues });
-    const known = listPlugins(cfg.codeRoot, cfg.dataRoot).plugins.find((p) => p.id === req.params.id);
+    const known = (await listPlugins(cfg.codeRoot, cfg.dataRoot, cfg.pluginsLocalDir)).plugins.find((p) => p.id === req.params.id);
     if (!known) return reply.code(404).send({ error: `no plugin ${req.params.id}` });
     const current = readPluginsConfig(cfg.dataRoot);
     if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'config/plugins.yml changed since you loaded it', current: { ...current, doc: undefined } });

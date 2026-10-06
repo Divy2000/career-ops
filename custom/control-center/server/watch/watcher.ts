@@ -23,7 +23,11 @@ export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300):
   const targets = ['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'applications.md', 'status-log.tsv', 'interview-prep', 'active-interviews.md'].map((t) => path.join(dataRoot, t));
   const watcher = chokidar.watch(targets, {
     ignoreInitial: true,
-    ignored: (p: string) => p.includes(`${path.sep}node_modules${path.sep}`) || p.includes(`${path.sep}control-center${path.sep}`),
+    // Judged inside the data root: the root itself may sit under a folder named control-center or node_modules.
+    ignored: (p: string) => {
+      const rel = path.relative(dataRoot, p).split(path.sep);
+      return rel.includes('node_modules') || (rel[0] === 'data' && rel[1] === 'control-center');
+    },
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
   });
   const pending = new Map<Domain, { paths: Set<string>; timer: NodeJS.Timeout }>();

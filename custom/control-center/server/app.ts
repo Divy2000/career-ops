@@ -77,6 +77,8 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const applySettings = (s: AppSettings) => {
     runnerOpts.claudeSlots = s.claudeConcurrency;
     runner.store.setRetention(s.retention);
+    // A raised cap frees slots now, not at the next run event.
+    runner.reschedule();
   };
   closers.push(async () => runner.close());
 

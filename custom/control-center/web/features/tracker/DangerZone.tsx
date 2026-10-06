@@ -15,7 +15,8 @@ export function DangerZone({ n }: { n: number }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await apiSend<{ result: unknown; stderr?: string }>('POST', '/api/actions/tracker.delete', { params: { n, dryRun } });
+      // "Confirm delete" is the user's confirmation, which the real delete must carry; the dry run needs none.
+      const r = await apiSend<{ result: unknown; stderr?: string }>('POST', '/api/actions/tracker.delete', dryRun ? { params: { n, dryRun } } : { params: { n, dryRun }, confirmed: true });
       const text = `${typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2)}\n${r.stderr ?? ''}`.trim();
       if (dryRun) setPreview(text || 'Dry run produced no output.');
       else {

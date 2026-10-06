@@ -42,6 +42,10 @@ export interface ImmigrationOverview {
   digest: { kind: 'missing' } | { kind: 'ok'; sections: DigestSection[]; latestDate: string | null; staleDays: number | null };
   policyChanges: Record<string, unknown>[];
   alerts: { latest: Record<string, unknown>[]; history: Record<string, unknown>[] };
+  /** Why company-alerts.tsv could not be read (its first malformed line); null when it is fine or absent. */
+  alertsError: string | null;
+  /** Why policy-changes.tsv could not be read; null when it is fine or absent. */
+  policyChangesError: string | null;
   officialFeed: Record<string, string>[];
   companies: CompanyFile[];
   tiers: unknown;
@@ -213,8 +217,19 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   const changesRead = readText(path.join(imm, 'policy-changes.tsv'));
   const alertsRead = readText(path.join(imm, 'company-alerts.tsv'));
   const feedRead = readText(path.join(imm, 'official-feed.tsv'));
+  // Both files are written by Claude sessions; the core parsers throw on the first bad line. One bad line costs only that
+  // file's parsed view (and is reported), never the whole overview.
+  const parsed = <T>(fn: () => T, empty: T): { value: T; error: string | null } => {
+    try {
+      return { value: fn(), error: null };
+    } catch (err) {
+      return { value: empty, error: (err as Error).message };
+    }
+  };
   // The core keeps only the latest alert per slug; the full history comes from the raw TSV.
-  const latest = alertsRead.kind === 'ok' ? [...lib.parseCompanyAlerts(alertsRead.text)].map(([slug, a]) => ({ slug, ...a })) : [];
+  const alerts = parsed(() => (alertsRead.kind === 'ok' ? [...lib.parseCompanyAlerts(alertsRead.text)].map(([slug, a]) => ({ slug, ...a })) : []), []);
+  const changes = parsed(() => (changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : []), []);
+  const latest = alerts.value;
   const history: Record<string, unknown>[] = alertsRead.kind === 'ok' ? parseTsv(alertsRead.text) : [];
   const companies: CompanyFile[] = [];
   const companiesDir = path.join(imm, 'companies');
@@ -232,8 +247,10 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   const latestLog = logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null;
   return {
     digest,
-    policyChanges: changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : [],
+    policyChanges: changes.value,
+    policyChangesError: changes.error,
     alerts: { latest, history },
+    alertsError: alerts.error,
     officialFeed: feedRead.kind === 'ok' ? parseTsv(feedRead.text) : [],
     companies,
     tiers: readJson(path.join(imm, 'sponsor-tiers.json')),

@@ -123,8 +123,13 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
   files.sort((a, b) => mtime(dataRoot, b.path) - mtime(dataRoot, a.path));
   for (const f of files) f.rerenderBlock = report !== null && f.html ? rerenderProblem(rows, report, f.html, f.path) : null;
   const jdsDir = path.join(dataRoot, 'jds');
-  // With a report, only its own jds/NNN- captures: a company match would also list the JDs of the company's other reports.
-  const ownsJd = report === null ? (f: string) => namesCompany(slug, f) : (f: string) => f.startsWith(`${String(report).padStart(3, '0')}-`);
+  // With a report, only its own jds/<n>- captures: a company match would also list the JDs of the company's other reports.
+  // The prefix is compared as a number, as jd-capture.mjs does: hand-named captures are 7- or 0007- as often as 007-.
+  const reportOf = (f: string) => {
+    const m = /^(\d+)-/.exec(f);
+    return m ? parseInt(m[1]!, 10) : null;
+  };
+  const ownsJd = report === null ? (f: string) => namesCompany(slug, f) : (f: string) => reportOf(f) === report;
   const jds = fs.existsSync(jdsDir) ? fs.readdirSync(jdsDir).filter(ownsJd).map((f) => `jds/${f}`) : [];
   return { files, jds, indexPresent, report };
 }

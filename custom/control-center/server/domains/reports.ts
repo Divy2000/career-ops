@@ -148,6 +148,22 @@ function blockField(sectionContent: string, label: string): string | null {
 }
 
 /**
+ * The posting URL of a report's **URL:** header, cleaned as merge-tracker.mjs resolveReportUrl cleans it (a <...>
+ * autolink wrapper and trailing punctuation dropped), and only when it is a real http(s) URL: `N/A` is legitimate for a
+ * recruiter-sourced role and must not become a link.
+ */
+function postingUrl(value: string | null): string | null {
+  if (!value) return null;
+  const raw = value.split(/\s/)[0]!.replace(/^<|>$/g, '').replace(/[),.;]+$/, '');
+  try {
+    const u = new URL(raw);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * "Company <sep> Role", split once: at the first em dash or " -- " (what the templates write), and at " - " only when
  * neither is there, so a role such as "Software Engineer - Platform" stays whole.
  */
@@ -180,7 +196,7 @@ export function parseReport(markdown: string, file: string, num: number): Report
     company: str(machine?.company) ?? companyPart?.trim() ?? '',
     role: str(machine?.role) ?? rolePart?.trim() ?? '',
     date: headerField(markdown, DATE_KEY),
-    url: headerField(markdown, 'URL'),
+    url: postingUrl(headerField(markdown, 'URL')),
     via: headerField(markdown, 'Via'),
     // The Machine Summary carries the normalized archetype; the header may read "Not a target - closest default: X".
     archetype: str(machine?.archetype) ?? headerField(markdown, ARCHETYPE_KEY),

@@ -22,6 +22,19 @@ export interface StartRequest {
   tmpInputs?: string[];
 }
 
+/**
+ * kill(pid, 0): 'own' when it succeeds, 'other' when refused (EPERM: the PID runs as another user), 'gone' otherwise.
+ * A run's wrapper and child run as this user, so only 'own' can be one of our runs; 'other' is a reused PID.
+ */
+export function pidLiveness(pid: number, kill: (pid: number, signal: 0) => void = (p, signal) => process.kill(p, signal)): 'own' | 'other' | 'gone' {
+  try {
+    kill(pid, 0);
+    return 'own';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM' ? 'other' : 'gone';
+  }
+}
+
 export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -31,14 +44,38 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/** `ps -o lstart` of a live process, null when there is none. PIDs are reused (after a reboot especially); start times are not. */
-export function processStartTime(pid: number): string | null {
+/** A process's start in seconds since the epoch; 'unknown' when it runs but its start cannot be read; null when it does not run. */
+export type ProcessStart = number | 'unknown' | null;
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** `ps -o lstart` in the C locale: "Mon Oct  5 17:09:12 2026". */
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+
+/** /bin/ps -o lstart= for one PID, in the C locale and UTC whatever this process's environment is. */
+const runPs = (pid: number): string =>
+  execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } });
+
+/**
+ * When a process started, so a later check can tell a reused PID apart (PIDs are reused, after a reboot especially;
+ * start times are not). ps prints the start in the caller's TZ and locale, so it runs pinned (LC_ALL=C, TZ=UTC) and the
+ * answer is seconds since the epoch: a server restarted under another TZ or LANG reads the same number for a live run.
+ * ps's own "no such process" (exit 1, nothing printed) is null; when ps cannot answer otherwise, kill(pid, 0) decides
+ * between null and 'unknown'; output that does not parse is 'unknown'. Callers treat 'unknown' as running.
+ */
+export function processStartTime(pid: number, ps: (pid: number) => string = runPs, kill?: (pid: number, signal: 0) => void): ProcessStart {
+  let out: string;
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
-    return out || null;
-  } catch {
-    return null;
+    out = ps(pid).trim();
+  } catch (err) {
+    const e = err as { status?: number | null; signal?: string | null; stdout?: string };
+    if (e.status === 1 && !e.signal && !String(e.stdout ?? '').trim()) return null;
+    return pidLiveness(pid, kill) === 'own' ? 'unknown' : null;
   }
+  if (!out) return null;
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]!) : -1;
+  if (!m || month === -1) return 'unknown';
+  return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 
 /**
@@ -51,27 +88,47 @@ export class Runner {
   private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout }>();
   private envById = new Map<string, NodeJS.ProcessEnv>();
 
-  private procStart: (pid: number) => string | null;
+  private procStart: (pid: number) => ProcessStart;
 
   constructor(
     private dataRoot: string,
     private bus: EventBus,
-    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => string | null } = {},
+    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void } = {},
   ) {
     this.store = new RunStore(dataRoot, opts.retention);
-    this.procStart = opts.procStart ?? processStartTime;
+    this.procStart = opts.procStart ?? ((pid) => processStartTime(pid, undefined, opts.kill));
   }
 
   /**
-   * true: the PID is alive and started when we recorded; false: it is gone, or
-   * it now belongs to another process; null: no start time was recorded (runs
-   * from before start times were kept), so only liveness is known.
+   * true: the PID is ours and started when we recorded; false: it is gone, or
+   * it now belongs to another process (another user's, which kill(pid, 0)
+   * refuses, included); null: it is ours but only that is known, because no
+   * start time was recorded, the recorded one is in the earlier format (ps text
+   * in that server's TZ and locale, which cannot be compared), or ps cannot
+   * read the start now.
    */
-  private identity(pid: number | null | undefined, startedAt: string | null | undefined): boolean | null {
-    if (!pid || !pidAlive(pid)) return false;
-    if (!startedAt) return null;
+  private identity(pid: number | null | undefined, startedAt: RunMeta['wrapperStartedAt']): boolean | null {
+    if (!pid || !this.ours(pid)) return false;
+    if (typeof startedAt !== 'number') return null;
     const now = this.procStart(pid);
-    return now === null ? null : now === startedAt;
+    // ps says "no such process" although the PID just answered: it decides only if it is still ours now.
+    if (now === null) return this.ours(pid) ? null : false;
+    return now === 'unknown' ? null : now === startedAt;
+  }
+
+  private liveness(pid: number): 'own' | 'other' | 'gone' {
+    return pidLiveness(pid, this.opts.kill);
+  }
+
+  /** A process that can be one of our runs: kill(pid, 0) succeeds (a PID another user owns now is not ours). */
+  private ours(pid: number): boolean {
+    return this.liveness(pid) === 'own';
+  }
+
+  /** The start to record for a new PID: a number, or null when it cannot be read. */
+  private recordStart(pid: number): number | null {
+    const start = this.procStart(pid);
+    return typeof start === 'number' ? start : null;
   }
 
   /**
@@ -121,8 +178,15 @@ export class Runner {
       } else if (wrapper !== false) {
         this.track(meta);
       } else {
-        const reused = Boolean(meta.wrapperPid && pidAlive(meta.wrapperPid));
-        this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error: reused ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone' : 'wrapper process disappeared without an exit record' });
+        // The PID still runs, as ours with another start or as another user's: reused, not just gone.
+        const now = meta.wrapperPid ? this.liveness(meta.wrapperPid) : 'gone';
+        const error =
+          now === 'other'
+            ? "the wrapper PID now belongs to another user's process; the run is gone"
+            : now === 'own'
+              ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone'
+              : 'wrapper process disappeared without an exit record';
+        this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
         this.dropInputs(meta);
         this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
       }
@@ -158,6 +222,11 @@ export class Runner {
     return [...this.active.values()].filter((a) => a.meta.claude).length;
   }
 
+  /** Starts what the queue can start now: after a settings change raised the Claude slot cap, say. */
+  reschedule(): void {
+    this.pump();
+  }
+
   /** FIFO: a queued run starts when its resources are free and a Claude slot is free if it needs one. */
   private pump(): void {
     const busy = this.busyResources();
@@ -190,7 +259,7 @@ export class Runner {
     });
     child.unref();
     const wrapperPid = child.pid ?? null;
-    const running: RunMeta = { ...meta, status: 'running', startedAt: new Date().toISOString(), wrapperPid, wrapperStartedAt: wrapperPid ? this.procStart(wrapperPid) : null };
+    const running: RunMeta = { ...meta, status: 'running', startedAt: new Date().toISOString(), wrapperPid, wrapperStartedAt: wrapperPid ? this.recordStart(wrapperPid) : null };
     this.store.write(running);
     this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
     this.track(running);
@@ -204,7 +273,7 @@ export class Runner {
         const w = this.store.readWrapper(meta.id);
         if (w) {
           current.childPid = w.childPid;
-          current.childStartedAt = this.procStart(w.childPid);
+          current.childStartedAt = this.recordStart(w.childPid);
           this.store.write(current);
         }
       }
@@ -214,7 +283,7 @@ export class Runner {
         this.active.delete(meta.id);
         this.finalize(current, exit);
         this.pump();
-      } else if (current.wrapperPid && !pidAlive(current.wrapperPid)) {
+      } else if (current.wrapperPid && !this.ours(current.wrapperPid)) {
         clearInterval(timer);
         this.active.delete(meta.id);
         this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });

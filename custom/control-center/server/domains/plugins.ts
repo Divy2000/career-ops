@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseYamlDoc } from './yamlOps.js';
 import { etagOf } from './files.js';
+import { importCore } from '../core/adapter.js';
 
 export const PLUGINS_CONFIG_REL = 'config/plugins.yml';
 
@@ -51,53 +52,55 @@ export function readPluginsConfig(dataRoot: string): PluginsConfigRead & { doc: 
   return { kind: 'ok', path: PLUGINS_CONFIG_REL, raw, etag: etagOf(raw), doc: (parsed.doc as Record<string, unknown>) ?? {} };
 }
 
-const asStrings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
-
-function scanDir(dir: string, source: PluginInfo['source']): Array<Omit<PluginInfo, 'enabled' | 'configured'>> {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const out: Array<Omit<PluginInfo, 'enabled' | 'configured'>> = [];
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith('_') || e.name.startsWith('.')) continue;
-    const manifestPath = path.join(dir, e.name, 'manifest.json');
-    let m: Record<string, unknown>;
-    try {
-      m = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    const id = typeof m.id === 'string' ? m.id : e.name;
-    const skill = typeof m.skill === 'string' ? m.skill : 'skill.md';
-    out.push({
-      id,
-      name: typeof m.name === 'string' ? m.name : id,
-      description: typeof m.description === 'string' ? m.description : '',
-      version: typeof m.version === 'string' ? m.version : '',
-      hooks: asStrings(m.hooks),
-      requiredEnv: asStrings(m.requiredEnv),
-      optionalEnv: asStrings(m.optionalEnv),
-      humanInTheLoop: m.humanInTheLoop === true,
-      hasSkill: fs.existsSync(path.join(dir, e.name, skill)),
-      source,
-    });
-  }
-  return out;
+interface EngineManifest {
+  id: string;
+  name?: string;
+  description: string;
+  version?: string;
+  hooks: string[];
+  requiredEnv: string[];
+  optionalEnv: string[];
+  humanInTheLoop: boolean;
+  skill: string | null;
+  dir: string;
 }
 
-export function listPlugins(codeRoot: string, dataRoot: string): PluginsRead {
+interface PluginEngine {
+  discoverPlugins: (roots: string[], overrideIds?: Set<string>) => EngineManifest[];
+  resolveSuccessorIds: (root: string) => Set<string>;
+}
+
+/**
+ * The plugins plugins.mjs knows, found by its own engine (plugins/_engine.mjs): a symlinked plugins.local checkout
+ * counts, an invalid manifest (no id, an id that is not the folder name) is skipped, and the first root wins for an id
+ * (bundled plugins/ before plugins.local/, unless a registered successor overrides it). `localDir` replaces
+ * <codeRoot>/plugins.local (tests).
+ */
+export async function listPlugins(codeRoot: string, dataRoot: string, localDir: string = path.join(codeRoot, 'plugins.local')): Promise<PluginsRead> {
   const config = readPluginsConfig(dataRoot);
   const table = (config.doc?.plugins ?? {}) as Record<string, unknown>;
-  const found = [...scanDir(path.join(codeRoot, 'plugins'), 'bundled'), ...scanDir(path.join(codeRoot, 'plugins.local'), 'local')];
+  const engine = await importCore<PluginEngine>(codeRoot, 'plugins/_engine.mjs');
+  const bundledDir = path.join(codeRoot, 'plugins');
+  const found = engine.discoverPlugins([bundledDir, localDir], engine.resolveSuccessorIds(codeRoot));
   const plugins = found
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((p) => {
-      const entry = table && typeof table === 'object' ? (table[p.id] as Record<string, unknown> | undefined) : undefined;
-      return { ...p, configured: entry !== undefined, enabled: Boolean(entry && typeof entry === 'object' && entry.enabled === true) };
-    });
+    .map((m): PluginInfo => {
+      const entry = table && typeof table === 'object' ? (table[m.id] as Record<string, unknown> | undefined) : undefined;
+      return {
+        id: m.id,
+        name: m.name ?? m.id,
+        description: m.description,
+        version: m.version ?? '',
+        hooks: [...m.hooks],
+        requiredEnv: [...m.requiredEnv],
+        optionalEnv: [...m.optionalEnv],
+        humanInTheLoop: m.humanInTheLoop,
+        hasSkill: m.skill !== null,
+        source: m.dir.startsWith(bundledDir + path.sep) ? 'bundled' : 'local',
+        configured: entry !== undefined,
+        enabled: Boolean(entry && typeof entry === 'object' && entry.enabled === true),
+      };
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
   const { doc: _doc, ...rest } = config;
   return { plugins, config: rest };
 }

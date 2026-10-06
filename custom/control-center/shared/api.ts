@@ -52,7 +52,8 @@ export interface ApplicationDetail {
   report: ReportRead | { kind: 'none' };
   timeline: { statusLog: StatusLogRow[]; followups: FollowupEntry[]; pin: NextOverride | null };
   companyHistory: TrackerRow[];
-  sponsorship: { companyFile: CompanyFile | null; alert: Record<string, unknown> | null };
+  /** error: why company-alerts.tsv could not be read, so `alert` is null whatever the file says (null when it is fine). */
+  sponsorship: { companyFile: CompanyFile | null; alert: Record<string, unknown> | null; error: string | null };
 }
 
 export interface FollowupCadenceEntry {

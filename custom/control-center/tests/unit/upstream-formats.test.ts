@@ -151,7 +151,9 @@ describe('localized report templates (modes/<lang>/)', () => {
         .replace(/<!--[\s\S]*?-->/g, '')
         .replace(/\{X(?:\.X)?\/5\}|\{X(?:\.X)?\}\/5/g, '4.2/5')
         .replace(/\{YYYY-MM-DD\}/g, '2026-10-01')
-        .replace(/\{[^}]*\}/g, () => `value-${++n}`);
+        .replace(/\{[^}]*\}/g, () => `value-${++n}`)
+        // The URL line holds a posting URL in a real report; the parser keeps only a real http(s) URL (SW2-server-06).
+        .replace(/^(\*\*URL\s*:\*\*\s*)(value-\d+)/m, '$1https://jobs.example.com/$2');
       const r = parseReport(`${filled}\n\n---\n\n## A) Role Summary\n`, '010-acme.md', 10);
       const parsed = [r.date, r.url, r.via, r.archetype, r.legitimacy, r.workAuth, r.pdf];
       const lines = filled.split('\n').filter((l) => /^\*\*[^*]+\*\*/.test(l));

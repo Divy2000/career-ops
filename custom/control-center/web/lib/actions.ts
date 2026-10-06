@@ -31,12 +31,13 @@ export function useRunAction() {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const [output, setOutput] = useState<string | null>(null);
-  const run = async (id: string, params: Record<string, unknown> = {}, okText?: string): Promise<ActionOutcome | null> => {
+  /** opts.confirmed: the user confirmed the action's dialog; an action marked confirm runs only with it. */
+  const run = async (id: string, params: Record<string, unknown> = {}, okText?: string, opts: { confirmed?: boolean } = {}): Promise<ActionOutcome | null> => {
     setBusy(id);
     setMessage(null);
     setOutput(null);
     try {
-      const out = await apiSend<ActionOutcome>('POST', `/api/actions/${id}`, { params });
+      const out = await apiSend<ActionOutcome>('POST', `/api/actions/${id}`, opts.confirmed ? { params, confirmed: true } : { params });
       const text = okText ?? ('runId' in out ? `Started run ${out.runId}` : 'Done');
       setMessage({ tone: 'ok', text });
       if ('result' in out) setOutput(actionOutputText(out.result, out.stderr));

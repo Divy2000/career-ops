@@ -15,10 +15,17 @@ describe('action input files', () => {
     expect(fs.readFileSync(a, 'utf8')).toBe('pasted job description');
     const outside = path.join(root, 'cv.md');
     fs.writeFileSync(outside, '# CV');
-    removeTmpInputs(root, ['--file', a, '--json', outside, path.join(tmpInputDir(root), '..', 'tmp', '..', 'settings.json')]);
+    // A real file one level up, named by a path that starts with the tmp dir and climbs out of it (written raw, so the
+    // `..` is not normalized away before the call): a prefix check would delete it (SW2-tests-25).
+    const settings = path.join(tmpInputDir(root), '..', 'settings.json');
+    fs.writeFileSync(settings, '{}');
+    const climbing = `${tmpInputDir(root)}/../settings.json`;
+    expect(climbing.startsWith(tmpInputDir(root))).toBe(true);
+    removeTmpInputs(root, ['--file', a, '--json', outside, climbing]);
     expect(fs.existsSync(a)).toBe(false);
     expect(fs.existsSync(b)).toBe(true);
     expect(fs.existsSync(outside)).toBe(true);
+    expect(fs.readFileSync(settings, 'utf8')).toBe('{}');
   });
 
   it('sweeps input files and CV uploads older than the cutoff and keeps newer ones', () => {

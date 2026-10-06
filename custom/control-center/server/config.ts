@@ -31,6 +31,8 @@ export interface ServerConfig {
   claudeProjectsDir: string;
   /** Replaces plugins/h1b-sponsor/check.mjs for the Sponsorship lookup (tests only; CC_H1B_CHECK_SCRIPT is honored under NODE_ENV=test). */
   h1bCheckScript?: string;
+  /** The community plugins folder Audit plugins scans (default <codeRoot>/plugins.local; tests point it at a temp folder). */
+  pluginsLocalDir?: string;
   /** Answers the "is run-daily.sh running" probe without looking at host processes (tests only; CC_FAKE_DAILY is honored under NODE_ENV=test). */
   fakeDaily?: 'idle' | 'running';
 }

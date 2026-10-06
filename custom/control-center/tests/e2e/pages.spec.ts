@@ -175,4 +175,25 @@ test.describe('read-only pages render fixture data', () => {
     expect(await save()).toContain('FN:Pat Example (Acme Robotics recruiter)\r\n');
     await axeClean(page);
   });
+
+  test('a malformed company-alerts.tsv or policy-changes.tsv line is reported where its data would show, and the pages still load (SW2-server-01)', async ({ page }) => {
+    const imm = `${process.env.CC_E2E_TMP!}/root/data/immigration`;
+    const files = ['company-alerts.tsv', 'policy-changes.tsv'].map((f) => `${imm}/${f}`);
+    const originals = files.map((f) => fs.readFileSync(f, 'utf8'));
+    fs.appendFileSync(files[0]!, '2026-10-05\tAcme Robotics\tacme-robotics\tpause\tAcme pauses H-1B\thttps://news.example/acme\n');
+    fs.appendFileSync(files[1]!, 'Oct 5\t\tagency\tA title\thttps://agency.example/x\tnone\n');
+    try {
+      await page.goto('/tracker/1');
+      await expect(page.getByRole('heading', { level: 1, name: 'Acme Robotics' })).toBeVisible();
+      await page.getByRole('tab', { name: 'Sponsorship' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'company-alerts.tsv line 4: status must be one of' })).toBeVisible();
+      await page.goto('/sponsorship?tab=alerts');
+      await expect(page.getByRole('alert').filter({ hasText: 'company-alerts.tsv line 4' })).toBeVisible();
+      await page.goto('/sponsorship?tab=changes');
+      await expect(page.getByRole('alert').filter({ hasText: 'policy-changes.tsv line 4' })).toBeVisible();
+      await axeClean(page);
+    } finally {
+      files.forEach((f, k) => fs.writeFileSync(f, originals[k]!));
+    }
+  });
 });

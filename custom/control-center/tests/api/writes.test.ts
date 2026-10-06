@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
 import type { Exec } from '../../server/routes/system.js';
 import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
 import { dailyPidfile } from '../../server/system/daily.js';
@@ -151,6 +153,75 @@ describe('pipeline writes', () => {
   });
 });
 
+describe('pipeline adds while another writer holds the pipeline lock (SW2-tests-03)', () => {
+  it('answer 409 "pipeline is busy" with retry-after for /add and /urls, write nothing, and add once the lock is free', async () => {
+    const { acquirePipelineLock } = (await import(pathToFileURL(path.join(t.cfg.codeRoot, 'pipeline-lock.mjs')).href)) as { acquirePipelineLock: (p: string, o?: Record<string, number>) => Promise<{ release: () => void }> };
+    const pipeline = path.join(t.cfg.dataRoot, 'data', 'pipeline.md');
+    const before = fs.readFileSync(pipeline, 'utf8');
+    const lock = await acquirePipelineLock(pipeline);
+    // The writer child waits this long for one holder (scan.mjs's own override), so a held lock times out quickly.
+    const saved = process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS;
+    process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS = '300';
+    process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = '600';
+    try {
+      for (const res of [await post('/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/busy/1', company: 'Busy Co', title: 'Engineer' }] }), await post('/api/pipeline/urls', { urls: ['https://jobs.example.com/busy/2'] })]) {
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.headers['retry-after']).toBe('1');
+        expect(res.json()).toEqual({ error: 'pipeline is busy, try again in a moment' });
+      }
+      expect(fs.readFileSync(pipeline, 'utf8')).toBe(before);
+    } finally {
+      lock.release();
+      if (saved === undefined) delete process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS;
+      else process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS = saved;
+      delete process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+    }
+    const after = await post('/api/pipeline/add', { offers: [{ url: 'https://jobs.example.com/busy/1', company: 'Busy Co', title: 'Engineer' }] });
+    expect(after.statusCode, after.body).toBe(200);
+    expect(after.json()).toEqual({ added: 1, skipped: 0 });
+  });
+});
+
+describe('follow-up edits that cannot write (SW2-tests-23)', () => {
+  it('while another writer holds the follow-ups lock, answers 409 busy with retry-after and writes nothing', async () => {
+    const { withFollowupsLock } = (await import(pathToFileURL(path.join(t.cfg.codeRoot, 'followup-seed.mjs')).href)) as { withFollowupsLock: <T>(p: string, fn: () => Promise<T>) => Promise<T> };
+    const file = path.join(t.cfg.dataRoot, 'data', 'follow-ups.md');
+    const before = fs.readFileSync(file, 'utf8');
+    let release!: () => void;
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const holder = withFollowupsLock(file, () => new Promise<void>((r) => ((release = r), held())));
+    await holding;
+    try {
+      const res = await post('/api/followups/override', { appNum: 1, date: '2026-10-20' });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.headers['retry-after']).toBe('1');
+      expect(res.json().error).toMatch(/follow-ups file is busy/);
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      release();
+      await holder;
+    }
+  }, 30_000);
+
+  it('a write error whose message happens to contain "lock" (a data root under a folder named clock) is a 500 with the real error, not "busy"', async () => {
+    const dataRoot = path.join(tempDir('cc-clock-'), 'root');
+    fs.cpSync(path.join(t.cfg.dataRoot), dataRoot, { recursive: true });
+    const own = await makeTestApp({ dataRoot });
+    const file = path.join(dataRoot, 'data', 'follow-ups.md');
+    fs.chmodSync(file, 0o000);
+    try {
+      const res = await own.app.inject({ method: 'POST', url: '/api/followups/override', headers: own.authedWrite, payload: { appNum: 1, date: '2026-10-20' } });
+      expect(res.statusCode, res.body).toBe(500);
+      expect(res.body).toMatch(/EACCES/);
+      expect(res.body).not.toMatch(/busy/);
+    } finally {
+      fs.chmodSync(file, 0o644);
+      await own.close();
+    }
+  });
+});
+
 describe('follow-up writes', () => {
   it('logs a follow-up, shows it on the application timeline and deletes it again', async () => {
     const r = await post('/api/followups/log', { appNum: 6, date: '2026-10-03', channel: 'Email', contact: 'HM', notes: 'sent deck' });
@@ -206,7 +277,12 @@ describe('tracker delete', () => {
     // tracker.mjs narrates the preview on stderr; the body carries both streams.
     expect(preview.body).toMatch(/dry|would/i);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(true);
-    const real = await post('/api/actions/tracker.delete', { params: { n: 4, dryRun: false } });
+    // The real delete is a confirm action: refused without the page's explicit confirmation, done with it.
+    const unconfirmed = await post('/api/actions/tracker.delete', { params: { n: 4, dryRun: false } });
+    expect(unconfirmed.statusCode, unconfirmed.body).toBe(428);
+    expect(unconfirmed.json()).toMatchObject({ error: expect.stringMatching(/Delete tracker row needs confirmation/), confirm: expect.stringMatching(/Removes the row/) });
+    expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(true);
+    const real = await post('/api/actions/tracker.delete', { params: { n: 4, dryRun: false }, confirmed: true });
     expect(real.statusCode, real.body).toBe(200);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(false);
   });
@@ -261,6 +337,19 @@ describe('documents for a row whose number differs from its report', () => {
     const jds = (await docsOf(9)).jds;
     expect(jds).not.toContain('jds/099-2026-01-01_acme-robotics_old-role.pdf');
     expect(jds).not.toContain('jds/acme-robotics-scan-capture.md');
+  });
+
+  it('lists a JD capture whose report prefix is not padded to three digits, as jd-capture.mjs resolves it, and never another report\'s (SW2-server-04)', async () => {
+    const files = ['jds/1-acme-hand-named.md', 'jds/0001-acme-four-digits.md', 'jds/10-other-report.md', 'jds/100-other-report.md'];
+    for (const f of files) write(f);
+    try {
+      const jds = (await docsOf(9)).jds as string[];
+      expect(jds).toEqual(expect.arrayContaining(['jds/1-acme-hand-named.md', 'jds/0001-acme-four-digits.md']));
+      expect(jds).not.toContain('jds/10-other-report.md');
+      expect(jds).not.toContain('jds/100-other-report.md');
+    } finally {
+      for (const f of files) fs.rmSync(path.join(d.cfg.dataRoot, f), { force: true });
+    }
   });
 
   it('falls back to the company match for JDs when the row has no report', async () => {
@@ -338,8 +427,21 @@ describe('daily job awareness', () => {
     fs.writeFileSync(pidfile, '4242\n');
     jobRunning = true;
     try {
-      await new Promise((r) => setTimeout(r, 200));
-      expect((await get('/api/system/daily')).json()).toMatchObject({ running: true });
+      // The answer of a watcher poll that started after the pidfile was written: the first poll to finish after now may
+      // have started before it, the one after that did not (SW2-tests-21).
+      const since = Date.now();
+      let first: string | null = null;
+      let status: { running: boolean; checkedAt: string | null } | null = null;
+      for (let i = 0; i < 400 && !status; i++) {
+        const s = (await get('/api/system/daily')).json() as { running: boolean; checkedAt: string | null };
+        if (s.checkedAt && Date.parse(s.checkedAt) > since) {
+          if (first === null) first = s.checkedAt;
+          else if (s.checkedAt !== first) status = s;
+        }
+        if (!status) await new Promise((r) => setTimeout(r, 15));
+      }
+      expect(status, 'the daily watcher polled twice after the pidfile was written').not.toBeNull();
+      expect(status).toMatchObject({ running: true });
     } finally {
       jobRunning = false;
       fs.rmSync(pidfile);

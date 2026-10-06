@@ -23,6 +23,8 @@ export interface ActionContext {
   claudeBin?: string;
   /** Every input file the build writes (tmpFile adds it); the run records them and removes them when it ends. */
   tmpInputs: string[];
+  /** The community plugins folder (default <codeRoot>/plugins.local). */
+  pluginsLocalDir?: string;
 }
 
 export interface Command {
@@ -37,8 +39,13 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   id: string;
   label: string;
   cost: Cost;
-  /** Confirmation text shown before running; undefined means no confirm. */
+  /**
+   * Confirmation text shown before running; undefined means no confirm. The route refuses such an action (428) unless
+   * the request says `confirmed: true`, so the browser dialog is not the only gate.
+   */
   confirm?: string;
+  /** Params that only preview (a dry run), which run without the confirmation. */
+  preview?: (params: z.infer<S>) => boolean;
   resources: Resource[];
   claude: boolean;
   /** Sync actions run inline under a 30 s timeout and return their output. */
@@ -144,6 +151,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: true,
     params: z.object({ n: positive, dryRun: z.boolean().default(false) }),
+    preview: (p) => p.dryRun,
     build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),
   }),
   define({ id: 'tracker.verify', label: 'Verify tracker and pipeline', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'verifyPipeline', []) }),
@@ -300,6 +308,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: false,
     params: z.object({ apply: z.boolean().default(false) }),
+    preview: (p) => !p.apply,
     build: (p, ctx) => node(ctx, 'fixSlugs', p.apply ? ['--apply'] : ['--dry-run']),
   }),
   // ---- immigration ----
@@ -479,7 +488,7 @@ export const ACTIONS: ActionDef[] = [
   // ---- plugins ----
   define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),
   define({ id: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }), build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]) }),
-  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
+  define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), ctx.pluginsLocalDir ?? path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
   // ---- system ----
   define({ id: 'system.doctor', label: 'Doctor', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'doctor', ['--json']) }),
   define({ id: 'system.updateStatus', label: 'Update status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'updateSystem', ['status']) }),

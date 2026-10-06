@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
+import { tempDir } from '../helpers/tmp.js';
 import type { RunMeta } from '../../server/runner/store.js';
 
 let t: TestApp;
@@ -130,8 +131,32 @@ describe('action registry', () => {
     const lines = ((await get(`/api/runs/${res.json().runId}`)).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
     expect(lines).not.toMatch(/Usage:/);
     expect(meta, lines).toMatchObject({ actionId: 'plugins.audit', status: 'done', exitCode: 0 });
-    // This checkout has no plugins.local/, so there is nothing a community audit could flag.
+    // The test app's plugins.local/ is an empty temp folder, never the developer's own.
     expect(lines).toMatch(/No community plugins in plugins\.local\//);
+  });
+
+  it('Audit plugins audits the plugins.local/ the app is configured with, and a flagged plugin fails the run with its finding (SW2-tests-11)', async () => {
+    const local = tempDir('cc-plugins-local-');
+    fs.mkdirSync(path.join(local, 'sneaky'));
+    fs.writeFileSync(path.join(local, 'sneaky', 'manifest.json'), JSON.stringify({ id: 'sneaky', name: 'sneaky', version: '1.0.0', hooks: ['check'] }));
+    fs.writeFileSync(path.join(local, 'sneaky', 'index.mjs'), `import { exec } from 'node:${'child'}_process';\nexport const hooks = { check: () => exec };\n`);
+    const own = await makeTestApp({ pluginsLocalDir: local });
+    try {
+      const res = await own.app.inject({ method: 'POST', url: '/api/actions/plugins.audit', headers: own.authedWrite, payload: { params: {} } });
+      expect(res.statusCode, res.body).toBe(202);
+      const id = res.json().runId as string;
+      let meta: RunMeta;
+      for (;;) {
+        meta = (await own.app.inject({ method: 'GET', url: `/api/runs/${id}`, headers: own.authed })).json().meta;
+        if (!['queued', 'running'].includes(meta.status)) break;
+        await wait(100);
+      }
+      const lines = ((await own.app.inject({ method: 'GET', url: `/api/runs/${id}`, headers: own.authed })).json().lines as Array<{ line: string }>).map((l) => l.line).join('\n');
+      expect(meta, lines).toMatchObject({ status: 'failed', exitCode: 1 });
+      expect(lines).toMatch(/✗ sneaky\/index\.mjs: forbidden import "node:child_process"/);
+    } finally {
+      await own.close();
+    }
   });
 
   it('JD skill gap runs jd-skill-gap.mjs on the pasted JD and finishes, and asks for the JD instead of running without one (R7-15)', async () => {
@@ -194,11 +219,34 @@ describe('action registry', () => {
       return { id: '20261005000000-abcdef' } as RunMeta;
     });
     try {
-      const res = await post('/api/actions/daily.runNow', { params: {} });
+      const res = await post('/api/actions/daily.runNow', { params: {}, confirmed: true });
       expect(res.statusCode, res.body).toBe(202);
       expect(path.isAbsolute(t.cfg.claudeBin)).toBe(true);
       expect(started[0]!.cmd.args).toEqual([path.join(t.cfg.codeRoot, 'custom/immigration/run-daily.sh')]);
       expect(started[0]!.env).toMatchObject({ CC_CLAUDE_BIN: t.cfg.claudeBin, CAREER_OPS_ROOT: t.cfg.dataRoot });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('an action marked confirm runs only with the explicit confirmation, and a dry-run preview needs none (seed: server-side confirm)', async () => {
+    const started: Array<Parameters<typeof t.runner.start>[0]> = [];
+    const spy = vi.spyOn(t.runner, 'start').mockImplementation((req) => {
+      started.push(req);
+      return { id: '20261005000000-abcdef' } as RunMeta;
+    });
+    try {
+      for (const [id, params] of [['daily.runNow', {}], ['system.rollback', {}], ['system.updateApply', {}], ['devchat.installDeps', {}], ['portals.fixSlugs', { apply: true }]] as const) {
+        const res = await post(`/api/actions/${id}`, { params });
+        expect(res.statusCode, `${id}: ${res.body}`).toBe(428);
+        expect(res.json().confirm, id).toBeTypeOf('string');
+        expect((await post(`/api/actions/${id}`, { params, confirmed: 'yes' })).statusCode, `${id} with a non-boolean flag`).toBe(428);
+      }
+      expect(started).toEqual([]);
+      // The fix-slugs dry run only previews: no confirmation.
+      expect((await post('/api/actions/portals.fixSlugs', { params: { apply: false } })).statusCode).toBe(202);
+      expect((await post('/api/actions/daily.runNow', { params: {}, confirmed: true })).statusCode).toBe(202);
+      expect(started.map((r) => r.actionId)).toEqual(['portals.fixSlugs', 'daily.runNow']);
     } finally {
       spy.mockRestore();
     }
@@ -212,7 +260,7 @@ describe('action registry', () => {
       return { id: '20261005000000-abcdef' } as RunMeta;
     });
     try {
-      const res = await bare.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: bare.authedWrite, payload: { params: {} } });
+      const res = await bare.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: bare.authedWrite, payload: { params: {}, confirmed: true } });
       expect(res.statusCode, res.body).toBe(202);
       expect(started[0]!.env).not.toHaveProperty('CC_CLAUDE_BIN');
     } finally {

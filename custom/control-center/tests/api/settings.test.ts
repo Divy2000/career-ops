@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -173,6 +173,56 @@ describe('plugins', () => {
     expect(res.json().plugins.some((p: { id: string }) => p.id === '_template')).toBe(false);
     expect(res.json().config.kind).toBe('missing');
   });
+  it('finds plugins the way plugins.mjs does: a symlinked plugins.local checkout is listed, an invalid manifest or a shadowed id is not (SW2-server-02)', async () => {
+    const local = tempDir('cc-plugins-local-');
+    const manifest = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({ id, name: id, version: '1.0.0', apiVersion: 1, description: `${id} plugin`, hooks: ['ingest'], humanInTheLoop: true, ...extra });
+    const put = (dir: string, json: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'manifest.json'), json);
+      fs.writeFileSync(path.join(dir, 'index.mjs'), 'export const hooks = {};\n');
+    };
+    // A plugin developed in its own checkout and linked in, as plugins.local/ is meant to be used.
+    const checkout = path.join(tempDir('cc-plugin-checkout-'), 'my-plugin');
+    put(checkout, manifest('my-plugin'));
+    fs.symlinkSync(checkout, path.join(local, 'my-plugin'));
+    put(path.join(local, 'no-id'), manifest('no-id', { id: undefined }));
+    put(path.join(local, 'wrong-dir'), manifest('another-id'));
+    put(path.join(local, 'gmail'), manifest('gmail'));
+    const own = await makeTestApp({ pluginsLocalDir: local });
+    try {
+      const plugins = (await own.app.inject({ method: 'GET', url: '/api/plugins', headers: own.authed })).json().plugins as Array<{ id: string; source: string }>;
+      const ids = plugins.map((p) => p.id);
+      expect(plugins.find((p) => p.id === 'my-plugin')).toMatchObject({ source: 'local' });
+      expect(ids).not.toContain('no-id');
+      expect(ids).not.toContain('another-id');
+      expect(ids).not.toContain('wrong-dir');
+      expect(plugins.filter((p) => p.id === 'gmail')).toEqual([expect.objectContaining({ source: 'bundled' })]);
+      const toggle = await own.app.inject({ method: 'PUT', url: '/api/config/plugins/my-plugin', headers: own.authedWrite, payload: { enabled: true } });
+      expect(toggle.statusCode, toggle.body).toBe(200);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('refuses a plugin toggle sent with a stale ETag: 409 with the current version, and config/plugins.yml unchanged (SW2-tests-22)', async () => {
+    const stale = (await get('/api/plugins')).json().config.etag as string | null;
+    const file = path.join(t.cfg.dataRoot, 'config', 'plugins.yml');
+    const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      // Another writer (the CLI's plugins.mjs enable, a session) changes the file after the page loaded it.
+      fs.writeFileSync(file, 'plugins:\n  gmail:\n    enabled: true\n');
+      const before = fs.readFileSync(file, 'utf8');
+      const res = await send('PUT', '/api/config/plugins/gmail', { enabled: false }, stale === null ? { 'if-match': '"stale"' } : { 'if-match': stale });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'config/plugins.yml changed since you loaded it', current: { raw: before } });
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      if (original === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, original);
+    }
+  });
+
   it('enables a plugin by writing config/plugins.yml and rejects unknown ids', async () => {
     const res = await send('PUT', '/api/config/plugins/gmail', { enabled: true });
     expect(res.statusCode, res.body).toBe(200);
@@ -213,8 +263,9 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(xml).toContain(path.join(t.cfg.codeRoot, 'custom/upstream-sync/sync.sh'));
     expect(xml).toContain('<key>Hour</key><integer>4</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>0</integer>');
     const uid = String(process.getuid?.() ?? 0);
+    // The new plist is linted beside the installed one and only then moved over it (SW2-tests-19).
     expect(fake.calls.map((c) => [c.cmd, ...c.args].join(' '))).toEqual([
-      `plutil -lint ${plist}`,
+      expect.stringMatching(new RegExp(`^plutil -lint ${plist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-\\d+$`)),
       `launchctl enable gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootout gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootstrap gui/${uid} ${plist}`,
@@ -222,8 +273,58 @@ describe('launchd schedule through the injectable executor (never the real launc
       `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl print-disabled gui/${uid}`,
     ]);
-    expect(res.json()).toMatchObject({ label: 'com.career-ops.upstream-sync', plist: 'ok', loaded: true, disabled: false, hour: 4, minute: 30, weekday: 0, programArgumentsOk: true, lastExit: 0 });
+    // A job launchd just loaded has never run: print says "not running", runs 0 and "(never exited)" (print-idle.txt).
+    expect(res.json()).toMatchObject({ label: 'com.career-ops.upstream-sync', plist: 'ok', loaded: true, disabled: false, hour: 4, minute: 30, weekday: 0, programArgumentsOk: true, state: 'not running', lastExit: null, runs: 0 });
     expect(typeof res.json().nextFire).toBe('string');
+  });
+  it('after the job fires, the schedule reads the run count and exit the way launchctl print reports them (SW2-tests-10)', async () => {
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    fake.fire('com.career-ops.upstream-sync', 0);
+    fake.fire('com.career-ops.upstream-sync', 1);
+    const job = (await get('/api/schedule')).json().jobs[1];
+    expect(job).toMatchObject({ loaded: true, state: 'not running', runs: 2, lastExit: 1 });
+  });
+  it('a plist that fails the lint never replaces the installed one, which stays byte for byte, and launchd is not touched (SW2-tests-19)', async () => {
+    expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    const plist = path.join(t.cfg.launchAgentsDir, 'com.career-ops.upstream-sync.plist');
+    const installed = fs.readFileSync(plist, 'utf8');
+    fake.calls.length = 0;
+    fake.fail.add('plutil -lint');
+    try {
+      const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 6, minute: 0, weekday: 0, enabled: true });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toMatch(/plutil -lint rejected the plist/);
+    } finally {
+      fake.fail.clear();
+    }
+    expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+    expect(fs.readdirSync(t.cfg.launchAgentsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
+    expect(fake.calls.filter((c) => c.cmd === 'launchctl')).toEqual([]);
+  });
+  for (const [step, status, error] of [
+    ['launchctl enable', 502, /launchctl enable failed/],
+    ['launchctl bootstrap', 502, /launchctl bootstrap failed/],
+  ] as const) {
+    it(`a failing ${step} on Install and enable answers ${status} with the reason (SW2-tests-19)`, async () => {
+      fake.fail.add(step);
+      try {
+        const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true });
+        expect(res.statusCode).toBe(status);
+        expect(res.json().error).toMatch(error);
+      } finally {
+        fake.fail.clear();
+      }
+    });
+  }
+  it('a failing launchctl disable answers 502 and says the job would load again at login (SW2-tests-19)', async () => {
+    fake.fail.add('launchctl disable');
+    try {
+      const res = await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: false });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error).toMatch(/launchctl disable failed .*would load again at the next login/);
+    } finally {
+      fake.fail.clear();
+    }
   });
   it('disabling writes the plist and boots out without bootstrapping', async () => {
     // The weekly job installed and loaded, as the test above leaves it, so this test holds alone too.
@@ -360,6 +461,29 @@ describe('app settings and usage meter', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().fiveHour).toMatchObject({ tokens: 60 });
     expect(res.json().budgets).toEqual({ fiveHourTokens: 1000, sevenDayTokens: null });
+  });
+});
+
+describe('raising Claude concurrency (SW2-server-03)', () => {
+  it('starts a Claude run that was waiting for a slot as soon as the cap is raised, with no other run event', async () => {
+    const own = await makeTestApp();
+    try {
+      const put = (claudeConcurrency: number) => own.app.inject({ method: 'PUT', url: '/api/settings/app', headers: own.authedWrite, payload: { claudeConcurrency } });
+      expect((await put(1)).statusCode).toBe(200);
+      const noisy = { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '4000'], cwd: PACKAGE_ROOT };
+      const req = { actionId: 'test.claude', label: 'claude run', cost: 'tokens' as const, resources: [], claude: true, params: {}, cmd: noisy };
+      const first = own.runner.start(req);
+      const second = own.runner.start(req);
+      const status = (id: string) => own.runner.store.read(id)?.status;
+      expect(status(first.id)).toBe('running');
+      expect(status(second.id)).toBe('queued');
+      expect((await put(2)).statusCode).toBe(200);
+      expect(status(second.id)).toBe('running');
+      own.runner.cancel(first.id);
+      own.runner.cancel(second.id);
+    } finally {
+      await own.close();
+    }
   });
 });
 

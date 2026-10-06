@@ -203,6 +203,11 @@ export function ApplicationPage() {
                 ) : (
                   <Empty>No company sponsorship file yet. Run the check below to create one.</Empty>
                 )}
+                {q.data.sponsorship.error && (
+                  <p role="alert" className="danger-text">
+                    Company alerts could not be read: {q.data.sponsorship.error}
+                  </p>
+                )}
                 {q.data.sponsorship.alert && (
                   <p>
                     <Pill tone={alertTone(String(q.data.sponsorship.alert.status))}>{String(q.data.sponsorship.alert.status)}</Pill> {String(q.data.sponsorship.alert.headline)}

@@ -236,8 +236,174 @@ describe('Runner', () => {
     const running = runner.store.read(meta.id)!;
     expect(running.wrapperStartedAt).toBe(processStartTime(running.wrapperPid!));
     expect(running.childStartedAt).toBe(processStartTime(running.childPid!));
-    expect(running.wrapperStartedAt).toMatch(/\d{4}$/);
+    // Seconds since the epoch, close to when the wrapper was spawned.
+    expect(typeof running.wrapperStartedAt).toBe('number');
+    expect(Math.abs((running.wrapperStartedAt as number) - Date.parse(running.startedAt!) / 1000)).toBeLessThan(5);
     expect(processStartTime(2147483646)).toBeNull();
+  });
+
+  it('reads a start time the same whatever TZ and locale the server runs under (seed: runner.ts:37)', () => {
+    const before = processStartTime(process.pid);
+    expect(typeof before).toBe('number');
+    expect(Math.abs((before as number) - (Date.now() / 1000 - process.uptime()))).toBeLessThan(5);
+    const saved = { TZ: process.env.TZ, LC_ALL: process.env.LC_ALL, LANG: process.env.LANG };
+    process.env.TZ = 'Asia/Tokyo';
+    process.env.LC_ALL = 'de_DE.UTF-8';
+    process.env.LANG = 'de_DE.UTF-8';
+    try {
+      expect(processStartTime(process.pid)).toBe(before);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  it('a live run is kept when the server restarts under another TZ or locale', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const meta = first.start(req(['0', '20000']));
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt));
+    first.close();
+    const saved = { TZ: process.env.TZ, LC_ALL: process.env.LC_ALL };
+    process.env.TZ = 'Asia/Tokyo';
+    process.env.LC_ALL = 'de_DE.UTF-8';
+    let second: Runner | null = null;
+    try {
+      second = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(second);
+      second.reconcile();
+      expect(second.store.read(meta.id)?.status).toBe('running');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      second?.cancel(meta.id);
+    }
+  });
+
+  it('a live wrapper is kept when ps says "no such process" but the PID still answers (they disagree): judged by liveness alone (seed review)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...run, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 1_700_000_000 });
+      // ps answering "no such process" for a PID kill(pid, 0) still finds.
+      const runner = new Runner(root, new EventBus(), { pollMs: 50, procStart: () => null });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(run.id)?.status).toBe('running');
+      runner.close();
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('on that disagreement, a PID that answers kill(pid, 0) only with EPERM is another user\'s process now, so the run is lost (seed review 2)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...run, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 1_700_000_000 });
+      // ps finds no such process, and kill(pid, 0) is refused: the PID exists but is not ours, so it is not our wrapper.
+      const eperm = () => {
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      };
+      const runner = new Runner(root, new EventBus(), { pollMs: 50, procStart: () => null, kill: eperm });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(run.id)?.status).toBe('lost');
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('a PID that answers kill(pid, 0) only with EPERM is never our run, whatever its recorded start: reconcile marks the run lost as reused (EPERM review)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: ['tracker'], claude: true, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      // No start was recorded; after a reboot the PID belongs to a root process (kill(pid, 0) is refused).
+      store.write({ ...run, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: null });
+      const eperm = () => {
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      };
+      const runner = new Runner(root, new EventBus(), { pollMs: 50, kill: eperm });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(run.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/belongs to another user's process/) });
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('a tracked run whose wrapper PID turns into another user\'s process (kill answers EPERM) ends lost instead of running for good (EPERM review)', async () => {
+    let refused = false;
+    const kill = (pid: number, signal: 0) => {
+      if (refused) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      process.kill(pid, signal);
+    };
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50, kill });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '20000']));
+    await until(() => runner.store.read(meta.id)?.status === 'running');
+    refused = true;
+    try {
+      await until(() => runner.store.read(meta.id)?.status === 'lost');
+    } finally {
+      refused = false;
+      const pid = runner.store.read(meta.id)?.childPid;
+      if (pid) process.kill(-pid, 'SIGKILL');
+    }
+  });
+
+  it('when ps cannot answer, a PID kill(pid, 0) refuses with EPERM (not ours) reads as gone, and one it accepts as unknown (EPERM review)', () => {
+    const noPs = () => {
+      throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });
+    };
+    const eperm = () => {
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    };
+    // Fake kills: the answer does not depend on who runs the test (root, or a container whose PID 1 is this process).
+    expect(processStartTime(4242, noPs, eperm)).toBeNull();
+    expect(processStartTime(4242, noPs, () => undefined)).toBe('unknown');
+  });
+
+  it('when ps cannot answer, a live PID reads as unknown (kept) and a dead one as gone', () => {
+    const noPs = () => {
+      throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });
+    };
+    expect(processStartTime(process.pid, noPs)).toBe('unknown');
+    expect(processStartTime(2147483646, noPs)).toBeNull();
+    // ps printing a start it cannot parse is unknown too, never a mismatch.
+    expect(processStartTime(process.pid, () => 'gestern\n')).toBe('unknown');
+  });
+
+  it('a run recorded by an earlier version (start time as ps text) is judged by its PID alone: kept while it runs, lost once it is gone', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const base = { actionId: 'x', label: 'x', cost: 'free' as const, resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+      const live = store.create(base);
+      store.write({ ...live, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Mon Oct  5 17:09:12 2026', childPid: sleeper.pid!, childStartedAt: 'Mon Oct  5 17:09:12 2026' });
+      const gone = store.create(base);
+      store.write({ ...gone, status: 'running', wrapperPid: 2147483646, wrapperStartedAt: 'Mon Oct  5 17:09:12 2026' });
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(live.id)?.status).toBe('running');
+      expect(runner.store.read(gone.id)?.status).toBe('lost');
+      runner.close();
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
   });
 
   it('reconcile never adopts a live PID whose start time differs (PID reuse after a reboot)', async () => {
@@ -246,7 +412,7 @@ describe('Runner', () => {
     try {
       const store = new RunStore(root);
       const stale = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
-      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Thu Jan  1 00:00:00 1970', childPid: sleeper.pid!, childStartedAt: 'Thu Jan  1 00:00:00 1970' });
+      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 1, childPid: sleeper.pid!, childStartedAt: 1 });
       const runner = new Runner(root, new EventBus(), { pollMs: 50 });
       runners.push(runner);
       runner.reconcile();
@@ -263,7 +429,7 @@ describe('Runner', () => {
     try {
       const store = new RunStore(root);
       const stale = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
-      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 'Thu Jan  1 00:00:00 1970', childPid: sleeper.pid!, childStartedAt: 'Thu Jan  1 00:00:00 1970' });
+      store.write({ ...stale, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 1, childPid: sleeper.pid!, childStartedAt: 1 });
       const runner = new Runner(root, new EventBus(), { pollMs: 50 });
       runners.push(runner);
       expect(runner.cancel(stale.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/nothing was signalled/) });
