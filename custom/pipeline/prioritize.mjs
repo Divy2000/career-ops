@@ -10,6 +10,7 @@ import { readFile, writeFile, copyFile, rename } from 'node:fs/promises';
 import { orderPending, parseRow } from './lib.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
 import { localToday } from '../../lib/local-today.mjs';
+import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 // Same resolved paths (data root + CAREER_OPS_* overrides) the scanner writes to.
 import { PIPELINE_PATH as PIPELINE, SCAN_HISTORY_PATH as HISTORY, formatPipelineOffer } from '../../scan.mjs';
 
@@ -48,13 +49,15 @@ Reorders the pending rows of data/pipeline.md: jobs first seen today, fresh post
 `;
 
 async function main() {
-  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  const args = process.argv.slice(2);
+  // An unknown flag (--dry-run) is refused before anything is rewritten.
+  validateFlags(args, ['--today', '--help', '-h'], USAGE, { valueFlags: ['--today'], requireOperand: true });
+  if (hasFlag(args, '--help') || hasFlag(args, '-h')) {
     process.stdout.write(USAGE);
     return;
   }
-  const ti = process.argv.indexOf('--today');
   // The local day, as scan.mjs stamps first-seen dates; the UTC day is already tomorrow on a US evening.
-  const today = ti === -1 ? localToday() : process.argv[ti + 1];
+  const today = hasFlag(args, '--today') ? flagValue(args, '--today') : localToday();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(today ?? '')) throw new Error('--today needs a YYYY-MM-DD date');
 
   // Same lock scan.mjs and rank-pipeline.mjs hold, so a concurrent writer's

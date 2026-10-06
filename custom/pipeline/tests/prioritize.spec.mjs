@@ -41,6 +41,30 @@ test('prioritize runs on a root with no scan history yet (URLs added by hand), w
   assert.equal(fs.existsSync(path.join(root, 'data', 'scan-history.tsv')), false);
 });
 
+test('prioritize reads --today in the --today=YYYY-MM-DD form too (SW6-libs-02)', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const backlog = '- [ ] https://jobs.example.com/backlog | Backlog Co | Data Analyst | Remote';
+  const fresh = '- [ ] https://jobs.example.com/fresh | Fresh Co | Data Analyst | Remote';
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${backlog}\n${fresh}\n`);
+  fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\nhttps://jobs.example.com/backlog\t2001-01-01\tx\tData Analyst\tBacklog Co\tadded\nhttps://jobs.example.com/fresh\t2026-10-01\tx\tData Analyst\tFresh Co\tadded\n');
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--today=2026-10-01'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /\(1 first seen 2026-10-01\)/);
+});
+
+test('prioritize refuses an unknown flag such as --dry-run before it rewrites anything (SW6-libs-02)', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n- [ ] https://jobs.example.com/b | B Co | Backend Engineer | Remote\n';
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--dry-run'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /unrecognized flag\(s\): --dry-run/);
+  assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+});
+
 test('prioritize treats a root with no data/pipeline.md yet (a first scan that added nothing) as an empty pipeline', () => {
   const root = tempDir('prioritize-');
   fs.mkdirSync(path.join(root, 'data'));

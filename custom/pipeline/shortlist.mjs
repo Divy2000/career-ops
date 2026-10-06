@@ -19,6 +19,7 @@ import { companySlug, parseCompanyAlerts } from '../immigration/lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { hasIndex } from '../../plugins/h1b-sponsor/lib/index.mjs';
 import { localToday } from '../../lib/local-today.mjs';
+import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const run = promisify(execFile);
 // Code lives in the checkout; user data follows career-ops' data-root contract.
@@ -33,10 +34,11 @@ const OUT = path.join(DATA, 'data/shortlist.md');
 const CHECK = path.join(CODE, 'plugins/h1b-sponsor/check.mjs');
 const TIER_TTL_DAYS = 30;
 
-function arg(name, fallback) {
-  const i = process.argv.indexOf(name);
-  if (i === -1) return fallback;
-  const n = Number(process.argv[i + 1]);
+function arg(args, name, fallback) {
+  if (!hasFlag(args, name)) return fallback;
+  const raw = flagValue(args, name) ?? '';
+  // Number('') is 0, so an empty `--top=` would silently list nothing.
+  const n = raw.trim() ? Number(raw) : NaN;
   if (!Number.isFinite(n)) throw new Error(`${name} needs a number`);
   return n;
 }
@@ -177,12 +179,15 @@ Writes data/shortlist.md from the ranked pending rows, scored with each company'
 `;
 
 async function main() {
-  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  const args = process.argv.slice(2);
+  // An unknown flag (--dry-run) is refused before any lookup or write.
+  validateFlags(args, ['--min-rank', '--top', '--help', '-h'], USAGE, { valueFlags: ['--min-rank', '--top'], requireOperand: true });
+  if (hasFlag(args, '--help') || hasFlag(args, '-h')) {
     process.stdout.write(USAGE);
     return;
   }
-  const minRank = arg('--min-rank', 3);
-  const top = arg('--top', 40);
+  const minRank = arg(args, '--min-rank', 3);
+  const top = arg(args, '--top', 40);
   const today = localToday();
   const rows = (await readPipeline()).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];

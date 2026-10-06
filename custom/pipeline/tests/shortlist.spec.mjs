@@ -120,6 +120,35 @@ test('the low-ranked fixture row reads as ranked, so the tests above cover the -
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /Ranked rows with rank >= 1: 1\./);
 });
 
+test('the shortlist reads --min-rank in the --min-rank=N form too (SW6-libs-02)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Low Co': { tier: 'strong', matched: 'Low Co', checked: localToday() } }));
+  const r = spawnSync(process.execPath, [SHORTLIST, '--min-rank=1'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /Ranked rows with rank >= 1: 1\./);
+});
+
+test('the shortlist refuses an unknown flag such as --dry-run before any lookup or write (SW6-libs-02)', () => {
+  const root = rankedRoot();
+  const r = spawnSync(process.execPath, [SHORTLIST, '--dry-run'], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /unrecognized flag\(s\): --dry-run/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+});
+
+test('the shortlist refuses an empty --min-rank= or --top= instead of reading it as 0 (SW6-libs-02)', () => {
+  for (const flag of ['--min-rank=', '--top=']) {
+    const root = rankedRoot();
+    const r = spawnSync(process.execPath, [SHORTLIST, flag], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 1, flag);
+    assert.match(r.stderr, new RegExp(`${flag.slice(0, -1)} needs a number`));
+    assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
+  }
+});
+
 /** A root with two companies ranked above the cut, and nothing cached, so the run must look both up. */
 function rankedRoot() {
   const root = tempDir('shortlist-');
