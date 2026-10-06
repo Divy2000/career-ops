@@ -1,4 +1,6 @@
 /// <reference lib="dom" />
+import fs from 'node:fs';
+import path from 'node:path';
 import { AxeBuilder } from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
@@ -43,4 +45,22 @@ export async function waitForAnimations(page: Page, { timeout = 10_000 }: { time
 export async function axeBuilder(page: Page): Promise<AxeBuilder> {
   await waitForAnimations(page);
   return new AxeBuilder({ page });
+}
+
+/**
+ * Snapshots files of the main app's data root (paths relative to it) and returns what puts them back: every spec
+ * shares that root, so a test that changes one restores it in a finally, and a file that did not exist is removed.
+ */
+export function snapshotDataFiles(...rels: string[]): () => void {
+  const root = path.join(process.env.CC_E2E_TMP!, 'root');
+  const saved = rels.map((rel) => {
+    const abs = path.join(root, rel);
+    return { abs, raw: fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null };
+  });
+  return () => {
+    for (const { abs, raw } of saved) {
+      if (raw === null) fs.rmSync(abs, { force: true });
+      else fs.writeFileSync(abs, raw);
+    }
+  };
 }
