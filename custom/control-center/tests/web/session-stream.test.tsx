@@ -138,6 +138,7 @@ describe('one session across its turns', () => {
   let heldMeta: Array<() => void>;
   let failing: number;
   let missing: boolean;
+  let notASession: boolean;
   const retry = { ...SESSION_LOAD_RETRY };
 
   function Probe() {
@@ -166,12 +167,15 @@ describe('one session across its turns', () => {
     heldMeta = [];
     failing = 0;
     missing = false;
+    notASession = false;
     // The load's retry backoff in milliseconds instead of seconds, so the outage test does not wait on real delays.
     Object.assign(SESSION_LOAD_RETRY, { baseMs: 5, maxMs: 20 });
     vi.stubGlobal('EventSource', FakeEventSource);
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
+        // Another route under /api/sessions/ (engine) answers 200 with no session record.
+        if (url === '/api/sessions/s1' && notASession) return new Response('{"playwrightAvailable":false,"modes":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
         if (url === '/api/sessions/s1' && missing) return new Response('{"error":"session not found"}', { status: 404, headers: { 'content-type': 'application/json' } });
         if (url === '/api/sessions/s1' && failing > 0) {
           failing -= 1;
@@ -318,6 +322,19 @@ describe('one session across its turns', () => {
     await settle();
     const reads = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === '/api/sessions/s1');
     expect(reads).toHaveLength(1);
+    expect(latest.transcript.turns).toEqual([]);
+  });
+
+  it('an id that names another route (engine), answered with no session record, is left alone: no meta, not gone, not read again', async () => {
+    notASession = true;
+    await mount();
+    await settle();
+    await act(async () => appStream().open());
+    await settle();
+    const reads = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === '/api/sessions/s1');
+    expect(reads).toHaveLength(1);
+    expect(latest.meta).toBeNull();
+    expect(latest.gone).toBe(false);
     expect(latest.transcript.turns).toEqual([]);
   });
 
