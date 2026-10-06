@@ -8,10 +8,7 @@ const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 /** Files that may spell colors out: the token definitions and the pre-paint boot script. */
 const EXEMPT = new Set(['styles/tokens.css', 'public/theme-boot.js']);
 /** Color-looking data that is not styling. Each entry names the literal and why it stays. */
-const DATA_LITERALS: Record<string, string[]> = {
-  // Default written into profile.yml for the CV PDF accent; it is the user's data, not app chrome.
-  'features/settings/ProfileForm.tsx': ['#2563eb'],
-};
+const DATA_LITERALS: Record<string, string[]> = {};
 
 const COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g;
 
