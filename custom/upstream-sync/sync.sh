@@ -184,18 +184,13 @@ if [ -z "$BLOCKERS" ]; then
   gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
-  fetch_main origin || fail "cannot refresh origin/main after the merge"
-  if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-    DEPS_BEFORE="$(deps_fingerprint HEAD)" || fail "cannot read the live checkout's dependency files"
-    git merge -q --ff-only origin/main || fail "live checkout could not fast-forward"
-    if [ "$DEPS_BEFORE" != "$(deps_fingerprint HEAD)" ]; then
-      install_root_deps run-scripts >/dev/null 2>&1 || notify "Merged upstream, but npm install failed in the live checkout; run it by hand"
-    fi
-    echo "live checkout now at $(git rev-parse --short HEAD)"
-    notify "Merged upstream ($BEHIND commits) and updated career-ops"
-  else
-    notify "Merged upstream; live checkout has local changes, run: git pull --ff-only"
-  fi
+  LIVE_UPDATE="$(update_live_checkout)"
+  case $? in
+    0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
+    3) echo "$LIVE_UPDATE"; notify "Merged upstream, but npm install failed in the live checkout; run it by hand" ;;
+    10) echo "live checkout not updated: $LIVE_UPDATE"; notify "Merged upstream; $LIVE_UPDATE, so it was not updated. Run: git switch main && git pull --ff-only" ;;
+    *) fail "$LIVE_UPDATE" ;;
+  esac
   git worktree remove --force "$WT" >/dev/null 2>&1
 else
   gh pr comment "$PR_URL" --body "Not auto-merged: $BLOCKERS." >/dev/null || true

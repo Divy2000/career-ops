@@ -238,3 +238,25 @@ merge_blockers() {
   for w in ${why[@]+"${why[@]}"}; do out="${out:+$out; }$w"; done
   printf '%s' "$out"
 }
+
+# update_live_checkout: after the sync PR merged, bring the live checkout (the
+# current directory) up to the new origin/main: fetch, then fast-forward only
+# when it is on main with no tracked local changes, and reinstall its root
+# dependencies (lifecycle scripts included, as a user's own install would) when
+# the merge changed them. Prints one line saying what happened. Returns 0 when
+# updated, 3 when updated but the install failed, 10 when left alone (not on
+# main, or local changes), 1 when the fetch, the fingerprint or the
+# fast-forward failed.
+update_live_checkout() {
+  local deps_before
+  fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
+  if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
+  deps_before="$(deps_fingerprint HEAD)" || { echo "cannot read the live checkout's dependency files"; return 1; }
+  git merge -q --ff-only origin/main || { echo "live checkout could not fast-forward"; return 1; }
+  if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
+    echo "live checkout now at $(git rev-parse --short HEAD), but npm install failed; run it by hand"
+    return 3
+  fi
+  echo "live checkout now at $(git rev-parse --short HEAD)"
+}
