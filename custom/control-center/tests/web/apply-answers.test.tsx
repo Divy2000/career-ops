@@ -68,3 +68,31 @@ describe('Apply drafted answers: select fields', () => {
     expect([...select.options].map((o) => o.value)).toEqual(['No', 'Yes']);
   });
 });
+
+describe('Apply drafted answers: any field with fixed options (SW7-web-a-05)', () => {
+  it('a radio or combobox field with options is a choice between them, not free text', async () => {
+    for (const type of ['radio', 'combobox']) {
+      const select = await mount([{ ...field('No'), type }]);
+      expect(select, type).not.toBeNull();
+      expect([...select.options].map((o) => o.value), type).toEqual(['No', 'Yes']);
+      expect(select.value, type).toBe('No');
+      expect(host.querySelector('input'), type).toBeNull();
+    }
+  });
+
+  it('a checkbox group is shown as set by hand on the form: its options and the drafted answer, nothing to edit (review fix)', async () => {
+    await act(async () => root.render(createElement(Harness, { initial: [{ id: 'langs', label: 'Languages you speak', type: 'checkbox', options: ['English', 'German', 'French'], required: false, value: 'English, German', needsConfirmation: false }] })));
+    const manual = host.querySelector('[data-manual-field="langs"]')!;
+    expect(manual).not.toBeNull();
+    expect([...manual.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['English', 'German', 'French']);
+    expect(manual.textContent).toContain('Set this on the form yourself');
+    expect(manual.textContent).toContain('Drafted: English, German');
+    expect(host.querySelector('select, input, textarea')).toBeNull();
+  });
+
+  it('a field whose options list is empty stays a text box', async () => {
+    await act(async () => root.render(createElement(Harness, { initial: [{ ...field('x'), type: 'radio', options: [] }] })));
+    expect(host.querySelector('select')).toBeNull();
+    expect(host.querySelector('input')!.value).toBe('x');
+  });
+});

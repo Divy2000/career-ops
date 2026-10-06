@@ -29,28 +29,45 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
   const set = (id: string, value: string) => onChange(fields.map((f) => (f.id === id ? { ...f, value } : f)));
   return (
     <div className="stack" aria-label="Drafted answers">
-      {fields.map((f) => (
-        <label key={f.id} className="stack" style={{ gap: 4 }}>
-          <span>
-            {f.label} {f.required && <span className="faint">(required)</span>} {f.needsConfirmation && <Pill tone="warn">needs your confirmation</Pill>}
-          </span>
-          {f.type === 'select' && f.options ? (
-            <select value={f.value} onChange={(e) => set(f.id, e.target.value)}>
-              {/* Without an option for the held value the browser shows the first option, while the held value is what Fill sends. */}
-              {!f.options.includes(f.value) && <option value={f.value}>{f.value === '' ? 'Choose an answer' : f.value}</option>}
+      {fields.map((f) =>
+        // A checkbox group takes several answers, and the fill turn leaves checkboxes to the candidate (modes/apply.md):
+        // one select would suggest a single answer the app sets. It is listed as a step to do on the form instead.
+        f.type === 'checkbox' && f.options && f.options.length > 0 ? (
+          <div key={f.id} className="stack" style={{ gap: 4 }} data-manual-field={f.id}>
+            <span>
+              {f.label} {f.required && <span className="faint">(required)</span>} <Pill tone="warn">Set this on the form yourself</Pill>
+            </span>
+            <ul className="small" style={{ margin: 0 }}>
               {f.options.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
+                <li key={o}>{o}</li>
               ))}
-            </select>
-          ) : f.type === 'textarea' ? (
-            <textarea rows={4} value={f.value} onChange={(e) => set(f.id, e.target.value)} />
-          ) : (
-            <input value={f.value} onChange={(e) => set(f.id, e.target.value)} />
-          )}
-        </label>
-      ))}
+            </ul>
+            {f.value && <span className="muted small">Drafted: {f.value}</span>}
+          </div>
+        ) : (
+            <label key={f.id} className="stack" style={{ gap: 4 }}>
+              <span>
+                {f.label} {f.required && <span className="faint">(required)</span>} {f.needsConfirmation && <Pill tone="warn">needs your confirmation</Pill>}
+              </span>
+              {/* Any fixed set of choices is a select, whatever the form called its control (radio, checkbox, combobox): a typed value could match none of them. */}
+              {f.options && f.options.length > 0 ? (
+                <select value={f.value} onChange={(e) => set(f.id, e.target.value)}>
+                  {/* Without an option for the held value the browser shows the first option, while the held value is what Fill sends. */}
+                  {!f.options.includes(f.value) && <option value={f.value}>{f.value === '' ? 'Choose an answer' : f.value}</option>}
+                  {f.options.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              ) : f.type === 'textarea' ? (
+                <textarea rows={4} value={f.value} onChange={(e) => set(f.id, e.target.value)} />
+              ) : (
+                <input value={f.value} onChange={(e) => set(f.id, e.target.value)} />
+              )}
+            </label>
+        ),
+      )}
     </div>
   );
 }
