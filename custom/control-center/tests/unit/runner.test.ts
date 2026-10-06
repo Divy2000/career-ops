@@ -285,6 +285,24 @@ describe('Runner', () => {
     }
   });
 
+  it('a live wrapper is kept when ps says "no such process" but the PID still answers (they disagree): judged by liveness alone (seed review)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const store = new RunStore(root);
+      const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+      store.write({ ...run, status: 'running', wrapperPid: sleeper.pid!, wrapperStartedAt: 1_700_000_000 });
+      // ps answering "no such process" for a PID kill(pid, 0) still finds.
+      const runner = new Runner(root, new EventBus(), { pollMs: 50, procStart: () => null });
+      runners.push(runner);
+      runner.reconcile();
+      expect(runner.store.read(run.id)?.status).toBe('running');
+      runner.close();
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
   it('when ps cannot answer, a live PID reads as unknown (kept) and a dead one as gone', () => {
     const noPs = () => {
       throw Object.assign(new Error('spawn /bin/ps ENOENT'), { code: 'ENOENT' });

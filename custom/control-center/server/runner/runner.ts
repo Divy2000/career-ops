@@ -97,7 +97,9 @@ export class Runner {
     if (!pid || !pidAlive(pid)) return false;
     if (typeof startedAt !== 'number') return null;
     const now = this.procStart(pid);
-    if (now === null) return false;
+    // ps says "no such process" although kill(pid, 0) just found it: gone only if it is gone by now too, else the start
+    // cannot be compared and liveness alone decides.
+    if (now === null) return pidAlive(pid) ? null : false;
     return now === 'unknown' ? null : now === startedAt;
   }
 
