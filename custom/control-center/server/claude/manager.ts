@@ -240,14 +240,21 @@ export class SessionManager {
     return this.store.delete(id);
   }
 
-  /** Server start: sessions left running by a previous process are re-attached or finalized. */
+  /**
+   * Server start: sessions left running by a previous process are re-attached or finalized, and so is a last turn that
+   * was never finalized whatever the session's status says (cancelled while no server tracked it, between a drain and
+   * the next server's activation): finalize records its cost, files and post-turn hashes and releases its report number.
+   */
   reconcile(): void {
     for (const meta of this.store.list()) {
-      if (meta.status !== 'running' && meta.status !== 'queued') continue;
-      if (this.active.has(meta.id)) continue;
+      const live = meta.status === 'running' || meta.status === 'queued';
       const turn = meta.turns.at(-1);
+      if (!live && (!turn || turn.endedAt)) continue;
+      if (this.active.has(meta.id)) continue;
       const run = turn ? this.runner.store.read(turn.runId) : null;
       if (!turn || !run) {
+        // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
+        if (!live) continue;
         const reason = 'run record missing after a restart';
         this.store.setStatus(meta.id, 'error', reason);
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
