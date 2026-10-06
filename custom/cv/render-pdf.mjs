@@ -12,6 +12,11 @@
 //
 // Without --strict-pages a CV that overflows even the tightest density is a
 // warning (the densest PDF is kept), matching generate-pdf.mjs's own default.
+//
+// Each density attempt runs generate-pdf.mjs with --strict-pages, so an attempt
+// that overflows leaves its PDF on disk to count but publishes nothing to
+// data/pdf-index.tsv; only the attempt that fits, or (without --strict-pages)
+// one more render of the densest layout, indexes the PDF for --report.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -59,13 +64,19 @@ async function main() {
 
   const html = readFileSync(input, 'utf8');
   let lastAttempt = null;
-  const render = async (candidate) => {
-    writeFileSync(input, candidate);
-    const attempt = spawnSync(process.execPath, [GENERATE, input, output, ...forwarded, `--max-pages=${maxPages}`], {
+  const generate = (extra) => {
+    const attempt = spawnSync(process.execPath, [GENERATE, input, output, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
       cwd: CODE, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
     });
     if (attempt.error) throw attempt.error;
-    if (attempt.status !== 0) throw new RenderFailed(attempt);
+    return attempt;
+  };
+  const render = async (candidate) => {
+    writeFileSync(input, candidate);
+    const attempt = generate(['--strict-pages']);
+    // generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, nothing else is.
+    const overflowed = attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
+    if (attempt.status !== 0 && !overflowed) throw new RenderFailed(attempt);
     lastAttempt = attempt;
     return { pages: countPdfPages(readFileSync(output)) };
   };
@@ -80,7 +91,15 @@ async function main() {
     }
     throw err;
   }
-  print(lastAttempt);
+  if (!result.fits && !strict) {
+    // The densest layout is what the input holds after the last attempt; render it once more to publish it.
+    lastAttempt = generate([]);
+    if (lastAttempt.status !== 0) {
+      print(lastAttempt);
+      process.exit(lastAttempt.status || 1);
+    }
+  }
+  if (result.fits || !strict) print(lastAttempt);
   const tried = result.attempts.map((a) => `d${a.density}=${a.pages}`).join(', ');
   const pages = `${result.pages} page${result.pages === 1 ? '' : 's'}`;
   if (result.fits) {
