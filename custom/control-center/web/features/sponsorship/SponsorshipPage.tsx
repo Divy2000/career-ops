@@ -141,7 +141,7 @@ export function SponsorshipPage() {
                   Policy changes could not be read: {d.policyChangesError}
                 </p>
               )}
-              {tab === 'changes' && (
+              {tab === 'changes' && !d.policyChangesError && (
                 <TableScroll label="Policy changes">
                   <table className="table">
                     <thead>
