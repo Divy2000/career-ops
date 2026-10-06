@@ -1,3 +1,3 @@
 # name	company	type	title	phone	email	linkedin	tracker#	notes
-Pat Example	Acme Robotics	recruiter	Technical Recruiter	-	pat@acme-robotics.example	linkedin.com/in/pat-example	1	intro call scheduled
-Sam Sample	Globex Payments	hiring-manager	Engineering Manager	-	-	-	3	-
+Pat Example	Acme Robotics	recruiter	Technical Recruiter		pat@acme-robotics.example	linkedin.com/in/pat-example	1	intro call scheduled
+Sam Sample	Globex Payments	hiring-manager	Engineering Manager				3	

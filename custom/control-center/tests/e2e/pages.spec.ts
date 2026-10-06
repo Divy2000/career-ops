@@ -232,6 +232,10 @@ test.describe('read-only pages render fixture data', () => {
     expect(plain.startsWith('BEGIN:VCARD\r\n')).toBe(true);
     expect(plain.match(/BEGIN:VCARD/g)).toHaveLength(2);
     expect(plain).toContain('FN:Pat Example\r\n');
+    // An empty contacts.tsv cell is empty, never a '-' placeholder that would land in the card (SW5-tests-09).
+    expect(plain).toContain('FN:Sam Sample\r\n');
+    expect(plain).not.toMatch(/^(TEL|EMAIL|URL)[^:\r\n]*:-\r$/m);
+    expect(plain).not.toMatch(/^NOTE:.* -\r$/m);
     await page.getByRole('checkbox', { name: /caller ID/i }).check();
     expect(await save()).toContain('FN:Pat Example (Acme Robotics recruiter)\r\n');
     await axeClean(page);
