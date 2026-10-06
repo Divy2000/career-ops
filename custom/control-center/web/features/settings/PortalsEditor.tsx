@@ -3,6 +3,7 @@ import { DataState, Empty, Pill, Tabs } from '../../components/ui';
 import { ActionButton, ActionOutput, Message } from '../../components/ActionBar';
 import { useActions, useRunAction } from '../../lib/actions';
 import { isPlainObject } from '../../lib/yamlOpsClient';
+import { useGuardedTab } from '../../lib/unsaved';
 import { KeyEditor, type FieldRules } from './StructuredEditor';
 import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
 import { ConfigEditor } from './RawConfigEditor';
@@ -177,9 +178,10 @@ function PortalsHealth() {
 
 export function PortalsTab() {
   const [sub, setSub] = useState<'structured' | 'raw' | 'health'>('structured');
+  const switchTo = useGuardedTab(setSub);
   return (
     <div className="stack">
-      <Tabs label="Portals views" tabs={[{ id: 'structured', label: 'Structured' }, { id: 'raw', label: 'Raw YAML' }, { id: 'health', label: 'Health' }]} value={sub} onChange={setSub} />
+      <Tabs label="Portals views" tabs={[{ id: 'structured', label: 'Structured' }, { id: 'raw', label: 'Raw YAML' }, { id: 'health', label: 'Health' }]} value={sub} onChange={switchTo} />
       {sub === 'structured' && <StructuredPortals />}
       {sub === 'raw' && <ConfigEditor fileKey="portals" label="portals.yml" validator="validate-portals.mjs" />}
       {sub === 'health' && <PortalsHealth />}

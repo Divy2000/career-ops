@@ -5,6 +5,7 @@ import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { DataState, Empty, Pill, Tabs } from '../../components/ui';
 import { isPlainObject } from '../../lib/yamlOpsClient';
+import { useGuardedTab, useUnsaved } from '../../lib/unsaved';
 import { KeyEditor, type FieldRules } from './StructuredEditor';
 import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
 import { ConfigEditor } from './RawConfigEditor';
@@ -66,6 +67,7 @@ export function CadenceForm() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', 'cadence'], queryFn: () => apiGet<CadenceRead>('/api/followups/cadence') });
   const [draft, setDraft] = useState<Record<string, string>>({});
+  useUnsaved('the follow-up cadence', Object.keys(draft).length > 0);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const value = (k: string) => draft[k] ?? (q.data?.cadence[k] !== undefined ? String(q.data.cadence[k]) : '');
   const save = async () => {
@@ -195,9 +197,10 @@ function StructuredProfile() {
 
 export function ProfileTab() {
   const [sub, setSub] = useState<'form' | 'cadence' | 'raw'>('form');
+  const switchTo = useGuardedTab(setSub);
   return (
     <div className="stack">
-      <Tabs label="Profile views" tabs={[{ id: 'form', label: 'Form' }, { id: 'cadence', label: 'Follow-up cadence' }, { id: 'raw', label: 'Raw YAML' }]} value={sub} onChange={setSub} />
+      <Tabs label="Profile views" tabs={[{ id: 'form', label: 'Form' }, { id: 'cadence', label: 'Follow-up cadence' }, { id: 'raw', label: 'Raw YAML' }]} value={sub} onChange={switchTo} />
       {sub === 'form' && <StructuredProfile />}
       {sub === 'cadence' && <CadenceForm />}
       {sub === 'raw' && <ConfigEditor fileKey="profile" label="config/profile.yml" validator="validate-profile.mjs" />}

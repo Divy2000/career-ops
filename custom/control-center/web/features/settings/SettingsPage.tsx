@@ -12,6 +12,7 @@ import { BlacklistEditor } from './BlacklistEditor';
 import { PluginsTab } from './PluginsTab';
 import { AppTab, EngineSettings } from './AppTab';
 import { UsageMeter } from './UsageMeter';
+import { UnsavedProvider, useGuardedTab } from '../../lib/unsaved';
 
 export { ConfigEditor } from './RawConfigEditor';
 
@@ -123,8 +124,17 @@ function UpdatesTab() {
 }
 
 export function SettingsPage() {
+  return (
+    <UnsavedProvider>
+      <SettingsSections />
+    </UnsavedProvider>
+  );
+}
+
+function SettingsSections() {
   const { tab, add } = route.useSearch();
   const navigate = useNavigate({ from: '/settings' });
+  const switchTo = useGuardedTab((t: SettingsTab) => void navigate({ search: { tab: t } }));
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
@@ -144,7 +154,7 @@ export function SettingsPage() {
           { id: 'app', label: 'App' },
         ]}
         value={tab}
-        onChange={(t: SettingsTab) => void navigate({ search: { tab: t } })}
+        onChange={switchTo}
       />
       {tab === 'portals' && <PortalsTab />}
       {tab === 'profile' && <ProfileTab />}

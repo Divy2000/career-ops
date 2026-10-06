@@ -6,6 +6,7 @@ import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
+import { useUnsaved } from '../../lib/unsaved';
 import type { BlacklistRead, BlacklistRow } from '@shared/api';
 import { localDate } from '@shared/local-date';
 
@@ -31,6 +32,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const current = rows ?? q.data?.rows ?? [];
   const dirty = rows !== null;
+  useUnsaved('data/blacklist.md', dirty);
   const addRow = () => {
     if (!draft.company.trim()) return;
     if (draft.scope === 'domain' && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(draft.company.trim())) {

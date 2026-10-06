@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { DataState, Pill } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
+import { useUnsaved } from '../../lib/unsaved';
 import type { ConfigRead } from '@shared/api';
 
 /**
@@ -20,6 +21,7 @@ export function ConfigEditor({ fileKey, label, validator }: { fileKey: 'portals'
   const latestDraft = useRef<string | null>(null);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string; details?: string } | null>(null);
   const raw = draft ?? q.data?.raw ?? '';
+  useUnsaved(label, draft !== null && draft !== (q.data?.raw ?? ''));
   const onEdit = (value: string) => {
     edit.pin();
     latestDraft.current = value;

@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useUnsaved } from '../../lib/unsaved';
 import { SessionPanel } from '../../components/SessionPanel';
 import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
 import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
@@ -77,6 +78,7 @@ export function ProjectsLibrary() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<Editing | null>(null);
+  useUnsaved('the open project form', editing !== null && JSON.stringify(editing.draft) !== JSON.stringify(editing.base));
   const data = q.data;
   // A form left with nothing to update (its entry renamed or removed on disk) is rebased again on every new version of
   // the library, so it picks the entry back up when a rewrite in two steps restores it. Adjusted while rendering.

@@ -99,6 +99,24 @@ test.describe('Settings', () => {
     }
   });
 
+  test('switching a tab with unsaved edits asks first, and Cancel keeps them (SW3-web-b-02)', async ({ page }) => {
+    await page.goto(`/auth?t=${E2E_TOKEN}`);
+    await page.goto('/settings');
+    await page.getByRole('button', { name: 'Add job_boards' }).click();
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    await page.getByRole('tab', { name: 'Raw YAML' }).click();
+    const ask = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await expect(ask).toContainText('portals.yml');
+    await ask.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByText('1 pending change')).toBeVisible();
+    // A top-level tab asks too.
+    await page.getByRole('tab', { name: 'Blacklist' }).click();
+    await expect(ask).toBeVisible();
+    await ask.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page).toHaveURL(/tab=blacklist/);
+    await expect(page.getByRole('heading', { name: /Blacklist/ })).toBeVisible();
+  });
+
   test('the structured portals editor refuses an enabled tracked company the scanner could not reach', async ({ page }) => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     await page.goto('/settings');

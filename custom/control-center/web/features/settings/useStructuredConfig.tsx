@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import { applyOpsJs } from '../../lib/yamlOpsClient';
 import { useEditBase } from '../../lib/editBase';
+import { useUnsaved } from '../../lib/unsaved';
 import type { ConfigRead, YamlOp } from '@shared/api';
 
 export interface EditorNote {
@@ -34,6 +35,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const [note, setNote] = useState<EditorNote | null>(null);
   const [saving, setSaving] = useState(false);
   const edit = useEditBase(q.data);
+  useUnsaved(fileKey === 'portals' ? 'portals.yml' : 'config/profile.yml', pending.length > 0);
   const server = edit.base ?? q.data ?? null;
   const doc = useMemo(() => applyOpsJs(server?.doc ?? null, pending), [server, pending]);
   const addOp = (op: YamlOp) => {
