@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
@@ -11,6 +12,7 @@ import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { foldsCase } from '../helpers/case.js';
 import { tempDir } from '../helpers/tmp.js';
+import { PACKAGE_ROOT } from '../helpers/app.js';
 
 const codeRoot = '/repo/career-ops';
 const base = { claudeBin: 'claude', codeRoot, dataRoot: '/data/root', sessionDir: '/data/root/data/control-center/sessions/s1', policyFile: '/data/root/data/control-center/sessions/s1/policy.json', settingsFile: '/data/root/data/control-center/sessions/s1/settings.json', userMessage: 'Evaluate https://x.example/1', claudeSessionId: '11111111-1111-4111-8111-111111111111', preamble: 'PREAMBLE', resume: false };
@@ -230,8 +232,14 @@ describe('invocation: read confinement', () => {
   });
 });
 
+/** Names the hook's DNS stub answers (tests/fakes/dns-stub.mjs); every other name does not resolve. */
+const TEST_DNS = { 'public.test': ['93.184.215.14'], 'private.test': ['10.0.0.7'], 'mixed.test': ['93.184.215.14', '127.0.0.1'] };
+const DNS_STUB = pathToFileURL(path.join(PACKAGE_ROOT, 'tests', 'fakes', 'dns-stub.mjs')).href;
+
 function hookRun(sessionDir: string, policy: { file: string; sha256: string }, payload: Record<string, unknown>) {
-  const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir } });
+  // The hook resolves names through the DNS stub, never the machine's resolver (SW2-tests-24).
+  const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${DNS_STUB}`.trim(), CC_TEST_DNS: JSON.stringify(TEST_DNS), CC_POLICY_FILE: policy.file, CC_POLICY_SHA256: policy.sha256, CC_SESSION_DIR: sessionDir };
+  const r = spawnSync(process.execPath, [GUARD_HOOK_PATH], { input: JSON.stringify(payload), encoding: 'utf8', env });
   return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
 
@@ -277,6 +285,27 @@ describe('guard hook', () => {
     expect(pre('Write', { file_path: path.join(realRoot, 'data', 'blacklist.md'), content: 'x' }).status).toBe(2);
     expect(pre('Edit', { file_path: path.join(realRoot, 'data', 'applications.md'), old_string: 'a', new_string: 'b' }).status).toBe(2);
     expect(pre('MultiEdit', { file_path: path.join(realRoot, 'reports', '..', 'cv.md'), edits: [] }).status).toBe(2);
+  });
+  it('a Write through a dangling link goes where the link points: outside the roots it is refused and nothing is created (SW2-tests-04)', () => {
+    const outside = fs.realpathSync(tempDir('cc-hook-dangling-'));
+    // A file link, a folder link and a chain whose last hop leaves the roots, none of whose targets exist yet.
+    fs.symlinkSync(path.join(outside, 'new.md'), path.join(realRoot, 'reports', 'dangling.md'));
+    fs.symlinkSync(path.join(outside, 'missing-dir'), path.join(realRoot, 'reports', 'dangling-dir'));
+    fs.symlinkSync(path.join(realRoot, 'reports', 'hop.md'), path.join(realRoot, 'reports', 'chain.md'));
+    fs.symlinkSync(path.join(outside, 'chained.md'), path.join(realRoot, 'reports', 'hop.md'));
+    for (const file of ['dangling.md', 'dangling-dir/x.md', 'chain.md']) {
+      const out = pre('Write', { file_path: path.join(realRoot, 'reports', file), content: 'x' });
+      expect(out.status, file).toBe(2);
+      expect(out.stderr, file).toMatch(/outside the repo and data roots/);
+    }
+    expect(fs.readdirSync(outside)).toEqual([]);
+    // A dangling link whose target is inside the write scope is written like that target.
+    fs.symlinkSync(path.join(realRoot, 'reports', '003-later.md'), path.join(realRoot, 'reports', 'inside-link.md'));
+    expect(pre('Write', { file_path: path.join(realRoot, 'reports', 'inside-link.md'), content: 'x' }).status).toBe(0);
+    // A loop of links leads nowhere that can be checked: refused.
+    fs.symlinkSync(path.join(realRoot, 'reports', 'loop-b.md'), path.join(realRoot, 'reports', 'loop-a.md'));
+    fs.symlinkSync(path.join(realRoot, 'reports', 'loop-a.md'), path.join(realRoot, 'reports', 'loop-b.md'));
+    expect(pre('Write', { file_path: path.join(realRoot, 'reports', 'loop-a.md'), content: 'x' }).status).toBe(2);
   });
   it('refuses a write path with a .. segment or a leading ~: after a symlink the kernel resolves .. against its target, not on paper', () => {
     const outside = fs.realpathSync(tempDir('cc-hook-outside-'));
@@ -505,6 +534,26 @@ describe('guard hook', () => {
     for (const rel of ['custom/control-center/server/routes/read.ts', 'custom/control-center/web/features/today/TodayPage.tsx', 'data/notes/devchat.md', 'modes/_custom.md']) expect(write(rel).status, rel).toBe(0);
   });
 
+  it('Dev Chat cannot write any custom test suite, the shared test helpers or the installer: they run outside any guard (SW2-libs-01, SW2-tests-17)', () => {
+    const root = fs.realpathSync(tempDir('cc-hook-devchat-suites-'));
+    const dir = fs.realpathSync(tempDir('cc-hook-devchat-suites-guard-'));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    // The real files of this checkout: install.sh and upstream-sync run `node --test custom/*/tests/*.spec.mjs`, and every
+    // spec imports custom/test-support.
+    const custom = path.join(PACKAGE_ROOT, '..');
+    const files = (fs.readdirSync(custom, { recursive: true }) as string[]).map((f) => `custom/${f.split(path.sep).join('/')}`).filter((f) => !f.includes('/node_modules/') && fs.statSync(path.join(custom, '..', f)).isFile());
+    const suites = files.filter((f) => /^custom\/[^/]+\/tests\//.test(f) || /\.(spec|test)\.[cm]?[jt]sx?$/.test(f) || f.startsWith('custom/test-support/') || f.startsWith('custom/install/'));
+    for (const must of ['custom/test-support/tmp.mjs', 'custom/install/install.sh', 'custom/install/bootstrap.sh', 'custom/projects/tests/rank.spec.mjs']) expect(suites, must).toContain(must);
+    expect(suites.length).toBeGreaterThan(20);
+    for (const rel of suites) expect(write(rel), rel).toBe(2);
+    // The custom modules those suites test stay Dev Chat's to edit.
+    for (const rel of ['custom/projects/lib.mjs', 'custom/cv/build-html.mjs', 'custom/pipeline/shortlist.mjs', 'custom/immigration/freshness.mjs']) {
+      expect(files, rel).toContain(rel);
+      expect(write(rel), rel).toBe(0);
+    }
+  });
+
   it('a tampered or unverifiable policy fails closed for every tool call', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-tamper-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')! });
@@ -584,11 +633,17 @@ describe('guard hook: read confinement', () => {
     }
     expect(pre('WebFetch', { url: 'https://nothing.invalid/', prompt: 'x' }).stderr).toMatch(/could not resolve/);
     expect(pre('WebFetch', { url: 'https://93.184.216.34/', prompt: 'x' }).status).toBe(0);
+    // Names go through the DNS check: one that resolves to a private address, or to any loopback one, is refused.
+    expect(pre('WebFetch', { url: 'https://private.test/', prompt: 'x' }).stderr).toMatch(/private\.test resolves to 10\.0\.0\.7/);
+    expect(pre('WebFetch', { url: 'https://mixed.test/', prompt: 'x' }).stderr).toMatch(/mixed\.test resolves to 127\.0\.0\.1/);
+    expect(pre('WebFetch', { url: 'https://public.test/jobs/1', prompt: 'x' }).status).toBe(0);
   });
 
   it('a Bash script URL argument goes through the same DNS check', () => {
     expect(pre('Bash', { command: 'node check-liveness.mjs https://nothing.invalid/x' }).stderr).toMatch(/could not resolve/);
     expect(pre('Bash', { command: 'node check-liveness.mjs https://93.184.216.34/x' }).status).toBe(0);
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://private.test/x' }).stderr).toMatch(/resolves to 10\.0\.0\.7/);
+    expect(pre('Bash', { command: 'node check-liveness.mjs https://public.test/x' }).status).toBe(0);
     expect(pre('Bash', { command: 'node check-liveness.mjs file:///etc/passwd' }).status).toBe(2);
   });
 
@@ -624,6 +679,8 @@ describe('guard hook: read confinement', () => {
     expect(liveness(list('scheme.txt', 'file:///etc/passwd\n')).stderr).toMatch(/not an http/);
     expect(liveness(list('word.txt', 'https://93.184.216.34/a\nnot-a-url\n')).stderr).toMatch(/not an http/);
     expect(liveness(list('dns.txt', 'https://nothing.invalid/x\n')).stderr).toMatch(/could not resolve/);
+    expect(liveness(list('private-name.txt', 'https://public.test/1\nhttps://private.test/2\n')).stderr).toMatch(/resolves to 10\.0\.0\.7/);
+    expect(liveness(list('public-name.txt', 'https://public.test/1\n')).status).toBe(0);
     expect(liveness(list('big.txt', `https://93.184.216.34/${'x'.repeat(URL_LIST_MAX_BYTES)}\n`)).stderr).toMatch(/larger than/);
     expect(liveness('missing.txt').stderr).toMatch(/cannot read/);
     expect(liveness(path.join(outside, 's.txt')).status).toBe(2);

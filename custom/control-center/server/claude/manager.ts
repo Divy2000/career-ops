@@ -64,6 +64,8 @@ export interface StartInput {
 interface TurnState {
   beforeReports: string[];
   filesOffset: number;
+  /** The turn resumed a conversation; absent in turns started before it was recorded, which go by their number. */
+  resumed?: boolean;
 }
 
 interface Tracked {
@@ -360,7 +362,7 @@ export class SessionManager {
         preamble,
       });
       // Written before the run exists, so a restart always finds the turn's starting point.
-      state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id) };
+      state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id), resumed: opts.resume };
       fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     } catch (err) {
       return this.failBeforeSpawn(meta, (err as Error).message);
@@ -389,6 +391,7 @@ export class SessionManager {
     let seq = 0;
     let offset = 0;
     let envelopes = 0;
+    let answers = 0;
     let denials = 0;
     let sawResult = false;
     let turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null = null;
@@ -409,6 +412,7 @@ export class SessionManager {
       const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
       for (const ev of events) {
         if (ev.type === 'envelope') envelopes++;
+        if (ev.type === 'envelope' && ev.kind === 'answers') answers++;
         if (ev.type === 'permission.denied') denials++;
         if (ev.type === 'turn.done') {
           turnDone = ev;
@@ -443,7 +447,7 @@ export class SessionManager {
       clearInterval(timer);
       this.active.delete(id);
       pull();
-      void this.finalize(id, n, run, policy, state, { envelopes, denials, sawResult, turnDone, finalText: finalText || parser.text, failure });
+      void this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: finalText || parser.text, failure });
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
@@ -453,7 +457,7 @@ export class SessionManager {
     return Boolean(this.store.read(id)?.turns.find((t) => t.n === n)?.endedAt);
   }
 
-  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
+  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; answers: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
     const meta = this.store.read(id);
     // Already finalized (by another server, or before a restart): its cost and report number were settled then.
     if (!meta || this.turnEnded(id, n)) return;
@@ -480,7 +484,11 @@ export class SessionManager {
       finalText: r.finalText,
       envelopeCount: r.envelopes,
       newReports,
+      resumed: state.resumed ?? n > 1,
+      // Read before this turn's own answers are recorded: a turn that delivers them is done by its envelope.
+      answersSeen: meta.answersSeen === true,
     });
+    if (r.answers > 0) this.store.markAnswersSeen(id);
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;
     const num = meta.reportNum;

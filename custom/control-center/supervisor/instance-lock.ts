@@ -46,10 +46,13 @@ const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2
 /** macOS's ps, by its absolute path: what PATH holds never decides which program answers, or whether one does. */
 export const PS_PATH = '/bin/ps';
 
+/** Signal 0 to a PID: what process.kill does, injected in tests (as root, or as PID 1 in a container, no real PID answers EPERM). */
+export type KillProbe = (pid: number, signal: 0) => void;
+
 /** Whether `pid` runs, asked of the kernel: ESRCH is gone; success or EPERM (another user's process) is running. */
-function runningByKill(pid: number): 'unknown' | null {
+function runningByKill(pid: number, kill: KillProbe): 'unknown' | null {
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
     return 'unknown';
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'ESRCH' ? null : 'unknown';
@@ -62,17 +65,17 @@ function runningByKill(pid: number): 'unknown' | null {
  * times out, dies) or prints a start that does not parse, the kernel is asked whether the PID runs: 'unknown' when
  * it does, which callers treat as running, null when it does not, so a crashed holder's lock never blocks a restart.
  */
-export function processStartTime(pid: number, psPath: string = PS_PATH): ProcessStart {
+export function processStartTime(pid: number, psPath: string = PS_PATH, kill: KillProbe = (p, s) => process.kill(p, s)): ProcessStart {
   let out: string;
   try {
     out = execFileSync(psPath, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { LC_ALL: 'C', TZ: 'UTC' } }).trim();
   } catch (err) {
     const e = err as { status?: number | null; signal?: string | null; stdout?: string };
-    return e.status === 1 && !e.signal && !String(e.stdout ?? '').trim() ? null : runningByKill(pid);
+    return e.status === 1 && !e.signal && !String(e.stdout ?? '').trim() ? null : runningByKill(pid, kill);
   }
   const m = LSTART.exec(out);
   const month = m ? MONTHS.indexOf(m[1]!) : -1;
-  if (!m || month === -1) return runningByKill(pid);
+  if (!m || month === -1) return runningByKill(pid, kill);
   return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 

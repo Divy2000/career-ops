@@ -199,10 +199,12 @@ export { ALWAYS_DENIED_WRITES };
  * everything its allowed npm/npx commands execute besides the app sources
  * (manifests, build and test configs, tests, scripts), and what launchd or the
  * user runs outside any session guard: the daily and weekly job scripts and
- * prompts, the launchd installer, and the custom/ test suites. Dev Chat can still
- * edit server/** and the custom/immigration and custom/pipeline modules, which
- * those commands and jobs load: it is a trusted code-editing agent and this list
- * prevents accidents, it is not a sandbox (README section 5).
+ * prompts, the launchd installer, the installer, and every custom/ test suite
+ * with the helpers they all import (install.sh and the weekly sync run every
+ * custom spec with node --test). Dev Chat can still edit server/**
+ * and the custom modules those commands and jobs load: it is a trusted
+ * code-editing agent and this list prevents accidents, it is not a sandbox
+ * (README section 5).
  */
 export const DEVCHAT_DENIED_WRITES = [
   ...ALWAYS_DENIED_WRITES,
@@ -219,10 +221,11 @@ export const DEVCHAT_DENIED_WRITES = [
   'custom/control-center/scripts/**',
   'custom/immigration/run-daily.sh',
   'custom/immigration/daily-prompt.md',
-  'custom/immigration/tests/**',
-  'custom/immigration/**/*.test.*',
-  'custom/pipeline/tests/**',
-  'custom/pipeline/**/*.test.*',
+  'custom/*/tests/**',
+  'custom/**/*.spec.*',
+  'custom/**/*.test.*',
+  'custom/test-support/**',
+  'custom/install/**',
   'custom/upstream-sync/**',
   'custom/launchd/**',
   '**/node_modules/**',

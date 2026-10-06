@@ -33,20 +33,37 @@ export function matches(rel, globs) {
   return globs.some((g) => globToRegExp(g).test(rel));
 }
 
+/** How many dangling links resolveReal follows before it gives up (the kernel's own limit is of this order). */
+const MAX_LINK_HOPS = 40;
+
 /**
  * Realpath with a possibly missing tail: resolve the deepest existing ancestor
- * with realpathSync.native (it returns the on-disk case), then re-append.
+ * with realpathSync.native (it returns the on-disk case), then re-append. A
+ * dangling link on the way is followed to its target first (existsSync follows
+ * links, so it would otherwise read as a missing name, while creating a file
+ * through it creates the target). A loop of links throws ELOOP.
  */
 export function resolveReal(p) {
-  let dir = p;
-  const tail = [];
-  while (!fs.existsSync(dir)) {
-    tail.unshift(path.basename(dir));
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+  let current = path.resolve(p);
+  for (let hops = 0; hops <= MAX_LINK_HOPS; hops++) {
+    let dir = current;
+    const tail = [];
+    let dangling = false;
+    while (!fs.existsSync(dir)) {
+      if (fs.lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        dangling = true;
+        break;
+      }
+      tail.unshift(path.basename(dir));
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    if (!dangling) return path.join(fs.realpathSync.native(dir), ...tail);
+    // A link's relative target is read against the real folder the link sits in.
+    current = path.join(path.resolve(fs.realpathSync.native(path.dirname(dir)), fs.readlinkSync(dir)), ...tail);
   }
-  return path.join(fs.realpathSync.native(dir), ...tail);
+  throw Object.assign(new Error(`${p}: too many levels of symbolic links`), { code: 'ELOOP' });
 }
 
 export function relativeToRoot(codeRoot, target) {

@@ -160,6 +160,31 @@ describe('Claude sessions', () => {
     await post(`/api/sessions/${id}/turns`, { prompt: `Fill the real form with these confirmed answers: ${answers}` });
     const second = await settle(id);
     expect(second.meta.turns[1]!.userText).toContain('Edited answer');
+    // The fill turn reports in prose: the answers envelope belongs to the turn that read the form (SW2-tests-20).
+    expect(second.meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
+  });
+
+  it('apply: a turn after a login wall (no answers yet) still has to deliver them; a malformed answers envelope does not count (SW2-tests-20 review)', async () => {
+    const wall = scenarioFile({
+      events: [INIT, result('The form is behind a login. Log in in the browser and tell me when you are done.', 0.01)],
+      resume: [INIT, result('Logged in. The form asks for your name, why us and sponsorship.\n<<cc:answers {"nope":true}>>', 0.01)],
+    });
+    const second = await withScenario(wall, async () => {
+      const { id } = (await post('/api/sessions', { mode: 'apply', target: { type: 'url', value: 'https://jobs.example.com/acme/9' }, prompt: 'Draft answers' })).json();
+      const first = await settle(id);
+      expect(first.meta).toMatchObject({ status: 'awaiting_user', lastReason: 'no terminal envelope in the output' });
+      expect((await post(`/api/sessions/${id}/turns`, { prompt: 'I am logged in now' })).statusCode).toBe(202);
+      return settle(id);
+    });
+    expect(second.meta).toMatchObject({ status: 'awaiting_user', lastReason: 'no terminal envelope in the output' });
+    expect(second.events.some((e) => e.event.type === 'envelope.invalid')).toBe(true);
+  });
+
+  it('apply: a fork of a session whose answers were delivered fills in prose like the source would (SW2-tests-20 review)', async () => {
+    const { id } = (await post('/api/sessions', { mode: 'apply', target: { type: 'url', value: 'https://jobs.example.com/acme/10' }, prompt: 'Draft answers' })).json();
+    expect((await settle(id)).meta.status).toBe('done');
+    const fork = (await post(`/api/sessions/${id}/fork`, { prompt: 'Fill the real form with these confirmed answers: {}' })).json();
+    expect((await settle(fork.id)).meta).toMatchObject({ status: 'done', lastReason: 'clean exit with output' });
   });
 
   it('cancel kills the turn and leaves the session cancelled', async () => {
