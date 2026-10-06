@@ -123,6 +123,7 @@ CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_AP
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
+refresh_root_deps origin/main || fail "reinstalling the merged root dependencies failed"
 
 CHANGED_UPSTREAM="$(git diff --name-only upstream/main HEAD -- . ':(exclude)custom/**' ':(exclude).github/README.md')"
 if [ -n "$CHANGED_UPSTREAM" ]; then
