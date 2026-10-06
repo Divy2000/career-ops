@@ -1463,6 +1463,33 @@ describe('stream parser', () => {
     expect(done.some((e) => e.type === 'envelope' && e.kind === 'act')).toBe(true);
     expect(p.push('not json')).toEqual([{ type: 'stderr', text: 'not json' }]);
   });
+
+  it('takes envelopes from every assistant message of the turn, not only the last one in the result, once each (SW4-claude-03)', () => {
+    const p = new StreamParser();
+    const ev = (o: unknown) => p.push(JSON.stringify(o));
+    const offer = (n: number) => `<<cc:offer {"url":"https://jobs.example.com/a/${n}","company":"C${n}","title":"Engineer"}>>`;
+    // The result holds only the last message; offer 1 and its duplicate were written before a tool call.
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: `Found one:\n${offer(1)}\nLet me search further.` }, { type: 'tool_use', id: 't1', name: 'WebSearch', input: { query: 'more' } }] } });
+    ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'results' }] } });
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: `Still that one:\n${offer(1)}` }, { type: 'tool_use', id: 't2', name: 'WebSearch', input: { query: 'again' } }] } });
+    ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'results' }] } });
+    const last = `Found another:\n${offer(2)}\nThat is all.`;
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: last }] } });
+    const done = ev({ type: 'result', subtype: 'success', result: last, num_turns: 5, is_error: false, usage: {} });
+    expect(done.filter((e) => e.type === 'envelope').map((e) => (e.type === 'envelope' ? (e.payload as { company: string }).company : ''))).toEqual(['C1', 'C2']);
+    // The visible text is still the final message's.
+    expect(done.find((e) => e.type === 'text.done')).toEqual({ type: 'text.done', text: 'Found another:\nThat is all.' });
+  });
+
+  it('an apply answers envelope written before a later tool call is kept, so the turn has its terminal envelope (SW4-claude-03)', () => {
+    const p = new StreamParser();
+    const ev = (o: unknown) => p.push(JSON.stringify(o));
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: '<<cc:answers {"fields":[{"id":"q1","label":"Why us","type":"textarea","required":true,"value":"Because","needsConfirmation":true}]}>>' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/r/cv.md' } }] } });
+    ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'cv' }] } });
+    ev({ type: 'assistant', message: { content: [{ type: 'text', text: 'Review the answers above.' }] } });
+    const done = ev({ type: 'result', subtype: 'success', result: 'Review the answers above.', num_turns: 3, is_error: false, usage: {} });
+    expect(done.filter((e) => e.type === 'envelope')).toEqual([expect.objectContaining({ type: 'envelope', kind: 'answers' })]);
+  });
 });
 
 describe('envelopes', () => {
