@@ -193,7 +193,7 @@ labels=com.career-ops.immigration-watch
 if [ "$JOBS" = all ]; then labels="$labels com.career-ops.upstream-sync"; fi
 for label in $labels; do
   if job_running "$label"; then
-    echo "$label is running right now; nothing was changed. Re-run this once it finishes: bash $(shell_quote "$0") --jobs $JOBS" >&2
+    echo "$label is running right now; nothing was changed. Re-run this once it finishes: bash $(shell_quote "$0") --jobs $JOBS$([ "$RESET" = 1 ] && echo " --reset")" >&2
     exit 4
   fi
 done

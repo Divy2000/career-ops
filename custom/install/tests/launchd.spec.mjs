@@ -502,3 +502,9 @@ test('a job that is loaded but idle is reinstalled as usual', { skip: !HAS_PLUTI
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.log, new RegExp(`^launchctl bootstrap .*${DAILY.replaceAll('.', '\\.')}\\.plist$`, 'm'));
 });
+
+test('the re-run command printed for a running job keeps --reset when it was given', { skip: !HAS_PLUTIL && 'needs /usr/bin/plutil (macOS)' }, () => {
+  const r = run(['--jobs', 'daily', '--reset'], { existingXml: { [DAILY]: oldPlist(DAILY, { hour: 6, minute: 30 }) }, env: { STUB_LAUNCHD_RUNNING: DAILY } });
+  assert.equal(r.status, 4, r.stdout + r.stderr);
+  assert.match(r.stderr, /Re-run this once it finishes: bash .*custom\/launchd\/install\.sh' --jobs daily --reset$/m);
+});
