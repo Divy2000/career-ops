@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { acquireInstanceLock, instanceLockPath, processStartTime, UNREADABLE_LOCK_GRACE_MS, type LockResult } from '../../supervisor/instance-lock.js';
+import { tsxLoaderUrl } from '../../supervisor/child-command.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -257,12 +258,17 @@ describe('two supervisors taking over one stale lock (SW-claude-02 review)', () 
       `const wait = () => (fs.existsSync(end) ? process.exit(0) : setTimeout(wait, 10));`,
       `wait();`,
     ].join('\n'));
+    // The supported Node floor predates built-in type stripping, so the children run as on such a Node, without it, and
+    // load the TypeScript module through tsx as the supervisor's own children do.
+    const noTypeStripping = ['--no-strip-types', '--no-experimental-strip-types'].filter((f) => process.allowedNodeEnvironmentFlags.has(f)).slice(0, 1);
+    // tsx keeps a cache in TMPDIR: the children get their own, removed with this file's temp dirs.
+    const childTmp = tempDir('cc-lock-proc-tmp-');
     const run = (root: string, go: string, end: string) => {
-      const child = spawn(process.execPath, [script, root, go, end], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [...noTypeStripping, '--import', tsxLoaderUrl(PACKAGE_ROOT), script, root, go, end], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TMPDIR: childTmp } });
       let out = '';
       child.stdout.on('data', (d: Buffer) => (out += d.toString()));
       child.stderr.on('data', (d: Buffer) => (out += d.toString()));
-      return { ready: () => out.includes('ready'), answered: () => /\{"ok":(true|false)\}/.test(out), done: new Promise<string>((resolve) => child.on('exit', () => resolve(out))) };
+      return { ready: () => out.includes('ready'), answered: () => /\{"ok":(true|false)\}/.test(out), output: () => out, done: new Promise<string>((resolve) => child.on('exit', () => resolve(out))) };
     };
     for (let round = 0; round < 5; round++) {
       const root = tempDir('cc-lock-proc-root-');
@@ -274,7 +280,7 @@ describe('two supervisors taking over one stale lock (SW-claude-02 review)', () 
       const takers = [run(root, go, end), run(root, go, end)];
       const deadline = Date.now() + 20_000;
       while (!takers.every((t) => t.ready())) {
-        if (Date.now() > deadline) throw new Error('the takers did not start');
+        if (Date.now() > deadline) throw new Error(`the takers did not start\n${takers.map((t) => t.output()).join('\n---\n')}`);
         await new Promise((r) => setTimeout(r, 20));
       }
       fs.writeFileSync(go, '');
