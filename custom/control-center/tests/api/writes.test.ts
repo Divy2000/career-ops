@@ -334,6 +334,19 @@ describe('documents for a row whose number differs from its report', () => {
     expect(jds).not.toContain('jds/acme-robotics-scan-capture.md');
   });
 
+  it('lists a JD capture whose report prefix is not padded to three digits, as jd-capture.mjs resolves it, and never another report\'s (SW2-server-04)', async () => {
+    const files = ['jds/1-acme-hand-named.md', 'jds/0001-acme-four-digits.md', 'jds/10-other-report.md', 'jds/100-other-report.md'];
+    for (const f of files) write(f);
+    try {
+      const jds = (await docsOf(9)).jds as string[];
+      expect(jds).toEqual(expect.arrayContaining(['jds/1-acme-hand-named.md', 'jds/0001-acme-four-digits.md']));
+      expect(jds).not.toContain('jds/10-other-report.md');
+      expect(jds).not.toContain('jds/100-other-report.md');
+    } finally {
+      for (const f of files) fs.rmSync(path.join(d.cfg.dataRoot, f), { force: true });
+    }
+  });
+
   it('falls back to the company match for JDs when the row has no report', async () => {
     write('jds/umbrella-corp-security-analyst.md');
     expect((await docsOf(5)).jds).toEqual(['jds/umbrella-corp-security-analyst.md']);
