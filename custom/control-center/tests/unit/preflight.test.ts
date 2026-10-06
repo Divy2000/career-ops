@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { preflight, resolveClaudeBin, claudeCandidates, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
+import { preflight, resolveClaudeBin, claudeCandidates, testHost, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
 import { tempDir } from '../helpers/tmp.js';
 import { configFromEnv } from '../../server/config.js';
 
@@ -63,6 +63,19 @@ function fakeClaude(body: string): string {
   return bin;
 }
 const base = { nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test' }, ...host() };
+
+describe('test-only host pins (SW3-tests-23)', () => {
+  it('under NODE_ENV=test, pin the platform and a managed-settings folder with no MDM profile', () => {
+    expect(testHost({ NODE_ENV: 'test', CC_FAKE_PLATFORM: 'darwin', CC_FAKE_MANAGED_SETTINGS_DIR: '/tmp/managed' })).toEqual({ platform: 'darwin', managedSettings: { dir: '/tmp/managed', plists: [] } });
+    expect(testHost({ NODE_ENV: 'test' })).toEqual({});
+  });
+
+  it('outside tests they are ignored, so a real launch always checks the real host', () => {
+    for (const NODE_ENV of [undefined, 'development', 'production']) {
+      expect(testHost({ NODE_ENV, CC_FAKE_PLATFORM: 'darwin', CC_FAKE_MANAGED_SETTINGS_DIR: '/tmp/managed' }), String(NODE_ENV)).toEqual({});
+    }
+  });
+});
 
 describe('preflight claude probe', () => {
   it('warns when more than one claude binary is installed, naming the one in use', async () => {

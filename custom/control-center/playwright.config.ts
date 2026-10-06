@@ -69,6 +69,9 @@ function serverFor(port: number, root: string, guard: string) {
       CC_FAKE_DAILY: 'idle',
       // The sponsor lookup answers from a synthetic employer table, never the real DOL index (NODE_ENV=test only).
       CC_H1B_CHECK_SCRIPT: path.join(here, 'tests/fakes/h1b-check.mjs'),
+      // The preflight checks a pinned host, not this machine's platform or its Claude Code MDM settings (NODE_ENV=test only).
+      CC_FAKE_PLATFORM: 'darwin',
+      CC_FAKE_MANAGED_SETTINGS_DIR: path.join(tmp.dir, 'managed-settings'),
     },
   };
 }

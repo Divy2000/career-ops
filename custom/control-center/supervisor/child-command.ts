@@ -7,7 +7,11 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
+/** tsx's loader for `node --import`: runs TypeScript on any supported Node, with or without built-in type stripping. */
+export function tsxLoaderUrl(packageRoot: string): string {
+  return pathToFileURL(createRequire(path.join(packageRoot, 'package.json')).resolve('tsx')).href;
+}
+
 export function serverChildCommand(packageRoot: string): { bin: string; args: string[] } {
-  const loader = createRequire(path.join(packageRoot, 'package.json')).resolve('tsx');
-  return { bin: process.execPath, args: ['--import', pathToFileURL(loader).href, path.join(packageRoot, 'server', 'index.ts')] };
+  return { bin: process.execPath, args: ['--import', tsxLoaderUrl(packageRoot), path.join(packageRoot, 'server', 'index.ts')] };
 }
