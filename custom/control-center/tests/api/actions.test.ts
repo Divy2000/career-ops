@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
+import { DailyJobWatch } from '../../server/system/daily.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
 import type { RunMeta } from '../../server/runner/store.js';
@@ -264,6 +265,73 @@ describe('action registry', () => {
     } finally {
       spy.mockRestore();
       await busy.close();
+    }
+  });
+
+  it('Run the daily job now while this app\'s own daily run is still queued is refused, and only one daily run is queued (SW6-server-03)', async () => {
+    const app = await makeTestApp();
+    // A scan holds the pipeline resource, so the first daily run waits behind it, with no pidfile yet.
+    const blocker = app.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: ['pipeline'], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    const run = () => app.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: app.authedWrite, payload: { params: {}, confirmed: true } });
+    let first: string | undefined;
+    try {
+      const a = await run();
+      expect(a.statusCode, a.body).toBe(202);
+      first = a.json().runId as string;
+      expect(app.runner.queuedIds()).toContain(first);
+      const b = await run();
+      expect(b.statusCode, b.body).toBe(409);
+      expect(b.json().error).toMatch(/^Skipped: the daily job is already queued/);
+      expect(b.json().error).toContain(first);
+      expect(app.runner.queuedIds().filter((id) => app.runner.store.read(id)?.actionId === 'daily.runNow')).toEqual([first]);
+    } finally {
+      if (first) app.runner.cancel(first);
+      app.runner.cancel(blocker.id);
+      for (let i = 0; i < 200 && !app.runner.store.readExit(blocker.id); i++) await new Promise((r) => setTimeout(r, 50));
+      await app.close();
+    }
+  });
+
+  it('two Run the daily job now requests at once queue one daily run: the other is refused with 409, however slow the job probe is (SW6-server-03 review)', async () => {
+    const app = await makeTestApp();
+    const slowProbe = vi.spyOn(DailyJobWatch.prototype, 'runningNow').mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 150));
+      return false;
+    });
+    const blocker = app.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: ['pipeline'], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    const run = () => app.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: app.authedWrite, payload: { params: {}, confirmed: true } });
+    try {
+      const answers = await Promise.all([run(), run()]);
+      expect(answers.map((a) => a.statusCode).sort()).toEqual([202, 409]);
+      expect(answers.find((a) => a.statusCode === 409)!.json().error).toMatch(/^Skipped: the daily job is already queued/);
+      expect(app.runner.pending('daily.runNow')).toHaveLength(1);
+    } finally {
+      slowProbe.mockRestore();
+      for (const m of app.runner.pending('daily.runNow')) app.runner.cancel(m.id);
+      app.runner.cancel(blocker.id);
+      for (let i = 0; i < 200 && !app.runner.store.readExit(blocker.id); i++) await new Promise((r) => setTimeout(r, 50));
+      await app.close();
+    }
+  });
+
+  it('a queued daily run another process settled on disk (cancelled in a blue/green handover) does not block a new one (SW6-server-03 review 2)', async () => {
+    const app = await makeTestApp();
+    const blocker = app.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: ['pipeline'], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    const run = () => app.app.inject({ method: 'POST', url: '/api/actions/daily.runNow', headers: app.authedWrite, payload: { params: {}, confirmed: true } });
+    try {
+      const first = await run();
+      expect(first.statusCode, first.body).toBe(202);
+      const id = first.json().runId as string;
+      app.runner.store.write({ ...app.runner.store.read(id)!, status: 'cancelled', endedAt: new Date().toISOString() });
+      const second = await run();
+      expect(second.statusCode, second.body).toBe(202);
+      expect(app.runner.pending('daily.runNow').map((m) => m.id)).toEqual([second.json().runId]);
+      expect(app.runner.queuedIds()).not.toContain(id);
+    } finally {
+      for (const m of app.runner.pending('daily.runNow')) app.runner.cancel(m.id);
+      app.runner.cancel(blocker.id);
+      for (let i = 0; i < 200 && !app.runner.store.readExit(blocker.id); i++) await new Promise((r) => setTimeout(r, 50));
+      await app.close();
     }
   });
 

@@ -375,6 +375,28 @@ export class Runner {
     return marked;
   }
 
+  /**
+   * Starts the run unless this process already has a run of the same action that has not ended, which it returns
+   * instead. The check and the enqueue happen in one synchronous step, so two requests at once cannot both start one.
+   */
+  startUnlessPending(req: StartRequest): RunMeta | { pending: RunMeta } {
+    const pending = this.pending(req.actionId)[0];
+    return pending ? { pending } : this.start(req);
+  }
+
+  /**
+   * This process's runs of `actionId` that have not ended: queued first, then running. A queued run another process
+   * settled on disk meanwhile (cancelled or marked lost in a blue/green handover) is dropped from the queue, not counted.
+   */
+  pending(actionId: string): RunMeta[] {
+    const settled = this.queue.filter((q) => q.meta.actionId === actionId && this.store.read(q.meta.id)?.status !== 'queued');
+    if (settled.length) {
+      this.queue = this.queue.filter((q) => !settled.includes(q));
+      for (const q of settled) this.envById.delete(q.meta.id);
+    }
+    return [...this.queue.map((q) => q.meta), ...[...this.active.values()].map((a) => a.meta)].filter((m) => m.actionId === actionId);
+  }
+
   queuedIds(): string[] {
     return this.queue.map((q) => q.meta.id);
   }

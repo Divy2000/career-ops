@@ -57,6 +57,11 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   claude: boolean;
   /** Sync actions run inline under a 30 s timeout and return their output. */
   sync: boolean;
+  /**
+   * At most one run of this action from this app at a time: a start while one is queued or running is refused with
+   * 409 and this reason. The runner checks and enqueues in one step, so two requests at once cannot both start one.
+   */
+  single?: (pending: { id: string; status: string }) => string;
   params: S;
   /** A readable reason these params cannot run against the data root (missing input files and the like); checked before build. */
   check?: (params: z.infer<S>, ctx: ActionContext) => CheckProblem | null | Promise<CheckProblem | null>;
@@ -536,6 +541,9 @@ export const ACTIONS: ActionDef[] = [
     sync: false,
     params: none,
     // A second run would only find the job's lock held and skip: say so now instead of starting a run that does nothing.
+    // A run this app started may still be queued behind a scan, or starting, before run-daily.sh holds its lock: a
+    // second one would run the whole job again once the first ends.
+    single: (mine) => `Skipped: the daily job is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule.`,
     check: async (_p, ctx) => ((await ctx.dailyRunning?.()) ? { status: 409, error: 'Skipped: the daily job is already running (its schedule or another start began it). Watch it on Runs & Schedule; it ran nothing new.' } : null),
     // CC_RUN_DAILY_SKIP_EXIT: should the job start in between, run-daily.sh still finds the lock held, and then says
     // it skipped and exits 75, so this run ends failed with that line instead of done with an empty log.
