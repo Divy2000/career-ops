@@ -204,3 +204,77 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
   });
 });
 
+
+describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  const row = (url: string, company: string, done = false) => ({ url, company, role: 'Engineer', location: null, compensation: null, done, section: done ? 'done' : 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });
+  let rows: ReturnType<typeof row>[];
+  beforeEach(() => {
+    posts = [];
+    rows = [row('https://jobs.acme.example/1', 'Acme'), row('https://jobs.acme.example/2', ' acme '), row('https://jobs.acme.example/3', 'Acme', true), row('https://jobs.globex.example/1', 'Globex')];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          return url === '/api/sessions/fanout' ? json({ sessions: [{ id: 's1' }, { id: 's2' }], reserved: [50, 51] }, 202) : json({ error: 'unexpected' }, 500);
+        }
+        if (url === '/api/pipeline')
+          return json({
+            kind: 'ok',
+            path: 'data/pipeline.md',
+            etag: 'e1',
+            rows,
+          });
+        return json([]);
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const runProposal = async (company: string) => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    return item;
+  };
+
+  it('asks with the number of evaluations it will start, before starting any (review fix)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')?.textContent).toContain('2 pending Inbox postings at Acme');
+    expect(posts).toEqual([]);
+  });
+
+  it('above three evaluations, asks the way Evaluate visible does: Start N evaluation sessions? (review fix)', async () => {
+    rows.push(row('https://jobs.acme.example/4', 'Acme'), row('https://jobs.acme.example/5', 'Acme'));
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog__title')?.textContent).toBe('Start 4 evaluation sessions?');
+    await act(async () => bodyButton('Start them')!.click());
+    expect(posts).toHaveLength(1);
+    expect((posts[0]!.body as { urls: string[] }).urls).toHaveLength(4);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it("evaluates each of the company's pending Inbox postings by URL, so each row moves to Processed once its report is written", async () => {
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+    expect(navigations).toEqual([{ to: '/sessions' }]);
+  });
+
+  it('with no pending posting at that company, starts nothing and says so, without asking', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('No pending Inbox posting at Initech');
+  });
+});

@@ -4,11 +4,13 @@ import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { SessionPanel } from './SessionPanel';
 import { Pill } from './ui';
-import { apiSend } from '../lib/api';
+import { apiGet, apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
-import { startSession, startTailoredCvSession } from '../lib/sessions';
+import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
 import { afterFocusSettles } from '../lib/focus';
 import { ASK_ACTION_SPECS, type AskActionName } from '@shared/ask-actions';
+import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
+import type { PipelineRead } from '@shared/api';
 
 export interface Proposal {
   id: number;
@@ -22,7 +24,7 @@ const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   navigate: (p) => `Open ${String(p.to ?? '(no path)')}`,
   filterPipeline: (p) => `Filter the pipeline by "${String(p.q ?? p.query ?? '')}"`,
   evaluate: (p) => `Evaluate ${String(p.url ?? '')} (uses tokens)`,
-  evaluateCompany: (p) => `Evaluate every posting at ${String(p.company ?? '')} (uses tokens)`,
+  evaluateCompany: (p) => `Evaluate every pending Inbox posting at ${String(p.company ?? '')} (uses tokens)`,
   explore: () => 'Open Discover (network scan)',
   research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
   generatePdf: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`,
@@ -42,6 +44,18 @@ export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) =
 /** Own keys only: an advisor-named action like `toString` must not reach Object.prototype. */
 function askAction(name: string): (typeof ASK_ACTIONS)[string] | null {
   return Object.hasOwn(ASK_ACTIONS, name) ? ASK_ACTIONS[name]! : null;
+}
+
+/**
+ * The company's pending Inbox postings, one evaluation each by URL as Evaluate visible does: only a URL-targeted evaluation
+ * moves its row to Processed once the report is written, so a company-targeted session left them all pending.
+ */
+async function pendingUrlsAt(company: string): Promise<string[]> {
+  const pipeline = await apiGet<PipelineRead>('/api/pipeline');
+  const urls = [...new Set((pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && r.company.trim().toLowerCase() === company.toLowerCase()).map((r) => r.url))];
+  if (urls.length === 0) throw new Error(`No pending Inbox posting at ${company}.`);
+  if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
+  return urls;
 }
 
 export function useAskHotkey(toggle: () => void): void {
@@ -80,7 +94,24 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     if (!def) return;
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
-    if (def.confirm && !(await confirm({ title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true }))) {
+    // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
+    const company = String(p.params.company ?? '').trim();
+    let companyUrls: string[] = [];
+    if (p.action === 'evaluateCompany') {
+      try {
+        companyUrls = await pendingUrlsAt(company);
+      } catch (err) {
+        update(p.id, { state: 'failed', note: describeError(err) });
+        return;
+      }
+    }
+    const question =
+      p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
+        ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.`, confirmLabel: 'Start them', focusCancel: true }
+        : p.action === 'evaluateCompany'
+          ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens). Continue?`, confirmLabel: 'Do it', danger: true }
+          : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
+    if (def.confirm && !(await confirm(question))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
     }
@@ -108,11 +139,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
-        case 'evaluateCompany': {
-          const m = await startSession({ mode: 'oferta', target: { type: 'company', value: String(p.params.company) }, prompt: `Evaluate every pending pipeline posting at ${String(p.params.company)}.` });
-          await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
+        case 'evaluateCompany':
+          await fanOut('oferta', companyUrls);
+          await router.navigate({ to: '/sessions' });
           break;
-        }
         case 'research': {
           const m = await startSession({ mode: 'research', target: { type: 'text', value: String(p.params.topic ?? p.params.company ?? '') }, prompt: `Research: ${String(p.params.topic ?? p.params.company ?? '')}` });
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });

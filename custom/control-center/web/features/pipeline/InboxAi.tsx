@@ -5,9 +5,7 @@ import { Pill } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { fanOut } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
-import { BATCH_MAX_URLS } from '@shared/fanout';
-
-export const FANOUT_CONFIRM_ABOVE = 3;
+import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 
 /**
  * Process inbox runs pipeline mode over data/pipeline.md, whose liveness sweep puts every pending row in the file it
