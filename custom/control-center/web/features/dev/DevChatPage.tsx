@@ -34,7 +34,14 @@ export interface ReloadStatus {
   startedAt?: string;
   error?: string;
   stderrTail?: string;
+  /** With `failed`: the active server child exited on its own after it started, rather than a new one failing to start. */
+  crashed?: boolean;
+  /** The server child that serves the app; null when none does (it stopped, or the first one never started). */
+  activePid?: number | null;
 }
+
+/** No server child serves the app: every API call gets the supervisor's 503 page, so only /__recovery can help. */
+export const serverDown = (s: ReloadStatus | undefined): boolean => s?.state === 'failed' && (s.crashed === true || s.activePid === null);
 
 export async function fetchReloadStatus(): Promise<ReloadStatus> {
   try {
@@ -140,6 +147,14 @@ export function ReloadStatusCard() {
       <h2>Server reload</h2>
       {!s || s.state === 'unavailable' ? (
         <p className="muted small">Supervisor status unavailable (the server is running without the supervisor, or the status endpoint is unreachable).</p>
+      ) : serverDown(s) ? (
+        <div role="alert">
+          <Pill tone="danger">server stopped</Pill> <span className="muted small">{s.error}</span>
+          {s.stderrTail && <pre tabIndex={0} className="log mono small">{s.stderrTail}</pre>}
+          <p className="small">
+            No server is running. Revert the change or restart the server from <a href="/__recovery">/__recovery</a>.
+          </p>
+        </div>
       ) : s.state === 'failed' ? (
         <div role="alert">
           <Pill tone="danger">reload failed</Pill> <span className="muted small">{s.error}</span>
