@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
@@ -36,7 +36,10 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   const [open, setOpen] = useState(process.panel.sessionId !== null);
   // New run lets go of the finished run (it stays on the Sessions page) and remounts the panel on its start form.
   const [fresh, setFresh] = useState(0);
+  // The session New run let go of: a sessions list read before it ended may still list it as live.
+  const [letGo, setLetGo] = useState<string | null>(null);
   const newRun = () => {
+    setLetGo(process.panel.sessionId);
     // Letting go is what a deleted session gets: the store forgets it and no session is attached.
     process.panel.onStatus('gone');
     setFresh((n) => n + 1);
@@ -45,7 +48,14 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   // Process inbox evaluates every pending row, and an evaluation started for one of them would evaluate, report and
   // bill it a second time: while either runs, the other does not start.
   const sessions = useSessions();
-  const pipelineLive = process.busy || (sessions.data ?? []).some((s) => s.mode === 'pipeline' && LIVE.has(s.status));
+  const livePipeline = (sessions.data ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== letGo)?.id ?? null;
+  const pipelineLive = process.busy || livePipeline !== null;
+  // The remembered session is this browser tab's only: a live one started in another tab (or before this tab was
+  // reopened) is re-attached, so the button shows it instead of a start form for a second run.
+  const { sessionId: processId, onSessionId: attachProcess } = process.panel;
+  useEffect(() => {
+    if (livePipeline !== null && processId === null && !process.waiting) attachProcess(livePipeline);
+  }, [livePipeline, processId, process.waiting, attachProcess]);
   const pipeline = usePipeline();
   const beingEvaluated = evaluatingTargets(sessions.data);
   const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
@@ -114,7 +124,15 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
         </div>
       )}
       {open &&
-        (!process.shown && (busy || pendingEvaluating > 0) ? (
+        (!process.shown && (sessions.isPending || livePipeline !== null) ? (
+          <p role="status" className="muted small">
+            Checking for a Process inbox already running.
+          </p>
+        ) : !process.shown && sessions.data === undefined ? (
+          <p role="alert" className="danger-text small">
+            Could not check for a running Process inbox, so it cannot start until the sessions list loads.
+          </p>
+        ) : !process.shown && (busy || pendingEvaluating > 0) ? (
           <p role="status" className="muted small">
             {busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again. It can start once they finish.
           </p>

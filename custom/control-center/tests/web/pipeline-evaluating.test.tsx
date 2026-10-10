@@ -171,6 +171,25 @@ describe('Process inbox and the evaluations do not run over the same rows', () =
     await until(() => host.textContent?.includes('1 pending row is being evaluated'), 'the note');
     expect(pipelinePanel()).toBeUndefined();
   });
+
+  it('given a Process inbox session another tab started, opening Process inbox shows that session instead of a start form (R17-feat-b-L1-02)', async () => {
+    sessions = [pipelineSession('s-pipe-other', 'running')];
+    await mount();
+    await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => pipelinePanel(), 'the Process inbox panel');
+    expect(pipelinePanel()).toMatchObject({ sessionId: 's-pipe-other' });
+    expect(panels.filter((p) => p.mode === 'pipeline').every((p) => p.sessionId === 's-pipe-other')).toBe(true);
+  });
+
+  it('given a sessions list that cannot be read, Process inbox offers no start form, since it cannot tell no run is live (R17-feat-b-L1-02)', async () => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (input === '/api/sessions' && !init?.method ? new Response('down', { status: 503 }) : inner(input as string, init)));
+    await mount();
+    await act(async () => (await until(() => button('Process inbox'), 'Process inbox')).click());
+    await until(() => host.textContent?.includes('Could not check for a running Process inbox'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
+  });
 });
 
 describe('Process inbox new run', () => {
