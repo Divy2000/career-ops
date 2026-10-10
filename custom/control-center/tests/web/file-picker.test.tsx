@@ -9,6 +9,7 @@ import { FilePicker } from '@web/components/ui';
 let host: HTMLElement;
 let root: Root;
 let picked: string[];
+let valueSets: string[];
 
 async function render() {
   picked = [];
@@ -18,8 +19,32 @@ async function render() {
   await act(async () => root.render(createElement(FilePicker, { label: 'Projects file', accept: '.json,.pdf', onFile: (f: File) => void picked.push(f.name) })));
 }
 
+// jsdom's file input reports value '' whatever is assigned, so reading value back cannot show
+// the reset; record what the change handler writes instead.
+const recorded = new WeakSet<HTMLInputElement>();
+function recordValueSets(input: HTMLInputElement) {
+  valueSets = [];
+  if (recorded.has(input)) return;
+  recorded.add(input);
+  let owner: object | null = input;
+  let desc: PropertyDescriptor | undefined;
+  while (owner && !(desc = Object.getOwnPropertyDescriptor(owner, 'value'))) owner = Object.getPrototypeOf(owner);
+  const inner = desc!;
+  Object.defineProperty(input, 'value', {
+    configurable: true,
+    get() {
+      return inner.get!.call(this);
+    },
+    set(v: string) {
+      valueSets.push(v);
+      inner.set!.call(this, v);
+    },
+  });
+}
+
 async function choose(name: string) {
   const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+  recordValueSets(input);
   await act(async () => {
     Object.defineProperty(input, 'files', { value: [new File(['x'], name)], configurable: true });
     input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -50,8 +75,9 @@ describe('FilePicker', () => {
     await render();
     await choose('projects.json');
     expect(host.querySelector('.file-picker__name')?.textContent).toBe('projects.json');
-    expect(host.querySelector<HTMLInputElement>('input[type="file"]')!.value).toBe('');
+    expect(valueSets).toEqual(['']);
     await choose('projects.json');
+    expect(valueSets).toEqual(['']);
     expect(picked).toEqual(['projects.json', 'projects.json']);
   });
 });
