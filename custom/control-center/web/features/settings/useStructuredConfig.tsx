@@ -28,9 +28,26 @@ const valueAt = (doc: unknown, path: YamlOp['path']): unknown => path.reduce<unk
 const changedOnDisk = (op: YamlOp, base: unknown, current: unknown) => op.op !== 'insert' && JSON.stringify(valueAt(base, op.path)) !== JSON.stringify(valueAt(current, op.path));
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
+// Structured saves answered so far, and for each read the count when it was sent: a read sent after a save answered
+// holds the version written (or a newer one), whatever millisecond it lands in and however late an earlier read answers.
+let savesAnswered = 0;
+const sentAfter = new WeakMap<ConfigRead, number>();
+/** The config query every editor of a file shares, so each read it caches carries when it was sent. */
+export const configQuery = (fileKey: 'portals' | 'profile') => ({
+  queryKey: ['config', fileKey],
+  queryFn: async () => {
+    const seq = savesAnswered;
+    const read = await apiGet<ConfigRead>(`/api/config/${fileKey}`);
+    sentAfter.set(read, seq);
+    return read;
+  },
+  // Each read stays its own object, so an unchanged file read after a save is still known to be one.
+  structuralSharing: false,
+});
+
 export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['config', fileKey], queryFn: () => apiGet<ConfigRead>(`/api/config/${fileKey}`) });
+  const q = useQuery(configQuery(fileKey));
   const [pending, setPendingState] = useState<YamlOp[]>([]);
   // The ops as last edited, read when a save answers: ops added while it was on its way were not sent and stay pending.
   const latest = useRef<YamlOp[]>([]);
@@ -43,12 +60,12 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const [saving, setSaving] = useState(false);
   const edit = useEditBase(q.data);
   useUnsaved(fileKey === 'portals' ? 'portals.yml' : 'config/profile.yml', pending.length > 0);
-  // When the last save answered. A read that lands after it holds the version written (or a newer one another writer
-  // made): with nothing pending, the editor follows the live copy again instead of staying pinned to the written one
-  // and its ETag. A failed read leaves the pre-save copy, so the written version stays the base until one succeeds.
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  if (savedAt !== null && q.dataUpdatedAt > savedAt && pending.length === 0) {
-    setSavedAt(null);
+  // The last save that answered. Once a read sent after it succeeds, with nothing pending, the editor follows the live
+  // copy again instead of staying pinned to the written one and its ETag. A failed read leaves the pre-save copy, so
+  // the written version stays the base until one succeeds.
+  const [savedSeq, setSavedSeq] = useState<number | null>(null);
+  if (savedSeq !== null && q.data && (sentAfter.get(q.data) ?? -1) >= savedSeq && pending.length === 0) {
+    setSavedSeq(null);
     edit.rebase(null);
   }
   const server = edit.base ?? q.data ?? null;
@@ -83,7 +100,8 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       // editor still moves onto that version instead of falling back to the pre-save copy, so the next edit is not a
       // false 409 against the stale ETag.
       edit.rebase(server ? { ...server, doc: applyOpsJs(server.doc, sent), etag: r.etag } : null);
-      setSavedAt(Date.now());
+      savesAnswered += 1;
+      setSavedSeq(savesAnswered);
       setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${sent.length} change${sent.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
       toast.success(`Saved ${server?.path ?? fileKey}`);
       await qc.invalidateQueries({ queryKey: ['config'] });
