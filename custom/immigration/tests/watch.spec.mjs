@@ -202,6 +202,14 @@ test('an unknown flag such as --dry-run is refused before any fetch or write, an
   assert.equal(fs.existsSync(path.join(w.imm, 'seen.json')), false);
 });
 
+test('--since -h treats -h as its date operand, not a help request (R17-scripts-a-L2-02)', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  const r = w.watchRaw('--since', '-h');
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /--since needs a YYYY-MM-DD date/);
+});
+
 // ---- the news window follows the last successful pass (SW8-scripts-01) ----
 
 for (const clock of [{}, ...NEAR_MIDNIGHT]) test(`acknowledging a pass records it as the last successful one, and a later run keeps that date${clock.zone ? ` (${clock.zone} at ${clock.at})` : ''}`, () => {
