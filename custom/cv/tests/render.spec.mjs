@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fitToPages, setDensity, countPdfPages, DENSITIES } from '../lib.mjs';
 import { HERE, REPO, loadFixture, cvMarkdownFor, dataRoot, envFor } from './helpers.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const BUILD = path.join(HERE, '..', 'build-html.mjs');
 const RENDER = path.join(HERE, '..', 'render-pdf.mjs');
@@ -241,13 +242,15 @@ test('given an output path that is an existing folder, when the final render fai
 });
 
 // A render started in the background, for the specs that stop it with a signal partway through.
+// Its own TMPDIR, so a spec can check that a stopped render leaves nothing there either (Chromium keeps its profile in it).
 const startRender = (root, html, args) => {
-  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], { cwd: REPO, env: envFor(root), stdio: ['ignore', 'pipe', 'pipe'] });
+  const tmp = fs.realpathSync(tempDir('render-tmp-'));
+  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], { cwd: REPO, env: { ...envFor(root), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
   child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
   const exited = new Promise((resolve) => child.on('close', (status, signal) => resolve({ status, signal, out })));
-  return { child, exited };
+  return { child, exited, tmp };
 };
 const waitFor = async (check, what, ms = 120000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 10))) if (check()) return;
@@ -260,13 +263,14 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     const root = dataRoot({ cv: cvMarkdownFor(fixture) });
     const html = buildInto(root, fixture);
     const before = fs.readFileSync(html, 'utf8');
-    const { child, exited } = startRender(root, html, ['--max-pages=1']);
+    const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
     await waitFor(() => fs.readdirSync(path.join(root, 'output')).some((f) => f.includes('.render-pdf-')), 'the draft HTML');
     child.kill(signal);
     const end = await exited;
     assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
     assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'the draft HTML is removed');
     assert.deepEqual(scratchIn(root), [], 'the scratch folder is removed');
+    assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
     assert.equal(fs.readFileSync(html, 'utf8'), before);
   });
 }
@@ -276,7 +280,7 @@ test('given a render stopped with SIGTERM while it publishes the chosen layout, 
   const html = buildInto(root, fixture);
   const before = fs.readFileSync(html, 'utf8');
   const pdf = path.join(root, 'output', 'cv-test.pdf');
-  const { child, exited } = startRender(root, html, ['--max-pages=1']);
+  const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
   // The input changes only when the chosen layout is written to it, right before the final render.
   await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
   assert.equal(fs.existsSync(pdf), false, 'the signal lands before the final render wrote the PDF');
@@ -286,13 +290,14 @@ test('given a render stopped with SIGTERM while it publishes the chosen layout, 
   assert.match(fs.readFileSync(html, 'utf8'), /<html[^>]*data-density="\d"/, 'the input keeps the published layout');
   assert.equal(countPdfPages(fs.readFileSync(pdf)), 1, 'the PDF of that layout was published');
   assert.deepEqual(scratchIn(root), []);
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
 });
 
 test('given a render and its final generate-pdf stopped together while publishing (a process-group cancel), then the input HTML gets back the layout it had (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
   const before = fs.readFileSync(html, 'utf8');
-  const { child, exited } = startRender(root, html, ['--max-pages=1']);
+  const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
   await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
   const kids = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
   assert.equal(kids.length, 1, 'the final generate-pdf.mjs runs');
@@ -302,6 +307,7 @@ test('given a render and its final generate-pdf stopped together while publishin
   assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
   assert.equal(fs.readFileSync(html, 'utf8'), before, 'nothing was published, so the input keeps its layout');
   assert.deepEqual(scratchIn(root), []);
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
 });
 
 test('given a final render that publishes the PDF and then exits non-zero, when run, then the input keeps the layout of the published PDF (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
@@ -329,13 +335,16 @@ test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the 
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
   const before = fs.readFileSync(html, 'utf8');
+  const tmp = fs.realpathSync(tempDir('render-tmp-'));
   const preload = path.join(root, 'flood.mjs');
   fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs')) process.stdout.write('x'.repeat(17 * 1024 * 1024));\n`);
   const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
-    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000, maxBuffer: 64 * 1024 * 1024,
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp }, encoding: 'utf8', timeout: 240000, maxBuffer: 64 * 1024 * 1024,
   });
   assert.equal(r.status, 1, r.stderr.slice(0, 2000));
   assert.match(r.stderr, /render-pdf failed: generate-pdf\.mjs printed more than 16 MiB/);
+  // The stopped child may have started Chromium already: its profile must not stay behind in TMPDIR.
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
   assert.equal(fs.readFileSync(html, 'utf8'), before);
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html']);
   assert.deepEqual(scratchIn(root), []);

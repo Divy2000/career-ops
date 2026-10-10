@@ -23,7 +23,7 @@
 // the drafts are removed; a publishing render is let finish, and the input keeps
 // the chosen layout only when that render published it.
 
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,7 +77,12 @@ async function main() {
   const scratch = mkdtempSync(path.join(resolveWorkspaceRootFor(getCareerOpsRoot()), '.render-pdf-'));
   const draftHtml = path.join(path.dirname(input), `.${path.basename(scratch)}-${path.basename(input)}`);
   const draftPdf = path.join(scratch, path.basename(output));
-  const draftEnv = { ...process.env, CAREER_OPS_PDF_INDEX: path.join(scratch, 'pdf-index.tsv') };
+  // Every render's TMPDIR (Chromium's profile and artifacts) is in the scratch folder too: a render stopped before
+  // Playwright could clean up leaves nothing in the system temp folder.
+  const childTmp = path.join(scratch, 'tmp');
+  mkdirSync(childTmp);
+  const childEnv = { ...process.env, TMPDIR: childTmp };
+  const draftEnv = { ...childEnv, CAREER_OPS_PDF_INDEX: path.join(scratch, 'pdf-index.tsv') };
   // Messages name the files the user passed, not the drafts.
   const real = (text) => (text ?? '').replaceAll(draftHtml, input).replaceAll(path.basename(draftHtml), path.basename(input))
     .replaceAll(draftPdf, output);
@@ -144,6 +149,8 @@ async function main() {
     process.exit(128 + os.constants.signals[signal]);
   };
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, onSignal);
+  // The scratch folder lives until the last render ends, however the run ends.
+  process.on('exit', removeDrafts);
   const generate = (from, to, extra, env = process.env) => new Promise((resolve, reject) => {
     if (stopping) return;
     const child = spawn(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
@@ -191,7 +198,7 @@ async function main() {
     }
     throw err;
   } finally {
-    removeDrafts();
+    rmSync(draftHtml, { force: true });
   }
   let published = null;
   if (result.fits || !strict) {
@@ -200,7 +207,7 @@ async function main() {
     restoreInput = true;
     writeFileSync(input, result.html);
     try {
-      published = await generate(input, output, result.fits ? ['--strict-pages'] : []);
+      published = await generate(input, output, result.fits ? ['--strict-pages'] : [], childEnv);
     } finally {
       // Unless the chosen layout was published, the input gets back the layout it had.
       settlePublish(published);
