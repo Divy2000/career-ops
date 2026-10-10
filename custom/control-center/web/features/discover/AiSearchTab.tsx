@@ -1,10 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useTracker } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { pipelineAddBatches } from '@shared/pipeline-add';
 import { SessionPanel } from '../../components/SessionPanel';
+import { useRememberedSession } from '../../lib/useRememberedSession';
 import { Pill, TableScroll } from '../../components/ui';
 import { addNote } from './addNote';
 
@@ -20,8 +21,27 @@ interface Offer {
 /** A sent offer's state from its batch's counts: the route reports totals, not which URL it skipped. */
 type Sent = 'added' | 'already there' | 'in pipeline';
 
+/**
+ * The rule POST /api/pipeline/add checks every URL by (postingUrl in server/domains/inboxSkip.ts): one URL it refuses
+ * fails the whole body, so such an offer is never sent.
+ */
+function addableUrl(raw: string): boolean {
+  const s = raw.trim();
+  if (!s || s.length > 2048 || /[\0\r\n]/.test(s)) return false;
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    return false;
+  }
+  return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname) && !u.username && !u.password;
+}
+
 /** Spec 1a: ai-search session with offer envelopes, dedup against known URLs, add one or all. */
 export function AiSearchTab() {
+  // The search is paid and its offers can be added only here: leaving the tab or the page and coming back re-attaches
+  // the last search, whose replayed offer envelopes rebuild the table.
+  const remembered = useRememberedSession('cc.discover.ai');
   const pipeline = usePipeline();
   const tracker = useTracker();
   const qc = useQueryClient();
@@ -32,9 +52,14 @@ export function AiSearchTab() {
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind === 'offer') setOffers((prev) => (prev.some((o) => o.url === (payload as Offer).url) ? prev : [...prev, payload as Offer]));
   }, []);
+  // One add at a time: a second click before the first answers would send the same offers and relabel them.
+  const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
   const add = async (list: Offer[]) => {
-    const fresh = list.filter((o) => !known.has(o.url) && !sent.has(o.url));
-    if (fresh.length === 0) return;
+    const fresh = list.filter((o) => addableUrl(o.url) && !known.has(o.url) && !sent.has(o.url));
+    if (fresh.length === 0 || addingRef.current) return;
+    addingRef.current = true;
+    setAdding(true);
     let added = 0;
     let skipped = 0;
     try {
@@ -50,17 +75,22 @@ export function AiSearchTab() {
     } catch (err) {
       setNote(`${added ? `Added ${added}, then could not add the rest` : 'Could not add'}: ${describeError(err)}`);
     }
-    await qc.invalidateQueries({ queryKey: ['pipeline'] });
+    try {
+      await qc.invalidateQueries({ queryKey: ['pipeline'] });
+    } finally {
+      addingRef.current = false;
+      setAdding(false);
+    }
   };
-  const newOnes = offers.filter((o) => !known.has(o.url) && !sent.has(o.url));
+  const newOnes = offers.filter((o) => addableUrl(o.url) && !known.has(o.url) && !sent.has(o.url));
   return (
     <div className="stack">
-      <SessionPanel mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
+      <SessionPanel key={remembered.panelKey} {...remembered.panel} mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
       {offers.length > 0 && (
         <div className="card">
           <div className="row gap" style={{ justifyContent: 'space-between' }}>
             <h2 style={{ margin: 0 }}>Found {offers.length}</h2>
-            <button type="button" disabled={newOnes.length === 0} onClick={() => void add(newOnes)}>
+            <button type="button" disabled={newOnes.length === 0 || adding} onClick={() => void add(newOnes)}>
               Add all new ({newOnes.length})
             </button>
           </div>
@@ -82,6 +112,7 @@ export function AiSearchTab() {
                   // What this page sent decides first: once added, the refetched pipeline lists the URL too.
                   const done = sent.get(o.url);
                   const dup = done === undefined && known.has(o.url);
+                  const refused = done === undefined && !dup && !addableUrl(o.url);
                   return (
                     <tr key={o.url}>
                       <td>{o.company}</td>
@@ -91,9 +122,9 @@ export function AiSearchTab() {
                         </a>
                       </td>
                       <td className="muted">{o.location ?? ''}</td>
-                      <td>{dup ? <Pill>already known</Pill> : done === 'added' ? <Pill tone="ok">added</Pill> : done ? <Pill>{done}</Pill> : <Pill tone="accent">new</Pill>}</td>
+                      <td>{dup ? <Pill>already known</Pill> : refused ? <Pill tone="warn">not a posting URL</Pill> : done === 'added' ? <Pill tone="ok">added</Pill> : done ? <Pill>{done}</Pill> : <Pill tone="accent">new</Pill>}</td>
                       <td>
-                        <button type="button" disabled={dup || done !== undefined} onClick={() => void add([o])}>
+                        <button type="button" disabled={dup || refused || done !== undefined || adding} onClick={() => void add([o])}>
                           Add
                         </button>
                       </td>

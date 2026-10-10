@@ -78,6 +78,7 @@ export function DiscoverPage() {
           <AiSearchTab />
           <ModeLauncher
             heading="AI scan modes"
+            rememberAs="cc.discover.modes"
             modes={[
               { id: 'scan', label: 'AI portal scan', prompt: 'Scan the configured portals with judgment and add strong matches to the pipeline.' },
               { id: 'discover', label: 'Discover ATS boards', prompt: 'Find the ATS boards for these companies and append them to portals.yml: ' },
