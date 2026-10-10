@@ -166,6 +166,18 @@ test('a Federal Register reply whose next page repeats fails that source instead
   assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-9', 'uscis:https://www.uscis.gov/news/opt'], 'a failed source contributes nothing, not even its first page');
 });
 
+test('a --since run fetches the explicit window but leaves the per-source cursor, so a later normal run still backfills the outage (R17-scripts-a-L2-01)', () => {
+  const w = watchWorld();
+  const old = dayBefore(w.now, 20);
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: old, last_success: { 'federal-register': old, uscis: old } }));
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  w.watch('--since', dayBefore(w.now, 5));
+  const { last_success } = w.seen();
+  assert.equal(last_success['federal-register'], old, 'a --since run must not advance the cursor');
+  assert.equal(last_success.uscis, old);
+});
+
 test('an unknown flag such as --dry-run is refused before any fetch or write, and --help prints usage and touches nothing (R17-scripts-a-L2-02)', () => {
   const w = watchWorld();
   w.setFeeds({ fr: [w.doc('2026-1', H1B)] });

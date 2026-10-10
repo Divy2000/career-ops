@@ -152,7 +152,10 @@ async function main() {
   const pending = await withPendingLock(async () => {
     const seen = await readSeen();
     const lastSuccess = { ...(seen.last_success ?? {}) };
-    for (const n of succeeded) if (!(lastSuccess[n] > today)) lastSuccess[n] = today;
+    // A --since run is an explicit, manual window: it must not advance the per-source
+    // cursor, or the next normal run would forget an outage backfill older than the
+    // 14-day floor and leave those items unfetched.
+    if (!sinceArg) for (const n of succeeded) if (!(lastSuccess[n] > today)) lastSuccess[n] = today;
     // Items still queued count as known: a crash after the queue write but
     // before seen.json must not append them to the feed log a second time.
     const queued = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
