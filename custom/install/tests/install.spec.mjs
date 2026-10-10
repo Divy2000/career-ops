@@ -1038,6 +1038,18 @@ test('a stale Control Center lock whose PID was reused is reinstalled, not skipp
   }
 });
 
+// PID 1 is launchd, owned by root: kill(1, 0) is refused with EPERM, yet ps still reads when it started.
+test('a stale Control Center lock naming a reused PID of another user is reinstalled, not skipped (R18-scripts-b-review-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: 1, start: 1, port: 4317, nonce: 'test' }));
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock names another user\'s process that started at another time');
+});
+
 test('a failing doctor is reported as a pending action, not hidden', () => {
   const { w, D, args } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });

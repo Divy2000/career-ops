@@ -547,20 +547,22 @@ try {
   start = typeof l.start === "number" && Number.isFinite(l.start) ? l.start : null;
 } catch { /* a damaged lock is not a running instance */ }
 if (!pid) process.exit(1);
-try { process.kill(pid, 0); }
-catch (e) { process.exit(e.code === "EPERM" ? 0 : 1); }
-// No start time recorded: the PID being alive is all we can check (as acquireInstanceLock does).
-if (start === null) process.exit(0);
-// A live PID whose process started at another time is a reused PID, not the Control Center.
-let out = "";
+// When the PID started, read like processStartTime in supervisor/instance-lock.ts: ps first, since it reads
+// the process of another user too (kill(pid, 0) is refused with EPERM there, which says nothing about reuse). Only
+// when ps cannot answer does the kernel decide: "unknown" when the PID runs, null when it does not.
+const runs = () => { try { process.kill(pid, 0); return "unknown"; } catch (e) { return e.code === "ESRCH" ? null : "unknown"; } };
+let live;
 try {
-  out = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, env: { LC_ALL: "C", TZ: "UTC" } }).trim();
-} catch { process.exit(0); }
-const m = LSTART.exec(out);
-const month = m ? MONTHS.indexOf(m[1]) : -1;
-if (!m || month === -1) process.exit(0);
-const live = Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
-process.exit(live === start ? 0 : 1);
+  const out = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { LC_ALL: "C", TZ: "UTC" } }).trim();
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  live = m && month !== -1 ? Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000 : runs();
+} catch (e) {
+  live = e.status === 1 && !e.signal && !String(e.stdout || "").trim() ? null : runs();
+}
+// Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
+// With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
+process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
 ' "$lock"
 }
 

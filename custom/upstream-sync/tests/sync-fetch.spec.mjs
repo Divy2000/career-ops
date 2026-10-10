@@ -944,6 +944,20 @@ test('a stale Control Center lock whose PID was reused is not treated as running
   }
 });
 
+// PID 1 is launchd, owned by root: kill(1, 0) is refused with EPERM, yet ps still reads when it started.
+test('a stale Control Center lock naming a reused PID of another user is not treated as running, so npm ci still runs (R18-scripts-b-review-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  holdRunningControlCenter(w, { pid: 1 }, 1);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock names another user\'s process that started at another time');
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 test('a running Control Center with a failed root install still reports the skipped Control Center deps (R17-scripts-b-L1-01)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true, npmExit: 1 });
   const child = spawn('sleep', ['30'], { stdio: 'ignore' });
