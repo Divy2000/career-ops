@@ -1,13 +1,15 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
 import { useEngine, useSessionStream, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
 import { useRememberedSession } from '../../lib/useRememberedSession';
+import { lastSession } from '../../lib/lastSession';
 import { UnsavedProvider, useUnsaved } from '../../lib/unsaved';
 import { describeError, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
 import { prefillBlockers } from './prefill';
@@ -82,28 +84,40 @@ type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: st
 
 /** Leaving the page with edited answers asks first: the session keeps only the answers as it drafted them. */
 export function ApplyBody(props: ApplyBodyProps) {
+  // New draft remounts the form, so the URL, the answers and the panel start clean.
+  const [draft, setDraft] = useState(0);
   return (
     <UnsavedProvider>
-      <ApplyForm {...props} />
+      <ApplyForm key={draft} {...props} onNewDraft={() => setDraft((d) => d + 1)} />
     </UnsavedProvider>
   );
 }
 
-function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
+const applyKey = (n: string | null) => `cc.apply.${n ?? 'url'}`;
+
+function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
   // The draft is a paid session and Fill is reachable only here: the row's last apply session is re-attached when the
   // page comes back, and its answers envelope (replayed by the panel) rebuilds the form.
-  const remembered = useRememberedSession(`cc.apply.${n ?? 'url'}`);
+  const remembered = useRememberedSession(applyKey(n));
   const sessionId = remembered.panel.sessionId;
-  // A session re-attached on /apply (no row) brings back its posting URL, which it carries as its target.
-  const [reattached] = useState(sessionId);
-  const attached = useSessionStream(n === null ? reattached : null).meta?.target;
   const [typedUrl, setUrl] = useState<string | null>(null);
+  // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
+  // back its posting URL, which it carries as its target. One started from a typed URL already shows it.
+  const attached = useSessionStream(n === null && typedUrl === null ? sessionId : null).meta?.target;
   const url = typedUrl ?? (attached?.type === 'url' && attached.value ? attached.value : postingUrl);
   const [fields, setFields] = useState<AnswerField[] | null>(null);
   const [drafted, setDrafted] = useState<AnswerField[] | null>(null);
-  useUnsaved('the edited answers', fields !== null && JSON.stringify(fields) !== JSON.stringify(drafted));
+  const edited = fields !== null && JSON.stringify(fields) !== JSON.stringify(drafted);
+  useUnsaved('the edited answers', edited);
+  const confirm = useConfirm();
+  // The draft stays on the Sessions page; this page lets go of it and offers the start form again.
+  const newDraft = async () => {
+    if (edited && !(await confirm({ title: 'Discard the edited answers?', body: 'A new draft starts from an empty form. The current draft stays on the Sessions page with the answers as it drafted them.', confirmLabel: 'Discard changes', danger: true }))) return;
+    lastSession(applyKey(n)).write(null);
+    onNewDraft();
+  };
   const [status, setStatus] = useState('queued');
   const [fillNote, setFillNote] = useState<string | null>(null);
   const actions = useRunAction();
@@ -143,15 +157,26 @@ function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
     if (out && 'result' in out) setSummary(String(out.result).trim());
   };
 
-  // Each click starts a paid session, so the button waits for the first start to answer.
+  // Each click starts a paid session that writes the row's CV, so the button stays off while the last one started here
+  // (remembered across leaving the page, for the session page it opens) is starting, queued or running.
+  const pdfSession = useRememberedSession(`cc.pdf.${n ?? 'none'}`);
+  const pdfId = n ? pdfSession.panel.sessionId : null;
+  const pdfStream = useSessionStream(pdfId);
+  const { onStatus: pdfOnStatus, onStarting: pdfOnStarting, onSessionId: pdfOnSessionId, onStartFailed: pdfOnStartFailed } = pdfSession.panel;
+  useEffect(() => {
+    if (pdfId) pdfOnStatus(pdfStream.gone ? 'gone' : pdfStream.transcript.status);
+  }, [pdfId, pdfStream.gone, pdfStream.transcript.status, pdfOnStatus]);
   const [generating, setGenerating] = useState(false);
   const generatePdf = async () => {
     if (!n) return;
     setGenerating(true);
+    pdfOnStarting();
     try {
       const m = await startTailoredCvSession(n);
+      pdfOnSessionId(m.id);
       await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
+      pdfOnStartFailed();
       actions.setMessage({ tone: 'danger', text: `Could not start the tailored CV session: ${describeError(err)}` });
     } finally {
       setGenerating(false);
@@ -237,6 +262,11 @@ function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
                   Mark applied
                 </button>
               )}
+              {sessionId && !remembered.busy && (
+                <button type="button" title="Lets go of this draft (it stays on the Sessions page) and offers the start form again" onClick={() => void newDraft()}>
+                  New draft
+                </button>
+              )}
               <button type="button" onClick={() => void navigate({ to: n ? '/tracker/$n' : '/tracker', params: n ? { n } : undefined })}>
                 Leave
               </button>
@@ -250,9 +280,18 @@ function ApplyForm({ n, company, postingUrl }: ApplyBodyProps) {
                 ))}
                 {blockers.needsPdf && n && (
                   <div>
-                    <button type="button" disabled={generating} onClick={() => void generatePdf()}>
+                    <button type="button" disabled={generating || pdfSession.busy} onClick={() => void generatePdf()}>
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
+                    {pdfSession.busy && pdfId && (
+                      <span className="muted small">
+                        {' '}
+                        <Link to="/sessions/$id" params={{ id: pdfId }}>
+                          The tailored CV session
+                        </Link>{' '}
+                        is still running.
+                      </span>
+                    )}
                   </div>
                 )}
                 {blockers.needsPdf && !n && docs.data.pdfs.length === 0 && (
