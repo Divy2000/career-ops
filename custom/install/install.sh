@@ -1009,9 +1009,16 @@ if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [
   if cc_running; then
     say "Control Center is already running; not starting a second instance"
   else
-    # It was running when its npm ci was skipped and has stopped since: install what it was left without first.
-    if [ "$CC_DEPS_DEFERRED" = 1 ] && ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
-      die 1 "npm ci for the Control Center failed. See $LOG_FILE."
+    # It was running when its npm ci was skipped and has stopped since: install what it was left without first, and
+    # check the result again, since the preflight above ran against the dependencies it had then.
+    if [ "$CC_DEPS_DEFERRED" = 1 ]; then
+      if ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
+        die 1 "npm ci for the Control Center failed. See $LOG_FILE."
+      fi
+      if ! (cd "$DIR" && run_logged npm --prefix custom/control-center run preflight); then
+        say "The Control Center preflight failed after its npm ci, so it was not started; run: npm --prefix $(shell_quote "$DIR/custom/control-center") run preflight, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")"
+        exit 3
+      fi
     fi
     say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
     exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
