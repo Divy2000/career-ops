@@ -445,12 +445,20 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
   });
 
   it('refuses to start while another mount is starting the row\'s CV', async () => {
-    sessionStorage.setItem('cc.pdf.2:starting', '1');
+    sessionStorage.setItem('cc.pdf.2:starting', String(Date.now()));
     await remountDrawer();
     const item = await run();
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');
     expect(item.textContent).toContain('already starting');
+  });
+
+  it('starts after an orphaned starting mark has expired, so a reload mid-start does not block the row forever', async () => {
+    sessionStorage.setItem('cc.pdf.2:starting', String(Date.now() - 16_000));
+    await remountDrawer();
+    const item = await run();
+    expect(posts).toHaveLength(1);
+    expect(item.dataset.proposalState).toBe('done');
   });
 });
 
