@@ -355,3 +355,27 @@ test('an alert headline with a markdown link is written so the excluded bullet s
   assert.equal(m[3], 'https://jobs.example.com/1');
   assert.match(m[4], /^paused \(2026-10-01\): See the announcement - more details$/);
 });
+
+test('an alert headline keeps its pipe and a nested link still parses (R17-scripts-a-L3-02 edge cases)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Backend Engineer | Remote | rank: 4.2/5 — fit\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Acme': { tier: 'strong', matched: 'Acme', checked: localToday() } }));
+  fs.writeFileSync(
+    path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
+    `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme\tacme\tpaused\tH-1B | OPT [[update]](https://news.example/b)\thttps://news.example/b\n`,
+  );
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
+  const line = md.split('\n').find((l) => l.startsWith('- Acme - '));
+  assert.ok(line, `excluded bullet present in:\n${md}`);
+  const m = line.match(EXCLUDED_BULLET);
+  assert.ok(m, `excluded bullet parses:\n${line}`);
+  assert.equal(m[2], 'Backend Engineer');
+  assert.equal(m[3], 'https://jobs.example.com/1');
+  assert.ok(m[4].includes('H-1B | OPT'), `pipe preserved (not a table cell): ${m[4]}`);
+  assert.ok(m[4].includes('update'), `nested link text kept: ${m[4]}`);
+  assert.ok(!m[4].includes('H-1B / OPT'), `pipe is not rewritten to a slash: ${m[4]}`);
+});

@@ -197,15 +197,20 @@ async function readPortals() {
 
 const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 
-// Escape the markdown-significant characters the Control Center's parser unescapes (\\, \[, \]) plus the pipe,
-// matching how scan.mjs writes pipeline cells.
-const escapeMarkdown = (s) => String(s ?? '').replace(/[\\[\]]/g, (c) => ({ '\\': '\\\\', '[': '\\[', ']': '\\]' }[c])).replace(/\|/g, '/');
+// Escape the markdown-significant characters the Control Center's parser unescapes (\\, \[, \]). The pipe is NOT
+// escaped here: the excluded bullet is not a pipe-delimited table cell, and unescapeMarkdownCell never reverses a `/`,
+// so a headline's `|` would be permanently shown as `/`.
+const escapeMarkdown = (s) => String(s ?? '').replace(/[\\[\]]/g, (c) => ({ '\\': '\\\\', '[': '\\[', ']': '\\]' }[c]));
 
 // The alert headline is AI-written and may carry a markdown link `[text](url)`. The excluded bullet's `[title](url)`
-// link is read back by a greedy parse in the Control Center, so a `](` in the headline is misread as the title link and
-// the row comes out with the wrong role, link and alert. Neutralize the link (keep the text, drop the URL, which the
-// alert's own url column carries), then escape the rest.
-const sponsorCell = (label) => escapeMarkdown(String(label ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1'));
+// link is read back by a greedy parse in the Control Center, so any `](` in the headline is misread as the title link
+// and the row comes out with the wrong role, link and alert. Strip links (keep the text, drop the URL, which the
+// alert's own url column carries), then break any surviving `](` (a nested [[text]](url) or a literal bracket pair) so
+// the greedy parse binds only the title's `](`, then escape the rest.
+const sponsorCell = (label) => {
+  let s = String(label ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\]\(/g, '] (');
+  return escapeMarkdown(s);
+};
 
 const USAGE = `Usage: node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
 Writes data/shortlist.md from the ranked pending rows, scored with each company's DOL sponsorship tier.
