@@ -92,10 +92,11 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     setSaving(true);
     try {
       await apiSend('PUT', '/api/blacklist', { confirm: true, rows: current }, { 'X-CC-Explicit': 'blacklist', ...(from?.etag ? { 'If-Match': from.etag } : {}) });
-      setRows(null);
       setNote({ tone: 'ok', text: 'Blacklist written.' });
       toast.success('Blacklist written');
       await qc.invalidateQueries({ queryKey: ['config'] });
+      // Cleared once the refetch settles, so the table never flashes the pre-save rows while it is on its way.
+      setRows(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         await qc.invalidateQueries({ queryKey: ['config', 'blacklist'] });

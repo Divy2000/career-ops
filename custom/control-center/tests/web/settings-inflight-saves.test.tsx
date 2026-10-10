@@ -405,3 +405,44 @@ describe('raw YAML editor: a save whose refetch fails (R18-feat-c-L1-01)', () =>
     expect(writes()[1]).toEqual(expect.objectContaining({ body: { raw: 'a: 3\n' }, headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
   });
 });
+
+describe('cadence and blacklist editors while the post-save refetch is on its way (R18-feat-c-L1-02)', () => {
+  it('the cadence form keeps showing the saved value, not the pre-save copy', async () => {
+    files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    slowRead = {};
+    const refetch = slowRead;
+    await click(button('Save cadence')!);
+    await until(() => /Follow-up cadence saved/.test(document.body.textContent ?? ''), 'the saved note');
+    await until(() => Boolean(refetch.release), 'the refetch on its way');
+    expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.value).toBe('9');
+    // The read on its way answers the file as written.
+    files['/api/followups/cadence']!.cadence = { applied_first_days: 9 };
+    await act(async () => refetch.release!());
+    await until(() => !document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.disabled, 'the fields back');
+    expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.value).toBe('9');
+  });
+
+  it('the blacklist keeps showing the written rows, not the pre-save copy', async () => {
+    files = { '/api/blacklist': { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', rows: [{ company: 'Initech', since: '2026-01-01', scope: 'company', reason: '' }], preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] } };
+    const { BlacklistEditor } = await import('@web/features/settings/BlacklistEditor');
+    await mount(createElement(BlacklistEditor, {}));
+    await type(await until(() => labelled<HTMLInputElement>('Blacklist company or domain'), 'the company field'), 'Globex');
+    await click(button('Add row')!);
+    slowRead = {};
+    const refetch = slowRead;
+    await click(button('Save blacklist')!);
+    await click(await until(() => button('Write blacklist'), 'the confirm dialog'));
+    await until(() => /Blacklist written/.test(document.body.textContent ?? ''), 'the written note');
+    await until(() => Boolean(refetch.release), 'the refetch on its way');
+    expect(button('Remove Globex from the blacklist draft')).toBeDefined();
+    files['/api/blacklist']!.rows = [{ company: 'Initech', since: '2026-01-01', scope: 'company', reason: '' }, { company: 'Globex', since: '2026-01-01', scope: 'company', reason: '' }];
+    await act(async () => refetch.release!());
+    await until(() => button('Remove Globex from the blacklist draft')?.disabled === false, 'the editor back');
+    expect(button('Remove Globex from the blacklist draft')).toBeDefined();
+    expect(button('Discard')!.disabled).toBe(true);
+  });
+});
