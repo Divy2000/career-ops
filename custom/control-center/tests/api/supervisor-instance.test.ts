@@ -508,6 +508,20 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('a CC_PORT that is not a port from 1 to 65535 stops the launch with a message, before anything starts (R14-supervisor-X-01)', async () => {
+    for (const bad of ['0', '70000', 'abc', '43.5']) {
+      const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_PORT: bad } });
+      try {
+        await until(() => s.proc.exitCode !== null, `the supervisor to exit for CC_PORT=${bad}`, 30_000);
+        expect(s.proc.exitCode, s.output()).toBe(1);
+        expect(s.output()).toContain(`CC_PORT must be a port number from 1 to 65535, got "${bad}"`);
+        expect(s.output()).not.toMatch(/Control Center ready|Recovery page/);
+      } finally {
+        await stop(s);
+      }
+    }
+  });
+
   it('with CC_NO_RELOAD set, a server child that cannot start still stops the supervisor with exit 1 (SW2-claude-05 review)', async () => {
     const held = await heldPort();
     const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_CHILD_PORT: String(held.port) } });

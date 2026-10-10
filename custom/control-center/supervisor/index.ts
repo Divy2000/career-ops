@@ -28,7 +28,10 @@ import { RECOVERY_SCRIPT } from './recovery-script.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
-const PORT = Number(process.env.CC_PORT ?? 4317);
+const PORT_TEXT = process.env.CC_PORT ?? '4317';
+// Digits only: Number() also takes "", "0x10" and "1e3", and listen(0) asks the OS for any port, which the URLs and the
+// host and origin checks (all pinned to PORT) would never match.
+const PORT = /^\d+$/.test(PORT_TEXT) ? Number(PORT_TEXT) : NaN;
 const BUILT = process.argv.includes('--built') || process.env.CC_SERVE_BUILT === '1';
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
 const SESSION_COOKIE = 'cc_session';
@@ -164,6 +167,10 @@ ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 }
 
 async function main(): Promise<void> {
+  if (!(Number.isInteger(PORT) && PORT >= 1 && PORT <= 65535)) {
+    console.error(`CC_PORT must be a port number from 1 to 65535, got "${PORT_TEXT}". Set it to a free port, or unset it for 4317.`);
+    process.exit(1);
+  }
   const dataRoot = await resolveDataRoot();
   // Before anything starts: a second instance on this data root would reconcile the first one's runs and sessions.
   const lock = acquireInstanceLock(dataRoot, { pid: process.pid, port: PORT });
