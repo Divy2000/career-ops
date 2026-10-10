@@ -63,7 +63,9 @@ async function mount() {
       }
       if (url === '/api/projects' && (init?.method ?? 'GET') === 'GET') return json(200, { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [] });
       const upload = url.match(/^\/api\/projects\/upload\?name=(.+)$/);
-      if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'intake reads PDF, Markdown and text: export to PDF or .md/.txt first' });
+      // As server/routes/projects.ts: the Content-Type decides, never the file name.
+      const type = String(new Headers(init?.headers).get('content-type') ?? '').split(';')[0]!.trim();
+      if (upload && type !== 'application/pdf') return json(415, { error: 'intake reads PDF, Markdown and text: export to PDF or .md/.txt first' });
       if (upload) {
         const respond = () => json(200, { path: `projects/${decodeURIComponent(upload[1]!)}`, bytes: 3 });
         return hold.upload ? waitFor('upload', url, respond) : respond();
@@ -164,6 +166,12 @@ describe('Import projects: parser sessions per uploaded document', () => {
     await act(async () => button('Append').click());
     await until(() => sentTo('/api/projects/append') === 1, 'the append');
     expect(sent.find((c) => c.url === '/api/projects/append')?.body).toEqual({ markdown: '## From Second\n- fresh.\n<!-- projects/second.pdf -->\n', source: 'projects/second.pdf' });
+  });
+
+  it('uploads a PDF the browser gave no type as a PDF', async () => {
+    await mount();
+    await choose('first.pdf', '');
+    expect(panelsShown()).toEqual(['projects/first.pdf']);
   });
 
   it('shows intake\'s reason when the server refuses a DOCX, and starts no parser', async () => {
