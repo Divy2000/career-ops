@@ -64,4 +64,17 @@ describe('the blacklist write confirm', () => {
     expect(dialog()!.textContent).toContain('1 removed');
     expect(dialog()!.textContent).not.toContain('0 added');
   });
+  it('reports every row removed when the whole blacklist is cleared (review)', async () => {
+    const { BlacklistEditor } = await import('@web/features/settings/BlacklistEditor');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(BlacklistEditor, {})))));
+    await until(() => document.body.textContent?.includes('Initech'), 'the rows');
+
+    await act(async () => button('Remove Initech from the blacklist draft')!.click());
+    await act(async () => button('Remove Globex from the blacklist draft')!.click());
+    await act(async () => button('Save blacklist')!.click());
+    await until(() => dialog(), 'the confirm dialog');
+
+    expect(dialog()!.textContent).toContain('0 rows will be written (2 removed)');
+  });
 });

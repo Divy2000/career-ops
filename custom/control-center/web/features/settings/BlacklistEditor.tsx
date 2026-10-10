@@ -76,7 +76,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
       body: (
         <>
           <p>
-            {current.length} row{current.length === 1 ? '' : 's'} will be written{current.length > 0 && diff.length > 0 ? ` (${diff.join(', ')})` : ''}. The scanner skips every listed company and domain on its next run.
+            {current.length} row{current.length === 1 ? '' : 's'} will be written{diff.length > 0 ? ` (${diff.join(', ')})` : ''}. The scanner skips every listed company and domain on its next run.
           </p>
           {columnWarning && <p>{columnWarning}</p>}
           <p>This is the only way the app writes the blacklist; AI sessions are denied this file.</p>
