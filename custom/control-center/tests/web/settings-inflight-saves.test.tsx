@@ -8,6 +8,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
+import { applyOpsJs } from '@web/lib/yamlOpsClient';
+import type { YamlOp } from '@shared/api';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,7 +49,9 @@ beforeEach(() => {
       // As the real routes: the write lock serializes saves, and each compares If-Match with the version on disk.
       if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
       const etag = `${doc.etag}+`;
-      files[key] = { ...doc, etag };
+      // A structured save writes its ops, so the refetch after it reads the version written, as on the real routes.
+      const ops = (body as { ops?: YamlOp[] } | null)?.ops;
+      files[key] = { ...doc, etag, ...(ops && 'doc' in doc ? { doc: applyOpsJs(doc.doc, ops) } : {}) };
       return json(200, { ok: true, etag, warnings: '' });
     }),
   );
@@ -65,8 +69,11 @@ afterEach(async () => {
 async function mount(child: ReactNode) {
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = qc;
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, child))));
 }
+/** The mounted app's query client, so a test can play the watcher's refetch after a change on disk. */
+let client: QueryClient;
 const labelled = <T extends HTMLElement>(label: string) => document.querySelector<T>(`[aria-label="${label}"]`);
 const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() === name);
 const alerts = () => [...document.querySelectorAll('[role="alert"]')].map((a) => a.textContent ?? '').join('\n');
@@ -160,6 +167,23 @@ describe('structured editors: an edit made while a save is on its way', () => {
     expect(writes()[1]).toEqual(expect.objectContaining({ body: { ops: [{ op: 'set', path: ['b'], value: 3 }] }, headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
     expect(alerts()).toBe('');
   });
+  it('after a save, a later change on disk becomes the base once refetched, so the next edit saves on it without a false 409 (review)', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    await click(button('Save')!);
+    await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+    // Another writer changes the file; the watcher refetches it.
+    files['/api/config/portals'] = { ...files['/api/config/portals']!, etag: 'p2', doc: { a: 5, b: 1 } };
+    await act(async () => client.invalidateQueries({ queryKey: ['config'] }));
+    await until(() => labelled('doc')!.textContent === JSON.stringify({ a: 5, b: 1 }), 'the version on disk');
+    await click(button('Set b')!);
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'If-Match': 'p2' }) }));
+    await until(() => labelled('pending')!.textContent === '0', 'nothing pending');
+    expect(alerts()).toBe('');
+  });
+
   it('Discard does nothing until the save answers, so a later edit is not mistaken for a sent one', async () => {
     await mountHarness();
     await click(button('Set a')!);

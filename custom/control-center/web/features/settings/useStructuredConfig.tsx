@@ -78,6 +78,9 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${sent.length} change${sent.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
       toast.success(`Saved ${server?.path ?? fileKey}`);
       await qc.invalidateQueries({ queryKey: ['config'] });
+      // The refetch holds the version just written (or a newer one another writer made): with nothing pending, the
+      // editor follows the live copy again instead of staying pinned to the written one and its ETag.
+      if (latest.current.length === 0) edit.rebase(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         const current = (err.body as { current: ConfigRead }).current;
