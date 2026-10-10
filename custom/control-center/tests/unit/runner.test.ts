@@ -624,8 +624,8 @@ describe('Runner', () => {
       CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', PATH: '/bin', HOME: '/h',
     };
     const env = childEnv({}, base);
-    // The two scan paths are always set, empty, so a scan writes the data root's files (R12-srv-core-L2-03).
-    expect(Object.keys(env).sort()).toEqual(['CAREER_OPS_PIPELINE', 'CAREER_OPS_SCAN_HISTORY', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // The four scan paths are always set, empty, so a scan writes the data root's files (R12-srv-core-L2-03, R17-srv-core-X-01).
+    expect(Object.keys(env).sort()).toEqual(['CAREER_OPS_PIPELINE', 'CAREER_OPS_PORTALS', 'CAREER_OPS_PROFILE', 'CAREER_OPS_SCAN_HISTORY', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
     // A session's own credentials, passed explicitly, still reach it.
     expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
   });
@@ -653,6 +653,14 @@ describe('Runner', () => {
         else process.env[k] = v;
       }
     }
+  });
+
+  it('pins CAREER_OPS_PORTALS and CAREER_OPS_PROFILE to the data root too, so an app scan reads the Portals editor and profile, not a lane\'s (R17-srv-core-X-01)', () => {
+    const lane = { CAREER_OPS_PORTALS: '/lane/portals.yml', CAREER_OPS_PROFILE: '/lane/profile.yml', CAREER_OPS_PIPELINE: '/lane/pipeline.md', CAREER_OPS_SCAN_HISTORY: '/lane/history.tsv', PATH: '/bin' };
+    const env = childEnv({}, lane);
+    expect(env).toMatchObject({ CAREER_OPS_PORTALS: '', CAREER_OPS_PROFILE: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '' });
+    // A caller passing one explicitly still wins (the network scan writes its own ephemeral portals file).
+    expect(childEnv({ CAREER_OPS_PORTALS: '/tmp/ephemeral.yml' }, lane).CAREER_OPS_PORTALS).toBe('/tmp/ephemeral.yml');
   });
 
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
@@ -697,6 +705,7 @@ describe('Runner', () => {
     expect(second.store.read(ghost.id)?.status).toBe('lost');
     await until(() => second.store.read(live.id)?.status === 'done', 15_000);
   });
+
 });
 
 describe('two server processes on one data root (SW6-claude-01 review)', () => {

@@ -17,11 +17,11 @@ export const isCredential = (name: string): boolean => name.startsWith('ANTHROPI
 
 /**
  * scan.mjs and its siblings put these ahead of the data root (a second search lane, #2271), from the shell or from the
- * data root's .env. The app reads and edits only the data root's data/pipeline.md and data/scan-history.tsv, so a scan
- * it starts must write those: an empty value keeps each script's default (they read it with ||), and dotenv never
+ * data root's .env. The app reads and edits only the data root's data/pipeline.md, data/scan-history.tsv, portals.yml
+ * and config/profile.yml, so a scan it starts must read and write those: an empty value keeps each script's default (they read it with ||), and dotenv never
  * overwrites a variable that is already set. A caller may still pass one explicitly.
  */
-const PINNED_TO_DATA_ROOT = { CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '' };
+const PINNED_TO_DATA_ROOT = { CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PROFILE: '' };
 
 export function childEnv(extra: NodeJS.ProcessEnv = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
