@@ -116,6 +116,7 @@ test('integration: given the made-up 6-role CV, when rendered with a 1-page budg
   assert.ok(density !== undefined, 'density attribute written back');
   assert.match(r.stdout, new RegExp(`density ${density}, 1 page`));
   assert.match(r.stdout, /Fact check passed/);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-')), [], 'the scratch folder is removed from the data root (R11-tests-custom-L3-06)');
 });
 
 test('given every density overflowing, when run with --strict-pages, then it exits non-zero; without it, it warns and exits 0', { timeout: 240000 }, () => {
@@ -168,6 +169,7 @@ test('given an indexed CV with the same file names, when a strict re-render of i
   assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the indexed PDF is not overwritten by an overflowing draft');
   assert.equal(fs.readFileSync(index, 'utf8'), indexed);
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), ['cv-test.html', 'cv-test.pdf']);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-')), [], 'the scratch folder is removed from the data root (R11-tests-custom-L3-06)');
 });
 
 test('given generate-pdf.mjs failing the fact check, when run, then it passes the message through and leaves the input untouched', { timeout: 120000 }, () => {
@@ -181,6 +183,7 @@ test('given generate-pdf.mjs failing the fact check, when run, then it passes th
   assert.match(r.stdout + r.stderr, /5 hours/);
   assert.equal(fs.readFileSync(html, 'utf8'), before, 'a failed run leaves the input HTML as it was');
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no PDF and no draft is left behind');
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-')), [], 'the scratch folder is removed from the data root (R11-tests-custom-L3-06)');
 });
 
 test('given an output folder that does not exist yet, when rendered, then it is created as upstream does and the PDF lands there (review of SW5-tests-01)', { timeout: 240000 }, () => {
