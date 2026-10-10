@@ -46,6 +46,33 @@ describe('moving an evaluated posting to Processed', () => {
     expect(r.text).toBe(`## Pendientes\n\n\n## Procesadas\n\n- [x] #042 | ${URL} | Acme (report) | Engineer (report) | 4.0/5 | PDF ✅\n`);
   });
 
+  it('writes the report\'s company and role the way scan.mjs sanitizes cells, so a | cannot add a column (R12-srv-dom-b-L3-01)', () => {
+    const md = `## Pending\n\n- [ ] ${URL} |  | \n\n## Processed\n`;
+    const r = moveToProcessed(md, URL, { ...POSTING, company: 'Acme [Labs]', role: 'Software Engineer | Payments\\EU', score: 4.2 });
+    expect(r.text).toContain(`- [x] #042 | ${URL} | Acme \\[Labs\\] | Software Engineer / Payments\\\\EU | 4.2/5 | PDF ❌`);
+  });
+
+  it('moves the row between the Pending and Processed headings of every shipped mode language, and creates the paired Processed heading (R13-feat-b-L3-01 review)', () => {
+    const modes = path.join(DEFAULT_CODE_ROOT, 'modes');
+    const files = [path.join(modes, 'pipeline.md'), ...fs.readdirSync(modes).map((d) => path.join(modes, d, 'pipeline.md')).filter((f) => fs.existsSync(f))];
+    for (const file of files) {
+      let fenced = false;
+      const [pending, processed] = fs.readFileSync(file, 'utf8').split('\n').flatMap((line) => {
+        if (line.startsWith('```')) fenced = !fenced;
+        return fenced && line.startsWith('## ') ? [line.slice(3).trim()] : [];
+      });
+      const row = `- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌`;
+      expect(moveToProcessed(`## ${pending}\n\n- [ ] ${URL} | Acme | Eng\n\n## ${processed}\n`, URL, POSTING).text, file).toBe(`## ${pending}\n\n\n## ${processed}\n\n${row}\n`);
+      expect(moveToProcessed(`## ${pending}\n\n- [ ] ${URL} | Acme | Eng\n`, URL, POSTING).text, file).toBe(`## ${pending}\n\n## ${processed}\n\n${row}\n`);
+    }
+  });
+
+  it('reads a heading with a suffix and the accented Traitées the way the Pipeline page does', () => {
+    const row = `- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌`;
+    expect(moveToProcessed(`## Pending (1)\n\n- [ ] ${URL} | Acme | Eng\n\n## Processed (0)\n`, URL, POSTING).text).toBe(`## Pending (1)\n\n\n## Processed (0)\n\n${row}\n`);
+    expect(moveToProcessed(`## En attente\n\n- [ ] ${URL} | Acme | Eng\n\n## Traitées\n`, URL, POSTING).text).toBe(`## En attente\n\n\n## Traitées\n\n${row}\n`);
+  });
+
   it('a report with no generated PDF, or no readable score, says so', () => {
     const r = moveToProcessed(`## Pending\n- [ ] ${URL} | Acme | Eng\n## Processed\n`, URL, { ...POSTING, score: null, pdf: false });
     expect(r.text).toContain(`- [x] #042 | ${URL} | Acme | Eng | N/A | PDF ❌`);

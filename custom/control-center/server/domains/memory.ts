@@ -17,10 +17,13 @@ function holdsLine(text: string, fact: string): boolean {
 }
 
 export function applyRememberedFact(md: string, fact: string): { text: string; result: 'ok' | 'deduped' } {
-  const f = fact.trim().replace(/\s+/g, ' ').slice(0, 300);
+  // The fact may come from a model that read a JD: no HTML comment opener or closer, so it can never forge or end the
+  // managed block.
+  const f = fact.replace(/<!--|-->/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 300);
   if (!f) return { text: md, result: 'deduped' };
   const i = md.indexOf(NOTES_START);
-  const j = md.indexOf(NOTES_END);
+  // The block's own end: the first end marker after its start, never a stray one above it.
+  const j = i === -1 ? -1 : md.indexOf(NOTES_END, i + NOTES_START.length);
   if (i !== -1 && j !== -1 && j > i) {
     if (holdsLine(md.slice(i, j), f)) return { text: md, result: 'deduped' };
     return { text: md.slice(0, j) + `- ${f}\n` + md.slice(j), result: 'ok' };

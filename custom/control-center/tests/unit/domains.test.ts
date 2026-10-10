@@ -59,6 +59,15 @@ describe('immigration overview', () => {
     expect(parseDailyLog(text, '2026-10-05')).toMatchObject({ status: 'running', startedAt: '2026-10-05 10:15:00', finishedAt: null, failedCount: null, failedSteps: [] });
   });
 
+  it('a failed step with no done line yet reads running with its failed step, since run-daily.sh step() moves on to the next steps (R12-srv-dom-a-L1-01)', async () => {
+    const text = '=== 2026-10-05 07:00:00 start\n--- 07:00:05 scan\n!!! step failed: scan\n--- 07:02:00 policy pass\n';
+    const log = parseDailyLog(text, '2026-10-05');
+    expect(log).toMatchObject({ status: 'running', failedSteps: ['scan'], finishedAt: null });
+    expect(log.steps[0]!.failed).toBe(true);
+    expect((await withJobState(log, '2026-10-05', async () => false, noRunToday)).status).toBe('interrupted');
+    expect(parseDailyLog(`${text}=== 2026-10-05 07:09:00 done (failed=1)\n`, '2026-10-05').status).toBe('failed');
+  });
+
   it('a run with no done line reads interrupted once the job is known not to run, and stays running while it runs or nobody knows', async () => {
     const log = parseDailyLog('=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n', '2026-10-05');
     expect((await withJobState(log, '2026-10-05', async () => false, noRunToday)).status).toBe('interrupted');
@@ -168,6 +177,21 @@ describe('immigration overview', () => {
     expect((o.tiers as Record<string, { tier: string }>)['Acme Robotics']).toMatchObject({ tier: 'strong', matched: 'Acme Robotics, Inc.' });
   });
 
+  it('reads a headerless company-alerts.tsv history by position, as the core reader does (R12-srv-dom-a-L2-01, R12-srv-dom-a-L3-01)', async () => {
+    const headerless = copyFixtureRoot();
+    fs.writeFileSync(
+      path.join(headerless, 'data/immigration/company-alerts.tsv'),
+      '2026-09-01\tAcme\tacme\tpaused\tAcme pauses H-1B\thttps://a\n2026-09-05\tGlobex\tglobex\tstopped\tGlobex stops\thttps://g\n',
+    );
+    const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, headerless, '2026-10-04');
+    expect(o.alerts.history).toEqual([
+      { date: '2026-09-01', company: 'Acme', slug: 'acme', status: 'paused', headline: 'Acme pauses H-1B', url: 'https://a' },
+      { date: '2026-09-05', company: 'Globex', slug: 'globex', status: 'stopped', headline: 'Globex stops', url: 'https://g' },
+    ]);
+    expect(o.alerts.latest).toHaveLength(2);
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).alerts.history[0]).toMatchObject({ date: '2026-10-02', company: 'Initech Cloud', status: 'paused' });
+  });
+
   it('counts the watcher queue from pending.json and reports null when there is none', async () => {
     expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).pendingCount).toBeNull();
     const withQueue = copyFixtureRoot();
@@ -221,6 +245,14 @@ describe('fresh matches (whats-new port)', () => {
     } finally {
       process.env.TZ = tz;
     }
+  });
+
+  it('names the source the way the Inbox does, without the -api or -full suffix scan.mjs records (R12-srv-dom-b-L2-02)', () => {
+    const norm = (v: unknown) => String(v ?? '').toLowerCase().trim();
+    const row = (portal: string, n: number) => ({ url: `https://jobs.example.com/${n}`, firstSeen: '2026-10-05', portal, title: `Engineer ${n}`, company: `Co ${n}`, status: 'added', location: '', postedAt: '' }) as ScanHistoryRow;
+    const history = [row('greenhouse-api', 1), row('lever-full', 2), row('', 3)];
+    const ats = collectWhatsNew({ history, applications: [], norm, now: new Date(2026, 9, 5, 12).getTime(), days: 7, limit: 50 }).offers.map((o) => o.ats).sort();
+    expect(ats).toEqual(['greenhouse', 'lever', 'other']);
   });
 
   it('returns recent, unevaluated, non-skipped rows newest first with a complete count', async () => {

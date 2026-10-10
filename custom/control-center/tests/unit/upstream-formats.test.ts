@@ -293,12 +293,57 @@ describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
     expect(readScanHistory(root)).toEqual([expected]);
   });
 
+  it('reads columns by position under an older 7-column header, so posted_at from later appended rows is kept (R12-srv-dom-b-L2-01)', () => {
+    const root = tempDir('cc-scan-history-contract-');
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(
+      path.join(root, 'data', 'scan-history.tsv'),
+      'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://jobs.example.com/new\t2026-10-01\tgreenhouse-api\tEngineer\tNewCo\tadded\tRemote\tfp1\t2026-09-30\t0.9\t\tnewco\n',
+    );
+    expect(readScanHistory(root)).toEqual([{ url: 'https://jobs.example.com/new', firstSeen: '2026-10-01', portal: 'greenhouse-api', title: 'Engineer', company: 'NewCo', status: 'added', location: 'Remote', postedAt: '2026-09-30' }]);
+  });
+
   it('reads a legacy 7-column file with no header', () => {
     const root = tempDir('cc-scan-history-contract-');
     fs.mkdirSync(path.join(root, 'data'));
     fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), 'https://jobs.example.com/old\t2026-09-01\tlever\tEngineer\tOldCo\tadded\tBerlin\n');
     expect(readScanHistory(root)).toEqual([{ url: 'https://jobs.example.com/old', firstSeen: '2026-09-01', portal: 'lever', title: 'Engineer', company: 'OldCo', status: 'added', location: 'Berlin', postedAt: '' }]);
   });
+});
+
+describe('localized pipeline.md headings (every modes/*/pipeline.md, R13-feat-b-L3-01)', () => {
+  const modeFiles = [path.join(DEFAULT_CODE_ROOT, 'modes', 'pipeline.md'), ...fs.readdirSync(path.join(DEFAULT_CODE_ROOT, 'modes'), { withFileTypes: true }).filter((d) => d.isDirectory() && fs.existsSync(path.join(DEFAULT_CODE_ROOT, 'modes', d.name, 'pipeline.md'))).map((d) => path.join(DEFAULT_CODE_ROOT, 'modes', d.name, 'pipeline.md'))];
+  /** The two section headings a mode's format block writes, in order: Pending first, Processed second. */
+  const headingsOf = (file: string): string[] => {
+    let fenced = false;
+    const out: string[] = [];
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (line.startsWith('```')) fenced = !fenced;
+      else if (fenced && line.startsWith('## ')) out.push(line.slice(3).trim());
+    }
+    return out;
+  };
+
+  it('finds the format headings of every shipped mode', () => {
+    expect(modeFiles.length).toBeGreaterThan(10);
+    for (const f of modeFiles) expect(headingsOf(f), f).toHaveLength(2);
+  });
+
+  it('reads the Japanese headings modes/ja/pipeline.md lets an existing file keep (未処理 / 処理済み)', () => {
+    const md = '## 未処理\n\n- [ ] https://jobs.example.com/1 | Acme | Eng\n\n## 処理済み\n\n- [x] #143 | https://jobs.example.com/2 | Acme | AI PM | 4.2/5 | PDF ✅\n';
+    expect(parsePipeline(md).map((r) => r.section)).toEqual(['pending', 'done']);
+    expect(applyInboxSkip(md, 'https://jobs.example.com/1', true)).toMatchObject({ ok: true, matched: 1 });
+  });
+
+  for (const file of modeFiles) {
+    it(`reads the Pending and Processed sections ${path.relative(DEFAULT_CODE_ROOT, file)} writes, and Skip finds its pending rows`, () => {
+      const [pending, processed] = headingsOf(file);
+      const md = `# Pipeline\n\n## ${pending}\n\n- [ ] https://jobs.example.com/1 | Acme | Eng\n\n## ${processed}\n\n- [x] #143 | https://jobs.example.com/2 | Acme | AI PM | 4.2/5 | PDF ✅\n`;
+      expect(parsePipeline(md).map((r) => r.section)).toEqual(['pending', 'done']);
+      expect(applyInboxSkip(md, 'https://jobs.example.com/1', true)).toMatchObject({ ok: true, matched: 1, changed: 1 });
+      expect(applyInboxSkip(md, 'https://jobs.example.com/2', false)).toEqual({ ok: false, error: 'unmatched' });
+    });
+  }
 });
 
 describe('follow-up pins (followup-cadence.mjs resolveNextOverride)', () => {
@@ -314,6 +359,26 @@ process.stdout.write(JSON.stringify(${JSON.stringify(cases)}.map((last) => m.res
     const ours = cases.map((last) => activePin(pin, last === null ? [] : [{ date: last }, { date: '2026-09-01' }])?.date ?? null);
     expect(ours).toEqual(cadence);
     expect(cadence).toEqual(['2026-10-10', '2026-10-10', '2026-10-10', null]);
+  });
+});
+
+describe('follow-up pins under a retirement (followup-cadence.mjs isRetired, R12-srv-dom-a-L2-03, R12-srv-dom-a-L3-02)', () => {
+  it('the Timeline drops a pin the cadence ignores because a cleared #N retirement outranks it, and keeps it once a later follow-up revives the application', () => {
+    const D = String.fromCharCode(0x2014);
+    const base = ['# Follow-ups', '', '- next #42 2026-10-15 (set 2026-10-01)', `- cleared #42 2026-10-05 ${D} no contact on file`, '- next #7 2026-10-20 (set 2026-10-05)', '- cleared #7 2026-02-31'];
+    const cases: Array<string | null> = [null, '2026-10-03', '2026-10-05', '2026-10-06'];
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'followup-cadence.mjs')).href)});
+const text = ${JSON.stringify(base.join('\n'))};
+const pins = m.parseNextOverrides(text), cleared = m.parseClearedDirectives(text);
+process.stdout.write(JSON.stringify([42, 7].map((n) => ${JSON.stringify(cases)}.map((last) => (m.isRetired(cleared.get(n), last) ? null : m.resolveNextOverride(pins.get(n), last))))));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const cadence = JSON.parse(r.stdout) as Array<Array<string | null>>;
+    const pins = parseNextOverrides(base.join('\n'));
+    const ours = [42, 7].map((n) => cases.map((last) => activePin(pins.get(n) ?? null, last === null ? [] : [{ date: last }])?.date ?? null));
+    expect(ours).toEqual(cadence);
+    expect(cadence[0]).toEqual([null, null, null, null]);
+    expect(cadence[1]).toEqual(['2026-10-20', '2026-10-20', '2026-10-20', null]);
   });
 });
 

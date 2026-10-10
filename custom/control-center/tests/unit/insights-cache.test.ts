@@ -114,6 +114,24 @@ describe('the insights cache across days (R8-09)', () => {
     expect(next.fromCache).toBe(false);
     expect(runs).toBe(2);
   });
+
+  it('does not cache a failed run, so the next load retries it instead of serving the failure all day (R12-srv-dom-a-L1-02)', async () => {
+    let runs = 0;
+    let code = 1;
+    const exec: Exec = async () => ((runs += 1), { code, stdout: code === 0 ? '{"ok":true}' : '', stderr: '' });
+    const cfg = testConfig();
+    expect((await readInsight(cfg, exec, 'funnelVelocity')).kind).toBe('failed');
+    code = 0;
+    const retry = await readInsight(cfg, exec, 'funnelVelocity');
+    expect(retry).toMatchObject({ kind: 'ok', fromCache: false });
+    expect(runs).toBe(2);
+    expect((await readInsight(cfg, exec, 'funnelVelocity')).fromCache).toBe(true);
+    // A failure an older build cached under today's key is not served either.
+    const file = path.join(cfg.dataRoot, 'data', 'control-center', 'insights', 'funnelVelocity.json');
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), kind: 'failed', exit: 1 }));
+    expect(await readInsight(cfg, exec, 'funnelVelocity')).toMatchObject({ kind: 'ok', fromCache: false });
+    expect(runs).toBe(3);
+  });
 });
 
 describe('Company history reads the data root, wherever it is (SW7-server-01)', () => {

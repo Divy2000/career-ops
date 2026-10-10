@@ -109,7 +109,8 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   if (!opts.recompute) {
     try {
       const cached = JSON.parse(fs.readFileSync(file, 'utf8')) as InsightRead;
-      if (cached.inputsKey === key) return { ...cached, fromCache: true };
+      // Only a clean run is served from the cache, also when an older build cached a failure.
+      if (cached.inputsKey === key && cached.kind === 'ok') return { ...cached, fromCache: true };
     } catch {
       /* no usable cache */
     }
@@ -133,7 +134,11 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
     text: r.code === 0 ? (json === null ? r.stdout : '') : `${r.stderr.trim()}\n${r.stdout.trim()}`.trim().slice(-4000),
     fromCache: false,
   };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(read));
+  // A failure (a timeout or a killed child included) is often transient: caching it would serve it until the inputs or
+  // the day change, so only a clean run is kept.
+  if (read.kind === 'ok') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(read));
+  }
   return read;
 }

@@ -37,6 +37,25 @@ describe('inbox skip port', () => {
     const same = applyInboxSkip(PIPELINE, 'https://a.example/2', true);
     expect(same).toMatchObject({ ok: true, matched: 1, changed: 0 });
   });
+  it('restoring a skipped needs-JD row writes [!] back, so it keeps its needs-JD state (R12-srv-dom-a-L3-03)', () => {
+    const flagged = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n- [ ] https://a.example/9 | A | Role\n`;
+    const skipped = applyInboxSkip(flagged, 'https://private.example/job/1', true);
+    expect(skipped.ok).toBe(true);
+    if (!skipped.ok) return;
+    const restored = applyInboxSkip(skipped.text, 'https://private.example/job/1', false);
+    expect(restored).toMatchObject({ ok: true, changed: 1 });
+    if (!restored.ok) return;
+    expect(restored.text).toBe(flagged);
+    const plain = applyInboxSkip(flagged.replace('- [ ] https://a.example/9', '- [x] https://a.example/9'), 'https://a.example/9', false);
+    expect(plain.ok && plain.text).toBe(flagged);
+    // The localized forms the modes write, and a hand note that is not a fetch error.
+    for (const note of ['-- Fehler: Login erforderlich', '-- Erreur : login requis', `${String.fromCharCode(0x2014)} \u9519\u8bef\uff1a\u9700\u8981\u767b\u5f55`, `${String.fromCharCode(0x2014)} Вакансія закрита/неактивна`]) {
+      const r = applyInboxSkip(`## Pending\n- [x] https://b.example/1 ${note}\n`, 'https://b.example/1', false);
+      expect(r.ok && r.text, note).toBe(`## Pending\n- [!] https://b.example/1 ${note}\n`);
+    }
+    const hand = applyInboxSkip('## Pending\n- [x] https://b.example/2 - recruiter asked to wait\n', 'https://b.example/2', false);
+    expect(hand.ok && hand.text).toBe('## Pending\n- [ ] https://b.example/2 - recruiter asked to wait\n');
+  });
   it('skips a [!] row that waits for its JD, keeping its error note (SW5-tests-02)', () => {
     const text = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n`;
     const r = applyInboxSkip(text, 'https://private.example/job/1', true);
@@ -113,6 +132,44 @@ describe('follow-ups edits', () => {
     if (!cleared.ok) return;
     expect(cleared.text).not.toMatch(/^- next #1 /m);
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.clear', appNum: 4 })).toEqual({ ok: false, error: 'not-found' });
+  });
+  it('setting a pin revives a retired application by dropping its cleared #N line, which would otherwise outrank the pin (R12-srv-dom-a-L2-03)', () => {
+    const text = `${FOLLOWUPS}- cleared #1 2026-10-05 - no contact on file\n- cleared #6 2026-10-05\n`;
+    const set = applyFollowupEdit(text, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-10-06' });
+    expect(set.ok).toBe(true);
+    if (!set.ok) return;
+    expect(set.text).not.toMatch(/^- cleared #1 /m);
+    expect(set.text).toContain('- cleared #6 2026-10-05');
+    expect(set.text).toContain('- next #1 2026-10-20 (set 2026-10-06)');
+    // Only a line the cadence reads as a retirement: anything else is the user's text.
+    const note = applyFollowupEdit(`${FOLLOWUPS}- cleared #1 2026-10-05x - keep this note\n`, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-10-06' });
+    expect(note.ok && note.text).toContain('- cleared #1 2026-10-05x - keep this note');
+    const impossible = applyFollowupEdit(`${FOLLOWUPS}- cleared #1 2026-02-31 - note\n`, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-10-06' });
+    expect(impossible.ok && impossible.text).toContain('- cleared #1 2026-02-31 - note');
+  });
+  it('logs into an existing table with other header labels, numbering after every row in the file (R13-feat-a-L2-01)', () => {
+    const text = '# Follow-ups\n\n| # | App | Date | Company | Role | Channel | Contact | Notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n';
+    const r = applyFollowupEdit(text, { op: 'log.add', appNum: 5, date: '2026-10-03', company: 'Globex', role: 'SRE', channel: 'Email', contact: '', notes: '' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.num).toBe(2);
+    expect(r.text.match(/^\|---/gm)).toHaveLength(1);
+    expect(r.text.split('\n')[5]).toBe('| 2 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |');
+  });
+  it('logs into the follow-up table, not another table in the file, and counts only follow-up rows (R13-feat-a-L2-01 review)', () => {
+    const metrics = '## Stats\n\n| Year | Count |\n|---|---|\n| 2026 | 12 |\n';
+    const before = `${metrics}\n# Follow-ups\n\n| # | App | Date | Company | Role | Channel | Contact | Notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n\n## Later\n\n| Year | Count |\n|---|---|\n| 2027 | 1 |\n`;
+    const r = applyFollowupEdit(before, { op: 'log.add', appNum: 5, date: '2026-10-03', company: 'Globex', role: 'SRE', channel: 'Email', contact: '', notes: '' });
+    expect(r.ok && r.num).toBe(2);
+    if (!r.ok) return;
+    expect(r.text).toContain('| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n| 2 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n\n## Later');
+    expect(applyFollowupEdit(before, { op: 'log.delete', num: 2026 })).toEqual({ ok: false, error: 'not-found' });
+  });
+  it('refuses to delete a follow-up whose num appears more than once, rather than deleting another application\'s row (R13-feat-a-L2-01)', () => {
+    const text = `${FOLLOWUPS}\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n`;
+    expect(applyFollowupEdit(text, { op: 'log.delete', num: 1 })).toEqual({ ok: false, error: 'ambiguous' });
+    const add = applyFollowupEdit(text, { op: 'log.add', appNum: 6, date: '2026-10-04', company: 'V', role: 'R', channel: 'Email', contact: '', notes: '' });
+    expect(add.ok && add.num).toBe(3);
   });
   it('rejects dates that are not YYYY-MM-DD', () => {
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: 'tomorrow', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });

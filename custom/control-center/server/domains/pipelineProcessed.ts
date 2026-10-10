@@ -9,11 +9,11 @@ import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReport } from './reports.js';
 import { inside } from '../lib/paths.js';
-import { unescapeMarkdownUrl } from './inboxSkip.js';
+import { isProcessedHeading, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
 import { WRITTEN_SEGMENT } from './pipeline.js';
 
-const PENDING_RE = /^##\s+(Pendientes|Pending)\s*$/i;
-const PROCESSED_RE = /^##\s+(Procesadas|Processed)\s*$/i;
+const HEADING_RE = /^##\s+(.+?)\s*$/;
+const headingTitle = (line: string): string | null => line.match(HEADING_RE)?.[1] ?? null;
 const SECTION_RE = /^##\s+/;
 const PENDING_ITEM_RE = /^- \[ \]\s+/;
 
@@ -59,15 +59,29 @@ function scoreCell(score: number | null): string {
   return `${Number.isInteger(score) ? score.toFixed(1) : String(score)}/5`;
 }
 
+/**
+ * scan.mjs sanitizeMarkdownField, for the report's own company and role: one line, `\`, `[` and `]` backslashed, and a
+ * `|` written as `/` so it cannot open another cell. The row's own cells were written that way already.
+ */
+function markdownField(value: string): string {
+  return value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim()
+    .replace(/[\\[\]]/g, (c) => `\\${c}`)
+    .replace(/\|/g, '/');
+}
+
 /** Moves the Pending row(s) for `url` to Processed; every other line stays as written. */
 export function moveToProcessed(text: string, url: string, posting: EvaluatedPosting): { text: string; moved: boolean } {
   const nl = text.includes('\r\n') ? '\r\n' : '\n';
   const lines = text.split(/\r?\n/);
   const endedWithNl = lines.length > 1 && lines[lines.length - 1] === '';
   if (endedWithNl) lines.pop();
-  const pendStart = lines.findIndex((l) => PENDING_RE.test(l));
+  // The Pending and Processed headings of any shipped mode language; a new Processed section takes the Pending one's.
+  const pendStart = lines.findIndex((l) => processedHeadingFor(headingTitle(l) ?? '') !== null);
   if (pendStart < 0) return { text, moved: false };
-  const procStart = lines.findIndex((l) => PROCESSED_RE.test(l));
+  const procStart = lines.findIndex((l) => isProcessedHeading(headingTitle(l) ?? ''));
   const sectionEnd = (start: number) => {
     for (let i = start + 1; i < lines.length; i++) if (SECTION_RE.test(lines[i]!)) return i;
     return lines.length;
@@ -94,7 +108,7 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     // Company and role are the positional cells after the URL: a rank, posted, trust or note segment a writer appended
     // (rank-pipeline.mjs puts the rank right after a bare URL) is not one, so the report's own values stand in.
     const parts = body.split('|').map((s) => s.trim()).filter((cell, i) => i === 0 || !WRITTEN_SEGMENT.test(cell));
-    processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
+    processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || markdownField(posting.company)} | ${parts[2] || markdownField(posting.role)} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
   }
   if (remove.size === 0) return { text, moved: false };
   const out: string[] = [];
@@ -113,7 +127,7 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
   }
   if (procStart < 0 && processedLine) {
     if (out.length && out[out.length - 1]!.trim() !== '') out.push('');
-    out.push(PENDING_RE.exec(lines[pendStart]!)![1]!.toLowerCase() === 'pending' ? '## Processed' : '## Procesadas', '', processedLine);
+    out.push(`## ${processedHeadingFor(headingTitle(lines[pendStart]!)!)}`, '', processedLine);
   }
   return { text: out.join(nl) + (endedWithNl ? nl : ''), moved: true };
 }

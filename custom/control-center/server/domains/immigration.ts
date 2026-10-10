@@ -126,8 +126,9 @@ export function parseDailyLog(text: string, date: string): DailyLog {
       if (step) step.failed = true;
     } else if ((m = line.match(/^!!!\s+(.+)$/))) problems.push(m[1]!.trim());
   }
-  // A failure line fails the run even with no done line: the scripts write one and exit.
-  const failed = failedSteps.length > 0 || problems.length > 0 || (failedCount ?? 0) > 0;
+  // A bare `!!!` problem fails the run even with no done line: the scripts write one and exit. A failed step does not:
+  // run-daily.sh's step() records it and moves on to the next steps, so the run is over only at its done line.
+  const failed = problems.length > 0 || (failedCount ?? 0) > 0 || (failedSteps.length > 0 && finishedAt !== null);
   const status: DailyLog['status'] = !startedAt ? 'empty' : failed ? 'failed' : !finishedAt ? 'running' : 'ok';
   return { date, startedAt, finishedAt, status, steps, failedSteps, problems, failedCount };
 }
@@ -200,6 +201,23 @@ function readJson(p: string): unknown {
   }
 }
 
+const ALERT_COLUMNS = ['date', 'company', 'slug', 'status', 'headline', 'url'] as const;
+
+/**
+ * Every row of company-alerts.tsv, read by position like the core's parseCompanyAlerts: the header is optional (a
+ * sponsorship-check session may create the file with bare rows), so line 1 is skipped only when it starts with `date\t`.
+ */
+function parseAlertHistory(text: string): Record<string, string>[] {
+  return text
+    .replace(/\r/g, '')
+    .split('\n')
+    .filter((line, i) => line.trim() && !(i === 0 && line.startsWith('date\t')))
+    .map((line) => {
+      const cells = line.split('\t');
+      return Object.fromEntries(ALERT_COLUMNS.map((c, i) => [c, cells[i] ?? '']));
+    });
+}
+
 /**
  * `today` is the local date, as the scripts date their logs and digest sections; it dates digest staleness and the
  * latest log. dailyRunning answers whether run-daily.sh runs now (null: unknown), asked only for a recent run with no done line.
@@ -230,7 +248,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   const alerts = parsed(() => (alertsRead.kind === 'ok' ? [...lib.parseCompanyAlerts(alertsRead.text)].map(([slug, a]) => ({ slug, ...a })) : []), []);
   const changes = parsed(() => (changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : []), []);
   const latest = alerts.value;
-  const history: Record<string, unknown>[] = alertsRead.kind === 'ok' ? parseTsv(alertsRead.text) : [];
+  const history: Record<string, unknown>[] = alertsRead.kind === 'ok' ? parseAlertHistory(alertsRead.text) : [];
   const companies: CompanyFile[] = [];
   const companiesDir = path.join(imm, 'companies');
   try {

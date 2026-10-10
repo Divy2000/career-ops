@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
+import { pipelineSection, pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
 import { parseTsv, readText } from './files.js';
 import { localJdPath } from '../../shared/local-jd.js';
 
@@ -53,8 +53,13 @@ export function seniorityOf(title: string): string | null {
   return null;
 }
 
+/** The source a scan-history portal names: scan.mjs records `<provider>-api` and the full ATS scan `<provider>-full`. */
+export function portalSource(portal: string): string {
+  return portal.trim().replace(/-full$/, '').replace(/-api$/, '');
+}
+
 export function sourceOf(url: string, portal: string | null): string {
-  if (portal) return portal.replace(/-full$/, '').replace(/-api$/, '');
+  if (portal) return portalSource(portal);
   if (localJdPath(url) !== null) return 'local';
   try {
     const host = new URL(url).hostname.replace(/^www\./, '');
@@ -86,8 +91,7 @@ export function parsePipeline(md: string): PipelineRow[] {
   md.split('\n').forEach((line, i) => {
     const h = line.match(/^##\s+(.+?)\s*$/);
     if (h) {
-      const t = h[1]!.toLowerCase();
-      section = /^(pending|pendientes)/.test(t) ? 'pending' : /^(done|hecho|processed|procesadas)/.test(t) ? 'done' : 'other';
+      section = pipelineSection(h[1]!);
       return;
     }
     const m = line.match(CHECKBOX_RE);
@@ -167,9 +171,10 @@ const SCAN_HISTORY_COLUMNS = ['url', 'first_seen', 'portal', 'title', 'company',
 export function readScanHistory(dataRoot: string): ScanHistoryRow[] {
   const read = readText(path.join(dataRoot, 'data', 'scan-history.tsv'));
   if (read.kind !== 'ok') return [];
-  // scan.mjs writes the header only on a fresh file and never rewrites an old headerless one.
-  const text = read.text.startsWith('url\t') ? read.text : `${SCAN_HISTORY_COLUMNS.join('\t')}\n${read.text}`;
-  return parseTsv(text).map((r) => ({
+  // scan.mjs writes the header only on a fresh file and never rewrites an old one (headerless, or the older 7-column
+  // header): its columns are positional and only ever appended, so cells are read by position, never by header name.
+  const body = read.text.startsWith('url\t') ? read.text.slice(read.text.search(/\n|$/) + 1) : read.text;
+  return parseTsv(`${SCAN_HISTORY_COLUMNS.join('\t')}\n${body}`).map((r) => ({
     url: r.url ?? '',
     firstSeen: r.first_seen ?? '',
     portal: r.portal ?? '',
