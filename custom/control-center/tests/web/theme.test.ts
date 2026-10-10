@@ -152,16 +152,16 @@ describe('theme store', () => {
     const data = installStorage();
     const t = await loadTheme();
     const stop = t.watchSystemAndStorage();
-    t.setThemeMode('dark');
-    expect(data.get('cc.theme')).toBe('dark');
+    t.setThemeMode('light');
+    expect(data.get('cc.theme')).toBe('light');
+    // The OS ends on the scheme it did not start on, so Auto shows whether the flip was recorded while it was ignored.
     sys.set(true);
-    sys.set(false);
-    expect(root().dataset.theme).toBe('dark');
+    expect(root().dataset.theme).toBe('light');
     t.setThemeMode('auto');
     expect(data.get('cc.theme')).toBe('auto');
-    expect(root().dataset.theme).toBe('light');
-    sys.set(true);
     expect(root().dataset.theme).toBe('dark');
+    sys.set(false);
+    expect(root().dataset.theme).toBe('light');
     stop();
   });
 

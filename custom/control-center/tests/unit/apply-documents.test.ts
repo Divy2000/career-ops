@@ -39,7 +39,8 @@ describe('artifactKindFromName', () => {
 
 describe('rerenderProblem', () => {
   const row = (report: number, pdf: string, html = ''): PdfIndexRow => ({ report, pdf, html, format: 'letter', date: '2026-10-01', kind: 'cv' });
-  const index = [row(1, 'output/acme-cv.pdf', 'output/acme-cv.html'), row(99, 'output/acme-platform-cv.pdf', 'output/acme-platform-cv.html'), row(42, 'output/shared.pdf'), row(1, 'output/shared.pdf')];
+  const index = [row(1, 'output/acme-cv.pdf', 'output/acme-cv.html'), row(99, 'output/acme-platform-cv.pdf', 'output/acme-platform-cv.html'), row(1, 'output/shared.pdf')];
+  // generate-pdf.mjs keeps one row per PDF path (applyManifestRow), so the index never files a PDF under two reports.
 
   it('allows a pair the PDF index files under the same report', () => {
     expect(rerenderProblem(index, 1, 'output/acme-cv.html', 'output/acme-cv.pdf')).toBeNull();

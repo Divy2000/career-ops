@@ -13,7 +13,7 @@ export const EM_DASH = String.fromCharCode(0x2014);
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'test-results', 'playwright-report', '.tmp', 'fixtures']);
-const TEXT_EXT = new Set(['.ts', '.tsx', '.mjs', '.js', '.json', '.md', '.css', '.html', '.yml', '.yaml', '.sh', '']);
+const TEXT_EXT = new Set(['.ts', '.tsx', '.mts', '.cts', '.mjs', '.cjs', '.js', '.json', '.md', '.css', '.html', '.yml', '.yaml', '.sh', '']);
 
 export function findEmDashes(dir) {
   const hits = [];

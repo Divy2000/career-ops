@@ -24,8 +24,11 @@ class FakeEventSource {
     if (this.closed) return;
     for (const fn of this.listeners.get(type) ?? []) fn(new MessageEvent(type, { data: JSON.stringify(data) }));
   }
+  // A browser fires both the onerror handler and every 'error' listener.
   drop() {
-    this.onerror?.(new Event('error'));
+    const ev = new Event('error');
+    this.onerror?.(ev);
+    for (const fn of this.listeners.get('error') ?? []) fn(ev as MessageEvent);
   }
   close() {
     this.closed = true;

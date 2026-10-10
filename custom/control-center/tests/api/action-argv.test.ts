@@ -255,8 +255,14 @@ describe('Image to PDF', () => {
   });
 
   it('refuses a missing image, or an output that is not a PDF, before running', async () => {
-    expect((await post('docs.imgToPdf', { file: 'output/nope.png', pdf: 'output/x.pdf' })).statusCode).toBe(400);
-    expect((await post('docs.imgToPdf', { file: 'output/acme-robotics-cv.html', pdf: 'output/x.txt' })).statusCode).toBe(400);
+    const missing = await post('docs.imgToPdf', { file: 'output/nope.png', pdf: 'output/x.pdf' });
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(missing.body).toMatch(/does not exist/);
+    // A real image, so only the output guard can refuse it: a non-PDF output would let img-to-pdf.mjs overwrite any file under output/.
+    fs.writeFileSync(path.join(t.cfg.dataRoot, 'output', 'shot3.png'), png);
+    const notPdf = await post('docs.imgToPdf', { file: 'output/shot3.png', pdf: 'output/x.txt' });
+    expect(notPdf.statusCode, notPdf.body).toBe(400);
+    expect(notPdf.body).toMatch(/a \.pdf file/);
   });
 });
 

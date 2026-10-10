@@ -46,7 +46,13 @@ describe('core contract', () => {
   for (const cli of CONTRACT.clis as CliContract[]) {
     it(`${cli.script} answers ${cli.helpArgs.join(' ')} with the contracted flags`, () => {
       expect(fs.existsSync(cliScriptPath(DEFAULT_CODE_ROOT, cli.id as never)), `${cli.script} exists`).toBe(true);
-      if (cli.probe === false) return;
+      if (cli.probe === false) {
+        // No help probe (it would run for real), so the flags the server builds argv with are checked in the source:
+        // a renamed flag otherwise breaks the action at runtime with every test green.
+        const source = fs.readFileSync(cliScriptPath(DEFAULT_CODE_ROOT, cli.id as never), 'utf8');
+        for (const flag of cli.flags) expect(new RegExp(`${flag}(?![\\w-])`).test(source), `${cli.script} handles ${flag}`).toBe(true);
+        return;
+      }
       const before = snapshot(fixtureRoot);
       const { status, signal, out } = runHelp(cli);
       // A timeout or a crash by signal has no exit status; the stream separator alone is no output.

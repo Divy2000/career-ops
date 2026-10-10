@@ -70,10 +70,10 @@ describe('claude shim: running the real binary', () => {
   });
 
   it('an unapproved Claude Code never runs the call: exit 3 with the reason', () => {
-    const real = realClaude('2.1.290');
+    const real = realClaude('0.0.1');
     const r = shim(['-p', 'x'], { CC_CLAUDE_BIN: real.bin });
     expect(r.status).toBe(3);
-    expect(r.stderr).toMatch(/Claude Code 2\.1\.290 is not approved/);
+    expect(r.stderr).toMatch(/Claude Code 0\.0\.1 is not approved/);
     expect(real.calls()).toEqual([]);
   });
 
@@ -114,7 +114,7 @@ describe('claude shim: running the real binary', () => {
     expect(fs.existsSync(refusals)).toBe(false);
     const refused = [
       shim(['-p', 'x', '--allowedTools', 'Bash'], { CC_CLAUDE_BIN: real.bin, CC_SHIM_REFUSALS: refusals }),
-      shim(['-p', 'x'], { CC_CLAUDE_BIN: realClaude('2.1.290').bin, CC_SHIM_REFUSALS: refusals }),
+      shim(['-p', 'x'], { CC_CLAUDE_BIN: realClaude('0.0.1').bin, CC_SHIM_REFUSALS: refusals }),
       shim(['-p', 'x'], { CC_CLAUDE_BIN: real.bin, CC_CLAUDE_EXPECT: `${fs.realpathSync(real.bin)}@2.1.288`, CC_SHIM_REFUSALS: refusals }),
       shim(['-p', 'x'], { CC_CLAUDE_BIN: 'claude', CC_SHIM_REFUSALS: refusals }),
     ];

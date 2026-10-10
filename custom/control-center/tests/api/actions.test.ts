@@ -414,9 +414,11 @@ describe('docs.prepareApplication (zero-token prefill)', () => {
   const GREENHOUSE = 'https://boards.greenhouse.io/acmerobotics/jobs/12345';
 
   it('the Apply page request with only a posting URL is refused with a readable reason, never the script usage text', async () => {
-    const res = await post('/api/actions/docs.prepareApplication', { params: { url: 'https://www.builtinaustin.com/job/associate-software-engineer-python-ai/10931484' } });
+    // An ATS apply link, so the URL check passes and only the missing CV PDF can refuse it.
+    const res = await post('/api/actions/docs.prepareApplication', { params: { url: GREENHOUSE } });
     expect(res.statusCode, res.body).toBe(400);
     expect(res.body).not.toMatch(/Usage:/);
+    expect(res.json().issues.map((i: { path: string[] }) => i.path)).toEqual([['pdf']]);
   });
 
   it('runs the script with --url and --pdf and returns the prefill summary inline', async () => {

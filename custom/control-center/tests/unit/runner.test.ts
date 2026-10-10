@@ -233,8 +233,13 @@ describe('Runner', () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50, nodePath: '/nonexistent/node-removed-by-brew-upgrade' });
     runners.push(runner);
     const meta = runner.start(req(['0'], { resources: ['pipeline'] }));
+    // Queued behind the first for the same resource: only the failed start's own pump can move it on.
+    const next = runner.start(req(['0'], { resources: ['pipeline'] }));
+    expect(runner.store.read(next.id)?.status).toBe('queued');
     await until(() => runner.store.read(meta.id)?.status === 'failed');
     expect(runner.store.read(meta.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/could not start.*ENOENT/i), endedAt: expect.any(String) });
+    await until(() => runner.store.read(next.id)?.status === 'failed');
+    expect(runner.store.read(next.id)).toMatchObject({ error: expect.stringMatching(/could not start.*ENOENT/i) });
     expect(runner.pending('test.noisy')).toEqual([]);
   });
 

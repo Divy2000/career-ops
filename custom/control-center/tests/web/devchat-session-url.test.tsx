@@ -33,7 +33,10 @@ let startReply: Record<string, unknown>;
 let runningMetaFetches: number;
 let failingReads: number;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+/** A short pause, only before asserting that something did not happen; a positive assertion waits with `until`. */
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+/** The Changes panel's poll interval while a session runs (DevChatPage.tsx). */
+const POLL_MS = 1000;
 /** Polls until `cond` holds, so a test waits for what it asserts instead of sleeping a fixed time. */
 async function until(cond: () => unknown, what: string, timeoutMs = 1000) {
   for (let i = 0; i < timeoutMs / 10; i++) {
@@ -108,13 +111,12 @@ describe('Dev Chat session in the URL', () => {
       prompt.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
-    await settle();
+    await until(() => router.state.location.search.session === 's-7', 'the session in the URL');
     expect(router.state.location.search).toEqual({ session: 's-7' });
     await act(async () => router.navigate({ to: '/runs' }));
-    await settle();
-    expect(host.textContent).toContain('Runs page');
+    await until(() => host.textContent?.includes('Runs page'), 'the Runs page');
     await act(async () => router.history.back());
-    await settle();
+    await until(() => host.querySelector('[aria-label="Reply to the session"]') && changesFetched.at(-1) === '/api/dev/changes/s-7' && host.textContent?.includes('modes/_custom.md'), 'the conversation and its Changes');
     expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).toBeNull();
     expect(host.querySelector('[aria-label="Reply to the session"]')).not.toBeNull();
     expect(changesFetched.at(-1)).toBe('/api/dev/changes/s-7');
@@ -123,10 +125,9 @@ describe('Dev Chat session in the URL', () => {
 
   it('given /dev?session=<id>, when the page opens, then it shows that session, and New conversation starts over', async () => {
     await open('/dev?session=s-7');
-    expect(host.querySelector('[aria-label="Reply to the session"]')).not.toBeNull();
-    expect(changesFetched).toContain('/api/dev/changes/s-7');
+    await until(() => host.querySelector('[aria-label="Reply to the session"]') && changesFetched.includes('/api/dev/changes/s-7'), 'the session and its Changes');
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation')!.click());
-    await settle();
+    await until(() => router.state.location.search.session === undefined && host.querySelector('textarea[aria-label="Prompt for devchat"]'), 'a new conversation');
     expect(router.state.location.search).toEqual({});
     expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).not.toBeNull();
   });
@@ -139,17 +140,19 @@ describe('Dev Chat session in the URL', () => {
       prompt.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
-    await settle();
+    await until(() => router.state.location.search.session === 's-7', 'the session in the URL');
     await act(async () => router.navigate({ to: '/dev', search: {} }));
-    await settle();
+    await until(() => router.state.location.search.session === 's-7' && host.querySelector('[aria-label="Reply to the session"]') && host.querySelector('[aria-label="Changes"]')?.textContent?.includes('modes/_custom.md'), 'the same session with its Changes');
     expect(router.state.location.search).toEqual({ session: 's-7' });
     expect(host.querySelector('[aria-label="Reply to the session"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Changes"]')?.textContent).toContain('modes/_custom.md');
     // New conversation forgets it: the next plain /dev starts empty.
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation')!.click());
-    await settle();
+    await until(() => router.state.location.search.session === undefined, 'the conversation to be forgotten');
     await act(async () => router.navigate({ to: '/runs' }));
     await act(async () => router.navigate({ to: '/dev', search: {} }));
+    // Settled on purpose: the check is that the URL does not gain the forgotten session.
+    await until(() => host.querySelector('textarea[aria-label="Prompt for devchat"]'), 'the empty Dev Chat');
     await settle();
     expect(router.state.location.search).toEqual({});
     expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).not.toBeNull();
@@ -169,6 +172,8 @@ describe('Dev Chat session in the URL', () => {
     expect(host.textContent).toContain('That conversation no longer exists');
     expect(sessionStorage.getItem('cc.devchat.session')).toBeNull();
     expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).not.toBeNull();
+    // Past one Changes poll interval (1 s), so a panel still polling the gone session would have asked again.
+    await act(async () => new Promise((r) => setTimeout(r, POLL_MS + 200)));
     expect(changesFetched.filter((u) => u.endsWith('/s-gone')).length).toBeLessThanOrEqual(1);
   });
 
@@ -216,7 +221,7 @@ describe('Dev Chat session in the URL', () => {
       prompt.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
-    await settle();
+    await until(() => router.state.location.search.session === 's-9' && host.querySelector('[role="alert"]')?.textContent?.includes('claude is not logged in'), 'the start error');
     expect(router.state.location.search).toEqual({ session: 's-9' });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('claude is not logged in');
   });
@@ -230,7 +235,7 @@ describe('Dev Chat session in the URL', () => {
       reply.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Fork')!.click());
-    await settle();
+    await until(() => router.state.location.search.session === 's-8' && host.querySelector('.session')?.getAttribute('data-session-id') === 's-8', 'the fork');
     expect(router.state.location.search).toEqual({ session: 's-8' });
     expect(host.querySelector('.session')).toBe(panel);
     expect(host.querySelector('.session')!.getAttribute('data-session-id')).toBe('s-8');

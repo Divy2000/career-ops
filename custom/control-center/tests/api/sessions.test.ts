@@ -1276,11 +1276,11 @@ describe('read confinement (BUG-06)', () => {
 
   it('a Claude Code version that is not approved fails the turn before it starts', async () => {
     const bin = path.join(tmp('cc-unapproved-'), 'claude');
-    fs.writeFileSync(bin, `#!${process.execPath}\nconsole.log('2.1.290 (Claude Code)');\n`, { mode: 0o755 });
+    fs.writeFileSync(bin, `#!${process.execPath}\nconsole.log('0.0.1 (Claude Code)');\n`, { mode: 0o755 });
     const other = await makeTestApp({ claudeBin: bin });
     try {
       const res = await call(other, 'POST', '/api/sessions', { mode: 'advisor', prompt: 'x' });
-      expect(res.json()).toMatchObject({ status: 'error', error: expect.stringMatching(/Claude Code 2\.1\.290 is not approved/), turns: [] });
+      expect(res.json()).toMatchObject({ status: 'error', error: expect.stringMatching(/Claude Code 0\.0\.1 is not approved/), turns: [] });
       expect((await call(other, 'GET', '/api/runs')).json()).toEqual([]);
     } finally {
       await other.close();
@@ -1289,11 +1289,11 @@ describe('read confinement (BUG-06)', () => {
 
   it('the setup status says when the installed Claude Code is not approved, so the health chip can warn that sessions are refused', async () => {
     const bin = path.join(tmp('cc-unapproved-'), 'claude');
-    fs.writeFileSync(bin, `#!${process.execPath}\nconsole.log('2.1.290 (Claude Code)');\n`, { mode: 0o755 });
+    fs.writeFileSync(bin, `#!${process.execPath}\nconsole.log('0.0.1 (Claude Code)');\n`, { mode: 0o755 });
     const other = await makeTestApp({ claudeBin: bin });
     try {
       const status = (await call(other, 'GET', '/api/system/status')).json();
-      expect(status.claude).toMatchObject({ version: '2.1.290 (Claude Code)', approved: false, problem: expect.stringMatching(/Claude Code 2\.1\.290 is not approved.*sessions are refused/i) });
+      expect(status.claude).toMatchObject({ version: '0.0.1 (Claude Code)', approved: false, problem: expect.stringMatching(/Claude Code 0\.0\.1 is not approved.*sessions are refused/i) });
       // The rest of the app answers as usual.
       expect((await call(other, 'GET', '/api/tracker')).statusCode).toBe(200);
     } finally {
@@ -1682,7 +1682,9 @@ describe('report reservations and session trackers survive failures (r16-claude)
       const read = app.runner.store.read.bind(app.runner.store);
       let failing = unreadable;
       vi.spyOn(app.runner.store, 'read').mockImplementation((rid) => {
-        if (rid === runId && failing > 0) {
+        // Only the session manager's reads fail: the runner's own tracker also reads this record on a timer, and a
+        // failure it consumed left the manager reading the record fine, so the turn ended done.
+        if (rid === runId && failing > 0 && !/runner[\\/]runner\.ts/.test(new Error().stack ?? '')) {
           failing -= 1;
           throw new Error('EIO: i/o error, read');
         }

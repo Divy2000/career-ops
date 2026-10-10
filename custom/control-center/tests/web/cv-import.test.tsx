@@ -41,7 +41,9 @@ async function mount() {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === '/api/files/user/cv' && cvFile) return cvFile(init?.method ?? 'GET', init);
       const upload = String(input).match(/^\/api\/cv\/upload\?name=(.+)$/);
-      if (upload && upload[1]!.endsWith('.docx')) return json(415, { error: 'the CV parser reads PDF only: export it to PDF, or pick a .md or .txt file to load the text directly' });
+      // As the server does (routes/files.ts): the Content-Type decides, never the file name.
+      const type = String(new Headers(init?.headers).get('content-type') ?? '').split(';')[0]!.trim();
+      if (upload && type !== 'application/pdf') return json(415, { error: 'the CV parser reads PDF only: export it to PDF, or pick a .md or .txt file to load the text directly' });
       if (upload) {
         const name = decodeURIComponent(upload[1]!);
         const respond = () => json(200, { path: `/data/uploads/${name}`, bytes: 3 });
@@ -126,6 +128,12 @@ describe('Import CV: one parser session per uploaded file', () => {
     expect(draft()).toBe('# Picked Markdown');
     await act(async () => stale('cv', { markdown: '# From A' }, 1));
     expect(draft()).toBe('# Picked Markdown');
+  });
+
+  it('uploads a PDF the browser gave no type as a PDF', async () => {
+    await mount();
+    await choose('a.pdf', '');
+    expect(panelsShown()).toEqual(['/data/uploads/a.pdf']);
   });
 
   it('shows the server\'s reason when it refuses a DOCX, and starts no parser', async () => {

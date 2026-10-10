@@ -354,6 +354,8 @@ describe('pipeline', () => {
     expect(seniorityOf('Engineer')).toBeNull();
     expect(sourceOf('https://boards.greenhouse.io/x/jobs/1', null)).toBe('greenhouse');
     expect(sourceOf('https://x.ashbyhq.com/y', 'ashby-full')).toBe('ashby');
+    // scan.mjs records the API scan's portal as `<provider>-api`.
+    expect(sourceOf('https://jobs.example.com/acme/123', 'greenhouse-api')).toBe('greenhouse');
     expect(sourceOf('nonsense', null)).toBe('other');
   });
 });

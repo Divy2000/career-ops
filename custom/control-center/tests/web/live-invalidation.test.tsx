@@ -34,6 +34,8 @@ function Probe() {
   useQuery({ queryKey: ['immigration', 'logs', 'immigration-watch'], queryFn: () => ((fetches.chip = (fetches.chip ?? 0) + 1), { ok: true }) });
   useQuery({ queryKey: ['immigration', 'logs', 'immigration-watch', '2026-10-05'], queryFn: () => ((fetches.log = (fetches.log ?? 0) + 1), { ok: true }) });
   useQuery({ queryKey: ['immigration'], queryFn: () => ((fetches.today = (fetches.today ?? 0) + 1), { ok: true }) });
+  // The top bar's daily-job indicator.
+  useQuery({ queryKey: ['system', 'daily'], queryFn: () => ((fetches.daily = (fetches.daily ?? 0) + 1), { running: true }) });
   return null;
 }
 
@@ -52,11 +54,11 @@ afterEach(async () => {
 });
 
 describe('live invalidation', () => {
-  it('a daily.status event refetches the job-log status, so a run that died without its done line stops reading running, on Today too', async () => {
-    expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
+  it('a daily.status event refetches the job-log status and the daily-job indicator, so a run that died without its done line stops reading running, on Today too', async () => {
+    expect(fetches).toEqual({ chip: 1, log: 1, today: 1, daily: 1 });
     await act(async () => FakeEventSource.last!.emit('daily.status', { running: false }));
-    await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2, 'all three refetches');
-    expect(fetches).toEqual({ chip: 2, log: 2, today: 2 });
+    await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2 && fetches.daily === 2, 'all four refetches');
+    expect(fetches).toEqual({ chip: 2, log: 2, today: 2, daily: 2 });
   });
 });
 
@@ -104,12 +106,12 @@ describe('live invalidation of what a page session writes (SW-web-a-11)', () => 
 
 describe('live invalidation after the event stream reconnects (SW-web-a-12)', () => {
   it('the first open refetches nothing; a reconnect refetches every live query, since changes made while it was down sent no event', async () => {
-    expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
+    expect(fetches).toEqual({ chip: 1, log: 1, today: 1, daily: 1 });
     await act(async () => FakeEventSource.last!.emit('open', null));
     await act(async () => new Promise((r) => setTimeout(r, 30)));
-    expect(fetches).toEqual({ chip: 1, log: 1, today: 1 });
+    expect(fetches).toEqual({ chip: 1, log: 1, today: 1, daily: 1 });
     await act(async () => FakeEventSource.last!.emit('open', null));
-    await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2, 'every query to refetch');
+    await until(() => fetches.chip === 2 && fetches.log === 2 && fetches.today === 2 && fetches.daily === 2, 'every query to refetch');
   });
 });
 

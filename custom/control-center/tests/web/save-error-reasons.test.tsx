@@ -12,7 +12,7 @@ import { until } from '../helpers/until';
 let host: HTMLElement;
 let root: Root;
 let reads: Record<string, unknown>;
-let refusal: { status: number; body: unknown };
+let refusal: () => Response;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -20,13 +20,14 @@ function json(status: number, body: unknown) {
 
 beforeEach(() => {
   reads = {};
-  refusal = { status: 502, body: { error: 'server child unavailable: the app is reloading' } };
+  // What the supervisor answers while the server child restarts: plain text, not JSON (supervisor/index.ts).
+  refusal = () => new Response('server child unavailable: the app is reloading', { status: 502, headers: { 'content-type': 'text/plain' } });
   vi.stubGlobal('EventSource', class { addEventListener() {} removeEventListener() {} close() {} });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if ((init?.method ?? 'GET') !== 'GET') return json(refusal.status, refusal.body);
+      if ((init?.method ?? 'GET') !== 'GET') return refusal();
       if (Object.hasOwn(reads, url)) return json(200, reads[url]);
       // The Runs page's other cards: an empty schedule and job log list.
       if (url === '/api/schedule') return json(200, { jobs: [], agentsDir: '' });
@@ -93,7 +94,7 @@ describe('the server\'s reason for a refused save or launch', () => {
   });
 
   it('Runs & Schedule > Run a script', async () => {
-    refusal = { status: 400, body: { error: 'No replies to review yet. Paste a reply first, then run the digest.' } };
+    refusal = () => json(400, { error: 'No replies to review yet. Paste a reply first, then run the digest.' });
     reads['/api/actions'] = [{ id: 'followups.replyWatch', label: 'Reply watch digest', cost: 'free', confirm: null, resources: [], claude: false, sync: false, params: { type: 'object', properties: {} } }];
     const { RunsPage } = await import('@web/features/runs/RunsPage');
     await mount(createElement(RunsPage));

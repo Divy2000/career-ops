@@ -20,8 +20,11 @@ function Harness({ initial }: { initial: AnswerField[] }) {
 
 const field = (value: string): AnswerField => ({ id: 'spons', label: 'Will you need sponsorship?', type: 'select', options: ['No', 'Yes'], required: false, value, needsConfirmation: true });
 
+// A fresh key per mount: Harness keeps its fields in useState, so re-rendering the same root with new `initial` would
+// keep showing the first case's fields.
+let mounts = 0;
 async function mount(initial: AnswerField[]) {
-  await act(async () => root.render(createElement(Harness, { initial })));
+  await act(async () => root.render(createElement(Harness, { key: ++mounts, initial })));
   return host.querySelector('select')!;
 }
 
@@ -102,7 +105,7 @@ describe('Apply drafted answers: any field with fixed options (SW7-web-a-05)', (
 
   it('a single checkbox or a radio with no options listed is set by hand too, with its drafted answer (review fix 3)', async () => {
     for (const [type, options] of [['checkbox', undefined], ['radio', []]] as const) {
-      await act(async () => root.render(createElement(Harness, { initial: [{ ...field('Yes'), type, options: options as string[] | undefined }] })));
+      await act(async () => root.render(createElement(Harness, { key: ++mounts, initial: [{ ...field('Yes'), type, options: options as string[] | undefined }] })));
       const manual = host.querySelector('[data-manual-field="spons"]');
       expect(manual, type).not.toBeNull();
       expect(manual!.textContent, type).toContain('Set this on the form yourself');

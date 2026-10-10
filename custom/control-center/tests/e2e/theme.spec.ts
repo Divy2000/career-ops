@@ -195,14 +195,16 @@ test.describe('theme switcher', () => {
     const page = await ctx.newPage();
     await login(page);
     await switcher(page).click();
-    await page.getByRole('menuitemradio', { name: 'Light' }).click();
+    await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+    await expect.poll(() => attrs(page)).toEqual({ theme: 'dark', mode: 'dark', scheme: 'dark' });
+    // The OS ends on the scheme it did not start on, so Auto shows whether the flip was recorded while it was ignored.
     await page.emulateMedia({ colorScheme: 'light' });
-    await page.emulateMedia({ colorScheme: 'dark' });
-    await expect.poll(async () => (await attrs(page)).theme).toBe('light');
+    await expect.poll(() => page.evaluate(() => matchMedia('(prefers-color-scheme: light)').matches)).toBe(true);
+    expect((await attrs(page)).theme).toBe('dark');
     await switcher(page).click();
     await page.getByRole('menuitemradio', { name: 'Auto' }).click();
-    await expect.poll(() => attrs(page)).toEqual({ theme: 'dark', mode: 'auto', scheme: 'dark' });
-    await expect(switcher(page)).toHaveAccessibleName('Theme: Auto (dark)');
+    await expect.poll(() => attrs(page)).toEqual({ theme: 'light', mode: 'auto', scheme: 'light' });
+    await expect(switcher(page)).toHaveAccessibleName('Theme: Auto (light)');
     await ctx.close();
   });
 
