@@ -173,32 +173,36 @@ export function LogBrowser() {
       </div>
       <DataState query={list}>
         {list.data && list.data.dates.length === 0 && <Empty>No logs yet for this job.</Empty>}
-        {one.data && (
-          <>
-            <div className="row gap">
-              <Pill tone={one.data.status === 'ok' ? 'ok' : one.data.status === 'failed' ? 'danger' : 'warn'}>{one.data.status}</Pill>
-              <span className="faint small">
-                {one.data.startedAt ?? ''} to {one.data.finishedAt ?? 'n/a'}
-              </span>
-            </div>
-            {one.data.problems.length > 0 && (
-              <ul className="bullets small danger-text" aria-label="Failures">
-                {one.data.problems.map((p, i) => (
-                  <li key={i}>{p}</li>
-                ))}
-              </ul>
+        {chosen && (
+          <DataState query={one}>
+            {one.data && (
+              <>
+                <div className="row gap">
+                  <Pill tone={one.data.status === 'ok' ? 'ok' : one.data.status === 'failed' ? 'danger' : 'warn'}>{one.data.status}</Pill>
+                  <span className="faint small">
+                    {one.data.startedAt ?? ''} to {one.data.finishedAt ?? 'n/a'}
+                  </span>
+                </div>
+                {one.data.problems.length > 0 && (
+                  <ul className="bullets small danger-text" aria-label="Failures">
+                    {one.data.problems.map((p, i) => (
+                      <li key={i}>{p}</li>
+                    ))}
+                  </ul>
+                )}
+                <ul className="bullets small">
+                  {one.data.steps.map((s) => (
+                    <li key={`${s.time}-${s.name}`} className={s.failed ? 'danger-text' : ''}>
+                      <span className="mono faint">{s.time}</span> {s.name}
+                    </li>
+                  ))}
+                </ul>
+                <pre tabIndex={0} className="log mono small" aria-label={`Log ${chosen}`}>
+                  {one.data.raw}
+                </pre>
+              </>
             )}
-            <ul className="bullets small">
-              {one.data.steps.map((s) => (
-                <li key={`${s.time}-${s.name}`} className={s.failed ? 'danger-text' : ''}>
-                  <span className="mono faint">{s.time}</span> {s.name}
-                </li>
-              ))}
-            </ul>
-            <pre tabIndex={0} className="log mono small" aria-label={`Log ${chosen}`}>
-              {one.data.raw}
-            </pre>
-          </>
+          </DataState>
         )}
       </DataState>
     </div>
