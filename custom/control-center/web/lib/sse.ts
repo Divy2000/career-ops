@@ -9,13 +9,17 @@ export const DOMAIN_KEYS: Record<string, string[][]> = {
   shortlist: [['shortlist']],
   // An application's detail carries its company sponsorship file and alert.
   immigration: [['immigration'], ['sponsorship'], ['tracker', 'row']],
-  interviews: [['tracker', 'interviews'], ['insights']],
+  // interview-prep/story-bank.md is also a Profile user file.
+  interviews: [['tracker', 'interviews'], ['insights'], ['config', 'user-file']],
   documents: [['tracker', 'documents'], ['apply', 'documents']],
   followups: [['followups'], ['tracker']],
   config: [['config'], ['system']],
   runs: [['runs']],
   sessions: [['sessions']],
 };
+
+/** Backoff before opening a stream the browser closed for good (exported so tests can shorten it). */
+export const APP_STREAM_RETRY = { baseMs: 1000, maxMs: 30_000 };
 
 type Listener = (ev: MessageEvent) => void;
 interface SharedStream {
