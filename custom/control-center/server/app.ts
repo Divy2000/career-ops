@@ -28,7 +28,7 @@ import { pinnedNodeBin, ScheduleService } from './system/schedule.js';
 import { maybeFakeLaunchd } from './system/fake-launchd.js';
 import { readSettings, type AppSettings } from './domains/settings.js';
 
-/** Action input files and CV uploads a crash or restart left behind are removed after a day. */
+/** Action input files a crash or restart left behind are removed after a day, and CV uploads too once no session names them. */
 const STALE_INPUT_MS = 24 * 3_600_000;
 
 export interface AppDeps {

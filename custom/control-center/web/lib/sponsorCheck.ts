@@ -3,8 +3,9 @@
 // started in one place shows in the other and no second check of that company starts beside it.
 
 /**
- * The storage key of a company's last check: one per company, so another company's check is never re-attached. Encoded,
- * not slugged: a slug folds "AT&T" and "AT T" together, and every all-non-ASCII name into the same empty key.
+ * The storage key of a company's last check: one per company, so another company's check is never re-attached. Callers
+ * pass the company-file slug (sponsorCheckCompany), so spellings that share a company file share a key; it is encoded
+ * here because the slug falls back to the raw name when nothing is left after slugging.
  */
 export const sponsorCheckKey = (company: string) => `cc.sponsorship.check:${encodeURIComponent(company.trim().toLowerCase())}`;
 
