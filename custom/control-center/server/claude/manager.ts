@@ -214,8 +214,21 @@ export class SessionManager {
     try {
       for (const [i, url] of input.urls.entries()) {
         const num = reserved[i]!;
-        sessions.push(await this.start({ mode: input.mode, target: { type: 'url', value: url }, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }));
-        handed.add(num);
+        const target = { type: 'url' as const, value: url };
+        try {
+          sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }));
+          handed.add(num);
+        } catch (err) {
+          // One URL that cannot start must not hide the ones that did: the caller keeps only the failed URLs for a retry.
+          const message = (err as Error).message;
+          const created = this.store.list().find((m) => m.reportNum === num && m.target.value === url && m.turns.length === 0);
+          if (created) {
+            handed.add(num);
+            sessions.push(await this.failBeforeSpawn(created, message));
+          } else {
+            sessions.push(unstartedMeta(input.mode, target, input.model ?? null, message));
+          }
+        }
       }
     } finally {
       // A session releases its own number; the ones never handed to a session go straight back to the pool.
@@ -628,6 +641,12 @@ export class SessionManager {
     if (used === null) return `the reservation for report number ${num} was released`;
     return used ? `report number ${num} is now held by the report` : `report number ${num} returned to the pool`;
   }
+}
+
+/** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
+function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
+  const now = new Date().toISOString();
+  return { id: '', claudeSessionId: '', mode, policyClass: getModePolicy(mode)?.policyClass ?? 'read-only', target, model, status: 'error', createdAt: now, updatedAt: now, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error, reportNum: null, lastReason: error };
 }
 
 export function parseReservedRange(stdout: string): number[] {

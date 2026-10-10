@@ -657,9 +657,13 @@ describe('Claude sessions', () => {
         if (calls === 2) throw new Error('disk full');
         return original(input);
       });
-      expect((await call(half, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls })).statusCode).toBe(502);
-      const first = half.sessions.list().find((x) => x.reportNum === 8 || x.target.value === urls[0])!;
-      expect((await settleOn(half, first.id)).meta.status).toBe('done');
+      // The URL that could not start comes back as an error session; the others started, so a retry keeps only it (SEED-claude-01).
+      const res = await call(half, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls });
+      expect(res.statusCode).toBe(202);
+      const sessions = res.json().sessions as Array<{ id: string; status: string; error: string | null; reportNum: number | null; target: { value: string } }>;
+      expect(sessions.map((x) => [x.target.value, x.status === 'error'])).toEqual([[urls[0], false], [urls[1], true], [urls[2], false]]);
+      expect(sessions[1]).toMatchObject({ error: 'disk full', reportNum: null });
+      for (const x of [sessions[0]!, sessions[2]!]) expect((await settleOn(half, x.id)).meta.status).toBe('done');
       expect(reserved(half)).toEqual([]);
     } finally {
       await half.close();
@@ -1563,6 +1567,29 @@ describe('report reservations and session trackers survive failures (r16-claude)
       const meta = await app.sessions.start({ mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/synthetic/65' }, prompt: 'Evaluate', reportNum: 65 });
       expect(meta).toMatchObject({ status: 'error', reportNum: null });
       expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a fan-out session whose start throws after it was created comes back as an error and gives its number back (SEED-claude-01)', async () => {
+    const app = await freshApp();
+    try {
+      const original = app.runner.start.bind(app.runner);
+      let calls = 0;
+      vi.spyOn(app.runner, 'start').mockImplementation((input) => {
+        calls += 1;
+        if (calls === 1) throw new Error('could not write the run record');
+        return original(input);
+      });
+      const urls = ['https://jobs.example.com/synthetic/31', 'https://jobs.example.com/synthetic/32'];
+      const res = await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls });
+      expect(res.statusCode).toBe(202);
+      const [failed, started] = res.json().sessions as Array<{ id: string; status: string; error: string | null; reportNum: number | null }>;
+      expect(failed).toMatchObject({ status: 'error', error: 'could not write the run record', reportNum: null });
+      expect(app.sessions.read(failed!.id)).toMatchObject({ status: 'error', reportNum: null });
+      expect((await settleOn(app, started!.id)).meta.status).toBe('done');
+      expect(fs.readdirSync(path.join(app.cfg.dataRoot, 'reports')).filter((n) => /^\d+-RESERVED\.md$/.test(n) && n !== '005-RESERVED.md')).toEqual([]);
     } finally {
       await app.close();
     }
