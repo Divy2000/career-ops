@@ -1,13 +1,46 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
-import { RunStore, type ExitMeaning, type RunMeta } from './store.js';
+import { RunStore, runsDir, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
+import { createWhole, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS } from '../../supervisor/instance-lock.js';
 import { childEnv } from '../system/child-env.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
 
 export const WRAPPER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'wrapper.mjs');
+
+/** The one secret a run's env may carry that another process can supply again: a session's Claude token (readToken). */
+const TOKEN_VAR = 'CLAUDE_CODE_OAUTH_TOKEN';
+/** Names of env variables never written to a run's start request when they hold a value. */
+const SECRET_NAME = /TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i;
+
+/**
+ * Held (in the runs folder) while a process picks the runs it can start and moves them from queued to running, so
+ * two server processes (blue/green) never both count a slot or a resource as free and start a run each.
+ */
+const SCHEDULE_LOCK = '.schedule.lock';
+/** Written in a run's folder just before its wrapper is spawned: a process that dies after it may have started it. */
+const STARTING_FILE = 'starting';
+/**
+ * How long a start a dead process left, with no wrapper recorded, still holds its slot after its wrapper is told to stop:
+ * the wrapper may have passed its first cancel check and be spawning its command, which it records right after.
+ */
+const STARTING_GRACE_MS = 5000;
+
+/** The process a claim or the schedule lock names: a bare PID in the earlier claim format; null when unreadable. */
+function parseHolder(text: string): { pid: number; start: number | null } | null {
+  const trimmed = text.trim();
+  if (/^[1-9]\d*$/.test(trimmed)) return { pid: Number(trimmed), start: null };
+  try {
+    const h = JSON.parse(trimmed) as { pid?: unknown; start?: unknown };
+    if (!Number.isInteger(h.pid) || (h.pid as number) <= 0) return null;
+    return { pid: h.pid as number, start: typeof h.start === 'number' && Number.isFinite(h.start) ? h.start : null };
+  } catch {
+    return null;
+  }
+}
 
 export interface StartRequest {
   actionId: string;
@@ -89,13 +122,22 @@ export class Runner {
   private queue: Array<{ meta: RunMeta; env: NodeJS.ProcessEnv }> = [];
   private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout }>();
   private envById = new Map<string, NodeJS.ProcessEnv>();
+  /** Queued runs another process left, being rebuilt (their token read) before they join the queue. */
+  private adopting = new Set<string>();
+  /** A later pump, while the queue waits on another process (its runs, its claim, or the schedule lock it holds). */
+  private retryTimer: NodeJS.Timeout | null = null;
+  /** Starts a dead process left whose wrapper was told to stop and may still record itself: held until it does or the grace ends. */
+  private stopping = new Set<string>();
+  /** This process as claims and the schedule lock name it, read once. */
+  private self: { pid: number; start: number | null } | null = null;
 
   private procStart: (pid: number) => ProcessStart;
 
   constructor(
     private dataRoot: string,
     private bus: EventBus,
-    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void; nodePath?: string } = {},
+    /** readToken: the Claude token, read again to start a session run another process queued (its token is never stored). */
+    private opts: { claudeSlots?: number; pollMs?: number; retention?: number; procStart?: (pid: number) => ProcessStart; kill?: (pid: number, signal: 0) => void; nodePath?: string; readToken?: () => Promise<string> } = {},
   ) {
     this.store = new RunStore(dataRoot, opts.retention);
     this.procStart = opts.procStart ?? ((pid) => processStartTime(pid, undefined, opts.kill));
@@ -133,17 +175,167 @@ export class Runner {
     return typeof start === 'number' ? start : null;
   }
 
+  private holderText(): string {
+    this.self ??= { pid: process.pid, start: this.recordStart(process.pid) };
+    return JSON.stringify({ ...this.self, nonce: crypto.randomUUID() });
+  }
+
   /**
-   * Exactly one process ever moves a queued run on: spawning it, cancelling it
-   * and marking it lost all take this O_EXCL claim first, so two server
-   * processes (blue/green) can never both start it.
+   * Whether the process a claim or the schedule lock names is gone for good: its PID does not run, or runs a process
+   * that started at another time. One that cannot be told apart (no start recorded, ps cannot answer) counts as live.
+   * Content that does not parse (a claim cut short by a crash) is gone once it is older than UNREADABLE_LOCK_GRACE_MS.
    */
-  private claim(id: string): boolean {
+  private holderGone(file: string, text: string): boolean {
+    const holder = parseHolder(text);
+    if (!holder) {
+      try {
+        return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw err;
+      }
+    }
+    if (holder.pid === process.pid) {
+      this.self ??= { pid: process.pid, start: this.recordStart(process.pid) };
+      if (holder.start !== null && this.self.start !== null) return holder.start !== this.self.start;
+    }
+    const live = this.identity(holder.pid, holder.start);
+    if (live !== null) return !live;
+    // No start to compare (a bare PID, or none could be read): a process that started after the file was written
+    // cannot have written it, so its PID was reused.
+    const now = this.procStart(holder.pid);
+    if (typeof now !== 'number') return false;
     try {
-      fs.writeFileSync(path.join(this.store.dirOf(id), 'claim'), String(process.pid), { flag: 'wx' });
-      return true;
+      return now > fs.statSync(file).mtimeMs / 1000;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+  }
+
+  /**
+   * The schedule lock, taken whole (or in place of one whose holder is gone); null while a live process holds it.
+   * Returns its release, which removes this lock and only this one.
+   */
+  private lockSchedule(): (() => void) | null {
+    const file = path.join(runsDir(this.dataRoot), SCHEDULE_LOCK);
+    const text = this.holderText();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (createWhole(file, text)) {
+        return () => {
+          if (readOrNull(file) === text) removeIf(file, text);
+        };
+      }
+      const seen = readOrNull(file);
+      if (seen === null) continue;
+      if (!this.holderGone(file, seen)) return null;
+      removeIf(file, seen);
+    }
+    return null;
+  }
+
+  /**
+   * Exactly one process ever moves a queued run on: spawning it, cancelling it and marking it lost all take this claim
+   * first (created whole, naming this process), so two server processes (blue/green) can never both start it.
+   * 'claimed': it was free. 'recovered': the process that held it is gone (it died between claiming the run and
+   * settling it); the claim is replaced under the schedule lock (`scheduling`: the caller holds it), so two processes
+   * never both replace it, and the caller settles what that process may have begun. 'held': a live process holds it,
+   * or the schedule lock it would be replaced under is busy.
+   */
+  private claim(id: string, scheduling = false): 'claimed' | 'recovered' | 'held' {
+    const file = path.join(this.store.dirOf(id), 'claim');
+    const text = this.holderText();
+    if (createWhole(file, text)) return 'claimed';
+    const seen = readOrNull(file);
+    if (seen === null || !this.holderGone(file, seen)) return 'held';
+    const unlock = scheduling ? null : this.lockSchedule();
+    if (!scheduling && !unlock) return 'held';
+    try {
+      removeIf(file, seen);
+      return createWhole(file, text) ? 'recovered' : 'held';
+    } finally {
+      unlock?.();
+    }
+  }
+
+  /**
+   * A queued run whose claim was taken over from a process that is gone, which may have begun starting it. Null when
+   * it never spawned a wrapper: start it as usual. Otherwise it is never started again: its wrapper's exit settles it,
+   * a wrapper that recorded itself is tracked as running, and one that recorded nothing yet is told to stop (it reads
+   * the cancel file before it spawns the command and again after) and the run ends lost once STARTING_GRACE_MS has
+   * passed since it began starting. Until then it stays queued, held in `stopping`: the pump counts it and looks again.
+   */
+  private resumeInterruptedStart(meta: RunMeta): RunMeta | null {
+    const startingFile = path.join(this.store.dirOf(meta.id), STARTING_FILE);
+    if (!fs.existsSync(startingFile)) return null;
+    const wrapper = this.store.readWrapper(meta.id);
+    const exit = this.store.readExit(meta.id);
+    const begun: RunMeta = { ...meta, startedAt: meta.startedAt ?? new Date().toISOString(), wrapperPid: wrapper?.wrapperPid ?? null, childPid: wrapper?.childPid ?? null };
+    if (exit) {
+      this.finalize(begun, exit);
+      return this.store.read(meta.id) ?? begun;
+    }
+    if (wrapper) {
+      const recordedAt = Date.parse(String((wrapper as { startedAt?: unknown }).startedAt));
+      const wrapperStartedAt = this.startRecordedBy(wrapper.wrapperPid, recordedAt);
+      if (wrapperStartedAt === false) {
+        const lateExit = this.store.readExit(meta.id);
+        if (lateExit) {
+          this.finalize(begun, lateExit);
+          return this.store.read(meta.id) ?? begun;
+        }
+        const gone: RunMeta = { ...begun, status: 'lost', endedAt: new Date().toISOString(), error: 'the server stopped while starting this run, and its wrapper is gone without an exit record (its PID is free or now belongs to another process)' };
+        this.store.write(gone);
+        this.envById.delete(meta.id);
+        this.dropInputs(gone);
+        this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+        return gone;
+      }
+      // A child PID now held by a process that started later is never recorded as the run's: nothing signals it.
+      const childStartedAt = wrapper.childPid ? this.startRecordedBy(wrapper.childPid, recordedAt) : null;
+      const running: RunMeta = { ...begun, status: 'running', wrapperStartedAt, childStartedAt: childStartedAt === false ? null : childStartedAt };
+      this.store.write(running);
+      this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
+      this.track(running);
+      return running;
+    }
+    this.store.requestCancel(meta.id);
+    if (Date.now() - this.mtimeOrZero(startingFile) < STARTING_GRACE_MS) {
+      this.stopping.add(meta.id);
+      this.retryLater();
+      return meta;
+    }
+    this.stopping.delete(meta.id);
+    const lost: RunMeta = {
+      ...meta,
+      status: 'lost',
+      endedAt: new Date().toISOString(),
+      error: 'the server stopped while starting this run, before its wrapper recorded anything; the wrapper was told to stop and the run was not started again, so start it again',
+    };
+    this.store.write(lost);
+    this.envById.delete(meta.id);
+    this.dropInputs(lost);
+    this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+    return lost;
+  }
+
+  /**
+   * The start of a PID a wrapper recorded at `recordedAtMs` (its wrapper.json), read now: false when the PID is not ours
+   * or the process holding it started after that record (the PID was reused); null when its start cannot be read.
+   */
+  private startRecordedBy(pid: number, recordedAtMs: number): number | null | false {
+    if (!this.ours(pid)) return false;
+    const start = this.procStart(pid);
+    if (typeof start !== 'number') return null;
+    return Number.isFinite(recordedAtMs) && start > recordedAtMs / 1000 ? false : start;
+  }
+
+  /** A file's mtime in ms; 0 when it is gone. */
+  private mtimeOrZero(file: string): number {
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
       throw err;
     }
   }
@@ -158,18 +350,16 @@ export class Runner {
   }
 
   /**
-   * Server start: pick up runs left running by a previous process. Runs still
-   * queued there can never start: the queue and their env (a session's token
-   * among it) lived only in that process, so they end as lost and their
-   * sessions finalize instead of waiting forever.
+   * Server start: pick up runs left running by a previous process, and the runs it still had queued (a blue/green reload
+   * drains the old server, whose queue lived in memory): each is queued here again, its env rebuilt from the start
+   * request it recorded and a session's token read anew, so it starts once a slot frees, as it would have. A queued run
+   * that cannot be rebuilt (recorded by an earlier version, a secret this process cannot supply) ends lost and its
+   * session finalizes instead of waiting forever. Claiming decides which process starts a run, so it runs once.
    */
   reconcile(): void {
     for (const meta of this.store.list()) {
       if (meta.status === 'queued') {
-        if (this.queue.some((q) => q.meta.id === meta.id) || !this.claim(meta.id)) continue;
-        this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'queued when the server restarted; it never started, so start it again' });
-        this.dropInputs(meta);
-        this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+        this.adopt(meta);
         continue;
       }
       if (meta.status !== 'running' || this.active.has(meta.id)) continue;
@@ -195,7 +385,64 @@ export class Runner {
     }
   }
 
+  /** Queues a run another process left queued, once its env is rebuilt; one it cannot rebuild ends lost. */
+  private adopt(meta: RunMeta): void {
+    if (this.queue.some((q) => q.meta.id === meta.id) || this.adopting.has(meta.id)) return;
+    let request: RunRequest | null;
+    try {
+      request = this.store.readRequest(meta.id);
+    } catch (err) {
+      this.loseQueued(meta, `queued when the server restarted, and its start request could not be read (${(err as Error).message}); start it again`);
+      return;
+    }
+    if (!request) {
+      this.loseQueued(meta, 'queued when the server restarted; it never started, so start it again');
+      return;
+    }
+    const missing = request.secrets.filter((k) => k !== TOKEN_VAR || !this.opts.readToken);
+    if (missing.length) {
+      this.loseQueued(meta, `queued when the server restarted, and ${missing.join(', ')} cannot be supplied again here; start it again`);
+      return;
+    }
+    this.adopting.add(meta.id);
+    const given = request;
+    const rebuild = async (): Promise<NodeJS.ProcessEnv> => ({ ...given.env, ...(given.secrets.includes(TOKEN_VAR) ? { [TOKEN_VAR]: await this.opts.readToken!() } : {}) });
+    rebuild().then(
+      (extra) => {
+        this.adopting.delete(meta.id);
+        const current = this.store.read(meta.id);
+        // Settled meanwhile (cancelled, or claimed by the process that queued it): nothing to queue.
+        if (current?.status !== 'queued' || this.queue.some((q) => q.meta.id === meta.id)) return;
+        const env = childEnv(extra);
+        this.envById.set(meta.id, env);
+        this.queue.push({ meta: current, env });
+        // First in, first out: an adopted run keeps its place ahead of runs queued here later.
+        this.queue.sort((x, y) => (x.meta.createdAt < y.meta.createdAt ? -1 : x.meta.createdAt > y.meta.createdAt ? 1 : 0));
+        this.pump();
+      },
+      (err: unknown) => {
+        this.adopting.delete(meta.id);
+        this.loseQueued(meta, `queued when the server restarted, and the Claude token could not be read to start it (${(err as Error).message}); start it again`);
+      },
+    );
+  }
+
+  /** A queued run that will never start ends lost, unless another process claimed it first (it starts or settled there). */
+  private loseQueued(meta: RunMeta, error: string): void {
+    const claim = this.claim(meta.id);
+    if (claim === 'held') return;
+    const current = this.store.read(meta.id) ?? meta;
+    if (current.status !== 'queued' || (claim === 'recovered' && this.resumeInterruptedStart(current))) return;
+    this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error });
+    this.dropInputs(meta);
+    this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+  }
+
   start(req: StartRequest): RunMeta {
+    // Recorded so another process can start it if this one drains first: the env given, every secret named, never stored.
+    const given = Object.entries(req.env ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string');
+    const secret = ([k, v]: [string, string]) => k === TOKEN_VAR || (v !== '' && SECRET_NAME.test(k));
+    const request: RunRequest = { env: Object.fromEntries(given.filter((e) => !secret(e))), secrets: given.filter(secret).map(([k]) => k) };
     const meta = this.store.create({
       actionId: req.actionId,
       label: req.label,
@@ -206,7 +453,7 @@ export class Runner {
       params: req.params,
       tmpInputs: req.tmpInputs ?? [],
       ...(req.exitMeaning ? { exitMeaning: req.exitMeaning } : {}),
-    });
+    }, request);
     const env = childEnv(req.env);
     this.envById.set(meta.id, env);
     this.queue.push({ meta, env });
@@ -215,14 +462,25 @@ export class Runner {
     return meta;
   }
 
-  private busyResources(): Set<string> {
-    const s = new Set<string>();
-    for (const { meta } of this.active.values()) for (const r of meta.resources) s.add(r);
-    return s;
+  /**
+   * The runs that hold resources and Claude slots: this process's own, and those running on disk for another process
+   * (the old server during a blue/green handover, before this one is activated), so neither runs past the cap.
+   */
+  private holders(): RunMeta[] {
+    const runs = new Map<string, RunMeta>();
+    for (const m of this.store.list()) if (m.status === 'running' && !this.endedUntracked(m)) runs.set(m.id, m);
+    for (const { meta } of this.active.values()) runs.set(meta.id, meta);
+    return [...runs.values()];
   }
 
-  private activeClaude(): number {
-    return [...this.active.values()].filter((a) => a.meta.claude).length;
+  /**
+   * A run recorded running that this process does not track, whose processes have ended: its wrapper recorded its
+   * exit, or is gone. The process that started it may have died before settling it, so its status alone would hold
+   * its slot and resources for good.
+   */
+  private endedUntracked(meta: RunMeta): boolean {
+    if (this.active.has(meta.id)) return false;
+    return this.store.readExit(meta.id) !== null || this.identity(meta.wrapperPid, meta.wrapperStartedAt) === false;
   }
 
   /** Starts what the queue can start now: after a settings change raised the Claude slot cap, say. */
@@ -230,32 +488,106 @@ export class Runner {
     this.pump();
   }
 
-  /** FIFO: a queued run starts when its resources are free and a Claude slot is free if it needs one. */
+  /**
+   * FIFO: a queued run starts when its resources are free and a Claude slot is free if it needs one. The count and the
+   * starts happen under the schedule lock, so another process never counts the same slot free meanwhile. While the
+   * queue waits on another process (the lock, a claim, or runs only that process tracks), it is pumped again later.
+   */
   private pump(): void {
-    const busy = this.busyResources();
-    let claude = this.activeClaude();
-    for (const item of [...this.queue]) {
-      const { meta } = item;
-      if (meta.resources.some((r) => busy.has(r))) continue;
-      if (meta.claude && claude >= this.claudeSlots) continue;
-      this.queue = this.queue.filter((q) => q !== item);
-      if (!this.spawnRun(item.meta, item.env)) continue;
-      for (const r of meta.resources) busy.add(r);
-      if (meta.claude) claude++;
+    if (this.queue.length === 0 && this.stopping.size === 0) return;
+    const unlock = this.lockSchedule();
+    if (!unlock) {
+      this.retryLater();
+      return;
     }
+    let waitsOnOthers = false;
+    try {
+      // Settled first, so a run taken over as running is counted below.
+      const starting = this.resumeAbandonedStarts();
+      const holders = [...this.holders(), ...starting];
+      const foreign = holders.some((m) => !this.active.has(m.id));
+      const busy = new Set(holders.flatMap((m) => m.resources));
+      let claude = holders.filter((m) => m.claude).length;
+      for (const item of [...this.queue]) {
+        const { meta } = item;
+        if (meta.resources.some((r) => busy.has(r)) || (meta.claude && claude >= this.claudeSlots)) {
+          waitsOnOthers ||= foreign;
+          continue;
+        }
+        const outcome = this.spawnRun(item.meta, item.env);
+        if (outcome === 'held') {
+          waitsOnOthers = true;
+          continue;
+        }
+        this.queue = this.queue.filter((q) => q !== item);
+        if (outcome !== 'started') continue;
+        for (const r of meta.resources) busy.add(r);
+        if (meta.claude) claude++;
+      }
+    } finally {
+      unlock();
+    }
+    if (waitsOnOthers || this.stopping.size) this.retryLater();
   }
 
-  /** False when another process already claimed the run (it was cancelled, marked lost or started elsewhere). */
-  private spawnRun(queued: RunMeta, env: NodeJS.ProcessEnv): boolean {
-    if (!this.claim(queued.id)) {
+  /**
+   * Runs still queued on disk whose wrapper a process may have spawned: their wrapper may hold a slot and resources
+   * although nothing counts it, and this queue may not hold them yet (their token still being read). Those whose
+   * claimant is gone are settled here, under the schedule lock, before the count. Returns those a live process still
+   * holds (it is starting them), which count as holders until it records them or is gone.
+   */
+  private resumeAbandonedStarts(): RunMeta[] {
+    const starting: RunMeta[] = [];
+    for (const id of this.stopping) if (this.store.read(id)?.status !== 'queued') this.stopping.delete(id);
+    for (const meta of this.store.list()) {
+      if (meta.status !== 'queued' || !fs.existsSync(path.join(this.store.dirOf(meta.id), STARTING_FILE))) continue;
+      // Taken over here already, its wrapper told to stop: settled once it records itself or the grace ends.
+      if (this.stopping.has(meta.id)) {
+        if (this.resumeInterruptedStart(meta)?.status === 'queued') starting.push(meta);
+        continue;
+      }
+      if (this.claim(meta.id, true) === 'held') {
+        starting.push(meta);
+        continue;
+      }
+      const current = this.store.read(meta.id);
+      if (current?.status === 'queued' && this.resumeInterruptedStart(current)?.status === 'queued') starting.push(current);
+    }
+    return starting;
+  }
+
+  private retryLater(): void {
+    if (this.retryTimer) return;
+    // Slower than tracking: each try reads every run's meta, and the wait can be as long as another process's run.
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.pump();
+    }, (this.opts.pollMs ?? 250) * 4);
+    this.retryTimer.unref();
+  }
+
+  /**
+   * 'started': it runs now (or was found running). 'held': a live process holds its claim and it is still queued, so
+   * it stays in the queue. 'gone': it was settled (here or elsewhere) and leaves the queue.
+   */
+  private spawnRun(queued: RunMeta, env: NodeJS.ProcessEnv): 'started' | 'held' | 'gone' {
+    const claim = this.claim(queued.id, true);
+    if (claim === 'held') {
+      if (this.store.read(queued.id)?.status === 'queued') return 'held';
       this.envById.delete(queued.id);
-      return false;
+      return 'gone';
     }
     const meta = this.store.read(queued.id) ?? queued;
-    if (meta.status !== 'queued') return false;
+    if (meta.status !== 'queued') return 'gone';
+    if (claim === 'recovered') {
+      const resumed = this.resumeInterruptedStart(meta);
+      // Still queued: its wrapper may yet record itself, so it holds its slot like one that runs.
+      if (resumed) return resumed.status === 'running' || resumed.status === 'queued' ? 'started' : 'gone';
+    }
     const runDir = this.store.dirOf(meta.id);
     let child: ReturnType<typeof spawn>;
     try {
+      fs.writeFileSync(path.join(runDir, STARTING_FILE), '');
       child = spawn(this.opts.nodePath ?? process.execPath, [WRAPPER_PATH, runDir, meta.cmd.cwd, meta.cmd.bin, ...meta.cmd.args], {
         detached: true,
         stdio: 'ignore',
@@ -265,7 +597,7 @@ export class Runner {
     } catch (err) {
       // Refused at once (an argument node will not pass on): the run is claimed, so nothing else would ever settle it.
       this.failToStart(meta, err);
-      return false;
+      return 'gone';
     }
     // ENOENT (the app's node was removed by an upgrade), EAGAIN or EMFILE arrive as an 'error' event: without a listener
     // that is an uncaught exception that takes the server child down.
@@ -282,7 +614,7 @@ export class Runner {
     this.store.write(running);
     this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
     this.track(running);
-    return true;
+    return 'started';
   }
 
   /** A run whose wrapper could not be started ends failed with the reason; its inputs go and its resources are free. */
@@ -350,7 +682,15 @@ export class Runner {
     let meta = this.store.read(id);
     if (!meta) return null;
     if (meta.status === 'queued') {
-      if (this.claim(id)) {
+      const claim = this.claim(id);
+      // Claimed elsewhere a moment ago, it is starting (or was settled): act on what is on disk now.
+      meta = this.store.read(id);
+      if (!meta) return null;
+      // Taken over from a process that died starting it: settle what it began, then cancel that like any other.
+      if (claim === 'recovered' && meta.status === 'queued') meta = this.resumeInterruptedStart(meta) ?? meta;
+      // Its wrapper is told to stop already and may still record itself: it settles once it does or the grace ends.
+      if (this.stopping.has(id)) return meta;
+      if (claim !== 'held' && meta.status === 'queued') {
         this.envById.delete(id);
         const cancelled: RunMeta = { ...meta, status: 'cancelled', endedAt: new Date().toISOString() };
         this.store.write(cancelled);
@@ -358,9 +698,6 @@ export class Runner {
         this.bus.publish('run.status', { runId: id, status: 'cancelled', actionId: cancelled.actionId });
         return cancelled;
       }
-      // Claimed elsewhere a moment ago: it is starting (or was settled); act on what is on disk now.
-      meta = this.store.read(id);
-      if (!meta) return null;
     }
     if (meta.status !== 'running') return meta;
     const childPid = meta.childPid ?? this.store.readWrapper(id)?.childPid ?? null;
@@ -423,19 +760,26 @@ export class Runner {
    * settled on disk meanwhile (cancelled or marked lost in a blue/green handover) is dropped from the queue, not counted.
    */
   pending(actionId: string): RunMeta[] {
-    const settled = this.queue.filter((q) => q.meta.actionId === actionId && this.store.read(q.meta.id)?.status !== 'queued');
-    if (settled.length) {
-      this.queue = this.queue.filter((q) => !settled.includes(q));
-      for (const q of settled) this.envById.delete(q.meta.id);
-    }
+    this.dropSettled((q) => q.meta.actionId === actionId);
     return [...this.queue.map((q) => q.meta), ...[...this.active.values()].map((a) => a.meta)].filter((m) => m.actionId === actionId);
   }
 
+  /** Drops queued runs another process settled on disk meanwhile (cancelled, marked lost, or started there). */
+  private dropSettled(which: (q: { meta: RunMeta }) => boolean = () => true): void {
+    const settled = this.queue.filter((q) => which(q) && this.store.read(q.meta.id)?.status !== 'queued');
+    if (!settled.length) return;
+    this.queue = this.queue.filter((q) => !settled.includes(q));
+    for (const q of settled) this.envById.delete(q.meta.id);
+  }
+
   queuedIds(): string[] {
+    this.dropSettled();
     return this.queue.map((q) => q.meta.id);
   }
 
   close(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     for (const { timer } of this.active.values()) clearInterval(timer);
     this.active.clear();
   }

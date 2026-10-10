@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
-import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
+import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { ASK_ACTION_SPECS } from '../../shared/ask-actions.js';
@@ -745,7 +745,11 @@ describe('guard hook', () => {
     const root = fs.realpathSync(tempDir('cc-hook-devchat-suites-'));
     const dir = fs.realpathSync(tempDir('cc-hook-devchat-suites-guard-'));
     const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
-    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    const hook = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' });
+    // The bulk of the files is checked in-process with the hook's own write check, against the policy file it loads: one
+    // hook process per file grew with every new test file toward the test timeout (SW5-tests-16).
+    const policy = JSON.parse(fs.readFileSync(pf.file, 'utf8')) as Parameters<typeof checkWrite>[0];
+    const why = (rel: string) => checkWrite(policy, 'Write', path.join(root, rel));
     // The real files of this checkout: install.sh and upstream-sync run `node --test custom/*/tests/*.spec.mjs`, and every
     // spec imports custom/test-support.
     const custom = path.join(PACKAGE_ROOT, '..');
@@ -757,13 +761,21 @@ describe('guard hook', () => {
     });
     const files = walk('');
     const suites = files.filter((f) => /^custom\/[^/]+\/tests\//.test(f) || /\.(spec|test)\.[cm]?[jt]sx?$/.test(f) || f.startsWith('custom/test-support/') || f.startsWith('custom/install/'));
-    for (const must of ['custom/test-support/tmp.mjs', 'custom/install/install.sh', 'custom/install/bootstrap.sh', 'custom/projects/tests/rank.spec.mjs']) expect(suites, must).toContain(must);
+    const musts = ['custom/test-support/tmp.mjs', 'custom/install/install.sh', 'custom/install/bootstrap.sh', 'custom/projects/tests/rank.spec.mjs'];
+    for (const must of musts) expect(suites, must).toContain(must);
     expect(suites.length).toBeGreaterThan(20);
-    for (const rel of suites) expect(write(rel), rel).toBe(2);
+    for (const rel of suites) expect(why(rel), rel).toMatch(/^Write: .* is always protected/);
+    // The hook process refuses them with that same reason.
+    for (const must of musts) {
+      const r = hook(must);
+      expect(r.status, must).toBe(2);
+      expect(r.stderr.trim(), must).toBe(why(must));
+    }
     // The custom modules those suites test stay Dev Chat's to edit.
     for (const rel of ['custom/projects/lib.mjs', 'custom/cv/build-html.mjs', 'custom/pipeline/shortlist.mjs', 'custom/immigration/freshness.mjs']) {
       expect(files, rel).toContain(rel);
-      expect(write(rel), rel).toBe(0);
+      expect(why(rel), rel).toBeNull();
+      expect(hook(rel).status, rel).toBe(0);
     }
   });
 
@@ -1039,6 +1051,11 @@ describe('checkBash: exact per-command argument grammars', () => {
       'node --test =node',
     ])
       no(devchat, cmd);
+  });
+
+  it('refuses a word starting with = (zsh expands =curl to the path of curl) in a command the policy otherwise allows, saying so (SW5-tests-04)', () => {
+    ok(oferta, 'node merge-tracker.mjs');
+    expect(checkBash('node merge-tracker.mjs =curl', oferta, root)).toMatch(/words starting with = are not allowed/);
   });
 
   it('git: only status, diff and log with read-only flags and in-repo paths; never --output, -o or --no-index', () => {

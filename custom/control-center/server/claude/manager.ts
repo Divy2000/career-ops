@@ -460,10 +460,40 @@ export class SessionManager {
       clearInterval(timer);
       this.active.delete(id);
       pull();
-      void this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: finalText || parser.text, failure });
+      this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: finalText || parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, run, { turnDone, denials }, err));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
+  }
+
+  /**
+   * A finalize that threw (a file it reads, a folder it writes): the turn ends once, instead of an unhandled rejection
+   * taking the server down and the next start re-running the same finalize. What finalize would have settled still is:
+   * the usage the turn reported, a reserved report number (released, so its RESERVED file goes) and a cancel (the turn
+   * stays cancelled); anything else ends in error saying why.
+   */
+  private async finalizeFailed(id: string, n: number, run: RunMeta, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number }, err: unknown): Promise<void> {
+    const why = `the turn could not be finalized: ${(err as Error).message}`;
+    console.error(`[sessions] session ${id} turn ${n}: ${(err as Error).stack ?? why}`);
+    try {
+      const meta = this.store.read(id);
+      if (!meta || this.turnEnded(id, n)) return;
+      const cancelled = meta.status === 'cancelled' || run.status === 'cancelled';
+      let reason = cancelled ? `cancelled by the user; ${why}` : why;
+      const num = meta.reportNum;
+      if (num !== null) {
+        // Claimed before the await, as finalize does, so the number is released once.
+        this.store.setReportNum(id, null);
+        reason += `; ${await this.releaseReportNum(num, null)}`;
+      }
+      if (this.turnEnded(id, n)) return;
+      const status = cancelled ? 'cancelled' : 'error';
+      this.store.endTurn(id, n, { costUsd: r.turnDone?.costUsd ?? 0, tokens: r.turnDone?.tokens ?? 0, permissionDenials: r.denials, status, error: status === 'error' ? why : undefined, reason });
+      this.emit(id, { type: 'status', status, reason, turn: n });
+      this.bus.publish('session.status', { sessionId: id, status, mode: meta.mode, turn: n });
+    } catch (again) {
+      console.error(`[sessions] session ${id} turn ${n} could not be settled either: ${(again as Error).message}`);
+    }
   }
 
   private turnEnded(id: string, n: number): boolean {
@@ -577,9 +607,17 @@ export class SessionManager {
   }
 
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
-  private async releaseReportNum(num: number, used: boolean): Promise<string> {
-    const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+  /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
+  private async releaseReportNum(num: number, used: boolean | null): Promise<string> {
+    let r: Awaited<ReturnType<Exec>>;
+    try {
+      r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+    } catch (err) {
+      // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
+      return `could not release the reservation for ${num}: ${(err as Error).message}`;
+    }
     if (r.code !== 0) return `could not release the reservation for ${num}: ${(r.stderr || r.stdout).trim().slice(-200)}`;
+    if (used === null) return `the reservation for report number ${num} was released`;
     return used ? `report number ${num} is now held by the report` : `report number ${num} returned to the pool`;
   }
 }

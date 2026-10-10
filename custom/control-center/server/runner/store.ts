@@ -49,6 +49,12 @@ export interface ExitMeaning {
   onlyWithoutStderr?: boolean;
 }
 
+/** A queued run's start request on disk: the env the caller gave it, minus its secrets, which are named in `secrets`. */
+export interface RunRequest {
+  env: Record<string, string>;
+  secrets: string[];
+}
+
 export interface RawLine {
   seq: number;
   ts: string;
@@ -96,7 +102,8 @@ export class RunStore {
     return path.join(runsDir(this.dataRoot), id);
   }
 
-  create(meta: Omit<RunMeta, 'id' | 'createdAt' | 'status' | 'startedAt' | 'endedAt' | 'exitCode' | 'signal' | 'wrapperPid' | 'childPid' | 'error'>): RunMeta {
+  /** request: written before the run's meta, so no other process ever lists the run as queued without it. */
+  create(meta: Omit<RunMeta, 'id' | 'createdAt' | 'status' | 'startedAt' | 'endedAt' | 'exitCode' | 'signal' | 'wrapperPid' | 'childPid' | 'error'>, request?: RunRequest): RunMeta {
     const full: RunMeta = {
       ...meta,
       id: newRunId(),
@@ -111,6 +118,7 @@ export class RunStore {
       error: null,
     };
     fs.mkdirSync(this.dirOf(full.id), { recursive: true });
+    if (request) this.writeRequest(full.id, request);
     this.write(full);
     this.prune();
     return full;
@@ -155,6 +163,28 @@ export class RunStore {
   /** Asks the run's wrapper to stop: it reads this before it spawns the command and once more after recording it. */
   requestCancel(id: string): void {
     fs.writeFileSync(path.join(this.dirOf(id), CANCEL_FILE), new Date().toISOString());
+  }
+
+  /** What the run was started with that it needs to start in another process: its env, secrets left out by name. */
+  writeRequest(id: string, request: RunRequest): void {
+    const p = path.join(this.dirOf(id), 'request.json');
+    const tmp = `${p}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(request));
+    fs.renameSync(tmp, p);
+  }
+
+  /** The run's start request, or null when it has none (a run from before it was recorded). Other read errors throw. */
+  readRequest(id: string): RunRequest | null {
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(this.dirOf(id), 'request.json'), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+    const r = JSON.parse(text) as Partial<RunRequest>;
+    if (!r || typeof r.env !== 'object' || r.env === null || !Array.isArray(r.secrets)) throw new Error('request.json is not a start request');
+    return { env: r.env as Record<string, string>, secrets: r.secrets.map(String) };
   }
 
   readWrapper(id: string): { wrapperPid: number; childPid: number } | null {

@@ -535,6 +535,26 @@ export function writeScopeReason(policy, found, label) {
   return `${label}: ${found.rel} is outside the write scope (${globs.join(', ') || 'none'})`;
 }
 
+/**
+ * The guard's decision on a write tool (Edit, Write, MultiEdit, NotebookEdit) aimed at `target`: `reason` is null when
+ * it may write, and `found` is where the target lies then (the file to snapshot first).
+ */
+export function writeTarget(policy, tool, target) {
+  if (typeof target !== 'string' || !target) return { reason: `${tool}: no file path`, found: null };
+  const unresolved = unresolvedPathReason(target, tool);
+  if (unresolved) return { reason: unresolved, found: null };
+  const found = locate(policy, target);
+  if (!found) return { reason: `${tool}: ${target} is outside the repo and data roots; sessions may only write inside them`, found: null };
+  if (matches(found.rel, policy.deny)) return { reason: `${tool}: ${found.rel} is always protected (blacklist and tracker are edited only through the app or core CLIs)`, found: null };
+  const outOfScope = writeScopeReason(policy, found, tool);
+  return outOfScope ? { reason: outOfScope, found: null } : { reason: null, found };
+}
+
+/** Null when the write tool may write `target`, else the reason it is refused. */
+export function checkWrite(policy, tool, target) {
+  return writeTarget(policy, tool, target).reason;
+}
+
 function writable(policy, value, label) {
   const found = locate(policy, value);
   if (!found) return `${label}: ${value} is outside the repo and data roots`;

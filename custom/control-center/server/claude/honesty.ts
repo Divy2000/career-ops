@@ -16,10 +16,22 @@ export interface NewReport {
 
 export function snapshotReports(dataRoot: string): Set<string> {
   try {
-    return new Set(fs.readdirSync(path.join(dataRoot, 'reports')).filter((n) => !isReservedReportFile(n) && reportNumberOf(n) !== null));
+    // Only files: a folder named like a report (a session that wrote reports/099-acme.md/jd.txt) is no report.
+    const entries = fs.readdirSync(path.join(dataRoot, 'reports'), { withFileTypes: true });
+    return new Set(entries.filter((e) => e.isFile() && !isReservedReportFile(e.name) && reportNumberOf(e.name) !== null).map((e) => e.name));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
     throw err;
+  }
+}
+
+/** A report's header score; null when it has none or cannot be read (EACCES, gone again): it still counts as new. */
+function scoreOf(dataRoot: string, num: number): number | null {
+  try {
+    const read = readReport(dataRoot, num);
+    return read.kind === 'ok' ? read.report.score : null;
+  } catch {
+    return null;
   }
 }
 
@@ -29,8 +41,7 @@ export function detectNewReports(dataRoot: string, before: Set<string>): NewRepo
   for (const file of snapshotReports(dataRoot)) {
     if (before.has(file)) continue;
     const num = reportNumberOf(file)!;
-    const read = readReport(dataRoot, num);
-    out.push({ num, file, score: read.kind === 'ok' ? read.report.score : null });
+    out.push({ num, file, score: scoreOf(dataRoot, num) });
   }
   return out.sort((a, b) => a.num - b.num);
 }

@@ -444,34 +444,55 @@ describe('Claude sessions', () => {
     }
   });
 
-  it('a turn still queued when the server restarts ends with a clear error instead of hanging', async () => {
+  // Requirement change (SW6-claude-01): a queued turn used to end "queued when the server restarted"; a blue/green reload
+  // (the old server drains, the new one takes over) does exactly that on every server edit, so it now waits in the new one.
+  it('a turn still queued when the server is replaced waits in the new server and starts once a slot frees, with its environment rebuilt (SW6-claude-01)', async () => {
     const dataRoot = copyFixtureRoot();
     const guardRoot = tempDir('cc-test-guard-');
+    const saved = process.env.FAKE_CLAUDE_REPORT_ENV;
+    process.env.FAKE_CLAUDE_REPORT_ENV = '1';
     const a = await makeTestApp({ dataRoot, guardRoot });
     const req = (app: TestApp, method: 'GET' | 'POST' | 'PUT', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload });
     try {
       expect((await req(a, 'PUT', '/api/settings/app', { claudeConcurrency: 1 })).statusCode).toBe(200);
       const slowId: string = (await req(a, 'POST', '/api/sessions', { mode: 'calibrate', prompt: 'Calibrate' })).json().id;
       const queued = (await req(a, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json();
+      const runId: string = queued.turns[0].runId;
       expect(queued.status).toBe('running');
-      expect(a.runner.queuedIds()).toEqual([queued.turns[0].runId]);
+      expect(a.runner.queuedIds()).toEqual([runId]);
+      // The old server drains (its in-memory queue goes with it); the new one takes over.
       await a.close();
       const b = await makeTestApp({ dataRoot, guardRoot });
       try {
-        const deadline = Date.now() + 15_000;
+        await until(() => b.runner.queuedIds().includes(runId), 10_000);
+        await wait(300);
+        expect((await req(b, 'GET', `/api/runs/${runId}`)).json().meta.status).toBe('queued');
+        expect((await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta.status).toBe('running');
+        // The slot frees: the waiting turn starts in the new server and finishes.
+        expect((await req(b, 'POST', `/api/sessions/${slowId}/cancel`, {})).statusCode).toBe(200);
+        const deadline = Date.now() + 30_000;
         let meta = (await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta;
         while (meta.status === 'running' && Date.now() < deadline) {
           await wait(100);
           meta = (await req(b, 'GET', `/api/sessions/${queued.id}`)).json().meta;
         }
-        expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/queued when the server restarted/) });
-        expect((await req(b, 'GET', `/api/runs/${queued.turns[0].runId}`)).json().meta.status).toBe('lost');
-        expect((await req(b, 'POST', `/api/sessions/${slowId}/cancel`, {})).statusCode).toBe(200);
+        expect(meta.status, JSON.stringify(meta)).toBe('done');
+        expect((await req(b, 'GET', `/api/runs/${runId}`)).json().meta.status).toBe('done');
+        const events = b.sessions.store.readEvents(queued.id).map((e) => e.event);
+        const env = events.find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-env: '));
+        expect(String(env?.type === 'stderr' ? env.text : '').replace('fake-claude-env: ', '').split(',')).toEqual(['CC_MODE', 'CC_POLICY_FILE', 'CC_POLICY_SHA256', 'CC_SESSION_DIR', 'CC_TURN_DIR']);
+        expect(events.find((e) => e.type === 'stderr' && String(e.text).startsWith('fake-claude-token: '))).toMatchObject({ text: 'fake-claude-token: self=present children=absent' });
+        // The token itself was never written down: only the variable's name is recorded with the queued run.
+        const record = fs.readFileSync(path.join(dataRoot, 'data', 'control-center', 'runs', runId, 'request.json'), 'utf8');
+        expect(record).not.toContain(FAKE_TOKEN);
+        expect(JSON.parse(record)).toMatchObject({ secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
       } finally {
         await b.close();
       }
     } finally {
       await a.close().catch(() => undefined);
+      if (saved === undefined) delete process.env.FAKE_CLAUDE_REPORT_ENV;
+      else process.env.FAKE_CLAUDE_REPORT_ENV = saved;
     }
   });
 
@@ -1095,6 +1116,116 @@ describe('read confinement (BUG-06)', () => {
     t.sessions.reconcile();
     expect(t.sessions.store.readEvents(meta.id)).toHaveLength(events);
     expect(t.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
+  });
+
+  /** A server of its own on a fresh data root, and how to wait for one of its sessions to settle. */
+  async function ownApp(deps: Parameters<typeof makeTestApp>[1] = {}) {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, deps);
+    const settleOn2 = async (id: string) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const meta = (await call(app, 'GET', `/api/sessions/${id}`)).json().meta as { status: string; error?: string | null };
+        if (TERMINAL.includes(meta.status)) return meta;
+        if (Date.now() > deadline) throw new Error(`session ${id} still ${meta.status}`);
+        await wait(100);
+      }
+    };
+    return { app, settle: settleOn2 };
+  }
+
+  it('a turn that leaves a directory named like a report (reports/099-acme.md/jd.txt) settles, and the server keeps running (SW6-claude-02)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    try {
+      const scenario = scenarioFile({ events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/099-acme.md/jd.txt', content: 'Senior Engineer at Acme.\n' } }, result('Saved a copy of the JD.', 0.02)] });
+      const { id } = await withScenario(scenario, async () => (await call(app, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate https://acme.example/1' })).json());
+      const meta = await settleThere(id);
+      expect(meta.status).toBe('awaiting_user');
+      expect(app.sessions.store.readEvents(id).some((e) => e.event.type === 'evaluation')).toBe(false);
+      expect((await call(app, 'GET', '/healthz')).statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // chmod does not stop root, so as root there is no EACCES to provoke (SW4-tests-25).
+  it.skipIf(process.getuid?.() === 0)('a turn whose finalize fails (the reports folder unreadable when it ends) ends in error saying why, and the server keeps running (SW6-claude-02)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    const reports = path.join(app.cfg.dataRoot, 'reports');
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      // After the turn took its snapshot of reports/, before it ends.
+      await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      fs.chmodSync(reports, 0o000);
+      const meta = await settleThere(id);
+      fs.chmodSync(reports, 0o755);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/the turn could not be finalized: EACCES/) });
+      expect(app.sessions.read(id)!.turns[0]!.endedAt).not.toBeNull();
+      // The usage the turn reported was parsed before finalize failed: it is recorded all the same (SW6-claude-02 review).
+      expect(app.sessions.read(id)!.turns[0]).toMatchObject({ costUsd: 0.07, tokens: 15 });
+      expect(app.sessions.read(id)!.totals).toEqual({ costUsd: 0.07, tokens: 15 });
+      expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'error', turn: 1 });
+      expect((await call(app, 'GET', '/healthz')).statusCode).toBe(200);
+    } finally {
+      fs.chmodSync(reports, 0o755);
+      await app.close();
+    }
+  });
+
+  /** Makes the session's turn 1 post-turn record unwritable (a folder where after.json goes), so its finalize throws. */
+  const breakFinalize = (app: TestApp, id: string) => {
+    const afterJson = path.join(app.sessions.store.guardDirOf(id), 'turns', '1', 'after.json');
+    fs.mkdirSync(path.join(afterJson, 'in-the-way'), { recursive: true });
+  };
+
+  it('a turn holding a reserved report number whose finalize fails releases the reservation: the number and its RESERVED file go (SW6-claude-02 review)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    try {
+      const sentinel = path.join(app.cfg.dataRoot, 'reports', '061-RESERVED.md');
+      fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
+      const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 61 }));
+      breakFinalize(app, id);
+      const meta = await settleThere(id);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/the turn could not be finalized/) });
+      expect(app.sessions.read(id)!.reportNum).toBeNull();
+      expect(fs.existsSync(sentinel)).toBe(false);
+      expect(app.sessions.read(id)!.turns[0]).toMatchObject({ costUsd: 0.07, tokens: 15 });
+      expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'error', reason: expect.stringMatching(/reservation for report number 61 was released/) });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a release of the reserved report number that rejects (the command could not be run) is reported on the turn like one that fails, instead of failing its finalize with the number already let go', async () => {
+    const rejecting: Exec = async (cmd, args, opts) => {
+      if (args.includes('--release')) throw new Error('spawn EAGAIN');
+      return execNoShell(cmd, args, opts);
+    };
+    const { app, settle: settleThere } = await ownApp({ exec: rejecting });
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 62 }));
+      const meta = await settleThere(id);
+      expect(meta.status).toBe('done');
+      expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'done', reason: expect.stringMatching(/could not release the reservation for 62: spawn EAGAIN/) });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a cancelled turn whose finalize fails stays cancelled, with why it could not be finalized (SW6-claude-02 review)', async () => {
+    const { app, settle: settleThere } = await ownApp();
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json());
+      breakFinalize(app, id);
+      await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      expect((await call(app, 'POST', `/api/sessions/${id}/cancel`, {})).statusCode).toBe(200);
+      await until(() => app.sessions.read(id)!.turns[0]!.endedAt !== null);
+      const meta = await settleThere(id);
+      expect(meta.status).toBe('cancelled');
+      const last = app.sessions.store.readEvents(id).map((e) => e.event).at(-1);
+      expect(last).toMatchObject({ type: 'status', status: 'cancelled', turn: 1, reason: expect.stringMatching(/cancelled by the user; the turn could not be finalized/) });
+    } finally {
+      await app.close();
+    }
   });
 
   it('new sessions and forks carry the current policy version', () => {
