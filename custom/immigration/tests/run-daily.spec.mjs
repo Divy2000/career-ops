@@ -82,12 +82,17 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const record = path.join(T, 'claude-calls.ndjson');
   const fakeClaude = path.join(bin, 'fake-claude');
   fs.writeFileSync(fakeClaude, `#!${process.execPath}\n${readFileSync(path.join(HERE, 'fixtures', 'fake-claude.mjs'), 'utf8')}`, { mode: 0o755 });
-  const run = (extraEnv = {}) => {
+  const envFor = (extraEnv) => {
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
     assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
     // TZ passes through: the job dates its log and digest by its local day, which the specs compute in this process's zone.
     // CC_NODE_BIN: the node running these specs, pinned as the plist pins one; run-daily.sh puts Homebrew first on PATH.
-    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, CC_NODE_BIN: process.execPath, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
+    return { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, CC_NODE_BIN: process.execPath, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
+  };
+  // The job started in its own process group, as the Control Center runner starts it, for a spec that signals it mid-run.
+  const start = (extraEnv = {}) => spawn('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env: envFor(extraEnv), stdio: 'ignore', detached: true });
+  const run = (extraEnv = {}) => {
+    const env = envFor(extraEnv);
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
@@ -103,7 +108,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const stepNodes = fs.existsSync(nodeLog) ? [...new Set(readFileSync(nodeLog, 'utf8').trim().split('\n'))] : [];
     return { stepNodes, stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
-  return { T, root, data, home, fakeClaude, run };
+  return { T, root, data, home, tmp, fakeClaude, run, start };
 }
 
 const flagValue = (argv, flag) => argv[argv.indexOf(flag) + 1];
@@ -512,6 +517,26 @@ jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leave
   assert.equal(alive(claudePid), false, 'the claude the shim ran was killed too');
   assert.equal(fs.existsSync(`${pids}.woke`), false, 'the claude was killed at the timeout, not left to run to its end');
 });
+
+for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]]) {
+  jobTest(`a run cancelled with ${signal} during the rank step removes the shim folder that holds the OAuth token (R11-scripts-a-L1-01)`, async () => {
+    const w = dailyWorld();
+    const pids = path.join(w.T, 'rank-claude.pids');
+    const child = w.start({ FAKE_CLAUDE_RANK_SLEEP_MS: '30000', FAKE_CLAUDE_PIDS: pids });
+    const exited = new Promise((resolve) => child.on('exit', (status, sig) => resolve({ status, sig })));
+    for (let i = 0; i < 600 && !fs.existsSync(pids); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(fs.existsSync(pids), 'the rank call never started');
+    assert.equal(fs.readdirSync(w.tmp).filter((f) => f.startsWith('career-ops-rank-shim.')).length, 1, 'the token folder exists while the rank runs');
+    // The runner's cancel: the signal goes to the whole process group.
+    process.kill(-child.pid, signal);
+    const end = await exited;
+    assert.notEqual(end.status, 0, `the cancelled run must not read as a success (${JSON.stringify(end)})`);
+    const imm = path.join(w.data, 'data', 'immigration');
+    for (let i = 0; i < 40 && fs.existsSync(path.join(imm, '.run-daily.pid')); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(fs.readdirSync(w.tmp), [], `the token outlived the cancelled rank step (expected exit ${code})`);
+    assert.equal(fs.existsSync(path.join(imm, '.run-daily.pid')), false, 'the pidfile goes too');
+  });
+}
 
 test('the rank wrapper sets its TERM/INT trap before it starts the shim, so a timeout that comes first still records the failure and orphans nothing', () => {
   const body = readFileSync(RUN_DAILY, 'utf8');

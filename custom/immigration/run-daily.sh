@@ -45,7 +45,19 @@ fi
 # the script was started. It goes when the run ends; a crash leaves a stale pid that no longer runs this script.
 PIDFILE="$IMM/.run-daily.pid"
 echo "$$" > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT
+# The step folders (the policy pass settings, the rank shim with the OAuth token) are removed on every way out: a
+# signal (the Control Center's cancel, a launchd stop) exits through the EXIT trap. Only SIGKILL skips it.
+SETTINGS_DIR=""
+SHIM_DIR=""
+cleanup() {
+  rm -f "$PIDFILE"
+  [ -z "$SETTINGS_DIR" ] || rm -rf "$SETTINGS_DIR"
+  [ -z "$SHIM_DIR" ] || rm -rf "$SHIM_DIR"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 LOG_DIR="$IMM/logs"
 TODAY="$(date +%Y-%m-%d)"
 RANK_LIMIT="${RANK_LIMIT:-100}"
@@ -183,6 +195,7 @@ process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceA
   # cloud metadata address), reads inside the roots and never of secret files, writes only under
   # data/immigration/.
   settings_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
+  SETTINGS_DIR="$settings_dir"
   if ! policy_sha="$(ROOT="$ROOT" DATA="$DATA" IMM="$IMM" DIR="$settings_dir" node --input-type=module -e '
 import fs from "node:fs";
 import os from "node:os";
@@ -255,6 +268,7 @@ rank_top() {
     return 1
   fi
   shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
+  SHIM_DIR="$shim_dir"
   if ! DIR="$shim_dir" node --input-type=module -e '
 import fs from "node:fs";
 import path from "node:path";
