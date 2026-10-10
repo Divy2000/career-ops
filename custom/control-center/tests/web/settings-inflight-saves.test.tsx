@@ -60,9 +60,10 @@ beforeEach(() => {
       // As the real routes: the write lock serializes saves, and each compares If-Match with the version on disk.
       if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
       const etag = `${doc.etag}+`;
-      // A structured save writes its ops, so the refetch after it reads the version written, as on the real routes.
+      // A structured save writes its ops and a raw save its text, so the refetch after it reads the version written, as on the real routes.
       const ops = (body as { ops?: YamlOp[] } | null)?.ops;
-      files[key] = { ...doc, etag, ...(ops && 'doc' in doc ? { doc: applyOpsJs(doc.doc, ops) } : {}) };
+      const raw = (body as { raw?: string } | null)?.raw;
+      files[key] = { ...doc, etag, ...(ops && 'doc' in doc ? { doc: applyOpsJs(doc.doc, ops) } : {}), ...(typeof raw === 'string' ? { raw } : {}) };
       return json(200, { ok: true, etag, warnings: '' });
     }),
   );
@@ -378,5 +379,29 @@ describe('plugin toggles', () => {
     expect(writes()[1]!.headers['If-Match']).toBe('g1+');
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(alerts()).toBe('');
+  });
+});
+
+describe('raw YAML editor: a save whose refetch fails (R18-feat-c-L1-01)', () => {
+  it('hides the editor until a read after the save succeeds, which shows the written text and saves on its ETag', async () => {
+    files = { '/api/config/portals': { key: 'portals', path: 'portals.yml', kind: 'ok', raw: 'a: 1\n', etag: 'p1', doc: { a: 1 }, parseError: null } };
+    const { ConfigEditor } = await import('@web/features/settings/RawConfigEditor');
+    await mount(createElement(ConfigEditor, { fileKey: 'portals', label: 'portals.yml', validator: 'validate-portals.mjs' }));
+    const editor = await until(() => labelled<HTMLTextAreaElement>('portals.yml YAML')?.value === 'a: 1\n' && labelled<HTMLTextAreaElement>('portals.yml YAML'), 'the editor');
+    await type(editor, 'a: 2\n');
+    readsFail = true;
+    await click(button('Validate and save')!);
+    await until(() => /Saved portals\.yml/.test(document.body.textContent ?? ''), 'the saved note');
+    // The pre-save copy is never editable: the failed read replaces the editor with the load error.
+    await until(() => /Could not load/.test(alerts()), 'the load error');
+    expect(labelled('portals.yml YAML')).toBeNull();
+    readsFail = false;
+    await click(button('Retry')!);
+    const shown = await until(() => labelled<HTMLTextAreaElement>('portals.yml YAML'), 'the editor back');
+    expect(shown.value).toBe('a: 2\n');
+    await type(shown, 'a: 3\n');
+    await click(button('Validate and save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ body: { raw: 'a: 3\n' }, headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
   });
 });
