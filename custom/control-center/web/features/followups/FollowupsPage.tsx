@@ -69,7 +69,7 @@ export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone
         <button type="button" disabled={busy} onClick={() => void submit()}>
           Save follow-up
         </button>
-        <button type="button" onClick={() => onDone('')}>
+        <button type="button" disabled={busy} onClick={() => onDone('')}>
           Cancel
         </button>
       </div>
@@ -213,7 +213,15 @@ export function RepliesTab() {
         </div>
         <textarea aria-label="Reply body" rows={6} placeholder="Paste the email body" value={body} onChange={(e) => setBody(e.target.value)} />
         <div className="row gap">
-          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyPaste')} disabled={busy !== null || !subject.trim() || !body.trim()} params={{ subject, from, body }} onRun={(p) => void run('followups.replyPaste', p)} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyPaste')} disabled={busy !== null || !subject.trim() || !body.trim()} params={{ subject, from, body }} onRun={(p) => void run('followups.replyPaste', p).then((out) => {
+              // A paste always appends a new candidate (every paste gets a fresh message_id), so the form is cleared on
+              // success: a second click would otherwise append the same email twice.
+              if (out) {
+                setSubject('');
+                setFrom('');
+                setBody('');
+              }
+            })} />
           <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyWatch')} disabled={busy !== null} onRun={() => void run('followups.replyWatch', {})} />
         </div>
       </div>

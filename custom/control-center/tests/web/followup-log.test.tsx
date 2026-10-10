@@ -61,4 +61,14 @@ describe('Log follow-up', () => {
     await act(async () => save().click());
     expect(posts).toBe(2);
   });
+
+  it('Cancel is disabled while a save is in flight, so the follow-up it still writes cannot be hidden (R18-feat-d-X-02)', async () => {
+    const cancel = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Cancel')!;
+    await act(async () => save().click());
+    expect(posts).toBe(1);
+    expect(cancel().disabled).toBe(true);
+    await act(async () => answer(new Response(JSON.stringify({ num: 3 }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    expect(done).toEqual(['Logged follow-up #3 for Acme Robotics']);
+    expect(cancel().disabled).toBe(false);
+  });
 });

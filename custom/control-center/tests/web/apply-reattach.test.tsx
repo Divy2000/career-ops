@@ -81,6 +81,7 @@ beforeEach(() => {
         if (startGate) await startGate;
         return json({ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'queued', target: { type: 'app', value: '12' } });
       }
+      if (url === '/api/sessions' && init?.method !== 'POST') return json([]);
       if (url === '/api/sessions/s-pdf-12') return json({ meta: { ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: pdfStatus, target: { type: 'app', value: '12' } }, events: [{ seq: 1, event: { type: 'status', status: pdfStatus, reason: null } }] });
       if (url === '/api/sessions/s-apply-url') return json({ meta: URL_SESSION, events: [] });
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404, headers: { 'content-type': 'application/json' } });
@@ -168,6 +169,27 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
     expect(applyPanel()!.sessionId ?? null).toBeNull();
     expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
+  });
+
+  it('a draft with edited answers deleted elsewhere drops them without asking, so the next draft cannot fill them', async () => {
+    await openApply();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Drafted answers"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Jane Q. Smith');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => applyPanel()!.onStatus!('gone', null));
+    await until(() => draftButton(), 'the Draft answers button');
+    // The deleted session's answers cannot be kept: no discard question that could keep them on Cancel.
+    expect(dialog()).toBeNull();
+    expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
+
+    // The next draft's id arrives before its answers envelope: Fill is not offered with the old session's edits.
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12b'));
+    expect(fillButton()).toBeUndefined();
   });
 
   it('on a tracker row, a typed apply link comes back with the re-attached draft, so prefill uses it', async () => {
@@ -312,6 +334,34 @@ describe('Apply starts over and follows the sessions it started', () => {
     await openApply();
     await until(() => host.querySelector('a[href="/sessions/s-pdf-12"]'), 'the link to the waiting session');
     expect(generate()!.disabled).toBe(true);
+  });
+
+  it('Generate CV PDF stays off while a pdf session started from the row\'s Documents tab runs (R18-feat-a-L1-02)', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') {
+        return json([{ ...URL_SESSION, id: 's-pdf-docs', mode: 'pdf', status: 'running', target: { type: 'app', value: '12' } }]);
+      }
+      return inner(input, init);
+    });
+    await openApply();
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-docs"]'), 'the link to the running Documents tab session');
+    expect(generate()!.disabled).toBe(true);
+  });
+
+  it('Generate CV PDF stays off while the sessions list has not confirmed there is no live pdf session (R18 review)', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') {
+        return new Response(JSON.stringify({ error: 'internal error' }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+      return inner(input, init);
+    });
+    await openApply();
+    const g = await until(() => generate(), 'the Generate CV PDF button');
+    expect(g!.disabled).toBe(true);
   });
 
   it('Generate CV PDF comes back once the tailored CV session ended', async () => {
