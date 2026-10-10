@@ -415,7 +415,8 @@ describe('guard hook', () => {
   });
 
   it('apply may update a report in reports/ (modes/apply.md Step 8 and 9.3), and nothing else there or in the tracker (R14-claude-L2-02, R14-claude-1-01)', () => {
-    const rels = ['reports/012-acme-platform-2026-10-01.md', 'reports/nested/012-acme.md', 'data/applications.md', 'cv.md'];
+    // A reservation sentinel is the number allocator's, never a report to update (review fix).
+    const rels = ['reports/012-acme-platform-2026-10-01.md', 'reports/nested/012-acme.md', 'reports/008-RESERVED.md', 'data/applications.md', 'cv.md'];
     for (const mode of ['apply', 'de/bewerben']) {
       expect(writesFor([mode], rels)).toEqual(Object.fromEntries(rels.map((rel, i) => [`${mode} ${rel}`, i === 0 ? 0 : 2])));
     }
@@ -427,12 +428,15 @@ describe('guard hook', () => {
       'patterns reports/012-acme.md': 2,
       'patterns data/salary-observations.tsv': 2,
     });
-    expect(writesFor(['tracker'], ['data/salary-observations.tsv', 'reports/012-acme.md', 'data/applications.md', 'reports/nested/x.md'])).toEqual({
+    expect(writesFor(['tracker'], ['data/salary-observations.tsv', 'reports/012-acme.md', 'data/applications.md', 'reports/nested/x.md', 'reports/008-RESERVED.md'])).toEqual({
       'tracker data/salary-observations.tsv': 0,
       'tracker reports/012-acme.md': 0,
       'tracker data/applications.md': 2,
       'tracker reports/nested/x.md': 2,
+      'tracker reports/008-RESERVED.md': 2,
     });
+    // An evaluation still owns its reservation sentinels (reserve-report-num.mjs writes them).
+    expect(writesFor(['oferta'], ['reports/008-RESERVED.md'])).toEqual({ 'oferta reports/008-RESERVED.md': 0 });
   });
 
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {

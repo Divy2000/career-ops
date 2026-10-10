@@ -283,7 +283,7 @@ export function writePolicyFile(dir: string, opts: { codeRoot: string; dataRoot?
     dataRoot: opts.dataRoot ?? opts.codeRoot,
     sessionDir: opts.sessionDir ?? dir,
     allow: [...opts.policy.writeGlobs, ...(opts.extraAllow ?? [])],
-    deny: opts.deny ?? [...ALWAYS_DENIED_WRITES],
+    deny: [...(opts.deny ?? ALWAYS_DENIED_WRITES), ...(opts.policy.denyWrites ?? [])],
     bash: opts.policy.bashPrefixes,
     playwright: opts.policy.mcp === 'playwright',
     readDeny: [...READ_DENY],

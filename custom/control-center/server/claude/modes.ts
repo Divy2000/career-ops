@@ -263,6 +263,12 @@ const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   tracker: ['data/salary-observations.tsv', 'reports/*.md'],
 };
 
+/** What a mode's extra writes still exclude: a reports/*.md grant updates reports, never the allocator's reservation sentinels. */
+const MODE_EXTRA_DENIES: Readonly<Record<string, readonly string[]>> = {
+  apply: ['reports/*-RESERVED.md'],
+  tracker: ['reports/*-RESERVED.md'],
+};
+
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
   advisor: { title: 'Ask (advisor)', policyClass: 'read-only' },
@@ -384,6 +390,8 @@ export interface ModePolicy {
   title: string;
   policyClass: PolicyClass;
   writeGlobs: string[];
+  /** Paths inside writeGlobs this mode may still not write (added to the turn's deny list). */
+  denyWrites?: string[];
   network: NetworkTool[];
   /** Scripts the session may run, relative to the code root. */
   scripts: string[];
@@ -422,6 +430,7 @@ export function getModePolicy(id: string): ModePolicy | null {
     title: derived?.title ?? virtual!.title,
     policyClass,
     writeGlobs: [...def.writeGlobs, ...(Object.hasOwn(MODE_EXTRA_WRITES, englishModeOf(id)) ? MODE_EXTRA_WRITES[englishModeOf(id)]! : [])],
+    ...(Object.hasOwn(MODE_EXTRA_DENIES, englishModeOf(id)) ? { denyWrites: [...MODE_EXTRA_DENIES[englishModeOf(id)]!] } : {}),
     network: virtual?.network ?? [...def.network],
     scripts,
     bashRules: explicit ? explicit.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),
