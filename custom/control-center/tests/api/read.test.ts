@@ -165,6 +165,19 @@ describe('read endpoints', () => {
     expect((await get('/api/immigration/companies/Not%20A%20Slug')).statusCode).toBe(400);
   });
 
+  it('a company file whose heading carries the legal name gets the freshness of that file, not of the heading\'s slug (R12-srv-core-L2-01)', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'immigration', 'companies', 'meta.md');
+    fs.writeFileSync(file, '# Meta Platforms, Inc. sponsorship check\nchecked_at: 2026-09-30\nverdict: sponsoring\n');
+    try {
+      const c = await get('/api/immigration/companies/meta');
+      expect(c.statusCode, c.body).toBe(200);
+      expect(c.json().company).toMatchObject({ slug: 'meta', name: 'Meta Platforms, Inc.' });
+      expect(c.json().freshness).toMatchObject({ slug: 'meta', file: 'data/immigration/companies/meta.md', checked_at: '2026-09-30' });
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
   it('GET /api/followups runs the core cadence script against the fixture root', async () => {
     const res = await get('/api/followups');
     expect(res.statusCode).toBe(200);
