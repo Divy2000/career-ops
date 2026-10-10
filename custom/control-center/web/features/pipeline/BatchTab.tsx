@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { Message } from '../../components/ActionBar';
 import { Pill } from '../../components/ui';
@@ -53,6 +53,14 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const blocked = pipelineLive || sessions.isPending || sessions.isError;
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
   const asking = useRef(false);
+  // A start can answer after the user left the page: only a still-mounted one moves them to the session.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const start = async (...args: Parameters<typeof startAsked>) => {
     if (asking.current) return;
     asking.current = true;
@@ -77,7 +85,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       setUrls(outcome.failedUrls.join('\n'));
       setMessage({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
       // The page moves to Sessions on onStarted, which would hide a failure and the URLs kept for the retry.
-      if (outcome.failedUrls.length === 0) onStarted?.();
+      if (outcome.failedUrls.length === 0 && mounted.current) onStarted?.();
     } catch (err) {
       // The fan-out starts its sessions one by one and answers an error without the ones it already started: those are
       // taken out of the box, so a retry does not evaluate them twice.

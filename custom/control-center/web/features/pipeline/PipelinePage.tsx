@@ -1,4 +1,4 @@
-import { useRef, useMemo, useState } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useShortlist } from '../../lib/queries';
@@ -286,6 +286,14 @@ function EvaluateJd({ reference, label, running, checking }: { reference: string
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A start can answer after the user left the page: only a still-mounted one moves them to the session.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const go = async () => {
     const jd = localJdPath(reference);
     if (jd === null) return;
@@ -293,7 +301,7 @@ function EvaluateJd({ reference, label, running, checking }: { reference: string
     setError(null);
     try {
       const m = await startSavedJdSession(reference, jd);
-      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(`Could not start the evaluation: ${describeError(err)}`);
     } finally {

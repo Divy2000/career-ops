@@ -105,6 +105,14 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   const [busy, setBusy] = useState(false);
   // The disabled button lags the click by a render, and confirms queue: a second click before it would ask twice.
   const asking = useRef(false);
+  // A start can answer after the user left the page: only a still-mounted one moves them to the session.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const evaluateAll = async () => {
     if (unique.length === 0 || tooMany || asking.current) return;
     asking.current = true;
@@ -115,7 +123,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
       const outcome = fanoutOutcome(r);
       setNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
       // A session that did not start is reported here; the Sessions page would hide why.
-      if (outcome.failedUrls.length === 0) await navigate({ to: '/sessions' });
+      if (outcome.failedUrls.length === 0 && mounted.current) await navigate({ to: '/sessions' });
     } catch (err) {
       setNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {

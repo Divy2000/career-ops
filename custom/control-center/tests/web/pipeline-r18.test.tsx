@@ -170,3 +170,53 @@ describe('A saved-JD evaluation and Process inbox (R18-feat-b-L3-04)', () => {
   });
 });
 
+describe('A start that answers after the user left the page (R18-feat-b-L3-05)', () => {
+  it('Evaluate JD does not move a user who went elsewhere to the session', async () => {
+    holdUrl = '/api/sessions';
+    const router = await mount();
+    const jd = await until(() => host.querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]:not(:disabled)'), 'Evaluate JD');
+    await act(async () => jd.click());
+    await until(() => hold, 'the start sent');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await act(async () => hold!.release());
+    await until(() => posts.length === 1 || undefined, 'the start');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
+  });
+
+  it('Evaluate visible does not move a user who went elsewhere to Sessions', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
+    await act(async () => button('Evaluate visible (2)')!.click());
+    await until(() => hold, 'the fan-out sent');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await act(async () => hold!.release());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
+  });
+
+  it('Batch evaluate does not move a user who went elsewhere to Sessions', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    await act(async () => (await until(() => button('Start them'), 'the confirm')).click());
+    await until(() => hold, 'the fan-out sent');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await act(async () => hold!.release());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
+  });
+
+  it('Batch evaluate still moves a user who stayed to Sessions', async () => {
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    await act(async () => (await until(() => button('Start them'), 'the confirm')).click());
+    await until(() => router.state.location.pathname === '/sessions' || undefined, 'the move to Sessions');
+  });
+});
+
