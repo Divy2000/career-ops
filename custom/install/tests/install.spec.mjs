@@ -867,6 +867,15 @@ test('launchd is skipped while modes/_brief.md is still the template the install
   assert.equal(r.status, 3, r.out);
 });
 
+test('launchd is skipped while modes/_brief.md, edited, still carries one of its template\'s placeholders, as the real doctor reports it', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  fs.writeFileSync(path.join(D, 'modes', '_brief.md'), `${read(D, 'modes', '_brief.template.md')}My own note\n`);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(w.calls('launchd-install').length, 0, r.out);
+  assert.match(r.out, /Onboarding is not finished \(still needed: modes\/_brief\.md\)/);
+});
+
 test('a ready install gets the daily job only; --with-upstream-sync gets both', () => {
   const a = fresh({ keychain: true });
   a.w.makeCheckout(a.D, { files: READY_FILES });

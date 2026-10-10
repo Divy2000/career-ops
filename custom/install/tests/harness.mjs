@@ -75,7 +75,7 @@ const TEMPLATES = {
 function buildFakeCheckout(dir) {
   put(path.join(dir, 'package.json'), '{"name":"fake-career-ops"}\n');
   fs.copyFileSync(path.join(REPO_ROOT, 'path-resolver.mjs'), path.join(dir, 'path-resolver.mjs'));
-  for (const [rel, template] of Object.entries(TEMPLATES)) put(path.join(dir, template), `TEMPLATE ${rel}\n`);
+  for (const [rel, template] of Object.entries(TEMPLATES)) put(path.join(dir, template), `TEMPLATE ${rel}\nName: {Your Name}\n`);
   put(path.join(dir, 'doctor.mjs'), `import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,11 +97,16 @@ if (args.includes('--init-templates')) {
 }
 if (args.includes('--json')) {
   const missing = ['cv.md', 'config/profile.yml', 'modes/_profile.md', 'portals.yml'].filter((p) => !fs.existsSync(path.join(root, p)));
-  // Like the real doctor: _profile.md and _brief.md still identical to their template are not personalized.
+  // Like the real doctor: _profile.md and _brief.md still identical to their template, or still carrying one of the
+  // template's own {placeholders}, are not personalized.
+  const placeholders = (text) => new Set(text.match(/\\{[^{}\\n]{2,60}\\}/g) || []);
   const stale = ['modes/_profile.md', 'modes/_brief.md'].filter((rel) => {
     const f = path.join(root, rel);
     const t = templateOf(rel);
-    return fs.existsSync(f) && t && fs.readFileSync(f, 'utf8') === fs.readFileSync(t, 'utf8');
+    if (!fs.existsSync(f) || !t) return false;
+    const text = fs.readFileSync(f, 'utf8');
+    const tpl = fs.readFileSync(t, 'utf8');
+    return text === tpl || [...placeholders(tpl)].some((p) => text.includes(p));
   });
   const forced = (process.env.FAKE_DOCTOR_UNPERSONALIZED || '').split(',').filter(Boolean);
   const unpersonalized = [...new Set([...stale, ...forced])].map((p) => ({ path: p, reason: 'x' }));
