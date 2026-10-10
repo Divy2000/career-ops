@@ -67,6 +67,12 @@ describe('moving an evaluated posting to Processed', () => {
     }
   });
 
+  it('reads a heading with a suffix and the accented Traitées the way the Pipeline page does', () => {
+    const row = `- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌`;
+    expect(moveToProcessed(`## Pending (1)\n\n- [ ] ${URL} | Acme | Eng\n\n## Processed (0)\n`, URL, POSTING).text).toBe(`## Pending (1)\n\n\n## Processed (0)\n\n${row}\n`);
+    expect(moveToProcessed(`## En attente\n\n- [ ] ${URL} | Acme | Eng\n\n## Traitées\n`, URL, POSTING).text).toBe(`## En attente\n\n\n## Traitées\n\n${row}\n`);
+  });
+
   it('a report with no generated PDF, or no readable score, says so', () => {
     const r = moveToProcessed(`## Pending\n- [ ] ${URL} | Acme | Eng\n## Processed\n`, URL, { ...POSTING, score: null, pdf: false });
     expect(r.text).toContain(`- [x] #042 | ${URL} | Acme | Eng | N/A | PDF ❌`);

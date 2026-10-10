@@ -26,33 +26,34 @@ const HEADING_PAIRS: ReadonlyArray<readonly [pending: string, processed: string]
   ['대기', '처리 완료'],
 ];
 const PENDING_HEADINGS = HEADING_PAIRS.map(([p]) => p);
-const PROCESSED_HEADINGS = [...HEADING_PAIRS.map(([, p]) => p), 'Traitées', 'Done', 'Hecho'];
+// Traitées: the accented spelling of the French heading, which a hand edit may use.
+const PROCESSED_WRITTEN = [...HEADING_PAIRS.map(([, p]) => p), 'Traitées'];
+const PROCESSED_HEADINGS = [...PROCESSED_WRITTEN, 'Done', 'Hecho'];
 
-const same = (a: string, b: string) => a.trim().toLowerCase() === b.toLowerCase();
-
-/** The Processed heading that pairs with a whole Pending heading title (`Offen` gives `Verarbeitet`), or null. */
-export function processedHeadingFor(pendingTitle: string): string | null {
-  return HEADING_PAIRS.find(([p]) => same(pendingTitle, p))?.[1] ?? null;
-}
-
-/** Whether a whole heading title is a Processed heading a pipeline mode writes. */
-export function isProcessedHeading(title: string): boolean {
-  return HEADING_PAIRS.some(([, p]) => same(title, p));
-}
-
-const startsWithHeading = (title: string, names: string[]): boolean => {
-  const t = title.toLowerCase();
-  return names.some((n) => {
+/** The name in `names` a heading title starts with as a whole word ("Pending (12)" is Pending, "Pendingly" is not). */
+const headingName = (title: string, names: readonly string[]): string | undefined => {
+  const t = title.trim().toLowerCase();
+  return names.find((n) => {
     const name = n.toLowerCase();
-    // A whole leading word: "Pending (12)" is the Pending section, "Pendingly" is not.
     return t.startsWith(name) && !/^[\p{L}\p{N}]/u.test(t.slice(name.length));
   });
 };
 
+/** The Processed heading that pairs with a Pending heading title (`Offen` gives `Verarbeitet`), or null. */
+export function processedHeadingFor(pendingTitle: string): string | null {
+  const name = headingName(pendingTitle, PENDING_HEADINGS);
+  return name === undefined ? null : HEADING_PAIRS.find(([p]) => p === name)![1];
+}
+
+/** Whether a heading title is a Processed heading a pipeline mode writes (not the older Done or Hecho). */
+export function isProcessedHeading(title: string): boolean {
+  return headingName(title, PROCESSED_WRITTEN) !== undefined;
+}
+
 /** Which pipeline.md section a `## ` heading's title opens, in any shipped mode language. */
 export function pipelineSection(title: string): 'pending' | 'done' | 'other' {
   const t = title.trim();
-  return startsWithHeading(t, PENDING_HEADINGS) ? 'pending' : startsWithHeading(t, PROCESSED_HEADINGS) ? 'done' : 'other';
+  return headingName(t, PENDING_HEADINGS) ? 'pending' : headingName(t, PROCESSED_HEADINGS) ? 'done' : 'other';
 }
 
 /**
