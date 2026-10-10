@@ -769,7 +769,7 @@ test('--onboard interactive without a usable terminal prints the command and rec
   assert.equal(r.status, 3);
 });
 
-test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus one Edit rule for the draft dir, no Bash, token only in the child env', () => {
+test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus one Edit rule for the draft dir, no Bash, no MCP servers, token only in the child env and never in its hook or tool children (R11-scripts-b-L3-01)', () => {
   const { w, D } = fresh({ keychain: true });
   const data = path.join(w.T, 'mydata');
   const resume = md(w, 'resume.md', '# Me\n## Skills\n');
@@ -792,8 +792,12 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   for (let i = start; i < argv.length && !argv[i].startsWith('--'); i++) tools.push(argv[i]);
   assert.deepEqual(tools, ['Read', 'Glob', 'Grep', `Edit(/${draft}/**)`]);
   assert.ok(!argv.some((a) => /bash/i.test(a) && !a.includes('\n') && a.length < 40));
+  // As the Control Center confines its sessions: no user or project MCP server starts with the token in its env.
+  assert.ok(argv.includes('--strict-mcp-config'), argv.join(' '));
+  assert.ok(!argv.includes('--mcp-config'), 'no MCP config is handed in');
   const envLine = w.log().find((l) => l.startsWith('claude-env'));
-  assert.equal(envLine, 'claude-env TOKEN_SET=1 API_KEY_EMPTY=1');
+  // SUBPROCESS_ENV_SCRUB: hook and tool children run without the OAuth token.
+  assert.equal(envLine, 'claude-env TOKEN_SET=1 API_KEY_EMPTY=1 SUBPROCESS_ENV_SCRUB=1');
   assert.ok(!r.out.includes(SECRET));
   assert.ok(!w.log().some((l) => l.includes(SECRET)));
   for (const log of installLogs(data)) assert.ok(!fs.readFileSync(log, 'utf8').includes(SECRET));

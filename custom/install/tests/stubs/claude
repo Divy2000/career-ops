@@ -8,7 +8,7 @@ case "${1:-}" in
   --version) echo "2.0.0 (Claude Code)"; exit 0 ;;
 esac
 if [ "${1:-}" = "-p" ]; then
-  echo "claude-env TOKEN_SET=${CLAUDE_CODE_OAUTH_TOKEN:+1} API_KEY_EMPTY=$([ -z "${ANTHROPIC_API_KEY-x}" ] && echo 1)" >> "$STUB_LOG"
+  echo "claude-env TOKEN_SET=${CLAUDE_CODE_OAUTH_TOKEN:+1} API_KEY_EMPTY=$([ -z "${ANTHROPIC_API_KEY-x}" ] && echo 1) SUBPROCESS_ENV_SCRUB=${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB-}" >> "$STUB_LOG"
   prev=""
   for a in "$@"; do
     if [ "$prev" = "--add-dir" ] && [ -z "${draft:-}" ]; then draft="$a"; fi
