@@ -8,7 +8,7 @@ import type { Target } from '@web/lib/sessions';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type PanelProps = { mode: string; sessionId?: string | null; onSessionId?: (id: string) => void; onStatus?: (s: string) => void; onStarting?: () => void; onStartFailed?: () => void };
+type PanelProps = { mode: string; sessionId?: string | null; onSessionId?: (id: string) => void; onStatus?: (s: string) => void; onStarting?: () => void; onStartFailed?: () => void; onSent?: () => void };
 let panels: PanelProps[];
 vi.mock('@web/components/SessionPanel', () => ({
   SessionPanel: (props: PanelProps) => {
@@ -189,6 +189,23 @@ describe('a start still in flight when the launcher was left', () => {
     await unmount();
     await mount({ rememberAs: 'cc.test.launch' });
     expect(panels.some((p) => p.sessionId === 'failed-1')).toBe(false);
+  });
+
+  it('keeps a session again once a reply runs it after its errored start (R17-shared-comp-L1-02)', async () => {
+    const { rememberedLaunches } = await import('@web/lib/lastSession');
+    await mount({ rememberAs: 'cc.test.launch' });
+    await act(async () => openPrompt().click());
+    const starter = last();
+    await act(async () => {
+      starter.onStarting!();
+      starter.onSessionId!('failed-1');
+      starter.onStartFailed!();
+    });
+    expect(rememberedLaunches('cc.test.launch').read()).toEqual([]);
+    // The panel's reply runs the errored session, so it is live again and must be kept for navigation.
+    const attached = panels.find((p) => p.sessionId === 'failed-1')!;
+    await act(async () => attached.onSent!());
+    expect(rememberedLaunches('cc.test.launch').read().map((l) => l.id)).toEqual(['failed-1']);
   });
 
   it('keeps a session reported between the remount\'s first render and its effects', async () => {

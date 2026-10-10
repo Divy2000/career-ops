@@ -136,6 +136,11 @@ export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: Mo
             setOwnStarts((n) => Math.max(0, n - 1));
             countStart(storeKey, -1);
           }}
+          onSent={() => {
+            // A reply or fork that ran after an errored start put the session live again: keep it, or a reload loses it.
+            const id = l.sessionId;
+            if (id) store.add({ mode: l.mode.id, id });
+          }}
           onSessionId={(id) => {
             // A start reports once; a fork reports again with the new session, which replaces the one it forked from.
             const isStart = l.sessionId === null && !reported.current.has(l.key);
