@@ -24,16 +24,18 @@ export interface EvaluatedPosting {
   company: string;
   role: string;
   score: number | null;
-  /** True when the report's **PDF:** header names a generated PDF (see pdfGenerated). */
+  /** True when the report's **PDF:** header says the PDF was generated (see pdfGenerated). */
   pdf: boolean;
 }
 
 /**
- * True only when the report's **PDF:** header names a .pdf file that exists inside the data root (links resolved). The
- * header is otherwise free text: "pending" before the CV is built, or "not generated" in the report's own language.
+ * True when the report's **PDF:** header names a .pdf file that exists inside the data root (links resolved), or is the
+ * bare mark the tr, zh and zh-TW modes write (`**PDF:** ✅`). The header is otherwise free text: "pending" before the
+ * CV is built, or "not generated" in the report's own language.
  */
 export function pdfGenerated(header: string | null, dataRoot: string): boolean {
   if (!header) return false;
+  if (header.trim() === '✅') return true;
   const root = fs.realpathSync(dataRoot);
   for (const [token] of header.matchAll(/[^\s`'"()<>[\]|]+\.pdf\b/gi)) {
     // A token the filesystem cannot resolve (missing, a name over 255 characters, a symlink loop, no permission) names
