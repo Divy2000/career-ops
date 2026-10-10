@@ -935,8 +935,8 @@ test('sync.sh updates the live checkout through update_live_checkout and fails t
  * Runs sync.sh's own lines from the origin/main check through leaving for the live checkout, with every other gate
  * green, on a sync commit made from origin/main as it was when the run started (BASE_REV). `moveMain` merges another
  * PR into the fork meanwhile; `fetchFails` makes the re-fetch fail; `race` merges another PR in the moment between
- * that check and GitHub's merge. gh is a stub that records its argv and, for `pr merge`, merges the PR's head into the
- * fork's main the way GitHub does (onto whatever main is then); `pr view` reports that merge commit.
+ * that check and the merge itself (a pre-push hook, which runs after the remote's refs were read). gh is a stub that
+ * records its argv.
  */
 function mergeDecision({ moveMain = false, fetchFails = false, race = false } = {}) {
   const w = makeWorld();
@@ -945,44 +945,39 @@ function mergeDecision({ moveMain = false, fetchFails = false, race = false } = 
     const baseRev = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
     git(w.live, 'checkout', '-q', '-b', 'sync/x', baseRev);
     commitFile(w.live, 'synced.txt', 'merged upstream\n', 'the sync merge');
-    const other = (repo) => commitFile(repo, 'other-pr.txt', 'x\n', 'another PR merged into the fork while the sync ran');
-    if (moveMain) {
-      const extra = path.join(w.base, 'extra');
-      git(w.base, 'clone', '-q', w.originBare, extra);
-      other(extra);
-      git(extra, 'push', '-q', 'origin', 'HEAD:main');
+    const extra = path.join(w.base, 'extra');
+    git(w.base, 'clone', '-q', w.originBare, extra);
+    commitFile(extra, 'other-pr.txt', 'x\n', 'another PR merged into the fork while the sync ran');
+    const otherPr = git(extra, 'rev-parse', 'HEAD').trim();
+    if (moveMain) git(extra, 'push', '-q', 'origin', 'HEAD:main');
+    if (race) {
+      const hook = path.join(w.live, '.git', 'hooks', 'pre-push');
+      mkdirSync(path.dirname(hook), { recursive: true });
+      writeFileSync(hook, `#!/bin/bash\ngit -C "${extra}" push -q origin HEAD:main\n`);
+      chmodSync(hook, 0o755);
     }
     if (fetchFails) git(w.live, 'remote', 'set-url', 'origin', path.join(w.base, 'gone.git'));
     const bin = path.join(w.base, 'bin');
     const ghLog = path.join(w.base, 'gh.log');
-    const oid = path.join(w.base, 'merge-oid');
-    const work = path.join(w.base, 'github');
-    stub(bin, 'gh', [
-      `printf '%s\\n' "$*" >> "${ghLog}"`,
-      'case "$1 $2" in',
-      `  "pr merge") head="$(git -C "${w.live}" rev-parse HEAD)"; git clone -q "${w.originBare}" "${work}" && cd "${work}" || exit 1`,
-      race ? '    echo x > other-pr.txt && git add -A && git commit -q -m "another PR, merged a moment before"' : '    :',
-      `    git fetch -q "${w.live}" "$head" && git merge -q --no-ff -m "Merge pull request" "$head" && git push -q origin HEAD:main && git rev-parse HEAD > "${oid}" ;;`,
-      `  "pr view") cat "${oid}" ;;`,
-      'esac',
-    ].join('\n'));
+    stub(bin, 'gh', `printf '%s\\n' "$*" >> "${ghLog}"`);
     const lines = readFileSync(SYNC, 'utf8').split('\n');
     const from = lines.findIndex((l) => l.startsWith('MAIN_MOVED='));
     const to = lines.findIndex((l, i) => i > from && l.startsWith('  cd "$LIVE"'));
     assert.ok(from > -1 && to > from, 'no MAIN_MOVED .. cd "$LIVE" block in sync.sh');
-    const script = `source "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\nPR_URL=https://example.invalid/pr/1\nLIVE="${w.live}"\n${lines.slice(from, to + 1).join('\n')}\necho deployed\nelse\necho "hold: $BLOCKERS"\nfi`;
+    const script = `source "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\nPR_URL=https://example.invalid/pr/1\nBRANCH=sync/x\nLIVE="${w.live}"\n${lines.slice(from, to + 1).join('\n')}\necho "deployed $MERGE_OID"\nelse\necho "hold: $BLOCKERS"\nfi`;
     const env = { ...GIT_ENV, PATH: `${bin}:${process.env.PATH}`, BASE_REV: baseRev, CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
     const res = spawnSync('bash', ['-c', script], { cwd: w.live, env, encoding: 'utf8' });
     const now = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
-    return { ...res, baseRev, now, head: git(w.live, 'rev-parse', 'HEAD').trim(), gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8') : '' };
+    const forkMain = git(w.originBare, 'rev-parse', 'refs/heads/main').trim();
+    return { ...res, baseRev, now, forkMain, otherPr, head: git(w.live, 'rev-parse', 'HEAD').trim(), gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8') : '' };
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 }
 
-test('a fork main unchanged since the run started is merged, pinned to the commit the gates tested (R11-scripts-b-L1-01)', () => {
+test('a fork main unchanged since the run started gets exactly the tested sync commit, and the live checkout is sent to it (R11-scripts-b-L1-01)', () => {
   const r = mergeDecision();
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /^deployed$/m, r.stdout);
-  assert.equal(r.gh.split('\n')[0], `pr merge https://example.invalid/pr/1 --merge --match-head-commit ${r.head} --delete-branch`);
+  assert.equal(r.forkMain, r.head, 'the fork main is the sync commit the gates tested');
+  assert.match(r.stdout, new RegExp(`^deployed ${r.head}$`, 'm'), r.stdout);
 });
 
 test('a fork main that moved while the sync ran holds the PR, naming both commits, and nothing is merged (R11-scripts-b-L1-01)', () => {
@@ -990,33 +985,22 @@ test('a fork main that moved while the sync ran holds the PR, naming both commit
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.notEqual(r.now, r.baseRev, 'the re-fetch saw the moved main');
   assert.match(r.stdout, new RegExp(`^hold: origin/main moved during the sync \\(tested ${r.baseRev.slice(0, 12)}, now ${r.now.slice(0, 12)}\\); re-run the sync$`, 'm'), r.stdout);
-  assert.equal(r.gh, '');
+  assert.equal(r.forkMain, r.otherPr);
 });
 
 test('a re-fetch of the fork main that fails holds the PR rather than merging on a stale origin/main (R11-scripts-b-L1-01)', () => {
   const r = mergeDecision({ fetchFails: true });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /^hold: cannot confirm origin\/main is still the commit the sync tested \(the fetch failed\)$/m, r.stdout);
-  assert.equal(r.gh, '');
+  assert.equal(r.forkMain, r.baseRev);
 });
 
-test('a PR merged onto a main that moved in the moment after the check fails the run before the live checkout is touched (R11-scripts-b-L1-01)', () => {
+test('a PR merged in the moment between the check and the merge leaves the fork main as that PR left it and fails the run before the live checkout (R11-scripts-b-L1-01)', () => {
   const r = mergeDecision({ race: true });
   assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.match(r.stdout, new RegExp(`^!!! the sync PR was merged onto [0-9a-f]{12}, not the tested ${r.baseRev.slice(0, 12)}; the live checkout was not updated`, 'm'), r.stdout);
-  assert.doesNotMatch(r.stdout, /^deployed$/m);
-});
-
-test('merged_onto holds back a merge it cannot read or find on origin/main (R11-scripts-b-L1-01)', () => {
-  const w = makeWorld();
-  try {
-    git(w.live, 'fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main');
-    const base = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
-    assert.equal(bashLib(w.live, `merged_onto "" ${base}`).stdout, 'cannot read the merge commit of the sync PR');
-    commitFile(w.live, 'local.txt', 'x\n', 'a commit GitHub never saw');
-    const local = git(w.live, 'rev-parse', 'HEAD').trim();
-    assert.equal(bashLib(w.live, `merged_onto ${local} ${base}`).stdout, `the merge commit ${local.slice(0, 12)} of the sync PR is not on origin/main`);
-  } finally { rmSync(w.base, { recursive: true, force: true }); }
+  assert.equal(r.forkMain, r.otherPr, 'no untested combination reached the fork main');
+  assert.match(r.stdout, /^!!! the fork main moved, or refused the push, before the sync commit could land on it; https:\/\/example\.invalid\/pr\/1 is left open$/m, r.stdout);
+  assert.doesNotMatch(r.stdout, /^deployed/m);
 });
 
 // ---- Playwright's browser after an install without lifecycle scripts (SW3-scripts-04) ----

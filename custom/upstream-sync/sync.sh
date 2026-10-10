@@ -210,20 +210,21 @@ else
 fi
 echo "PR: $PR_URL"
 
-# Every gate compared with BASE_REV: a main that moved since (another PR merged meanwhile) holds the PR, and the merge
-# itself is pinned to the head commit that was tested. GitHub still merges onto whatever main is when it runs, so a
-# merge made onto another main (a PR merged in the moment between) never reaches the live checkout.
+# Every gate compared with BASE_REV, so the fork's main may only become the tested sync commit while it is still
+# BASE_REV. A main that moved since (another PR merged meanwhile) holds the PR. The merge itself is a compare-and-swap
+# push of that commit to main, which the server refuses when main moved in the moment after the check; GitHub then
+# marks the PR merged. (gh pr merge would merge onto whatever main is by then, a combination nothing tested.)
 MAIN_MOVED="$(main_moved "$BASE_REV")"
 BLOCKERS="$(merge_blockers)"
 if [ -z "$BLOCKERS" ]; then
-  gh pr merge "$PR_URL" --merge --match-head-commit "$(git rev-parse HEAD)" --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
+  MERGE_OID="$(git rev-parse HEAD)" || fail "cannot read the sync commit"
+  git push -q --force-with-lease="main:$BASE_REV" origin "$MERGE_OID:refs/heads/main" ||
+    fail "the fork main moved, or refused the push, before the sync commit could land on it; $PR_URL is left open"
   echo "merged $PR_URL"
-  MERGE_OID="$(gh pr view "$PR_URL" --json mergeCommit -q .mergeCommit.oid)"
-  MERGED_ONTO="$(merged_onto "$MERGE_OID" "$BASE_REV")"
-  [ -z "$MERGED_ONTO" ] || fail "$MERGED_ONTO; the live checkout was not updated. Test origin/main before pulling it"
+  git push -q origin --delete "$BRANCH" >/dev/null 2>&1 || echo "could not delete $BRANCH on origin; delete it by hand"
   cd "$LIVE" || fail "live checkout missing"
   # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
-  # Moves to the verified merge commit only: a PR merged after it was not tested by this run.
+  # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
   case $? in
     0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
