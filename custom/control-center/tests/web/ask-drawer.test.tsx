@@ -292,6 +292,38 @@ describe('Ask drawer: research a company runs deep, not the Portfolio research v
   });
 });
 
+describe('Ask drawer: a 202 whose session already failed shows failed, not done (R17-shared-comp-X-02)', () => {
+  const FAILED = { id: 's-fail', mode: 'oferta', status: 'error', error: 'Claude CLI not approved', target: { type: 'url', value: 'https://jobs.example.com/1' } };
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && url === '/api/sessions') {
+          return Promise.resolve(new Response(JSON.stringify(FAILED), { status: 202, headers: { 'content-type': 'application/json' } }));
+        }
+        return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it.each([
+    ['evaluate', { url: 'https://jobs.example.com/1' }],
+    ['research', { topic: 'Acme' }],
+    ['generatePdf', { row: '2' }],
+  ] as const)('%s reports the start failure instead of done', async (action, params) => {
+    await act(async () => emitEnvelope!('act', { action, params }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Claude CLI not approved');
+    expect(navigations).toEqual([]);
+  });
+});
+
 describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () => {
   let starts: number;
   beforeEach(() => {

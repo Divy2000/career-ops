@@ -178,6 +178,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         case 'evaluate': {
           const url = String(p.params.url).trim();
           const m = await startSession({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
+          if (m.status === 'error') {
+            update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+            return;
+          }
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
@@ -193,12 +197,20 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         }
         case 'research': {
           const m = await startSession({ mode: 'deep', target: { type: 'text', value: String(p.params.topic ?? p.params.company ?? '') }, prompt: `Research: ${String(p.params.topic ?? p.params.company ?? '')}` });
+          if (m.status === 'error') {
+            update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+            return;
+          }
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
         case 'generatePdf': {
           const n = String(p.params.row ?? p.params.n ?? '');
           const m = await startTailoredCvSession(n);
+          if (m.status === 'error') {
+            update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+            return;
+          }
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
