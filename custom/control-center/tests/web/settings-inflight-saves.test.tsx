@@ -207,6 +207,20 @@ describe('a double click on Save', () => {
     expect(alerts()).toBe('');
   });
 
+  it('the cadence fields are locked while the save is on its way, so no edit is cleared unsent', async () => {
+    files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    held = [];
+    await click(button('Save cadence')!);
+    await until(() => held!.length === 1, 'the save on its way');
+    expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.disabled).toBe(true);
+    await release();
+    await until(() => !document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.disabled, 'the fields back');
+  });
+
   it('Validate and save on the raw YAML writes once and reports the save, not a conflict', async () => {
     files = { '/api/config/portals': { key: 'portals', path: 'portals.yml', kind: 'ok', raw: 'a: 1\n', etag: 'p1', doc: { a: 1 }, parseError: null } };
     const { ConfigEditor } = await import('@web/features/settings/RawConfigEditor');

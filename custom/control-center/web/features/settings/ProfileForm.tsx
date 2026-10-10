@@ -134,7 +134,7 @@ export function CadenceForm() {
                 <span className="faint small">{CADENCE_HELP[k]}</span>
               </label>
               <div className="fields__value">
-                <input id={`cadence-${k}`} type="number" min={0} max={365} value={value(k)} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} />
+                <input id={`cadence-${k}`} type="number" min={0} max={365} value={value(k)} disabled={saving} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} />
               </div>
             </div>
           ))}
