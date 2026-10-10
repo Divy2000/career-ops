@@ -212,7 +212,8 @@ async function main(): Promise<void> {
     CC_CODE_ROOT: CODE_ROOT,
     CC_DATA_ROOT: dataRoot,
     // Read before CAREER_OPS_ROOT is overwritten below: only an environment-chosen root (CC_DATA_ROOT included) is pinned into launchd plists.
-    CC_DATA_ROOT_FROM_ENV: process.env.CC_DATA_ROOT || dataRootFromEnv(process.env) ? '1' : '0',
+    // CC_DATA_ROOT is trimmed like resolveDataRoot trims it, so a whitespace-only value falls back to the default root and is not pinned.
+    CC_DATA_ROOT_FROM_ENV: process.env.CC_DATA_ROOT?.trim() || dataRootFromEnv(process.env) ? '1' : '0',
     CC_GUARD_DIR: guardRoot,
     CC_PUBLIC_PORT: String(PORT),
     CC_TOKEN: token,
