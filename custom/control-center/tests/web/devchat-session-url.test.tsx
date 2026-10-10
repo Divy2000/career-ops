@@ -29,6 +29,8 @@ let changesFetched: string[];
 const meta = { id: 's-7', mode: 'devchat', status: 'done', turns: [{ n: 1 }], target: { type: 'none', value: null } };
 /** What POST /api/sessions answers; a test can make the start fail. */
 let startReply: Record<string, unknown>;
+/** While set, POST /api/sessions waits for it, so a test can act while the start is in flight. */
+let startGate: Promise<void> | null;
 /** Meta fetches of the running session s-r; the first `failingReads` answer 500. */
 let runningMetaFetches: number;
 let failingReads: number;
@@ -52,7 +54,10 @@ async function open(entry: string) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
-      if (init?.method === 'POST' && url === '/api/sessions') return json(startReply, 202);
+      if (init?.method === 'POST' && url === '/api/sessions') {
+        if (startGate) await startGate;
+        return json(startReply, 202);
+      }
       if (init?.method === 'POST' && url === '/api/sessions/s-7/fork') return json({ ...meta, id: 's-8' }, 202);
       if (url === '/api/sessions/s-7') return json({ meta, events: stored() });
       if (url === '/api/sessions/s-8') return json({ meta: { ...meta, id: 's-8' }, events: stored() });
@@ -90,6 +95,7 @@ beforeEach(() => {
   Object.assign(SESSION_CHECK_RETRY, { baseMs: 5, maxMs: 15 });
   changesFetched = [];
   startReply = meta;
+  startGate = null;
   streamStatus = 'done';
   runningMetaFetches = 0;
   failingReads = 2;
@@ -130,6 +136,48 @@ describe('Dev Chat session in the URL', () => {
     await until(() => router.state.location.search.session === undefined && host.querySelector('textarea[aria-label="Prompt for devchat"]'), 'a new conversation');
     expect(router.state.location.search).toEqual({});
     expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).not.toBeNull();
+  });
+
+  it('given a start in flight, when the user leaves for Runs before it answers, then they stay on Runs and /dev reopens the session later', async () => {
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    await open('/dev');
+    const prompt = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt for devchat"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(prompt, 'Add a house rule');
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
+    await act(async () => router.navigate({ to: '/runs' }));
+    await until(() => host.textContent?.includes('Runs page'), 'the Runs page');
+    await act(async () => release());
+    await settle();
+    expect(router.state.location.pathname).toBe('/runs');
+    await act(async () => router.navigate({ to: '/dev' }));
+    await until(() => router.state.location.search.session === 's-7' && host.querySelector('[aria-label="Reply to the session"]'), 'the started session reopened');
+  });
+
+  it('given a start in flight, when the user leaves and comes back before it answers, then no second start is offered and the session attaches once it answers', async () => {
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    await open('/dev');
+    const prompt = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt for devchat"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(prompt, 'Add a house rule');
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
+    await act(async () => router.navigate({ to: '/runs' }));
+    await until(() => host.textContent?.includes('Runs page'), 'the Runs page');
+    await act(async () => router.navigate({ to: '/dev' }));
+    await settle();
+    expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).toBeNull();
+    expect(host.textContent).toContain('Starting the conversation');
+    const posts = () => (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/sessions' && i?.method === 'POST').length;
+    expect(posts()).toBe(1);
+    await act(async () => release());
+    await until(() => router.state.location.search.session === 's-7' && host.querySelector('[aria-label="Reply to the session"]'), 'the started session attached');
+    expect(posts()).toBe(1);
   });
 
   it('given a started session, when the nav link opens /dev with no session, then the same session comes back with its Changes and New conversation', async () => {
