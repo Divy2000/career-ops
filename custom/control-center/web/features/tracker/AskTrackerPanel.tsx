@@ -17,7 +17,17 @@ export function AskTrackerPanel() {
           Ask about tracker <Pill tone="warn">Uses tokens</Pill>
         </button>
       </div>
-      {open && <SessionPanel key={ask.panelKey} {...ask.panel} mode="tracker" title="Ask about the tracker" placeholder="Which applications went cold? What should I follow up on this week?" draftKey="cc.tracker.ask.draft" />}
+      {open && ask.waiting && (
+        <div className="card session" role="status">
+          <h2 style={{ margin: 0 }}>
+            Ask about the tracker <Pill tone="warn">Uses tokens</Pill>
+          </h2>
+          <p className="muted" style={{ margin: 'var(--space-2) 0 0' }}>
+            Starting the tracker session. It shows here once it is created.
+          </p>
+        </div>
+      )}
+      {open && !ask.waiting && <SessionPanel key={ask.panelKey} {...ask.panel} mode="tracker" title="Ask about the tracker" placeholder="Which applications went cold? What should I follow up on this week?" draftKey="cc.tracker.ask.draft" />}
     </div>
   );
 }

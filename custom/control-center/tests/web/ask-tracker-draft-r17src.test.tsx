@@ -106,4 +106,25 @@ describe('Ask about tracker: the unsent question', () => {
     await toggle();
     expect(box()!.value).toBe('');
   });
+
+  it('returning mid-start shows the starting note, not a fresh start form, so no second paid session starts (R17-feat-c-L1-01)', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/api/sessions' && init?.method === 'POST') await gate;
+      return inner(url, init);
+    });
+    await mount();
+    await toggle();
+    await type('Which applications went cold?');
+    await act(async () => box()!.form!.requestSubmit());
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await mount();
+    await toggle();
+    expect(box()).toBeNull();
+    expect(host.textContent).toContain('Starting the tracker session');
+    release();
+  });
 });
