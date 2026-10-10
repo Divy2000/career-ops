@@ -474,8 +474,10 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   };
 
   // A manual edit or format change makes the draft the user's own: it no longer restates the document, so provenance goes.
+  // A parse still running is stopped too, so its late result cannot replace the edit.
   const editDraft = (patch: { text?: string; format?: 'json' | 'markdown' }) => {
     generation.current += 1;
+    if (parse.parsing) showUpload(null);
     if (patch.text !== undefined) setText(patch.text);
     if (patch.format !== undefined) setFormat(patch.format);
     setSource(null);

@@ -275,6 +275,21 @@ describe('Import projects', () => {
     await until(() => sent('POST', '/api/sessions/s-proj/cancel') === 1, 'the cancel of the first parse');
   });
 
+  it('a draft typed while the parse runs is kept: the parse is cancelled and its late result dropped (R18-feat-b-X-02)', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await render(createElement(ProjectsLibrary));
+    await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
+    await choose('Projects file', 'one.pdf');
+    const panel = await until(() => panels.get('projects/one.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-proj'));
+    await act(async () => panel.onStatus!('running', null));
+    await typeInto('Projects to import', '[{"name": "Typed"}]');
+    await until(() => sent('POST', '/api/sessions/s-proj/cancel') === 1, 'the cancel of the parse');
+    await act(async () => panel.onEnvelope!('projects', { markdown: '## From the parser' }, 1));
+    expect(textOf('Projects to import')).toBe('[{"name": "Typed"}]');
+    expect((host.querySelector('select[aria-label="Import format"]') as HTMLSelectElement).value).toBe('json');
+  });
+
   it('an upload the network drops says it failed', async () => {
     const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
     await render(createElement(ProjectsLibrary));
