@@ -217,6 +217,9 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   // tab (cc.application.<n>.documents) is not remembered under cc.pdf.<n>, so the guard reads it from the list, exactly
   // as AskDrawer's generatePdf does, and links it instead of starting a second paid CV write.
   const sessions = useSessions();
+  // Until the sessions list answers (and when it cannot), a live pdf session for the row cannot be told apart from none,
+  // so Generate stays off rather than starting a second paid CV write, as Today's Evaluate button guards oferta sessions.
+  const sessionsChecking = sessions.isPending || sessions.isError;
   const livePdf = n === null ? undefined : sessions.data?.find((s) => s.mode === 'pdf' && LIVE_PDF.has(s.status) && s.target.value === n);
   const { onStatus: pdfOnStatus, onStarting: pdfOnStarting, onSessionId: pdfOnSessionId, onStartFailed: pdfOnStartFailed } = pdfSession.panel;
   useEffect(() => {
@@ -347,7 +350,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                 ))}
                 {blockers.needsPdf && n && (
                   <div>
-                    <button type="button" disabled={generating || pdfSession.busy || livePdf !== undefined} onClick={() => void generatePdf()}>
+                    <button type="button" disabled={generating || pdfSession.busy || livePdf !== undefined || sessionsChecking} onClick={() => void generatePdf()}>
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
                     {(livePdf?.id ?? (pdfSession.busy ? pdfId : null)) && (

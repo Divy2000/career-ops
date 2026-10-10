@@ -81,6 +81,7 @@ beforeEach(() => {
         if (startGate) await startGate;
         return json({ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'queued', target: { type: 'app', value: '12' } });
       }
+      if (url === '/api/sessions' && init?.method !== 'POST') return json([]);
       if (url === '/api/sessions/s-pdf-12') return json({ meta: { ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: pdfStatus, target: { type: 'app', value: '12' } }, events: [{ seq: 1, event: { type: 'status', status: pdfStatus, reason: null } }] });
       if (url === '/api/sessions/s-apply-url') return json({ meta: URL_SESSION, events: [] });
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404, headers: { 'content-type': 'application/json' } });
@@ -326,6 +327,20 @@ describe('Apply starts over and follows the sessions it started', () => {
     await openApply();
     await until(() => host.querySelector('a[href="/sessions/s-pdf-docs"]'), 'the link to the running Documents tab session');
     expect(generate()!.disabled).toBe(true);
+  });
+
+  it('Generate CV PDF stays off while the sessions list has not confirmed there is no live pdf session (R18 review)', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') {
+        return new Response(JSON.stringify({ error: 'internal error' }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+      return inner(input, init);
+    });
+    await openApply();
+    const g = await until(() => generate(), 'the Generate CV PDF button');
+    expect(g!.disabled).toBe(true);
   });
 
   it('Generate CV PDF comes back once the tailored CV session ended', async () => {
