@@ -174,7 +174,8 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
 
   app.get('/api/insights/dashboard', async () => {
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
-    if (tracker.kind !== 'ok') return { kind: tracker.kind, path: tracker.path };
+    if (tracker.kind === 'malformed') return { kind: tracker.kind, path: tracker.path, error: tracker.error };
+    if (tracker.kind === 'missing') return { kind: tracker.kind, path: tracker.path };
     return { kind: 'ok', dashboard: computeDashboard(tracker.rows, readStatusLog(tracker.path), await loadFunnelStages(cfg.codeRoot), await statusLabeler(cfg.codeRoot)) };
   });
 

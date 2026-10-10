@@ -81,7 +81,7 @@ export interface FollowupCadence {
   cadenceDefaults?: Record<string, number>;
 }
 
-export type DashboardRead = { kind: 'ok'; dashboard: Dashboard } | { kind: 'missing' | 'malformed'; path: string };
+export type DashboardRead = { kind: 'ok'; dashboard: Dashboard } | { kind: 'missing'; path: string } | { kind: 'malformed'; path: string; error: string };
 
 export interface WhatsNewResponse {
   offers: FreshOffer[];
