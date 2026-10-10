@@ -1682,7 +1682,9 @@ describe('report reservations and session trackers survive failures (r16-claude)
       const read = app.runner.store.read.bind(app.runner.store);
       let failing = unreadable;
       vi.spyOn(app.runner.store, 'read').mockImplementation((rid) => {
-        if (rid === runId && failing > 0) {
+        // Only the session manager's reads fail: the runner's own tracker also reads this record on a timer, and a
+        // failure it consumed left the manager reading the record fine, so the turn ended done.
+        if (rid === runId && failing > 0 && !/runner[\\/]runner\.ts/.test(new Error().stack ?? '')) {
           failing -= 1;
           throw new Error('EIO: i/o error, read');
         }
