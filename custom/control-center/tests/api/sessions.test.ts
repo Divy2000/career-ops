@@ -1119,8 +1119,8 @@ describe('read confinement (BUG-06)', () => {
   });
 
   /** A server of its own on a fresh data root, and how to wait for one of its sessions to settle. */
-  async function ownApp() {
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+  async function ownApp(deps: Parameters<typeof makeTestApp>[1] = {}) {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, deps);
     const settleOn2 = async (id: string) => {
       const deadline = Date.now() + 30_000;
       for (;;) {
@@ -1190,6 +1190,22 @@ describe('read confinement (BUG-06)', () => {
       expect(fs.existsSync(sentinel)).toBe(false);
       expect(app.sessions.read(id)!.turns[0]).toMatchObject({ costUsd: 0.07, tokens: 15 });
       expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'error', reason: expect.stringMatching(/reservation for report number 61 was released/) });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a release of the reserved report number that rejects (the command could not be run) is reported on the turn like one that fails, instead of failing its finalize with the number already let go', async () => {
+    const rejecting: Exec = async (cmd, args, opts) => {
+      if (args.includes('--release')) throw new Error('spawn EAGAIN');
+      return execNoShell(cmd, args, opts);
+    };
+    const { app, settle: settleThere } = await ownApp({ exec: rejecting });
+    try {
+      const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 62 }));
+      const meta = await settleThere(id);
+      expect(meta.status).toBe('done');
+      expect(app.sessions.store.readEvents(id).map((e) => e.event).at(-1)).toMatchObject({ type: 'status', status: 'done', reason: expect.stringMatching(/could not release the reservation for 62: spawn EAGAIN/) });
     } finally {
       await app.close();
     }

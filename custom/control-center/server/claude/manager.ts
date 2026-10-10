@@ -609,7 +609,13 @@ export class SessionManager {
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
   /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
   private async releaseReportNum(num: number, used: boolean | null): Promise<string> {
-    const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+    let r: Awaited<ReturnType<Exec>>;
+    try {
+      r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+    } catch (err) {
+      // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
+      return `could not release the reservation for ${num}: ${(err as Error).message}`;
+    }
     if (r.code !== 0) return `could not release the reservation for ${num}: ${(r.stderr || r.stdout).trim().slice(-200)}`;
     if (used === null) return `the reservation for report number ${num} was released`;
     return used ? `report number ${num} is now held by the report` : `report number ${num} returned to the pool`;
