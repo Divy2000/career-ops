@@ -274,7 +274,8 @@ test('a build cancelled with SIGTERM leaves no cv-build-* dir holding the payloa
   // spawnSync while the cv-build-* dir exists and holds the staged payload. The wait is async (not a busy loop):
   // a busy loop blocks the child's event loop too, so it could never process the SIGTERM and the cancel would not land.
   const preload = path.join(root, 'slow-build.mjs');
-  fs.writeFileSync(preload, `if (process.argv[1] && process.argv[1].endsWith('build-cv-html.mjs')) { await new Promise((r) => setTimeout(r, 5000)); }\n`);
+  const marker = path.join(root, 'child-started');
+  fs.writeFileSync(preload, `import fs from 'node:fs';\nif (process.argv[1] && process.argv[1].endsWith('build-cv-html.mjs')) { fs.writeFileSync(${JSON.stringify(marker)}, ''); await new Promise((r) => setTimeout(r, 5000)); }\n`);
   const tmp = fs.realpathSync(tempDir('cv-build-tmp-'));
   const child = spawn(process.execPath, [BUILD, input, output], {
     cwd: REPO,
@@ -291,6 +292,9 @@ test('a build cancelled with SIGTERM leaves no cv-build-* dir holding the payloa
     assert.fail(`timed out waiting for ${what}: ${out}`);
   };
   await waitFor(() => fs.readdirSync(tmp).some((f) => f.startsWith('cv-build-')), 'the cv-build-* dir');
+  // The child must be spawned (and in the process group) before the kill, or the SIGTERM lands before it exists and
+  // the child runs to completion. Its preload writes this marker the moment it starts its wait.
+  await waitFor(() => fs.existsSync(marker), 'the child build-cv-html.mjs');
   process.kill(-child.pid, 'SIGTERM');
   const end = await exited;
   assert.notEqual(end.status, 0, `a cancelled build must not read as a success: ${JSON.stringify(end)}`);
