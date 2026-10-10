@@ -71,6 +71,18 @@ test('the sponsorship house rule records every alert status it lists, expansion 
   for (const event of ['pause', 'stop', 'restriction', 'resumption', 'expansion']) assert.ok(rule.includes(event), `the trigger does not name ${event}: ${rule}`);
 });
 
+// shortlist.mjs and the evaluation match alerts by companySlug(name), so the rule must spell that normalization out,
+// and every example it gives must be what companySlug returns.
+test('the sponsorship house rule spells out the company slug rule with examples companySlug agrees with (R18-scripts-b-review-09)', async () => {
+  const { companySlug } = await import(path.join(ROOT, 'custom', 'immigration', 'lib.mjs'));
+  const rule = read(path.join(TEMPLATES, '_custom-sponsorship.md')).split('\n').find((l) => l.includes('`<slug>`'));
+  assert.ok(rule, 'the template defines the slug column');
+  const examples = [...rule.matchAll(/`([^`]+)` is `([^`]+)`/g)].map((m) => [m[1], m[2]]);
+  assert.ok(examples.length >= 3, `the slug rule needs examples: ${rule}`);
+  assert.ok(examples.some(([name]) => name.includes('&')), 'an example shows & becoming and');
+  for (const [name, slug] of examples) assert.equal(companySlug(name), slug, `${name} in ${rule}`);
+});
+
 test('the house rule updates the way the README does: the README installs a detached tag checkout, so it switches to main before pulling', () => {
   const readme = read(path.join(ROOT, '.github', 'README.md'));
   const updating = readme.slice(readme.indexOf('## Updating'));
