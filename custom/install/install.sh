@@ -85,6 +85,8 @@ VALIDATED=0
 MAC_FEATURES=0
 CLAUDE_BIN=""
 PREFLIGHT_FAILED=0
+# Set when the Control Center was running at the dependency step, so its npm ci was skipped.
+CC_DEPS_DEFERRED=0
 TTY_OK=0
 PROMPT_OK=0
 CV_COPY=""
@@ -613,6 +615,7 @@ else
   fi
   if [ "$MAC_FEATURES" = 1 ]; then
     if cc_running; then
+      CC_DEPS_DEFERRED=1
       say "  Control Center is running; leaving its dependencies as they are (stop it, run 'npm --prefix custom/control-center ci', then start it again)"
     elif ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
       die 1 "npm ci for the Control Center failed. See $LOG_FILE."
@@ -1006,6 +1009,10 @@ if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [
   if cc_running; then
     say "Control Center is already running; not starting a second instance"
   else
+    # It was running when its npm ci was skipped and has stopped since: install what it was left without first.
+    if [ "$CC_DEPS_DEFERRED" = 1 ] && ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
+      die 1 "npm ci for the Control Center failed. See $LOG_FILE."
+    fi
     say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
     exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
   fi

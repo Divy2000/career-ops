@@ -1091,6 +1091,25 @@ test('a Control Center lock that cannot be read is treated as running: no npm ci
   }
 });
 
+test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
+    assert.equal(r.status, 0, r.out);
+    const log = w.log();
+    const ci = log.findIndex((l) => l.startsWith('npm --prefix custom/control-center ci'));
+    assert.ok(ci > log.findIndex((l) => l.startsWith('doctor ')), `npm ci must run after the Control Center stopped: ${log.join('\n')}`);
+    assert.equal(log[log.length - 1], 'cc ', log.join('\n'));
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
 test('a failing doctor is reported as a pending action, not hidden', () => {
   const { w, D, args } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
