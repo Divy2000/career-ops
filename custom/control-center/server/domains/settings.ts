@@ -41,12 +41,37 @@ export function readSettings(dataRoot: string): { settings: AppSettings; problem
     throw err;
   }
   try {
-    const parsed = appSettingsSchema.partial().safeParse(JSON.parse(raw));
-    if (!parsed.success) return { settings: DEFAULT_SETTINGS, problem: `settings.json has invalid values: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}` };
-    return { settings: mergeSettings(parsed.data, {}), problem: null };
+    const rawValue: unknown = JSON.parse(raw);
+    const parsed = appSettingsSchema.partial().safeParse(rawValue);
+    if (parsed.success) return { settings: mergeSettings(parsed.data, {}), problem: null };
+    // One bad value must not reset its valid neighbors: a one-field PUT over such a file keeps every good setting.
+    const kept = keepValidSettings(rawValue);
+    return { settings: mergeSettings(kept, {}), problem: `settings.json has invalid values: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}` };
   } catch (err) {
     return { settings: DEFAULT_SETTINGS, problem: `settings.json is not valid JSON: ${(err as Error).message}` };
   }
+}
+
+/** Each top-level field parsed alone, so a file with one invalid value keeps the rest instead of falling back to defaults. */
+function keepValidSettings(raw: unknown): Partial<AppSettings> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const obj = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, schema] of Object.entries(appSettingsSchema.shape)) {
+    const field = schema.safeParse(obj[key]);
+    if (field.success) out[key] = field.data;
+  }
+  // The budgets are two settings in one object: one bad budget keeps the other (mergeSettings fills the missing one).
+  const budgets = obj.usageBudgets;
+  if (!('usageBudgets' in out) && budgets && typeof budgets === 'object' && !Array.isArray(budgets)) {
+    const kept: Record<string, unknown> = {};
+    for (const [key, schema] of Object.entries(appSettingsSchema.shape.usageBudgets.shape)) {
+      const field = schema.safeParse((budgets as Record<string, unknown>)[key]);
+      if (field.success) kept[key] = field.data;
+    }
+    out.usageBudgets = kept;
+  }
+  return out as Partial<AppSettings>;
 }
 
 /** The model a new session runs on: the one the request names, else the app default, else null (the CLI default). */
