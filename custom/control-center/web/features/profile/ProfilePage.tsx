@@ -10,6 +10,7 @@ import { ProjectsLibrary } from './ProjectsLibrary';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { UnsavedProvider, useGuardedTab, useUnsaved } from '../../lib/unsaved';
 import { useUserFile, type UserFile } from '../../lib/queries';
+import { useParseSession } from './parseSession';
 
 
 /** Raw editors under "More files"; cv.md has its own tab and article-digest.md its Projects tab (raw text here too). */
@@ -48,6 +49,8 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
   const latestDraft = useRef<string | null>(null);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const [conflict, setConflict] = useState<UserFile | null>(null);
+  // One save at a time: a second PUT on the same ETag would come back 409 and show the user's own save as a change on disk.
+  const [saving, setSaving] = useState(false);
   const text = draft ?? q.data?.text ?? '';
   useUnsaved(label, draft !== null && draft !== (q.data?.text ?? ''));
   const onEdit = (value: string) => {
@@ -59,6 +62,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
     setNote(null);
     const from = edit.base ?? q.data;
     const etag = from?.etag ?? null;
+    setSaving(true);
     try {
       const r = await apiSend<{ etag: string }>('PUT', `/api/files/user/${fileKey}`, { text }, etag ? { 'If-Match': etag } : {});
       // The saved text is the new base, so the refetch of this very write is not a change on disk.
@@ -79,6 +83,8 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
         edit.rebase(current);
         setNote({ tone: 'danger', text: 'The file changed on disk since you loaded it. Review the current version below, then save again to overwrite it.' });
       } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
+    } finally {
+      setSaving(false);
     }
   };
   return (
@@ -87,7 +93,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
         <h2 style={{ margin: 0 }}>
           {label} {q.data?.kind === 'missing' && <Pill tone="warn">not created yet</Pill>}
         </h2>
-        <button type="button" onClick={() => void save()} disabled={!q.data || text === q.data.text}>
+        <button type="button" onClick={() => void save()} disabled={saving || !q.data || text === q.data.text}>
           Save
         </button>
       </div>
@@ -120,7 +126,8 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const [draft, setDraft] = useState('');
   // What Save as cv.md last wrote: that draft is saved, so leaving with it asks nothing.
   const [savedText, setSavedText] = useState<string | null>(null);
-  useUnsaved('the CV import', draft.trim() !== '' && draft !== savedText);
+  const parse = useParseSession();
+  useUnsaved('the CV import', (draft.trim() !== '' && draft !== savedText) || parse.parsing);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -129,13 +136,17 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const currentUpload = useRef<string | null>(null);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
+    parse.begin(p);
     setUploadPath(p);
   };
+  const parseDone = parse.done;
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
-      if (kind === 'cv' && currentUpload.current === forPath) setDraft((payload as { markdown: string }).markdown);
+      if (kind !== 'cv' || currentUpload.current !== forPath) return;
+      parseDone();
+      setDraft((payload as { markdown: string }).markdown);
     },
-    [],
+    [parseDone],
   );
   const onEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
   // Bumped by every file pick; an upload or read that finishes under an older pick is dropped (as the projects import does).
@@ -145,22 +156,37 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     const current = () => generation.current === mine;
     setNote(null);
     showUpload(null);
-    if (/\.(md|txt|markdown)$/i.test(file.name)) {
-      const text = await file.text();
-      if (current()) setDraft(text);
-      return;
+    try {
+      if (/\.(md|txt|markdown)$/i.test(file.name)) {
+        const text = await file.text();
+        if (current()) setDraft(text);
+        return;
+      }
+      const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
+      const res = await fetch(`/api/cv/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
+      const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
+      if (!current()) return;
+      if (!res.ok || !body?.path) {
+        setNote(`Upload failed (${res.status}): ${body?.error ?? 'PDF only'}.`);
+        return;
+      }
+      showUpload(body.path);
+    } catch (err) {
+      // The server is down or restarting, or the file could not be read.
+      if (current()) setNote(`Upload failed: ${describeError(err)}`);
     }
-    const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
-    const res = await fetch(`/api/cv/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
-    const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
-    if (!current()) return;
-    if (!res.ok || !body?.path) {
-      setNote(`Upload failed (${res.status}): ${body?.error ?? 'PDF only'}.`);
-      return;
-    }
-    showUpload(body.path);
   };
+  // One save at a time: a second PUT on the same ETag would come back 409 as "changed on disk".
+  const [saving, setSaving] = useState(false);
   const save = async () => {
+    setSaving(true);
+    try {
+      await saveCv();
+    } finally {
+      setSaving(false);
+    }
+  };
+  const saveCv = async () => {
     setNote(null);
     setSaveError(null);
     try {
@@ -198,10 +224,10 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       <div className="row gap import-card__controls">
         <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf" onFile={(f) => void onFile(f)} />
       </div>
-      {uploadPath && <SessionPanel key={uploadPath} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
+      {uploadPath && <SessionPanel key={uploadPath} {...parse.panelFor(uploadPath)} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
       <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="# Your name ..." />
       <div className="row gap">
-        <button type="button" disabled={!draft.trim()} onClick={() => void save()}>
+        <button type="button" disabled={saving || !draft.trim()} onClick={() => void save()}>
           Save as cv.md
         </button>
         {note && (
