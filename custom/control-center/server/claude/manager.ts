@@ -25,6 +25,12 @@ import { ackPolicyPass } from '../domains/policyPass.js';
 
 export type TokenReader = () => Promise<string>;
 
+/** A report-number release that fails (the tracker lock busy) is tried this many times, waiting longer each time. */
+const RELEASE_ATTEMPTS = 3;
+const RELEASE_RETRY_MS = 250;
+/** How long a turn that failed after its run started waits for that stopped run to end before giving its number back. */
+const RUN_END_WAIT_MS = 10_000;
+
 const KEYCHAIN_HELP = 'Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
 
 /** Reads the OAuth token from the Keychain at spawn time; the value never leaves the process except into the child's env. */
@@ -162,9 +168,11 @@ export class SessionManager {
     return policy;
   }
 
-  async start(input: StartInput): Promise<SessionMeta> {
+  /** `onCreated` hears of the session as soon as it is recorded, so a caller can settle it if the start then throws. */
+  async start(input: StartInput, onCreated?: (meta: SessionMeta) => void): Promise<SessionMeta> {
     const policy = this.turnPolicy(input.mode);
     const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null, policyBatch: input.policyBatch ?? null });
+    onCreated?.(meta);
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
   }
 
@@ -214,8 +222,27 @@ export class SessionManager {
     try {
       for (const [i, url] of input.urls.entries()) {
         const num = reserved[i]!;
-        sessions.push(await this.start({ mode: input.mode, target: { type: 'url', value: url }, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }));
-        handed.add(num);
+        const target = { type: 'url' as const, value: url };
+        let created: SessionMeta | null = null;
+        try {
+          sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }, (m) => (created = m)));
+          handed.add(num);
+        } catch (err) {
+          // One URL that cannot start must not hide the ones that did: the caller keeps only the failed URLs for a retry.
+          const message = (err as Error).message;
+          const recorded = created as SessionMeta | null;
+          if (recorded && err instanceof TurnStartedError) {
+            // Settled by the turn itself: the number was released, or is still the session's while its run may write.
+            handed.add(num);
+            sessions.push(this.read(recorded.id) ?? { ...recorded, status: 'error', error: message, lastReason: message });
+          } else if (recorded) {
+            // The session holds the number now and releases it as a first turn that cannot start does.
+            handed.add(num);
+            sessions.push(await this.failBeforeSpawn(recorded, message));
+          } else {
+            sessions.push(unstartedMeta(input.mode, target, input.model ?? null, message));
+          }
+        }
       }
     } finally {
       // A session releases its own number; the ones never handed to a session go straight back to the pool.
@@ -258,6 +285,11 @@ export class SessionManager {
         if (!live) continue;
         const reason = 'run record missing after a restart';
         this.store.setStatus(meta.id, 'error', reason);
+        // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
+        if (meta.reportNum !== null) {
+          this.store.setReportNum(meta.id, null);
+          void this.releaseReportNum(meta.reportNum, false);
+        }
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
       }
@@ -315,12 +347,15 @@ export class SessionManager {
     }
   }
 
-  /** A turn that cannot start: the session says why, and its report reservation goes back to the pool. */
+  /**
+   * A turn that cannot start: the session says why. A first turn's report reservation goes back to the pool; a later
+   * turn's stays with the session (as after an awaiting_user outcome), so the retried reply is told the number again.
+   */
   private async failBeforeSpawn(meta: SessionMeta, message: string): Promise<SessionMeta> {
     this.store.setStatus(meta.id, 'error', message);
     this.emit(meta.id, { type: 'error', message });
     const num = this.store.read(meta.id)?.reportNum ?? null;
-    if (num !== null) {
+    if (num !== null && meta.turns.length === 0) {
       this.store.setReportNum(meta.id, null);
       await this.releaseReportNum(num, false);
     }
@@ -379,21 +414,51 @@ export class SessionManager {
     } catch (err) {
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
-    const run = this.runner.start({
-      actionId: `session.${meta.mode}`,
-      label: `${policy.title}: turn ${n}`,
-      cost: 'tokens',
-      resources: [],
-      claude: true,
-      params: { sessionId: meta.id, turn: n },
-      cmd: { bin: this.cfg.claudeBin, args: argv, cwd: this.cfg.codeRoot },
-      env,
-    });
-    const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
-    this.emit(meta.id, { type: 'status', status: 'running', turn: n });
-    this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
-    this.track(meta.id, n, run.id, policy, state, token);
-    return began;
+    let run: RunMeta;
+    try {
+      run = this.runner.start({
+        actionId: `session.${meta.mode}`,
+        label: `${policy.title}: turn ${n}`,
+        cost: 'tokens',
+        resources: [],
+        claude: true,
+        params: { sessionId: meta.id, turn: n },
+        cmd: { bin: this.cfg.claudeBin, args: argv, cwd: this.cfg.codeRoot },
+        env,
+      });
+    } catch (err) {
+      // Nothing was spawned (its run record could not be created): the turn fails like any other that cannot start.
+      return this.failBeforeSpawn(meta, (err as Error).message);
+    }
+    try {
+      const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
+      this.emit(meta.id, { type: 'status', status: 'running', turn: n });
+      this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
+      this.track(meta.id, n, run.id, policy, state, token);
+      return began;
+    } catch (err) {
+      // The run exists and may already be writing: it is stopped first. A first turn's report number goes back to the pool
+      // only once that run has ended; a later turn's stays with the session, as for any reply that could not start.
+      const message = (err as Error).message;
+      let stopped = false;
+      try {
+        this.runner.cancel(run.id);
+        stopped = await this.runEnded(run.id);
+      } catch {
+        /* the run record cannot be read: the number stays reserved */
+      }
+      try {
+        this.store.setStatus(meta.id, 'error', message);
+        const num = this.store.read(meta.id)?.reportNum ?? null;
+        if (stopped && num !== null && meta.turns.length === 0) {
+          this.store.setReportNum(meta.id, null);
+          await this.releaseReportNum(num, false);
+        }
+      } catch {
+        /* the session record cannot be written either: the next reconcile settles it */
+      }
+      throw new TurnStartedError(message);
+    }
   }
 
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
@@ -410,6 +475,13 @@ export class SessionManager {
     let finalText = '';
     // A line that cannot be processed fails this session (its run is stopped), never the server that tracks it.
     let failure: string | null = null;
+    const stopRun = () => {
+      try {
+        this.runner.cancel(runId);
+      } catch {
+        /* the run record is unreadable too: the turn is settled without it */
+      }
+    };
     const handle = (l: RawLine, emit: boolean) => {
       seq = l.seq;
       if (failure) return;
@@ -417,7 +489,7 @@ export class SessionManager {
         handleLine(l, emit);
       } catch (err) {
         failure = `could not process the session output: ${(err as Error).message}`;
-        this.runner.cancel(runId);
+        stopRun();
       }
     };
     const handleLine = (l: RawLine, emit: boolean) => {
@@ -431,6 +503,7 @@ export class SessionManager {
           sawResult = true;
         }
         // The honesty gate reads the last message (the result), as it always has; text.done holds every message for the transcript.
+        // Its visible text can be empty (an answer that is only an envelope): that is the turn's output, not a reason to fall back to the raw stream.
         if (ev.type === 'text.done') finalText = parser.lastVisibleText;
         // A fork's first turn reports the id --fork-session minted; later turns must resume that one.
         if (ev.type === 'session.init') {
@@ -440,12 +513,23 @@ export class SessionManager {
         if (emit) this.emit(id, ev);
       }
     };
+    // A file the tracker cannot read or write (a full disk, a folder turned read-only) fails this session the same way:
+    // its run is stopped (when even that is possible), the next tick tries again, and the turn ends once the run does.
+    const fail = (err: unknown) => {
+      if (failure) return;
+      failure = `could not record the session output: ${(err as Error).message}`;
+      stopRun();
+    };
     // A previous server already turned part of this log into events: rebuild the counters silently and go on from there.
-    const saved = readProgress(progressFile);
-    if (saved) {
-      for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
-      seq = saved.rawSeq;
-      offset = saved.rawOffset;
+    try {
+      const saved = readProgress(progressFile);
+      if (saved) {
+        for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
+        seq = saved.rawSeq;
+        offset = saved.rawOffset;
+      }
+    } catch (err) {
+      fail(err);
     }
     const pull = () => {
       const { lines, offset: next } = this.runner.store.readRaw(runId, seq, offset);
@@ -453,14 +537,33 @@ export class SessionManager {
       for (const l of lines) handle(l, true);
       if (lines.length) writeProgress(progressFile, { rawSeq: seq, rawOffset: offset });
     };
+    const safePull = () => {
+      try {
+        pull();
+      } catch (err) {
+        fail(err);
+      }
+    };
     const timer = setInterval(() => {
-      pull();
-      const run = this.runner.store.read(runId);
+      safePull();
+      let run: RunMeta | null;
+      try {
+        run = this.runner.store.read(runId);
+      } catch (err) {
+        // Without its run record the turn cannot be followed or finalized: it ends now, in error. Nothing confirms the
+        // stopped run has ended, so it may still write its report: the session keeps its number.
+        fail(err);
+        clearInterval(timer);
+        this.active.delete(id);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err);
+        return;
+      }
       if (!run || run.status === 'running' || run.status === 'queued') return;
       clearInterval(timer);
       this.active.delete(id);
-      pull();
-      this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: finalText || parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, run, { turnDone, denials }, err));
+      safePull();
+      const ended = run;
+      this.finalize(id, n, ended, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
@@ -472,16 +575,17 @@ export class SessionManager {
    * the usage the turn reported, a reserved report number (released, so its RESERVED file goes) and a cancel (the turn
    * stays cancelled); anything else ends in error saying why.
    */
-  private async finalizeFailed(id: string, n: number, run: RunMeta, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number }, err: unknown): Promise<void> {
-    const why = `the turn could not be finalized: ${(err as Error).message}`;
+  private async finalizeFailed(id: string, n: number, run: RunMeta | null, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number; failure: string | null; keepReservation?: boolean }, err: unknown): Promise<void> {
+    // A run stopped because its output could not be processed failed; it was not cancelled by the user.
+    const why = `${r.failure ? `${r.failure}; ` : ''}the turn could not be finalized: ${(err as Error).message}`;
     console.error(`[sessions] session ${id} turn ${n}: ${(err as Error).stack ?? why}`);
     try {
       const meta = this.store.read(id);
       if (!meta || this.turnEnded(id, n)) return;
-      const cancelled = meta.status === 'cancelled' || run.status === 'cancelled';
+      const cancelled = meta.status === 'cancelled' || (run?.status === 'cancelled' && !r.failure);
       let reason = cancelled ? `cancelled by the user; ${why}` : why;
       const num = meta.reportNum;
-      if (num !== null) {
+      if (num !== null && r.keepReservation !== true) {
         // Claimed before the await, as finalize does, so the number is released once.
         this.store.setReportNum(id, null);
         reason += `; ${await this.releaseReportNum(num, null)}`;
@@ -493,6 +597,17 @@ export class SessionManager {
       this.bus.publish('session.status', { sessionId: id, status, mode: meta.mode, turn: n });
     } catch (again) {
       console.error(`[sessions] session ${id} turn ${n} could not be settled either: ${(again as Error).message}`);
+    }
+  }
+
+  /** Waits (up to RUN_END_WAIT_MS) for a run to leave queued and running; false when it has not. */
+  private async runEnded(runId: string): Promise<boolean> {
+    const deadline = Date.now() + RUN_END_WAIT_MS;
+    for (;;) {
+      const status = this.runner.store.read(runId)?.status;
+      if (status !== 'queued' && status !== 'running') return true;
+      if (Date.now() > deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
@@ -608,18 +723,35 @@ export class SessionManager {
 
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
   /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
+  /** A failed attempt is tried again (the tracker lock may be busy): nothing else would drop the RESERVED file before a gc. */
   private async releaseReportNum(num: number, used: boolean | null): Promise<string> {
-    let r: Awaited<ReturnType<Exec>>;
-    try {
-      r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
-    } catch (err) {
-      // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
-      return `could not release the reservation for ${num}: ${(err as Error).message}`;
+    let failure = '';
+    for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
+      if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
+      failure = await this.tryReleaseReportNum(num);
+      if (!failure) break;
     }
-    if (r.code !== 0) return `could not release the reservation for ${num}: ${(r.stderr || r.stdout).trim().slice(-200)}`;
+    if (failure) return `could not release the reservation for ${num}: ${failure}`;
     if (used === null) return `the reservation for report number ${num} was released`;
     return used ? `report number ${num} is now held by the report` : `report number ${num} returned to the pool`;
   }
+
+  /** One release attempt: '' on success, else why it failed. */
+  private async tryReleaseReportNum(num: number): Promise<string> {
+    try {
+      const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+      return r.code === 0 ? '' : (r.stderr || r.stdout).trim().slice(-200) || `exit ${r.code}`;
+    } catch (err) {
+      // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
+      return (err as Error).message;
+    }
+  }
+}
+
+/** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
+function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
+  const now = new Date().toISOString();
+  return { id: '', claudeSessionId: '', mode, policyClass: getModePolicy(mode)?.policyClass ?? 'read-only', target, model, status: 'error', createdAt: now, updatedAt: now, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error, reportNum: null, lastReason: error };
 }
 
 export function parseReservedRange(stdout: string): number[] {
@@ -633,6 +765,8 @@ export function parseReservedRange(stdout: string): number[] {
 }
 
 export class BusyError extends Error {}
+/** A turn whose run was started (and is now being stopped) but could not be recorded on its session. */
+export class TurnStartedError extends Error {}
 export class NotFoundError extends Error {}
 /** The mode never runs as a session (sessionRefusal); the message says why and what to use instead. */
 export class ModeRefusedError extends Error {}

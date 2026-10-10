@@ -396,6 +396,49 @@ describe('guard hook', () => {
     for (const rel of adds) expect(write(discover, path.join(data, rel)), `discover ${rel}`).toBe(2);
   });
 
+  /** The guard's answer to a Write of `rel` (relative to the data root) for each mode; 0 allows it, 2 refuses it. */
+  function writesFor(modes: string[], rels: string[]): Record<string, number> {
+    const code = fs.realpathSync(tempDir('cc-extra-code-'));
+    const data = fs.realpathSync(tempDir('cc-extra-data-'));
+    const out: Record<string, number> = {};
+    for (const mode of modes) {
+      const dir = fs.realpathSync(tempDir(`cc-extra-guard-${mode.replace(/\//g, '-')}-`));
+      const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] });
+      for (const rel of rels) out[`${mode} ${rel}`] = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(data, rel), content: 'x' }, cwd: code, session_id: 's' }).status!;
+    }
+    return out;
+  }
+
+  it('titles mode may write portals.yml, the only file modes/titles.md writes; other profile modes may not (R14-claude-L2-01)', () => {
+    expect(writesFor(['titles'], ['portals.yml', 'data/applications.md'])).toEqual({ 'titles portals.yml': 0, 'titles data/applications.md': 2 });
+    expect(writesFor(['intake'], ['portals.yml'])).toEqual({ 'intake portals.yml': 2 });
+  });
+
+  it('apply may update a report in reports/ (modes/apply.md Step 8 and 9.3), and nothing else there or in the tracker (R14-claude-L2-02, R14-claude-1-01)', () => {
+    // A reservation sentinel is the number allocator's, never a report to update (review fix).
+    const rels = ['reports/012-acme-platform-2026-10-01.md', 'reports/nested/012-acme.md', 'reports/008-RESERVED.md', 'data/applications.md', 'cv.md'];
+    for (const mode of ['apply', 'de/bewerben']) {
+      expect(writesFor([mode], rels)).toEqual(Object.fromEntries(rels.map((rel, i) => [`${mode} ${rel}`, i === 0 ? 0 : 2])));
+    }
+  });
+
+  it('patterns may save its report and tracker may log a salary figure and update a revealed report; neither may touch the tracker file (R14-claude-L2-03)', () => {
+    expect(writesFor(['patterns'], ['reports/pattern-analysis-2026-10-10.md', 'reports/012-acme.md', 'data/salary-observations.tsv'])).toEqual({
+      'patterns reports/pattern-analysis-2026-10-10.md': 0,
+      'patterns reports/012-acme.md': 2,
+      'patterns data/salary-observations.tsv': 2,
+    });
+    expect(writesFor(['tracker'], ['data/salary-observations.tsv', 'reports/012-acme.md', 'data/applications.md', 'reports/nested/x.md', 'reports/008-RESERVED.md'])).toEqual({
+      'tracker data/salary-observations.tsv': 0,
+      'tracker reports/012-acme.md': 0,
+      'tracker data/applications.md': 2,
+      'tracker reports/nested/x.md': 2,
+      'tracker reports/008-RESERVED.md': 2,
+    });
+    // An evaluation still owns its reservation sentinels (reserve-report-num.mjs writes them).
+    expect(writesFor(['oferta'], ['reports/008-RESERVED.md'])).toEqual({ 'oferta reports/008-RESERVED.md': 0 });
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));
@@ -1241,8 +1284,10 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(apply, 'node application-answers.mjs --report output/r.md --input output/a.json --state filled --date 2026-10-05');
     ok(apply, 'node application-answers.mjs --input output/a.json --report output/r.md');
     // The review trigger: the script appends the answers it is given to whatever file --report names.
-    for (const target of ['modes/_custom.md', 'modes/_shared.md', 'AGENTS.md', 'cv.md', 'config/profile.yml', 'custom/control-center/server/claude/guard-hook.mjs', 'reports/001-acme.md', 'data/applications.md', '../outside.md', '/etc/hosts'])
+    for (const target of ['modes/_custom.md', 'modes/_shared.md', 'AGENTS.md', 'cv.md', 'config/profile.yml', 'custom/control-center/server/claude/guard-hook.mjs', 'reports/nested/001-acme.md', 'data/applications.md', '../outside.md', '/etc/hosts'])
       no(apply, `node application-answers.mjs --report ${target} --input output/a.json --state filled`);
+    // The matched report itself is in scope: modes/apply.md Step 8 and 9.3 upsert its ## Application Answers section (R14-claude-1-01).
+    ok(apply, 'node application-answers.mjs --report reports/001-acme.md --input output/a.json --state filled');
     // Its parser takes the next token as the value even when it starts with a single dash, and path.resolve drops -x/..
     no(apply, 'node application-answers.mjs --report -x/../modes/_custom.md --input output/a.json');
     // The last --report wins in the script, so every one is checked.
@@ -1659,6 +1704,27 @@ describe('envelopes', () => {
     const projects = extractEnvelopes('<<cc:projects {"markdown":"## Chess Engine\\n- Wrote it."}>>', false);
     expect(projects.envelopes[0]).toMatchObject({ ok: true, kind: 'projects', payload: { markdown: '## Chess Engine\n- Wrote it.' } });
     expect(extractEnvelopes('<<cc:projects {"markdown":""}>>', false).envelopes[0]).toMatchObject({ ok: false });
+  });
+
+  it('a "}>>" inside a JSON string does not end the envelope', () => {
+    const r = extractEnvelopes('<<cc:cv {"markdown":"contains }>> here"}>>', false);
+    expect(r.envelopes).toEqual([expect.objectContaining({ ok: true, kind: 'cv', payload: { markdown: 'contains }>> here' } })]);
+    expect(r.visibleText).toBe('');
+    const nested = extractEnvelopes('Hi <<cc:act {"action":"x","params":{"a":{"b":"}"}}}>> bye', false);
+    expect(nested.envelopes).toEqual([expect.objectContaining({ ok: true, kind: 'act', payload: { action: 'x', params: { a: { b: '}' } } } })]);
+    expect(nested.visibleText).toBe('Hi  bye');
+    // Malformed JSON still ends at the first closer and comes back as a warning, never as visible raw text.
+    const bad = extractEnvelopes('<<cc:act {"action":"x"}}>> tail', false);
+    expect(bad.envelopes).toEqual([expect.objectContaining({ ok: false, kind: 'act' })]);
+    expect(bad.visibleText).toBe(' tail');
+  });
+
+  it('while streaming, a partial envelope after a complete one on the same line is hidden', () => {
+    const r = extractEnvelopes('Go <<cc:act {"action":"a"}>> next <<cc:act {"action":"', true);
+    expect(r.envelopes).toEqual([expect.objectContaining({ ok: true, kind: 'act' })]);
+    expect(r.visibleText).toBe('Go  next');
+    // A string still open at the end of the stream is a partial envelope, even when it already holds a "}>>".
+    expect(extractEnvelopes('Saved <<cc:cv {"markdown":"a }>> b', true)).toEqual({ envelopes: [], visibleText: 'Saved ' });
   });
 
   it('an envelope kind named after an Object property is an unknown kind, never a crash', () => {
