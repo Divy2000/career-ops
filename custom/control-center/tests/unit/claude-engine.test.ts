@@ -1661,6 +1661,19 @@ describe('envelopes', () => {
     expect(extractEnvelopes('<<cc:projects {"markdown":""}>>', false).envelopes[0]).toMatchObject({ ok: false });
   });
 
+  it('a "}>>" inside a JSON string does not end the envelope', () => {
+    const r = extractEnvelopes('<<cc:cv {"markdown":"contains }>> here"}>>', false);
+    expect(r.envelopes).toEqual([expect.objectContaining({ ok: true, kind: 'cv', payload: { markdown: 'contains }>> here' } })]);
+    expect(r.visibleText).toBe('');
+    const nested = extractEnvelopes('Hi <<cc:act {"action":"x","params":{"a":{"b":"}"}}}>> bye', false);
+    expect(nested.envelopes).toEqual([expect.objectContaining({ ok: true, kind: 'act', payload: { action: 'x', params: { a: { b: '}' } } } })]);
+    expect(nested.visibleText).toBe('Hi  bye');
+    // Malformed JSON still ends at the first closer and comes back as a warning, never as visible raw text.
+    const bad = extractEnvelopes('<<cc:act {"action":"x"}}>> tail', false);
+    expect(bad.envelopes).toEqual([expect.objectContaining({ ok: false, kind: 'act' })]);
+    expect(bad.visibleText).toBe(' tail');
+  });
+
   it('an envelope kind named after an Object property is an unknown kind, never a crash', () => {
     for (const kind of ['constructor', 'tostring', 'hasownproperty', 'valueof', 'isprototypeof']) {
       const r = extractEnvelopes(`Done.\n<<cc:${kind} {}>>`, false);
