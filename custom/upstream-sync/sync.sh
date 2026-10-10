@@ -215,7 +215,8 @@ if [ -z "$BLOCKERS" ]; then
   gh pr merge "$PR_URL" --merge --match-head-commit "$(git rev-parse HEAD)" --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
-  LIVE_UPDATE="$(update_live_checkout)"
+  # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
+  LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600)"
   case $? in
     0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
     3) echo "$LIVE_UPDATE"; notify "Merged upstream, but in the live checkout ${LIVE_UPDATE#*, but }" ;;

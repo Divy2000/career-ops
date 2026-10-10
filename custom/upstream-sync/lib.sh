@@ -484,18 +484,33 @@ merge_blockers() {
   printf '%s' "$out"
 }
 
-# update_live_checkout: after the sync PR merged, bring the live checkout (the
-# current directory) up to the new origin/main: fetch, then fast-forward only
-# when it is on main with no tracked local changes. Then reinstall what the
-# merge changed, as a user's own install would: the root dependencies
-# (lifecycle scripts included) when deps_fingerprint changed, and the Control
-# Center's (npm ci) when its tracked lockfile changed, since bin/cc only checks
-# that its node_modules exists. Prints one line saying what happened. Returns 0
-# when updated, 3 when updated but an install failed, 10 when left alone (not
-# on main, or local changes), 1 when the fetch, the fingerprint or the
-# fast-forward failed.
+# update_live_checkout <daily-lock> <wait-seconds>: after the sync PR merged,
+# bring the live checkout (the current directory) up to the new origin/main:
+# fetch, then fast-forward only when it is on main with no tracked local
+# changes. Then reinstall what the merge changed, as a user's own install would:
+# the root dependencies (lifecycle scripts included) when deps_fingerprint
+# changed, and the Control Center's (npm ci) when its tracked lockfile changed,
+# since bin/cc only checks that its node_modules exists. All of it runs holding
+# <daily-lock>, the lock run-daily.sh holds for its whole run, so scripts and
+# node_modules never change under a running daily job; it waits up to
+# <wait-seconds> for that run to end. Prints one line saying what happened.
+# Returns 0 when updated, 3 when updated but an install failed, 10 when left
+# alone (not on main, local changes, or the daily job still running), 1 when
+# the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed=""
+  local deps_before cc_before failed="" rc
+  if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
+    if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+      echo "update_live_checkout: needs the daily job's lock file and a wait in seconds"
+      return 1
+    fi
+    mkdir -p "$(dirname "$1")" || { echo "cannot create the folder of the daily job's lock $1"; return 1; }
+    # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
+    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'source "$1" && update_live_checkout' update_live_checkout "${BASH_SOURCE[0]}"
+    rc=$?
+    if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
+    return "$rc"
+  fi
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi

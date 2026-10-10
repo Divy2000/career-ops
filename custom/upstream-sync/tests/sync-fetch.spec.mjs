@@ -819,8 +819,10 @@ function liveWorld({ depsChange = false, ccChange = false, npmExit = 0 } = {}) {
   commitFile(seed, 'scan.mjs', 'merged\n', 'merged sync PR');
   git(seed, 'push', '-q', origin, 'main');
   const target = git(seed, 'rev-parse', 'HEAD').trim();
-  const update = () => bashLib(live, 'out="$(update_live_checkout)"; rc=$?; printf "%s" "$out"; exit $rc', { PATH: `${bin}:${process.env.PATH}` });
-  return { base, live, log, target, update, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
+  // run-daily's lock, in a data root that does not exist yet: the daily job creates it.
+  const dailyLock = path.join(base, 'data', 'data', 'immigration', '.run-daily.lockf');
+  const update = ({ wait = 5, prefix = '' } = {}) => bashLib(live, `${prefix}out="$(update_live_checkout "$LOCK" ${wait})"; rc=$?; printf "%s" "$out"; exit $rc`, { PATH: `${bin}:${process.env.PATH}`, LOCK: dailyLock });
+  return { base, live, log, target, update, dailyLock, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
 }
 
 const LIVE_CASES = [
@@ -851,9 +853,52 @@ for (const c of LIVE_CASES) {
   });
 }
 
+test('a daily job holding its lock for longer than the wait leaves the live checkout alone, reinstalls nothing, and says why (R11-scripts-b-L1-03)', () => {
+  const w = liveWorld({ depsChange: true, ccChange: true });
+  try {
+    const before = w.head();
+    // The daily job, mid-run: it holds run-daily.sh's lock while the sync reaches the live update.
+    const res = w.update({ wait: 1, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 4 >/dev/null 2>&1 &\nsleep 0.5\n` });
+    assert.equal(res.status, 10, res.stdout + res.stderr);
+    assert.equal(res.stdout, 'the daily job is still running');
+    assert.equal(w.head(), before);
+    assert.equal(w.npm(), '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a daily job that finishes within the wait is waited for, then the live checkout is updated (R11-scripts-b-L1-03)', () => {
+  const w = liveWorld({ depsChange: true });
+  try {
+    const res = w.update({ wait: 20, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 1 >/dev/null 2>&1 &\nsleep 0.3\n` });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(res.stdout, /^live checkout now at [0-9a-f]+$/);
+    assert.equal(w.head(), w.target);
+    assert.match(w.npm(), /^install --no-package-lock --silent$/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('update_live_checkout refuses to run without the daily job\'s lock and a wait (R11-scripts-b-L1-03)', () => {
+  const w = liveWorld();
+  try {
+    const before = w.head();
+    const res = bashLib(w.live, 'update_live_checkout');
+    assert.equal(res.status, 1, res.stdout + res.stderr);
+    assert.match(res.stdout, /needs the daily job's lock file and a wait in seconds/);
+    assert.equal(w.head(), before);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('sync.sh updates the live checkout under the lock run-daily.sh takes, in the data root it resolved (R11-scripts-b-L1-03)', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  assert.match(sync, /^ {2}LIVE_UPDATE="\$\(update_live_checkout "\$DATA\/data\/immigration\/\.run-daily\.lockf" [0-9]+\)"$/m);
+  const daily = readFileSync(path.join(REPO_ROOT, 'custom/immigration/run-daily.sh'), 'utf8');
+  assert.match(daily, /^IMM="\$DATA\/data\/immigration"$/m);
+  assert.match(daily, /lockf -k -t 0 "\$IMM\/\.run-daily\.lockf"/);
+});
+
 test('sync.sh updates the live checkout through update_live_checkout and fails the run only on its failures (SW2-tests-14)', () => {
   const lines = readFileSync(SYNC, 'utf8').split('\n');
-  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout)"'));
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
   const to = lines.findIndex((l, i) => i > from && l === '  esac');
   assert.ok(from > -1 && to > from, 'no LIVE_UPDATE .. esac block in sync.sh');
   const block = lines.slice(from, to + 1).join('\n');
