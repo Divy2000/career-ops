@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import http from 'node:http';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
@@ -281,4 +282,102 @@ test('a row with no usable company name reads the same without a backend, and tr
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stderr, '');
   assert.deepEqual(sponsorCells(root), [['4', '4', 'no company name'], ['3.5', '3.5', 'no company name']]);
+});
+
+// ---- tier cache is persisted incrementally and atomically (R17-scripts-a-L1-01) ----
+
+const waitFor = async (check, what, ms = 15000) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+};
+
+test('a run killed mid-lookup keeps the tier lookups already done and leaves no torn cache (R17-scripts-a-L1-01)', async () => {
+  let globexSeen = false;
+  const server = http.createServer((req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') ?? '').toLowerCase();
+    if (q.startsWith('globex')) {
+      globexSeen = true;
+      return; // hang: Globex never answers, so the run stays in its lookup
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const root = rankedRoot();
+  try {
+    const child = spawn(process.execPath, [SHORTLIST], {
+      cwd: REPO,
+      env: rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` }),
+      stdio: 'ignore',
+      // Its own process group, so the kill below also reaps the check.mjs subprocess it spawned for the hung lookup.
+      detached: true,
+    });
+    const exited = new Promise((r) => child.on('exit', r));
+    await waitFor(() => globexSeen, 'the Globex lookup, meaning Acme was already looked up');
+    process.kill(-child.pid, 'SIGKILL');
+    await exited;
+    const cachePath = path.join(root, 'data', 'immigration', 'sponsor-tiers.json');
+    const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    assert.ok(cache['Acme'], `Acme was persisted before the kill:\n${JSON.stringify(cache)}`);
+    assert.equal(cache['Globex'], undefined, 'the never-finished Globex lookup is not cached');
+    assert.deepEqual(fs.readdirSync(path.join(root, 'data', 'immigration')).filter((f) => f.includes('.tmp-')), [], 'no torn temp file is left behind');
+  } finally {
+    server.close();
+  }
+});
+
+// ---- the excluded bullet escapes a markdown-linked headline (R17-scripts-a-L3-02) ----
+
+// The Control Center's greedy parse of `- Company - [Title](url) - label` (custom/control-center/server/domains/shortlist.ts).
+const EXCLUDED_BULLET = /^- (.+?) - \[(.*)\]\((\S*)\) - (.*)$/;
+
+test('an alert headline with a markdown link is written so the excluded bullet still parses (R17-scripts-a-L3-02)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Backend Engineer | Remote | rank: 4.2/5 — fit\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Acme': { tier: 'strong', matched: 'Acme', checked: localToday() } }));
+  fs.writeFileSync(
+    path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
+    `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme\tacme\tpaused\tSee [the announcement](https://news.example/a) - more details\thttps://news.example/a\n`,
+  );
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
+  const line = md.split('\n').find((l) => l.startsWith('- Acme - '));
+  assert.ok(line, `excluded bullet present in:\n${md}`);
+  const m = line.match(EXCLUDED_BULLET);
+  assert.ok(m, `excluded bullet parses:\n${line}`);
+  assert.equal(m[1].trim(), 'Acme');
+  assert.equal(m[2], 'Backend Engineer');
+  assert.equal(m[3], 'https://jobs.example.com/1');
+  assert.match(m[4], /^paused \(2026-10-01\): See the announcement - more details$/);
+});
+
+test('an alert headline keeps its pipe and a nested link still parses (R17-scripts-a-L3-02 edge cases)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Backend Engineer | Remote | rank: 4.2/5 — fit\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Acme': { tier: 'strong', matched: 'Acme', checked: localToday() } }));
+  fs.writeFileSync(
+    path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
+    `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme\tacme\tpaused\tH-1B | OPT [[update]](https://news.example/b)\thttps://news.example/b\n`,
+  );
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
+  const line = md.split('\n').find((l) => l.startsWith('- Acme - '));
+  assert.ok(line, `excluded bullet present in:\n${md}`);
+  const m = line.match(EXCLUDED_BULLET);
+  assert.ok(m, `excluded bullet parses:\n${line}`);
+  assert.equal(m[2], 'Backend Engineer');
+  assert.equal(m[3], 'https://jobs.example.com/1');
+  assert.ok(m[4].includes('H-1B | OPT'), `pipe preserved (not a table cell): ${m[4]}`);
+  assert.ok(m[4].includes('update'), `nested link text kept: ${m[4]}`);
+  assert.ok(!m[4].includes('H-1B / OPT'), `pipe is not rewritten to a slash: ${m[4]}`);
 });

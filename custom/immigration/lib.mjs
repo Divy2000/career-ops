@@ -68,12 +68,17 @@ export function companySlug(name) {
 function decodeXmlText(raw) {
   const cdata = raw.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
   const text = cdata ? cdata[1] : raw;
+  // One combined pass over every reference, so the output of one reference is never re-scanned as another
+  // (`&amp;#39;` must stay the literal `&#39;`, `&#38;amp;` the literal `&amp;`). Out-of-range values and
+  // surrogate code points (0xD800-0xDFFF) are left as-is: String.fromCodePoint throws on a surrogate.
+  const NAMED = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
   return text
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
+    .replace(/&(lt|gt|quot|apos|amp|#[xX][0-9a-fA-F]+|#\d+);/g, (match, body) => {
+      if (body in NAMED) return NAMED[body];
+      const hex = body.startsWith('#x') || body.startsWith('#X');
+      const cp = parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return cp >= 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) ? String.fromCodePoint(cp) : match;
+    })
     .trim();
 }
 

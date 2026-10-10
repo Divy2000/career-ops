@@ -45,8 +45,8 @@ function watchWorld({ daysAhead = 0, zone = ZONE, at = null } = {}) {
     doc: (n, title) => ({ document_number: n, title, publication_date: now.toISOString().slice(0, 10), html_url: `https://www.federalregister.gov/d/${n}`, type: 'Rule', agencies: [{ name: 'USCIS' }] }),
     rssItem: (slug, title) => `<item><title>${title}</title><link>https://www.uscis.gov/news/${slug}</link><pubDate>${now.toUTCString()}</pubDate></item>`,
     setFeeds: ({ fr = [], rss = [], ...failures }) => fs.writeFileSync(feeds, JSON.stringify({ fr, rss, ...failures })),
-    watch: () => JSON.parse(run()),
-    watchRaw: () => runRaw(),
+    watch: (...args) => JSON.parse(run(...args)),
+    watchRaw: (...args) => runRaw(...args),
     now,
     // The local day watch.mjs dates its run by (localToday() in its zone).
     today: dayIn(zone, now),
@@ -164,6 +164,50 @@ test('a Federal Register reply whose next page repeats fails that source instead
   assert.match(out.source_errors.join('\n'), /^federal-register: Federal Register returned a repeating next_page_url/);
   assert.equal(w.seen().last_success['federal-register'], old);
   assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-9', 'uscis:https://www.uscis.gov/news/opt'], 'a failed source contributes nothing, not even its first page');
+});
+
+test('a --since run fetches the explicit window but leaves the per-source cursor, so a later normal run still backfills the outage (R17-scripts-a-L2-01)', () => {
+  const w = watchWorld();
+  const old = dayBefore(w.now, 20);
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: old, last_success: { 'federal-register': old, uscis: old } }));
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  w.watch('--since', dayBefore(w.now, 5));
+  const { last_success } = w.seen();
+  assert.equal(last_success['federal-register'], old, 'a --since run must not advance the cursor');
+  assert.equal(last_success.uscis, old);
+  assert.equal(w.seen().last_run, old, 'a --since run must not advance the legacy last_run cursor');
+});
+
+test('a --since run on a fresh root writes no normal-run date, so a later run backfills from the floor', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  w.watch('--since', dayBefore(w.now, 5));
+  const seen = w.seen();
+  assert.equal(seen.last_run, null, 'a --since run must not record a normal-run date');
+  assert.deepEqual(seen.last_success, {}, 'no per-source cursor is advanced on a --since run');
+});
+
+test('an unknown flag such as --dry-run is refused before any fetch or write, and --help prints usage and touches nothing (R17-scripts-a-L2-02)', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  const dry = w.watchRaw('--dry-run');
+  assert.equal(dry.status, 1, dry.stderr);
+  assert.match(dry.stderr, /unrecognized flag\(s\): --dry-run/);
+  assert.equal(fs.existsSync(path.join(w.imm, 'seen.json')), false, 'the live watcher did not write seen.json');
+  assert.equal(fs.existsSync(path.join(w.imm, 'pending.json')), false);
+  const help = w.watchRaw('--help');
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /Usage: node custom\/immigration\/watch\.mjs/);
+  assert.equal(fs.existsSync(path.join(w.imm, 'seen.json')), false);
+});
+
+test('--since -h treats -h as its date operand, not a help request (R17-scripts-a-L2-02)', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  const r = w.watchRaw('--since', '-h');
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /--since needs a YYYY-MM-DD date/);
 });
 
 // ---- the news window follows the last successful pass (SW8-scripts-01) ----

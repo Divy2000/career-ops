@@ -6,7 +6,7 @@
 //
 //   node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -88,6 +88,15 @@ function lookupError(err) {
 // A URL-only row has no company, and a feed can give only a legal suffix ("Inc."): nothing to look up or score.
 const usableName = (c) => Boolean(c.replace(/\b(inc|llc|ltd|corp)\b\.?/gi, '').trim());
 
+// The tier cache is written through a temp file + rename, so a torn or overlapping write can never leave a
+// half-written cache that makes every later shortlist run fail on JSON.parse.
+async function writeTiers(cache) {
+  await mkdir(path.dirname(TIER_CACHE), { recursive: true });
+  const tmp = `${TIER_CACHE}.tmp-${process.pid}`;
+  await writeFile(tmp, JSON.stringify(cache, null, 2) + '\n');
+  await rename(tmp, TIER_CACHE);
+}
+
 async function loadTiers(allCompanies, today) {
   const cache = existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {};
   const fresh = (e) => e && !e.error && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
@@ -112,10 +121,9 @@ async function loadTiers(allCompanies, today) {
       cache[c] = { tier: 'lookup failed', matched: null, checked: today, error: true };
     }
     looked++;
+    // Persist after each lookup: a cancel partway through keeps the lookups already done instead of losing all of them.
+    await writeTiers(cache);
   }
-  // data/immigration exists only once the daily job or a sponsorship check ran.
-  await mkdir(path.dirname(TIER_CACHE), { recursive: true });
-  await writeFile(TIER_CACHE, JSON.stringify(cache, null, 2) + '\n');
   return { tiers: withNameless(companies.map((c) => [c, cache[c].tier])), looked };
 }
 
@@ -189,6 +197,21 @@ async function readPortals() {
 
 const cell = (s) => String(s ?? '').replace(/\|/g, '/');
 
+// Escape the markdown-significant characters the Control Center's parser unescapes (\\, \[, \]). The pipe is NOT
+// escaped here: the excluded bullet is not a pipe-delimited table cell, and unescapeMarkdownCell never reverses a `/`,
+// so a headline's `|` would be permanently shown as `/`.
+const escapeMarkdown = (s) => String(s ?? '').replace(/[\\[\]]/g, (c) => ({ '\\': '\\\\', '[': '\\[', ']': '\\]' }[c]));
+
+// The alert headline is AI-written and may carry a markdown link `[text](url)`. The excluded bullet's `[title](url)`
+// link is read back by a greedy parse in the Control Center, so any `](` in the headline is misread as the title link
+// and the row comes out with the wrong role, link and alert. Strip links (keep the text, drop the URL, which the
+// alert's own url column carries), then break any surviving `](` (a nested [[text]](url) or a literal bracket pair) so
+// the greedy parse binds only the title's `](`, then escape the rest.
+const sponsorCell = (label) => {
+  let s = String(label ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\]\(/g, '] (');
+  return escapeMarkdown(s);
+};
+
 const USAGE = `Usage: node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
 Writes data/shortlist.md from the ranked pending rows, scored with each company's DOL sponsorship tier.
   --min-rank N   leave out rows ranked below N (default 3)
@@ -233,7 +256,7 @@ async function main() {
     '',
     `## Excluded by sponsorship alerts (${excluded.length})`,
     '',
-    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title || s.url)}](${s.url}) - ${cell(s.sponsor)}`) : ['- none']),
+    ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title || s.url)}](${s.url}) - ${sponsorCell(s.sponsor)}`) : ['- none']),
     '',
   ].join('\n');
   await writeFile(OUT, md);

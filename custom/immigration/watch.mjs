@@ -11,6 +11,7 @@ import path from 'node:path';
 import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending, newsSince } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { localToday } from '../../lib/local-today.mjs';
+import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
 
 const DIR = path.join(getCareerOpsRoot(), 'data/immigration');
@@ -33,6 +34,11 @@ const HEADERS = {
 const FR_TERMS = ['H-1B', 'nonimmigrant workers', 'labor certification', 'employment-based immigrant', 'optional practical training'];
 const USCIS_RSS = 'https://www.uscis.gov/news/rss-feed/59144';
 const TIMEOUT_MS = 30000;
+const USAGE = `Usage: node custom/immigration/watch.mjs [--since YYYY-MM-DD] [--ack <watch-json>]
+Fetches official US work-visa policy sources and prints newly queued items as JSON on stdout.
+  --since YYYY-MM-DD   fetch from this date (a manual backfill; the per-source cursor is left alone)
+  --ack <file>         acknowledge the items of the watch JSON batch the policy pass was given
+`;
 
 async function fetchText(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'user-agent': 'career-ops immigration-watch' } });
@@ -75,16 +81,17 @@ async function uscis(since) {
 }
 
 function parseArgs(argv) {
-  const a = argv.indexOf('--ack');
-  if (a !== -1) {
-    if (!argv[a + 1]) throw new Error('--ack needs the path of the watch JSON that was processed');
-    return { ack: argv[a + 1] };
+  if (hasFlag(argv, '--ack')) {
+    const ack = flagValue(argv, '--ack');
+    if (!ack) throw new Error('--ack needs the path of the watch JSON that was processed');
+    return { ack };
   }
-  const i = argv.indexOf('--since');
-  if (i === -1) return { since: null };
-  const since = argv[i + 1];
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(since ?? '')) throw new Error('--since needs a YYYY-MM-DD date');
-  return { since };
+  if (hasFlag(argv, '--since')) {
+    const since = flagValue(argv, '--since');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(since ?? '')) throw new Error('--since needs a YYYY-MM-DD date');
+    return { since };
+  }
+  return { since: null };
 }
 
 // Every read-change-write of pending.json holds this lock (the repo's directory lock, pending.json.lock): the daily
@@ -108,7 +115,10 @@ async function ack(file) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  // An unknown flag (--help, --dry-run) is refused before any fetch or write.
+  validateFlags(argv, ['--since', '--ack', '--help', '-h'], USAGE, { valueFlags: ['--since', '--ack'], requireOperand: true });
+  const args = parseArgs(argv);
   if (args.ack) return ack(args.ack);
   const sinceArg = args.since;
   await mkdir(DIR, { recursive: true });
@@ -142,7 +152,10 @@ async function main() {
   const pending = await withPendingLock(async () => {
     const seen = await readSeen();
     const lastSuccess = { ...(seen.last_success ?? {}) };
-    for (const n of succeeded) if (!(lastSuccess[n] > today)) lastSuccess[n] = today;
+    // A --since run is an explicit, manual window: it must not advance the per-source
+    // cursor, or the next normal run would forget an outage backfill older than the
+    // 14-day floor and leave those items unfetched.
+    if (!sinceArg) for (const n of succeeded) if (!(lastSuccess[n] > today)) lastSuccess[n] = today;
     // Items still queued count as known: a crash after the queue write but
     // before seen.json must not append them to the feed log a second time.
     const queued = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
@@ -168,7 +181,7 @@ async function main() {
     if (toLog.length) {
       await appendFile(FEED, toLog.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
     }
-    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess, ...(seen.last_pass ? { last_pass: seen.last_pass } : {}) }, null, 2) + '\n');
+    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: sinceArg ? (seen.last_run ?? null) : today, last_success: lastSuccess, ...(seen.last_pass ? { last_pass: seen.last_pass } : {}) }, null, 2) + '\n');
     return pending;
   });
 

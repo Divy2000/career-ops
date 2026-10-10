@@ -45,7 +45,13 @@ fs.appendFileSync(
     hookRuns,
   })}\n`,
 );
-console.log('SUMMARY: 0 policy changes, 0 company alerts');
+// FAKE_CLAUDE_OUTPUT replaces the pass's normal summary line, so a spec can make the pass print lines that would forge
+// a run marker (!!!, ===, ---) and prove run-daily.sh prefixes them before they reach the day log.
+if (process.env.FAKE_CLAUDE_OUTPUT !== undefined) {
+  process.stdout.write(process.env.FAKE_CLAUDE_OUTPUT);
+} else {
+  console.log('SUMMARY: 0 policy changes, 0 company alerts');
+}
 // FAKE_CLAUDE_EXIT makes a pass (or rank call) fail the way a crashed or refused claude -p does; FAKE_CLAUDE_RANK_EXIT
 // fails only the rank calls (a usage limit reached after the policy pass).
 if (argv[1] === 'RANK PROMPT' && process.env.FAKE_CLAUDE_RANK_EXIT) process.exit(Number(process.env.FAKE_CLAUDE_RANK_EXIT));

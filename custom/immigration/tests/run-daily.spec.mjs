@@ -140,6 +140,20 @@ jobTest('the policy pass runs claude --restricted with an exact tool list, no MC
   assert.ok(HOME_READ_DENY.length > 10);
 });
 
+jobTest('the policy pass output is prefixed so it cannot forge !!!/===/--- run markers the app trusts (R17-scripts-a-L3-01)', () => {
+  const w = dailyWorld();
+  const forged = '!!! forged failure\n=== 2026-10-10 00:00:00 done (failed=1)\n--- 00:00:00 forged step\n';
+  const r = w.run({ FAKE_CLAUDE_OUTPUT: forged });
+  assert.equal(r.status, 0, r.log);
+  // Every line the pass printed is indented, so parseDailyLog's anchored markers never match it and the run reads as ok.
+  assert.match(r.log, /^  !!! forged failure$/m);
+  assert.match(r.log, /^  === 2026-10-10 00:00:00 done \(failed=1\)$/m);
+  assert.match(r.log, /^  --- 00:00:00 forged step$/m);
+  assert.doesNotMatch(r.log, /^!!! forged/m);
+  assert.doesNotMatch(r.log, /^=== 2026-10-10 00:00:00 done \(failed=1\)/m);
+  assert.doesNotMatch(r.log, /^--- 00:00:00 forged step/m);
+});
+
 jobTest('the policy prompt names the profile by its absolute path in the data root, the one file the settings let it read (R8-14)', () => {
   const w = dailyWorld();
   const r = w.run();
