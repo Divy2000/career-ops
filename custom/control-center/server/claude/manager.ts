@@ -12,7 +12,7 @@ import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
-import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
+import { conversationStarted, sessionsDir, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
@@ -215,7 +215,7 @@ export class SessionManager {
     // A second evaluation of a posting a live session of the mode evaluates (one waiting for the user's reply too: the
     // reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const live = new Map<string, string>();
-    for (const m of this.store.list()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
+    for (const m of this.readableSessions()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
     const key = (url: string) => `${input.mode}\0${url}`;
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
@@ -234,6 +234,21 @@ export class SessionManager {
     } finally {
       for (const url of urls) this.fanningOut.delete(key(url));
     }
+  }
+
+  /** Every session whose meta.json reads: one unreadable folder must not stop a fan-out (the list route fails on it). */
+  private readableSessions(): SessionMeta[] {
+    const out: SessionMeta[] = [];
+    for (const entry of fs.readdirSync(sessionsDir(this.cfg.dataRoot), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const meta = this.store.read(entry.name);
+        if (meta) out.push(meta);
+      } catch {
+        // Unreadable or half-written: not a session this guard can compare against.
+      }
+    }
+    return out;
   }
 
   private async startFanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
