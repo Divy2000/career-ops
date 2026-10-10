@@ -810,6 +810,16 @@ else
         say "  Headless onboarding needs Claude Code $CLAUDE_SCRUB_MIN or later, which keeps the token out of hooks and tools (found: ${claude_version:-unknown})."
         pending "Update Claude Code (claude update), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
+        # Drafts from an earlier run would be listed as this run's and picked up by "Resume from drafts": they hold
+        # personal data, so they are moved aside, not deleted.
+        if [ -d "$draft" ] && [ -n "$(ls -A "$draft" 2>/dev/null)" ]; then
+          prev="$draft.prev-$(date +%Y%m%d-%H%M%S)-$$"
+          if mv "$draft" "$prev"; then
+            say "  Moved the drafts of an earlier headless run to $prev."
+          else
+            warn "  Could not move the earlier drafts out of $draft; they are listed with this run's."
+          fi
+        fi
         mkdir -p "$draft"
         inputs=()
         if [ -n "$CV_COPY" ]; then inputs+=("$CV_COPY"); fi
