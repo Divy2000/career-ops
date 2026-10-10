@@ -97,6 +97,26 @@ export function ApplyBody(props: ApplyBodyProps) {
 
 const applyKey = (n: string | null) => `cc.apply.${n ?? 'url'}`;
 
+// The apply link typed for a draft, by its session id: a row's session targets the row, not the link, so the link is
+// kept beside it for a re-attached draft (prefill uses it). sessionStorage, like the remembered session itself.
+const typedUrlKey = (sid: string) => `cc.apply.typedUrl.${sid}`;
+function readTypedUrl(sid: string | null): string | null {
+  if (!sid) return null;
+  try {
+    return sessionStorage.getItem(typedUrlKey(sid));
+  } catch {
+    return null;
+  }
+}
+function writeTypedUrl(sid: string, url: string | null): void {
+  try {
+    if (url === null) sessionStorage.removeItem(typedUrlKey(sid));
+    else sessionStorage.setItem(typedUrlKey(sid), url);
+  } catch {
+    // storage refused: only the link's re-attaching is lost
+  }
+}
+
 function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
@@ -105,10 +125,21 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const remembered = useRememberedSession(applyKey(n));
   const sessionId = remembered.panel.sessionId;
   const [typedUrl, setUrl] = useState<string | null>(null);
+  // The panel's start holds the callback of the render it was sent from, so the link kept is the one its prompt used,
+  // also when the id comes back after this form unmounted.
+  const rememberSessionId = remembered.panel.onSessionId;
+  const onSessionId = useCallback(
+    (sid: string) => {
+      if (typedUrl !== null) writeTypedUrl(sid, typedUrl);
+      rememberSessionId(sid);
+    },
+    [typedUrl, rememberSessionId],
+  );
+  const storedUrl = readTypedUrl(sessionId);
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
   // back its posting URL, which it carries as its target. One started from a typed URL already shows it.
-  const attached = useSessionStream(n === null && typedUrl === null ? sessionId : null).meta?.target;
-  const url = typedUrl ?? (attached?.type === 'url' && attached.value ? attached.value : postingUrl);
+  const attached = useSessionStream(n === null && typedUrl === null && storedUrl === null ? sessionId : null).meta?.target;
+  const url = typedUrl ?? storedUrl ?? (attached?.type === 'url' && attached.value ? attached.value : postingUrl);
   const [fields, setFields] = useState<AnswerField[] | null>(null);
   const [drafted, setDrafted] = useState<AnswerField[] | null>(null);
   const edited = fields !== null && JSON.stringify(fields) !== JSON.stringify(drafted);
@@ -129,6 +160,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const newDraftAsked = async () => {
     if (edited && !(await confirm({ title: 'Discard the edited answers?', body: 'A new draft starts from an empty form. The current draft stays on the Sessions page with the answers as it drafted them.', confirmLabel: 'Discard changes', danger: true }))) return;
     lastSession(applyKey(n)).write(null);
+    if (sessionId) writeTypedUrl(sessionId, null);
     onNewDraft();
   };
   const [status, setStatus] = useState('queued');
@@ -375,7 +407,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
             startLabel="Draft answers"
             onEnvelope={onEnvelope}
             onStatus={onStatus}
-            onSessionId={remembered.panel.onSessionId}
+            onSessionId={onSessionId}
             onStartFailed={remembered.panel.onStartFailed}
             onStarting={remembered.panel.onStarting}
             replyLabel="Send"

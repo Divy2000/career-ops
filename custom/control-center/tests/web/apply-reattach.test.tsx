@@ -170,6 +170,23 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
   });
 
+  it('on a tracker row, a typed apply link comes back with the re-attached draft, so prefill uses it', async () => {
+    await openApply();
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'https://careers.acme.example/apply/1');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-12' });
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://careers.acme.example/apply/1');
+  });
+
   it('on /apply with no row, the re-attached session brings back the posting URL it was drafted for', async () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
     sessionStorage.setItem('cc.apply.url', 's-apply-url');
