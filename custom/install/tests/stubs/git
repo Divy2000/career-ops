@@ -24,9 +24,21 @@ case "${1:-}" in
       add) printf '%s\n' "$4" > "$dir/.git/remote-$3" ;;
     esac
     ;;
-  status) cat "$dir/.git/dirty" 2>/dev/null || true ;;
-  rev-parse) cat "$dir/.git/branch" 2>/dev/null || echo main ;;
-  ls-files) [ -f "$dir/.git/lock-tracked" ]; exit $? ;;
+  # Each answers only to the exact flags install.sh passes, the way real git does, so dropping one turns a test red:
+  # status without --porcelain prints its long form even on a clean tree, rev-parse HEAD without --abbrev-ref prints a
+  # commit id, and ls-files without --error-unmatch exits 0 for a file git does not track.
+  status)
+    if [ "${2:-}" = --porcelain ]; then cat "$dir/.git/dirty" 2>/dev/null || true
+    else echo "On branch main"; echo "nothing to commit, working tree clean"; fi
+    ;;
+  rev-parse)
+    if [ "${2:-}" = --abbrev-ref ] && [ "${3:-}" = HEAD ]; then cat "$dir/.git/branch" 2>/dev/null || echo main
+    else echo 0123456789abcdef0123456789abcdef01234567; fi
+    ;;
+  ls-files)
+    if [ "${2:-}" = --error-unmatch ]; then [ -f "$dir/.git/lock-tracked" ]; exit $?; fi
+    exit 0
+    ;;
   fetch|pull|checkout) exit 0 ;;
 esac
 exit 0
