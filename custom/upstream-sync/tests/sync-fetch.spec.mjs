@@ -901,6 +901,30 @@ test('update_live_checkout moves the live checkout to the verified sync merge, n
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+// A Control Center that is running leaves its supervisor.lock naming a live PID; the live update must not run npm ci
+// under it, because that deletes node_modules while the fast-forward's blue/green reload starts the new server child.
+function holdRunningControlCenter(w, child) {
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start: Math.floor(Date.now() / 1000), port: 4317, nonce: 'test' }));
+}
+
+test('a running Control Center leaves the live update to skip its npm ci, so the reload is not raced (R17-scripts-b-L1-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  holdRunningControlCenter(w, child);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 /**
  * A shell prefix that starts a daily job holding run-daily's lock in the background and returns once it holds it, so
  * the update after it always meets a held lock. `body` is what the job does while it holds the lock.

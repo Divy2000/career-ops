@@ -523,6 +523,29 @@ merge_blockers() {
   printf '%s' "$out"
 }
 
+# control_center_running <data-root>: whether the Control Center is running on
+# <data-root>, read from its supervisor.lock (the file the supervisor keeps via
+# acquireInstanceLock). Running means the lock names a PID that is alive; a
+# missing, unreadable or stale lock (its holder gone) is not running. npm ci
+# deletes node_modules, so the live update and the installer both consult this
+# before reinstalling the Control Center under a running instance: its blue/green
+# reload would race the deletion and fail.
+control_center_running() {
+  local lock="$1/data/control-center/supervisor.lock"
+  [ -f "$lock" ] || return 1
+  node -e '
+const fs = require("fs");
+let pid = 0;
+try {
+  const l = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  pid = Number.isInteger(l.pid) && l.pid > 0 ? l.pid : 0;
+} catch { /* a damaged lock is not a running instance */ }
+if (!pid) process.exit(1);
+try { process.kill(pid, 0); process.exit(0); }
+catch (e) { process.exit(e.code === "EPERM" ? 0 : 1); }
+' "$lock"
+}
+
 # update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
 # merged, bring the live checkout (the current directory) up to <commit>, the
 # tested sync commit the fork's main was moved to: this never moves it past
@@ -540,7 +563,7 @@ merge_blockers() {
 # main, local changes, already past <commit>, or the daily job still running), 1
 # when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed="" rc
+  local deps_before cc_before failed="" deferred="" data_root rc
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
     if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
       echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
@@ -550,11 +573,15 @@ update_live_checkout() {
     # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
     # While it holds the lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
     # lock held by the update waits for it instead of skipping the day (run-daily.sh).
-    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid"
+    # The daily lock's path is re-passed as $4 so the re-exec'd run can resolve the data root it names.
+    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "$4" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid" "$1"
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
   fi
+  # The daily job's lock always lives at <data-root>/data/immigration/.run-daily.lockf, so the data root is its
+  # grandparent's parent. The Control Center's supervisor.lock sits under that root.
+  data_root="$(dirname "$(dirname "$(dirname "$1")")")"
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
@@ -569,13 +596,22 @@ update_live_checkout() {
   if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
     failed="npm install"
   fi
-  if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ] &&
-    ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
-    failed="${failed:+$failed and }npm --prefix custom/control-center ci"
+  if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
+    if control_center_running "$data_root"; then
+      # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the
+      # running instance's dependencies alone; its next restart installs whatever the merge changed.
+      deferred="the Control Center is running, so its dependencies were not reinstalled; restart it to pick them up"
+    elif ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
+      failed="${failed:+$failed and }npm --prefix custom/control-center ci"
+    fi
   fi
   if [ -n "$failed" ]; then
     echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand"
     return 3
+  fi
+  if [ -n "$deferred" ]; then
+    echo "live checkout now at $(git rev-parse --short HEAD); $deferred"
+    return 0
   fi
   echo "live checkout now at $(git rev-parse --short HEAD)"
 }
