@@ -22,13 +22,20 @@ export const PROCESS_INBOX_PROMPT =
  * Both take posting URLs only; `savedJds` counts the visible rows that are a saved JD (local:jds/), which are evaluated
  * from their own row instead.
  */
-export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking = false }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void; checking?: boolean }) {
+export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking = false, uncheckable = false }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void; checking?: boolean; uncheckable?: boolean }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
   // The pipeline session is paid and edits data/pipeline.md: the last one is re-attached when the page comes back, and
   // while it is starting, queued or running the button shows it instead of closing it, so a second one cannot start.
   const process = useRememberedSession('cc.pipeline.process');
   const [open, setOpen] = useState(process.panel.sessionId !== null);
+  // New run lets go of the finished run (it stays on the Sessions page) and remounts the panel on its start form.
+  const [fresh, setFresh] = useState(0);
+  const newRun = () => {
+    // Letting go is what a deleted session gets: the store forgets it and no session is attached.
+    process.panel.onStatus('gone');
+    setFresh((n) => n + 1);
+  };
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   // One fan-out takes at most BATCH_MAX_URLS. Splitting a bigger set into several requests would leave a partial start
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
@@ -65,6 +72,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
+        {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
         {savedJds > 0 && (
           <span className="muted small">
             {savedJds === 1 ? '1 row with a saved JD is left out of Evaluate visible and Process inbox: use Evaluate JD on its row.' : `${savedJds} rows with a saved JD are left out of Evaluate visible and Process inbox: use Evaluate JD on each row.`}
@@ -81,7 +89,14 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           </span>
         )}
       </div>
-      {open && <SessionPanel key={process.panelKey} {...process.panel} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />}
+      {open && process.shown && !process.busy && (
+        <div className="row gap">
+          <button type="button" onClick={newRun}>
+            New run
+          </button>
+        </div>
+      )}
+      {open && <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />}
     </div>
   );
 }

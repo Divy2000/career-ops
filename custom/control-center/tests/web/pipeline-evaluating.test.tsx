@@ -153,6 +153,30 @@ describe('Process inbox', () => {
   });
 });
 
+describe('Process inbox new run', () => {
+  it('after a finished run, New run offers the start form again instead of the old session (review)', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-old');
+    await mount();
+    await until(() => pipelinePanel(), 'the re-attached panel');
+    expect(pipelinePanel()).toMatchObject({ sessionId: 's-old' });
+    await act(async () => pipelinePanel()!.onStatus!('done', null));
+    panels = [];
+    await act(async () => (await until(() => button('New run'), 'New run')).click());
+    await until(() => pipelinePanel(), 'the fresh panel');
+    expect(pipelinePanel()!.sessionId ?? null).toBeNull();
+    expect((pipelinePanel() as { autoStart?: boolean }).autoStart ?? false).toBe(false);
+    expect(sessionStorage.getItem('cc.pipeline.process')).toBeNull();
+  });
+
+  it('a failed sessions read keeps the evaluation starts off and says so (review)', async () => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (input === '/api/sessions' && !init?.method ? new Response('down', { status: 503 }) : inner(input as string, init)));
+    await mount();
+    await until(() => host.textContent?.includes('Could not check which rows are already being evaluated'), 'the note');
+    expect(button('Evaluate visible')!.disabled).toBe(true);
+  });
+});
+
 describe('Shortlist saved-JD links', () => {
   it('a local:jds/ row and an excluded one link to the saved file, not the literal reference (R13-feat-b-p-01)', async () => {
     await mount('shortlist');

@@ -145,8 +145,8 @@ function Inbox() {
   const seniorities = useMemo(() => [...new Set(rows.map((r) => r.seniority ?? 'unknown'))].sort(), [rows]);
   const sessions = useSessions();
   const evaluating = evaluatingTargets(sessions.data);
-  // Until the list loads, a running evaluation cannot be told apart from a row that has none.
-  const sessionsLoading = sessions.isPending;
+  // Until the list loads (and when it cannot), a running evaluation cannot be told apart from a row that has none.
+  const sessionsLoading = sessions.isPending || sessions.isError;
   const visible = rows.filter(
     (r) =>
       (showDone || !r.done) &&
@@ -174,6 +174,7 @@ function Inbox() {
           savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length}
           onFanOut={() => void qc.invalidateQueries({ queryKey: ['sessions'] })}
           checking={sessionsLoading}
+          uncheckable={sessions.isError}
           evaluating={new Set(visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && evaluating.has(r.url)).map((r) => r.url)).size}
         />
         {skipError && (

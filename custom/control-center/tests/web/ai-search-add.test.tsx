@@ -191,4 +191,14 @@ describe('Discover > AI search: add', () => {
     await mount();
     expect(panel!.sessionId).toBe('s-ai-1');
   });
+
+  it('after a finished search, New search offers the start form again and clears the old offers (review)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    await act(async () => panel!.onStatus!('done', null));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/old', company: 'Old Co', title: 'SRE' }, 1));
+    await act(async () => button('New search').click());
+    expect(panel!.sessionId ?? null).toBeNull();
+    expect(host.textContent).not.toContain('Old Co');
+    expect(sessionStorage.getItem('cc.discover.ai')).toBeNull();
+  });
 });

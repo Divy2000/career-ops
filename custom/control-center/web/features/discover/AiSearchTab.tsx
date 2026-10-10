@@ -42,12 +42,22 @@ export function AiSearchTab() {
   // The search is paid and its offers can be added only here: leaving the tab or the page and coming back re-attaches
   // the last search, whose replayed offer envelopes rebuild the table.
   const remembered = useRememberedSession('cc.discover.ai');
+  // New search lets go of the finished one (it stays on the Sessions page) and remounts the panel on its start form.
+  const [fresh, setFresh] = useState(0);
   const pipeline = usePipeline();
   const tracker = useTracker();
   const qc = useQueryClient();
   const [offers, setOffers] = useState<Offer[]>([]);
   const [sent, setSent] = useState<Map<string, Sent>>(new Map());
   const [note, setNote] = useState<string | null>(null);
+  const newSearch = () => {
+    // Letting go is what a deleted session gets: the store forgets it and no session is attached.
+    remembered.panel.onStatus('gone');
+    setFresh((n) => n + 1);
+    setOffers([]);
+    setSent(new Map());
+    setNote(null);
+  };
   const known = new Set<string>([...(pipeline.data?.kind === 'ok' ? pipeline.data.rows.map((r) => r.url) : []), ...(tracker.data?.kind === 'ok' ? tracker.data.rows.map((r) => r.url ?? '') : [])]);
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
     if (kind === 'offer') setOffers((prev) => (prev.some((o) => o.url === (payload as Offer).url) ? prev : [...prev, payload as Offer]));
@@ -85,7 +95,14 @@ export function AiSearchTab() {
   const newOnes = offers.filter((o) => addableUrl(o.url) && !known.has(o.url) && !sent.has(o.url));
   return (
     <div className="stack">
-      <SessionPanel key={remembered.panelKey} {...remembered.panel} mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
+      {remembered.shown && !remembered.busy && (
+        <div className="row gap">
+          <button type="button" onClick={newSearch}>
+            New search
+          </button>
+        </div>
+      )}
+      <SessionPanel key={`${remembered.panelKey}-${fresh}`} {...remembered.panel} mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
       {offers.length > 0 && (
         <div className="card">
           <div className="row gap" style={{ justifyContent: 'space-between' }}>
