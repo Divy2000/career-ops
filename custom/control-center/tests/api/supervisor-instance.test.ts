@@ -311,6 +311,31 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     return pkg;
   }
 
+  /** A copy of the package whose server child command points at a bin that cannot spawn, so spawn() emits 'error'. */
+  function packageWhoseChildCannotSpawn(): string {
+    const pkg = path.join(tempDir('cc-sup-pkg-badbin-'), 'control-center');
+    for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
+    fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    fs.symlinkSync(path.join(PACKAGE_ROOT, '..', 'immigration'), path.join(pkg, '..', 'immigration'));
+    const cc = path.join(pkg, 'supervisor', 'child-command.ts');
+    fs.writeFileSync(cc, fs.readFileSync(cc, 'utf8').replace('bin: process.execPath', "bin: '/definitely/not/a/real/node'"));
+    return pkg;
+  }
+
+  it('a server child that cannot spawn (a spawn error) leaves the supervisor and /__recovery up instead of crashing it (R17-supervisor-L1-01)', async () => {
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageWhoseChildCannotSpawn(), reload: true });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen after the spawn fails', 50_000);
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      expect(s.output()).toMatch(/server child could not start/);
+      expect(s.output()).not.toMatch(/Unhandled 'error' event|ERR_IPC_CHANNEL_CLOSED/);
+      expect((await request(port, 'GET', '/__recovery', { cookie: await signIn(port) })).status).toBe(200);
+    } finally {
+      await stop(s);
+    }
+  }, 70_000);
+
   it('a server child that listens but never answers /healthz fails its start after the health timeout instead of hanging the supervisor (SW4-claude-01)', async () => {
     const port = await freePort();
     const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageThatNeverAnswers(), reload: true });

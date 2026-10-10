@@ -79,6 +79,13 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       proc.kill('SIGTERM');
       reject(new Error(`server child did not report a port within 20 s\n${tail.text()}`));
     }, 20_000);
+    // A spawn that fails (the bin is missing, the cwd is gone) or a send() on a closed IPC channel emits 'error'; with no
+    // listener that throws uncaught and kills the supervisor, the app and /__recovery with it. Rejecting handles the
+    // startup failure, and after a successful start the listener still swallows later channel errors on drain/activate.
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`server child failed to spawn: ${err.message}\n${tail.text()}`));
+    });
     proc.on('message', (msg: unknown) => {
       const m = msg as { type?: string; port?: number };
       if (m?.type === 'listening' && typeof m.port === 'number') {
