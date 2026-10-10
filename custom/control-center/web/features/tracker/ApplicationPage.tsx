@@ -13,6 +13,7 @@ import { formatLocalMinute } from '../../lib/time';
 import { reasonLabel } from '../../lib/format';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
+import { sponsorCheckCompany } from '../sponsorship/companyKey';
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -337,7 +338,7 @@ function ReportTab({ report }: { report: NonNullable<ReturnType<typeof useApplic
  * tab switch, and while one runs (started here or there) the button stays off, so no second check writes the file.
  */
 function SponsorshipRefresh({ company }: { company: string }) {
-  const check = useRememberedSession(sponsorCheckKey(company));
+  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)));
   return (
     <div className="stack">
       <div className="row gap">

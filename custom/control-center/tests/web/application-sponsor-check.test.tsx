@@ -169,4 +169,24 @@ describe('Application > Sponsorship > Refresh check', () => {
     expect(lastPanel()).toMatchObject({ sessionId: 'check-app' });
     expect([...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Sponsorship check running'))!.disabled).toBe(true);
   });
+
+  it('a check Lookup started under the DOL entity name keeps the button off for the tracker name of that company, and the other way round (R13-feat-c-L1-02)', async () => {
+    const { SponsorCheckLauncher } = await import('@web/features/sponsorship/LookupTab');
+    await render(createElement(SponsorCheckLauncher, { company: 'STRIPE, INC.' }));
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Run sponsorship check'))!.click());
+    await act(async () => lastPanel()!.onSessionId!('check-lookup'));
+    await leave();
+
+    await openApplication('Stripe');
+    expect(lastPanel()).toMatchObject({ sessionId: 'check-lookup' });
+    expect(refreshButton()!.disabled).toBe(true);
+    await act(async () => lastPanel()!.onStatus!('done', 'clean exit with output'));
+    await act(async () => refreshButton()!.click());
+    await act(async () => lastPanel()!.onSessionId!('check-app'));
+    await leave();
+
+    await render(createElement(SponsorCheckLauncher, { company: 'STRIPE, INC.' }));
+    expect(lastPanel()).toMatchObject({ sessionId: 'check-app' });
+    expect([...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Sponsorship check running'))!.disabled).toBe(true);
+  });
 });
