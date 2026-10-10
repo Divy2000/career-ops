@@ -277,7 +277,7 @@ unexpected_upstream() {
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in custom/* | .github/README.md) continue ;; esac
-    printf '%s\n' "$2" | grep -qxF -- "$f" || printf '%s\n' "$f"
+    grep -qxF -- "$f" <<< "$2" || printf '%s\n' "$f"
   done <<< "$1"
 }
 
@@ -321,7 +321,7 @@ suite_failures() {
         continue
         ;;
     esac
-    if printf '%s\n' "$names" | grep -qxF '::rerun timed out::'; then
+    if grep -qxF '::rerun timed out::' <<< "$names"; then
       # A slow suite may hide a new failure behind its baseline: unique to this run, so it holds the PR.
       named="${named:+$named$'\n'}❌ $suite — node:test suite failed, re-run timed out (see $out)"
     elif [ -n "$names" ]; then
