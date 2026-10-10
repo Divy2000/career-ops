@@ -12,7 +12,7 @@ export function PluginsTab() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', 'plugins'], queryFn: () => apiGet<PluginsRead>('/api/plugins') });
   const actions = useActions();
-  const { run, message } = useRunAction();
+  const { run, busy, message } = useRunAction();
   const [skill, setSkill] = useState<{ id: string; markdown: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // One toggle at a time, until its refetch brings the new ETag: a second PUT meanwhile would carry the old one and
@@ -97,7 +97,7 @@ export function PluginsTab() {
                         <td>
                           <div className="row gap">
                             {hook ? (
-                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled} onRun={(params) => void run('plugins.run', params)}>
+                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled || busy !== null} onRun={(params) => void run('plugins.run', params)}>
                                 Run {hook}
                               </ActionButton>
                             ) : (
