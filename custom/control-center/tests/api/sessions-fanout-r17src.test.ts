@@ -6,9 +6,28 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
+import { execNoShell } from '../../server/routes/system.js';
 
 const call = (app: TestApp, url: string, payload: Record<string, unknown>) => app.app.inject({ method: 'POST', url, headers: app.authedWrite, payload });
 const freshApp = () => makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+// A fan-out starts real runs. app.close() clears timers but does not kill a running child, which would keep writing
+// into its data root after teardown and leave a directory behind. Stop every started run and wait for it to end.
+const quiet = async (app: TestApp) => {
+  const busy = (s: { status: string; turns: unknown[] }) => ['running', 'queued', 'awaiting_user'].includes(s.status) && s.turns.length > 0;
+  // The unreadable-meta test leaves a session whose meta.json is invalid; reading it must not throw here.
+  const safe = () => {
+    const out: Array<{ status: string; turns: unknown[]; id: string }> = [];
+    const dir = path.join(app.cfg.dataRoot, 'data', 'control-center', 'sessions');
+    let names: string[] = [];
+    try { names = fs.readdirSync(dir); } catch { return out; }
+    for (const n of names) {
+      try { const m = app.sessions.read(n); if (m) out.push(m); } catch { /* unreadable or half-written meta */ }
+    }
+    return out;
+  };
+  for (const s of safe()) if (busy(s)) app.sessions.cancel(s.id);
+  for (let i = 0; i < 400 && safe().some(busy); i += 1) await new Promise((r) => setTimeout(r, 25));
+};
 const LIVE_URL = 'https://jobs.example.com/synthetic/71';
 const OTHER_URL = 'https://jobs.example.com/synthetic/72';
 type Fan = { sessions: Array<{ id: string; status: string; error?: string; reportNum: number | null; target: { value: string } }>; reserved: number[] };
@@ -32,6 +51,7 @@ describe('fan-out and a live evaluation of the same posting', () => {
         expect(refused.error).toContain(live.id);
         expect(app.sessions.store.list().filter((s) => s.target.value === LIVE_URL)).toHaveLength(1);
       } finally {
+        await quiet(app);
         await app.close();
       }
     });
@@ -46,6 +66,7 @@ describe('fan-out and a live evaluation of the same posting', () => {
       expect(fan.reserved).toHaveLength(1);
       expect(fan.sessions[0]!.status).not.toBe('error');
     } finally {
+      await quiet(app);
       await app.close();
     }
   });
@@ -59,6 +80,37 @@ describe('fan-out and a live evaluation of the same posting', () => {
       expect(app.sessions.store.list().filter((s) => s.target.value === LIVE_URL)).toHaveLength(1);
       expect((a.json() as Fan).reserved.length + (b.json() as Fan).reserved.length).toBe(1);
     } finally {
+      await quiet(app);
+      await app.close();
+    }
+  });
+
+  it('refuses a single start of a URL a batch evaluate is already starting (R16-feata-01 review)', async () => {
+    // Hold the fan-out at its first child call, so its URL is claimed but no session exists yet.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let gated = false;
+    const app = await makeTestApp({}, {
+      exec: async (cmd, args, opts) => {
+        if (!gated) { gated = true; await gate; }
+        return execNoShell(cmd, args, opts);
+      },
+    });
+    try {
+      const fanP = app.sessions.fanOut({ mode: 'oferta', urls: [LIVE_URL] });
+      let res;
+      try {
+        res = await call(app, '/api/sessions', { mode: 'oferta', target: { type: 'url', value: LIVE_URL }, prompt: 'evaluate' });
+      } finally {
+        release();
+      }
+      expect(res.statusCode).toBe(409);
+      const fan = await fanP;
+      expect(fan.sessions.filter((s) => s.status !== 'error')).toHaveLength(1);
+      expect(app.sessions.store.list().filter((s) => s.target.value === LIVE_URL)).toHaveLength(1);
+    } finally {
+      release();
+      await quiet(app);
       await app.close();
     }
   });
@@ -77,6 +129,7 @@ describe('fan-out and a live evaluation of the same posting', () => {
       expect(fan.sessions.filter((s) => s.status !== 'error').map((s) => s.target.value)).toEqual([OTHER_URL]);
       expect(fan.sessions.find((s) => s.target.value === LIVE_URL)!.error).toContain(live.id);
     } finally {
+      await quiet(app);
       await app.close();
     }
   });
