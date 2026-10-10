@@ -85,6 +85,15 @@ function pendingRange(lines: string[]): { start: number; end: number } | null {
   return start === -1 ? null : { start, end: lines.length };
 }
 
+// modes/pipeline.md writes a URL it could not fetch as `- [!] URL <dash> Error: <reason>`: a note after the URL in the
+// first cell, which a scanned row (`URL | Company | Role`) never has.
+const FLAGGED_NOTE = /^\s*\S+\s+(?:--|[-:\u2013\u2014])\s*\S/;
+
+/** The open mark a restored row gets back: `!` for a skipped needs-JD row, so it still waits for its JD text. */
+function restoredMark(rest: string): '!' | ' ' {
+  return FLAGGED_NOTE.test(rest.split('|')[0] ?? '') ? '!' : ' ';
+}
+
 export type SkipResult = { ok: true; text: string; matched: number; changed: number } | { ok: false; error: 'invalid-url' | 'unmatched' };
 
 /** Flip `- [ ]` and `- [x]` on Pending rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays. */
@@ -106,7 +115,7 @@ export function applyInboxSkip(text: string, url: string, done: boolean): SkipRe
     if (jobUrlFromRest(m[3]!) !== parsed) continue;
     matched += 1;
     if ((m[2]!.toLowerCase() === 'x') === done) continue;
-    lines[i] = `${m[1]}[${done ? 'x' : ' '}]${m[3]}`;
+    lines[i] = `${m[1]}[${done ? 'x' : restoredMark(m[3]!)}]${m[3]}`;
     changed += 1;
   }
   if (matched === 0) return { ok: false, error: 'unmatched' };

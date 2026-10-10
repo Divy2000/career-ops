@@ -37,6 +37,18 @@ describe('inbox skip port', () => {
     const same = applyInboxSkip(PIPELINE, 'https://a.example/2', true);
     expect(same).toMatchObject({ ok: true, matched: 1, changed: 0 });
   });
+  it('restoring a skipped needs-JD row writes [!] back, so it keeps its needs-JD state (R12-srv-dom-a-L3-03)', () => {
+    const flagged = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n- [ ] https://a.example/9 | A | Role\n`;
+    const skipped = applyInboxSkip(flagged, 'https://private.example/job/1', true);
+    expect(skipped.ok).toBe(true);
+    if (!skipped.ok) return;
+    const restored = applyInboxSkip(skipped.text, 'https://private.example/job/1', false);
+    expect(restored).toMatchObject({ ok: true, changed: 1 });
+    if (!restored.ok) return;
+    expect(restored.text).toBe(flagged);
+    const plain = applyInboxSkip(flagged.replace('- [ ] https://a.example/9', '- [x] https://a.example/9'), 'https://a.example/9', false);
+    expect(plain.ok && plain.text).toBe(flagged);
+  });
   it('skips a [!] row that waits for its JD, keeping its error note (SW5-tests-02)', () => {
     const text = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n`;
     const r = applyInboxSkip(text, 'https://private.example/job/1', true);
