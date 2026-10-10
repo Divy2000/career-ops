@@ -149,6 +149,20 @@ describe('Reply watch digest: a file holding only the mock emails is no replies 
     }
   });
 
+  it('refuses the digest, naming the file, when an entry has no message id, as every pasted reply has (review fix 5)', async () => {
+    for (const entry of [{}, { message_id: '', subject: 'Next steps' }, { message_id: 5, subject: 'Next steps' }]) {
+      const content = JSON.stringify([entry]);
+      fs.writeFileSync(candidates(), content);
+      try {
+        const res = await post('followups.replyWatch', {});
+        expect(res.statusCode, content).toBe(400);
+        expect(res.json().error, content).toMatch(/data\/reply-candidates\.json is not a JSON list of replies/);
+      } finally {
+        fs.rmSync(candidates(), { force: true });
+      }
+    }
+  });
+
   it('runs once a real reply was pasted next to the mocks', async () => {
     seedMocks();
     const seeded = JSON.parse(fs.readFileSync(candidates(), 'utf8')) as unknown[];
