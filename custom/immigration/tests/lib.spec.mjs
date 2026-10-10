@@ -88,10 +88,12 @@ test('parseRssItems leaves a surrogate reference as-is and never over-decodes a 
   const xml = `<rss><channel>
     <item><title>Bad ref &#xD800; left alone</title><link>https://www.uscis.gov/a</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
     <item><title>Literal &#38;amp; stays literal</title><link>https://www.uscis.gov/b</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+    <item><title>Double-encoded &amp;#39; stays one pass</title><link>https://www.uscis.gov/c</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
   </channel></rss>`;
   const items = parseRssItems(xml);
   assert.equal(items[0].title, 'Bad ref &#xD800; left alone');
   assert.equal(items[1].title, 'Literal &amp; stays literal');
+  assert.equal(items[2].title, 'Double-encoded &#39; stays one pass');
 });
 
 test('isRelevantPolicyItem keeps work-visa topics and drops unrelated news', () => {

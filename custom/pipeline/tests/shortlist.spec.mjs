@@ -313,10 +313,12 @@ test('a run killed mid-lookup keeps the tier lookups already done and leaves no 
       cwd: REPO,
       env: rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` }),
       stdio: 'ignore',
+      // Its own process group, so the kill below also reaps the check.mjs subprocess it spawned for the hung lookup.
+      detached: true,
     });
     const exited = new Promise((r) => child.on('exit', r));
     await waitFor(() => globexSeen, 'the Globex lookup, meaning Acme was already looked up');
-    child.kill('SIGKILL');
+    process.kill(-child.pid, 'SIGKILL');
     await exited;
     const cachePath = path.join(root, 'data', 'immigration', 'sponsor-tiers.json');
     const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
