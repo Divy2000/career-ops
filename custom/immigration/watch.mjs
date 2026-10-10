@@ -181,7 +181,7 @@ async function main() {
     if (toLog.length) {
       await appendFile(FEED, toLog.map((i) => [today, i.published, i.source, i.title, i.url].map(clean).join('\t')).join('\n') + '\n');
     }
-    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: today, last_success: lastSuccess, ...(seen.last_pass ? { last_pass: seen.last_pass } : {}) }, null, 2) + '\n');
+    await writeAtomic(SEEN, JSON.stringify({ ids: [...known], last_run: sinceArg ? (seen.last_run ?? null) : today, last_success: lastSuccess, ...(seen.last_pass ? { last_pass: seen.last_pass } : {}) }, null, 2) + '\n');
     return pending;
   });
 

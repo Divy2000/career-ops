@@ -176,6 +176,16 @@ test('a --since run fetches the explicit window but leaves the per-source cursor
   const { last_success } = w.seen();
   assert.equal(last_success['federal-register'], old, 'a --since run must not advance the cursor');
   assert.equal(last_success.uscis, old);
+  assert.equal(w.seen().last_run, old, 'a --since run must not advance the legacy last_run cursor');
+});
+
+test('a --since run on a fresh root writes no normal-run date, so a later run backfills from the floor', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  w.watch('--since', dayBefore(w.now, 5));
+  const seen = w.seen();
+  assert.equal(seen.last_run, null, 'a --since run must not record a normal-run date');
+  assert.deepEqual(seen.last_success, {}, 'no per-source cursor is advanced on a --since run');
 });
 
 test('an unknown flag such as --dry-run is refused before any fetch or write, and --help prints usage and touches nothing (R17-scripts-a-L2-02)', () => {
