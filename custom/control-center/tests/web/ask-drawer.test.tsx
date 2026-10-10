@@ -52,6 +52,17 @@ afterEach(async () => {
   await act(async () => root.unmount());
 });
 
+// Remount the drawer with a fresh QueryClient so the sessions list (useSessions) loads from the current fetch stub:
+// the shared beforeEach mounts before each describe stubs fetch.
+async function remountDrawer() {
+  const { AskDrawer } = await import('@web/components/AskDrawer');
+  const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(AskDrawer, { open: true, onClose: () => undefined })))));
+}
+
 describe('Ask drawer: proposed actions', () => {
   it('an act envelope naming an Object property is shown as not allowlisted and offers nothing to run', async () => {
     for (const action of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
@@ -354,6 +365,36 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
   });
 });
 
+describe('Ask drawer: evaluate joins an already-running evaluation (R17-shared-comp-L1-01)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  const ACTIVE = { id: 's-active', mode: 'oferta', status: 'running', target: { type: 'url', value: 'https://jobs.example.com/1' } };
+  beforeEach(async () => {
+    posts = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) });
+        if (url === '/api/sessions' && init?.method !== 'POST') return new Response(JSON.stringify([ACTIVE]), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('opens the live oferta session instead of starting a second paid one', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.example.com/1' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-active' } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+});
+
 
 describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
   let posts: Array<{ url: string; body: unknown }>;
@@ -422,6 +463,24 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     rows.push(row('local:jds/2026-10-06_acme_pm.pdf', 'Acme'), { ...row('https://www.linkedin.com/jobs/view/4100000001', 'Acme'), needsJd: true } as ReturnType<typeof row>);
     const item = await runProposal('Acme');
     expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('leaves a posting already being evaluated out, as Evaluate visible does (R17-shared-comp-L1-01)', async () => {
+    const active = { id: 's-active', mode: 'oferta', status: 'running', target: { type: 'url', value: 'https://jobs.acme.example/1' } };
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return json({ sessions: [{ id: 's1' }], reserved: [50] }, 202);
+      }
+      if (String(url) === '/api/pipeline') return json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows });
+      if (String(url) === '/api/sessions') return json([active]);
+      return json([]);
+    });
+    await remountDrawer();
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/2'] } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
 

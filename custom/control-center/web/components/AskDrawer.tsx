@@ -12,6 +12,7 @@ import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@share
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
+import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import type { PipelineRead } from '@shared/api';
 
 export interface Proposal {
@@ -111,6 +112,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const confirm = useConfirm();
+  // The oferta guard the Evaluate entry points share: an active session for a posting is opened, and a start is deduped.
+  const activeFor = useActiveEvaluation();
+  const startEvaluation = useStartEvaluation();
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (open) return afterFocusSettles(() => drawerRef.current?.focus());
@@ -142,7 +146,11 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     let companyUrls: string[] = [];
     if (p.action === 'evaluateCompany') {
       try {
-        companyUrls = await pendingUrlsAt(company);
+        companyUrls = (await pendingUrlsAt(company)).filter((u) => !activeFor(u));
+        if (companyUrls.length === 0) {
+          update(p.id, { state: 'failed', note: `Every pending Inbox posting at ${company} is already being evaluated.` });
+          return;
+        }
       } catch (err) {
         update(p.id, { state: 'failed', note: describeError(err) });
         return;
@@ -177,7 +185,13 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         case 'evaluate': {
           const url = String(p.params.url).trim();
-          const m = await startSession({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
+          // A posting still being evaluated opens that session rather than a second paid one, as Evaluate visible does.
+          const active = activeFor(url);
+          if (active) {
+            await router.navigate({ to: '/sessions/$id', params: { id: active.id } });
+            break;
+          }
+          const m = await startEvaluation(url);
           if (m.status === 'error') {
             update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
             return;
