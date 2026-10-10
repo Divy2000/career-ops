@@ -22,7 +22,7 @@ export const PROCESS_INBOX_PROMPT =
  * Both take posting URLs only; `savedJds` counts the visible rows that are a saved JD (local:jds/), which are evaluated
  * from their own row instead.
  */
-export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void }) {
+export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking = false }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void; checking?: boolean }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
   // The pipeline session is paid and edits data/pipeline.md: the last one is re-attached when the page comes back, and
@@ -61,7 +61,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut }: { urls
         <button type="button" onClick={() => setOpen((o) => (process.busy ? true : !o))} aria-expanded={open}>
           Process inbox <Pill tone="warn">Uses tokens</Pill>
         </button>
-        <button type="button" disabled={busy || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
+        <button type="button" disabled={busy || checking || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}

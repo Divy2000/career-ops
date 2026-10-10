@@ -110,6 +110,22 @@ describe('Pipeline evaluations already running', () => {
     await until(() => button('Evaluate visible (0)'), 'the started rows left out');
   });
 
+  it('Evaluate visible waits for the sessions list, so a running evaluation is not started again before it loads (R13-feat-b-L1-01 review)', async () => {
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((r) => (answer = r));
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && !init?.method) await gate;
+      return inner(input as string, init);
+    });
+    sessions = [session('s-busy', 'running', { type: 'url', value: 'https://jobs.example.com/busy' })];
+    await mount();
+    const evaluate = await until(() => button('Evaluate visible'), 'Evaluate visible');
+    expect(evaluate.disabled).toBe(true);
+    answer();
+    await until(() => button('Evaluate visible (1)') && !button('Evaluate visible (1)')!.disabled, 'Evaluate visible enabled');
+  });
+
   it('Evaluate JD stays off while that saved JD is being evaluated (R13-feat-b-L1-01)', async () => {
     sessions = [session('s-jd', 'queued', { type: 'text', value: 'local:jds/acme.md' })];
     await mount();

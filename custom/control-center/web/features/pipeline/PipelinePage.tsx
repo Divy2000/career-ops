@@ -132,7 +132,10 @@ function Inbox() {
   const rows = useMemo(() => (data?.kind === 'ok' ? data.rows : []), [data]);
   const sources = useMemo(() => [...new Set(rows.map((r) => r.source))].sort(), [rows]);
   const seniorities = useMemo(() => [...new Set(rows.map((r) => r.seniority ?? 'unknown'))].sort(), [rows]);
-  const evaluating = evaluatingTargets(useSessions().data);
+  const sessions = useSessions();
+  const evaluating = evaluatingTargets(sessions.data);
+  // Until the list loads, a running evaluation cannot be told apart from a row that has none.
+  const sessionsLoading = sessions.isPending;
   const visible = rows.filter(
     (r) =>
       (showDone || !r.done) &&
@@ -159,6 +162,7 @@ function Inbox() {
           urls={visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && !evaluating.has(r.url)).map((r) => r.url)}
           savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length}
           onFanOut={() => void qc.invalidateQueries({ queryKey: ['sessions'] })}
+          checking={sessionsLoading}
           evaluating={new Set(visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && evaluating.has(r.url)).map((r) => r.url)).size}
         />
         {skipError && (
@@ -243,7 +247,7 @@ function Inbox() {
                     <td>
                       {!r.done ? (
                         <div className="row gap">
-                          {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} running={evaluating.has(r.url)} />}
+                          {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} running={evaluating.has(r.url)} checking={sessionsLoading} />}
                           <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
                             Skip
                           </button>
@@ -266,7 +270,7 @@ function Inbox() {
 }
 
 /** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
-function EvaluateJd({ reference, label, running }: { reference: string; label: string; running: boolean }) {
+function EvaluateJd({ reference, label, running, checking }: { reference: string; label: string; running: boolean; checking: boolean }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -286,7 +290,7 @@ function EvaluateJd({ reference, label, running }: { reference: string; label: s
   };
   return (
     <>
-      <button type="button" aria-label={`Evaluate JD for ${label}`} disabled={busy || running} onClick={() => void go()}>
+      <button type="button" aria-label={`Evaluate JD for ${label}`} disabled={busy || running || checking} onClick={() => void go()}>
         Evaluate JD <Pill tone="warn">Uses tokens</Pill>
       </button>
       {running && <Pill tone="info">evaluating</Pill>}
