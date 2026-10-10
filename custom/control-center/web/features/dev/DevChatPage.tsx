@@ -311,10 +311,9 @@ export function DevChatPage() {
   const onSent = useCallback(() => setBlacklist(false), []);
   // The Changes panel polls only a Dev Chat session the server confirmed, while its stream does not report it finished.
   const live = sessionId !== null && meta.isSuccess && !missing && status !== 'gone' && !isTerminal(status);
-  // New conversation is offered only once the current session has settled: while it is starting, queued, running or
-  // waiting for the user's reply (a reply resumes the file edits), a second Dev Chat session would edit the same files
-  // beside it, and reverting the first could overwrite the second's.
-  const busy = sessionId !== null && status !== 'gone' && (status === 'awaiting_user' || !isTerminal(status));
+  // New conversation is offered only once the current session has settled: while it is starting, queued or running, a
+  // second Dev Chat session would edit the same files beside it, and reverting the first could overwrite the second's.
+  const busy = sessionId !== null && status !== 'gone' && !isTerminal(status);
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
