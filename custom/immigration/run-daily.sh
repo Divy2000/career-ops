@@ -45,7 +45,20 @@ fi
 # the script was started. It goes when the run ends; a crash leaves a stale pid that no longer runs this script.
 PIDFILE="$IMM/.run-daily.pid"
 echo "$$" > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT
+# The step folders (the policy pass settings, the rank shim with the OAuth token) are removed on every way out: a
+# signal (the Control Center's cancel, a launchd stop) exits through the EXIT trap. Only SIGKILL skips it.
+SETTINGS_DIR=""
+SHIM_DIR=""
+cleanup() {
+  [ -z "$SETTINGS_DIR" ] || rm -rf "$SETTINGS_DIR"
+  [ -z "$SHIM_DIR" ] || rm -rf "$SHIM_DIR"
+  # Last: while the pid file is there the run counts as alive.
+  rm -f "$PIDFILE"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 LOG_DIR="$IMM/logs"
 TODAY="$(date +%Y-%m-%d)"
 RANK_LIMIT="${RANK_LIMIT:-100}"
@@ -56,8 +69,20 @@ cd "$ROOT"
 
 # The subscription token goes only to the claude calls (the policy pass, and the rank through the shim), never into
 # this shell's environment: scan.mjs loads third-party provider plugins into its own process, and every other step is
-# upstream code that has no use for it. An inherited copy is dropped too.
-unset CLAUDE_CODE_OAUTH_TOKEN
+# upstream code that has no use for it. An inherited copy is dropped too, with every other Anthropic credential a manual
+# or launchd start may carry: every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential name segment
+# (the rule the Control Center server applies to its children).
+for var in $(compgen -e); do
+  case "$var" in
+    ANTHROPIC_*) unset "$var" ;;
+    CLAUDE_CODE_*)
+      case "_${var}_" in
+        *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+      esac
+      ;;
+  esac
+done
+unset var
 if ! CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
   echo "!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
   exit 1
@@ -182,7 +207,9 @@ process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceA
   # policy pinned by its sha256: WebFetch only to public addresses (never loopback, private or the
   # cloud metadata address), reads inside the roots and never of secret files, writes only under
   # data/immigration/.
-  settings_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
+  # Straight into the global the EXIT trap removes: a signal is handled between commands, never inside this one.
+  SETTINGS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
+  settings_dir="$SETTINGS_DIR"
   if ! policy_sha="$(ROOT="$ROOT" DATA="$DATA" IMM="$IMM" DIR="$settings_dir" node --input-type=module -e '
 import fs from "node:fs";
 import os from "node:os";
@@ -254,7 +281,9 @@ rank_top() {
     echo "Claude Code changed since the job checked it ($CLAUDE_GATE, now $now); the rank is not run"
     return 1
   fi
-  shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
+  # Straight into the global the EXIT trap removes: a signal is handled between commands, never inside this one.
+  SHIM_DIR="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
+  shim_dir="$SHIM_DIR"
   if ! DIR="$shim_dir" node --input-type=module -e '
 import fs from "node:fs";
 import path from "node:path";

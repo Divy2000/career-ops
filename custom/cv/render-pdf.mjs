@@ -18,10 +18,14 @@
 // real input, output and index stay untouched until a layout is chosen. Only
 // then is the chosen HTML written to the input and rendered once more to the
 // output, which publishes the PDF for --report. A failed run, including a
-// --strict-pages overflow, leaves an already indexed CV exactly as it was.
+// --strict-pages overflow, leaves an already indexed CV exactly as it was. So
+// does a run stopped by SIGTERM, SIGINT or SIGHUP: a density render is stopped and
+// the drafts are removed; a publishing render is let finish, and the input keeps
+// the chosen layout only when that render published it.
 
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fitToPages, countPdfPages } from './lib.mjs';
@@ -31,9 +35,13 @@ import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const CODE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const GENERATE = path.join(CODE, 'generate-pdf.mjs');
+const MAX_OUTPUT = 16 * 1024 * 1024;
 const VALUE_FLAGS = ['--max-pages', '--format', '--report', '--kind'];
 const PASS_THROUGH = ['--format', '--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check'];
 const USAGE = `Usage: node custom/cv/render-pdf.mjs <input.html> <output.pdf> [--max-pages=N] [--strict-pages] [${PASS_THROUGH.join('] [')}]`;
+
+// generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, then refused before the index is.
+const strictOverflow = (attempt) => attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
 
 class RenderFailed extends Error {
   constructor(attempt) {
@@ -69,7 +77,12 @@ async function main() {
   const scratch = mkdtempSync(path.join(resolveWorkspaceRootFor(getCareerOpsRoot()), '.render-pdf-'));
   const draftHtml = path.join(path.dirname(input), `.${path.basename(scratch)}-${path.basename(input)}`);
   const draftPdf = path.join(scratch, path.basename(output));
-  const draftEnv = { ...process.env, CAREER_OPS_PDF_INDEX: path.join(scratch, 'pdf-index.tsv') };
+  // Every render's TMPDIR (Chromium's profile and artifacts) is in the scratch folder too: a render stopped before
+  // Playwright could clean up leaves nothing in the system temp folder.
+  const childTmp = path.join(scratch, 'tmp');
+  mkdirSync(childTmp);
+  const childEnv = { ...process.env, TMPDIR: childTmp };
+  const draftEnv = { ...childEnv, CAREER_OPS_PDF_INDEX: path.join(scratch, 'pdf-index.tsv') };
   // Messages name the files the user passed, not the drafts.
   const real = (text) => (text ?? '').replaceAll(draftHtml, input).replaceAll(path.basename(draftHtml), path.basename(input))
     .replaceAll(draftPdf, output);
@@ -77,19 +90,101 @@ async function main() {
     process.stdout.write(real(attempt.stdout));
     process.stderr.write(real(attempt.stderr));
   };
-  const generate = (from, to, extra, env = process.env) => {
-    const attempt = spawnSync(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
-      cwd: CODE, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-    });
-    if (attempt.error) throw attempt.error;
-    return attempt;
+  // A signal stops a density render in progress and removes the drafts. The final render that publishes the chosen
+  // layout is let finish instead, so the input and the PDF agree: the input keeps the layout when it was published and
+  // gets its own back when it was not (that render stopped by the same signal, as a process-group cancel does). The
+  // renders run asynchronously so the handler can run while one is in progress; once stopping, no render result is
+  // acted on and no new render starts.
+  let running = null;
+  let lastChild = null;
+  let stopping = false;
+  let restoreInput = false;
+  // The output as it was before the final render. generate-pdf.mjs writes the PDF and then its index row in one
+  // synchronous run, so a changed PDF means the chosen layout was published, even when that render then exited non-zero
+  // (stopped while it closed its browser): the input must keep the layout the PDF shows.
+  const outputBytes = () => {
+    try {
+      return statSync(output).isFile() ? readFileSync(output) : null;
+    } catch {
+      return null;
+    }
   };
+  let outputBefore = null;
+  // A changed PDF whose page tree reads, so not one cut short by a stop in the middle of the write.
+  const publishedOutput = () => {
+    const now = outputBytes();
+    if (now === null || (outputBefore !== null && now.equals(outputBefore))) return false;
+    try {
+      countPdfPages(now);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // After the final render: the input keeps the chosen layout only when the PDF it shows was published. Otherwise the
+  // input gets its layout back, and so does the output when the render left a PDF it never indexed: a strict overflow
+  // writes its over-budget PDF and then refuses it, and a stop in the middle of the write leaves a truncated one.
+  const settlePublish = (result) => {
+    if (result?.status === 0 || (!(result && strictOverflow(result)) && publishedOutput())) return;
+    writeFileSync(input, html);
+    const now = outputBytes();
+    if (now === null || (outputBefore !== null && now.equals(outputBefore))) return;
+    if (outputBefore === null) rmSync(output, { force: true });
+    else writeFileSync(output, outputBefore);
+  };
+  const removeDrafts = () => {
+    rmSync(draftHtml, { force: true });
+    rmSync(scratch, { recursive: true, force: true });
+  };
+  const onSignal = async (signal) => {
+    if (stopping) return;
+    stopping = true;
+    if (running && running.exitCode === null && running.signalCode === null) {
+      const closed = new Promise((resolve) => running.once('close', resolve));
+      if (!restoreInput) running.kill(signal);
+      await closed;
+    }
+    removeDrafts();
+    if (restoreInput) settlePublish(lastChild?.result ?? null);
+    process.exit(128 + os.constants.signals[signal]);
+  };
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, onSignal);
+  // The scratch folder lives until the last render ends, however the run ends.
+  process.on('exit', removeDrafts);
+  const generate = (from, to, extra, env = process.env) => new Promise((resolve, reject) => {
+    if (stopping) return;
+    const child = spawn(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
+      cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    running = child;
+    lastChild = child;
+    let stdout = '';
+    let stderr = '';
+    // Bounded like the spawnSync maxBuffer it replaced: a child printing without end is stopped, not buffered.
+    let flooded = false;
+    const collect = (append) => (d) => {
+      if (flooded) return;
+      append(d);
+      if (stdout.length + stderr.length > MAX_OUTPUT) {
+        flooded = true;
+        child.kill('SIGTERM');
+      }
+    };
+    child.stdout.setEncoding('utf8').on('data', collect((d) => { stdout += d; }));
+    child.stderr.setEncoding('utf8').on('data', collect((d) => { stderr += d; }));
+    child.on('error', (err) => { if (!stopping) reject(err); });
+    child.on('close', (status, signal) => {
+      if (running === child) running = null;
+      child.result = { status, signal, stdout, stderr };
+      if (stopping) return;
+      if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));
+      else resolve(child.result);
+    });
+  });
   const render = async (candidate) => {
     writeFileSync(draftHtml, candidate);
-    const attempt = generate(draftHtml, draftPdf, ['--strict-pages'], draftEnv);
-    // generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, nothing else is.
-    const overflowed = attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
-    if (attempt.status !== 0 && !overflowed) throw new RenderFailed(attempt);
+    const attempt = await generate(draftHtml, draftPdf, ['--strict-pages'], draftEnv);
+    if (attempt.status !== 0 && !strictOverflow(attempt)) throw new RenderFailed(attempt);
     return { pages: countPdfPages(readFileSync(draftPdf)) };
   };
 
@@ -104,17 +199,19 @@ async function main() {
     throw err;
   } finally {
     rmSync(draftHtml, { force: true });
-    rmSync(scratch, { recursive: true, force: true });
   }
   let published = null;
   if (result.fits || !strict) {
     // Publish the chosen layout: the input keeps its density and this render indexes the PDF.
+    outputBefore = outputBytes();
+    restoreInput = true;
     writeFileSync(input, result.html);
     try {
-      published = generate(input, output, result.fits ? ['--strict-pages'] : []);
+      published = await generate(input, output, result.fits ? ['--strict-pages'] : [], childEnv);
     } finally {
-      // Nothing was published, so the input keeps the layout it had.
-      if (published?.status !== 0) writeFileSync(input, html);
+      // Unless the chosen layout was published, the input gets back the layout it had.
+      settlePublish(published);
+      restoreInput = false;
     }
     if (published.status !== 0) {
       print(published);

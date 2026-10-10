@@ -29,9 +29,32 @@ export function recentAchievements(cvText) {
     const text = item[1];
     const bold = text.match(/\*\*(.+?)\*\*/);
     const title = (bold ? bold[1] : text.split(/\s+(?:--|\u2014|\u2013)\s+/)[0]).replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
-    out.push({ line: i + 1, title, urls: (text.match(URL_RE) ?? []).map((u) => u.replace(/[.,;]+$/, '')) });
+    out.push({ line: i + 1, title, urls: linksIn(text) });
   }
   return out;
+}
+
+// The body of every cv.md `##` section whose title ends in "Project" or "Projects" ("Projects", "Personal Projects"): the only part of
+// cv.md a project may come from, never an employer, a role, another section's title or a skill category.
+function projectSections(cvText) {
+  const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
+  const out = [];
+  let inside = false;
+  for (const line of lines) {
+    // A `#` heading ends a section as a `##` one does, and starts no projects section.
+    const section = line.match(/^#{1,2}(?!#)\s+(.*\S)\s*$/);
+    if (section) {
+      if (!line.startsWith('##')) {
+        inside = false;
+        continue;
+      }
+      // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
+      inside = /\bprojects?$/i.test(section[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[^A-Za-z]+$/, ''));
+      continue;
+    }
+    if (inside) out.push(line);
+  }
+  return out.join('\n');
 }
 
 // Same work: equal normalized titles, or the same canonical link. A title that
@@ -53,13 +76,14 @@ function publisherHost(url) {
 }
 
 // Papers belong in awards[] (Recent Achievements), never in projects[]; every
-// project must come from the library (kind project) or cv.md, and its link must
+// project must come from the library (kind project) or cv.md's Projects section, and its link must
 // be that source's link (the library wins when both list the project).
 export function checkPayload(payload, { cvText = '', libraryText = null } = {}) {
   const errors = [];
   const warnings = [];
   const achievements = recentAchievements(cvText);
   const library = libraryText === null ? [] : parseLibrary(libraryText).entries;
+  const cvProjects = projectSections(cvText);
   for (const p of Array.isArray(payload?.projects) ? payload.projects : []) {
     const name = typeof p?.name === 'string' ? p.name.trim() : '';
     if (!name) continue;
@@ -71,7 +95,7 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
     if (entry && entry.kind !== 'project') {
       errors.push(`project "${name}" is a ${entry.kind} in article-digest.md (line ${entry.line}); only kind project can be listed under Projects`);
     }
-    const inCv = entry ? null : findCvBlock(cvText, name);
+    const inCv = entry ? null : findCvBlock(cvProjects, name);
     if (!entry && !inCv) {
       errors.push(`project "${name}" is in neither article-digest.md nor cv.md; take projects from node custom/projects/rank.mjs output`);
     }

@@ -109,14 +109,35 @@ export function isRelevantPolicyItem(title) {
   return RELEVANT.some((re) => re.test(t));
 }
 
+// The daily prompt asks for exactly six tab-separated fields per row: a tab inside a field shifts every column after
+// it, so a row with another count is refused rather than read with its data truncated or shifted.
+function splitRow(line, names) {
+  const fields = line.split('\t');
+  if (fields.length !== names.length) throw new Error(`expected ${names.length} tab-separated fields, got ${fields.length}`);
+  return fields;
+}
+
+function assertFilled(fields, names, optional = []) {
+  names.forEach((name, i) => {
+    if (!optional.includes(name) && !fields[i].trim()) throw new Error(`${name} is empty`);
+  });
+}
+
+const POLICY_FIELDS = ['detected_date', 'announced_date', 'source', 'title', 'url', 'impact'];
+const ALERT_FIELDS = ['date', 'company', 'slug', 'status', 'headline', 'url'];
+
 export function parsePolicyChanges(tsv) {
   const rows = [];
   const lines = String(tsv ?? '').replace(/\r/g, '').split('\n');
   lines.forEach((line, i) => {
     if (!line.trim() || (i === 0 && line.startsWith('detected_date\t'))) return;
-    const [detected, announced, source, title, url, impact] = line.split('\t');
+    let detected, announced, source, title, url, impact;
     try {
+      const fields = splitRow(line, POLICY_FIELDS);
+      [detected, announced, source, title, url, impact] = fields;
+      announced = announced.trim();
       assertIsoDate(detected, 'detected_date');
+      assertFilled(fields, POLICY_FIELDS, ['announced_date']);
       if (announced) assertIsoDate(announced, 'announced_date');
     } catch (err) {
       throw new Error(`policy-changes.tsv line ${i + 1}: ${err.message}`);
@@ -130,10 +151,12 @@ export function parseCompanyAlerts(tsv) {
   const bySlug = new Map();
   String(tsv ?? '').replace(/\r/g, '').split('\n').forEach((line, i) => {
     if (!line.trim() || (i === 0 && line.startsWith('date\t'))) return;
-    const [date, company, slug, status, headline, url] = line.split('\t');
+    let date, company, slug, status, headline, url;
     try {
+      const fields = splitRow(line, ALERT_FIELDS);
+      [date, company, slug, status, headline, url] = fields;
       assertIsoDate(date, 'date');
-      if (!slug) throw new Error('slug is empty');
+      assertFilled(fields, ALERT_FIELDS);
       if (!ALERT_STATUSES.has(status)) throw new Error(`status must be one of ${[...ALERT_STATUSES].join('/')}, got ${JSON.stringify(status)}`);
     } catch (err) {
       throw new Error(`company-alerts.tsv line ${i + 1}: ${err.message}`);

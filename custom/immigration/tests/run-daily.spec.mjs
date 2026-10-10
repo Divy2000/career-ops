@@ -64,7 +64,9 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   // Each step and the rank-pipeline stand-in also note whether the Claude OAuth token reached them.
   const tokenLog = path.join(T, 'step-tokens.log');
   const nodeLog = path.join(T, 'step-nodes.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\n`;
+  // ... and which Anthropic or Claude Code variables reached them, by name.
+  const envLog = path.join(T, 'step-env.log');
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\nfs.appendFileSync(${JSON.stringify(envLog)}, ${JSON.stringify(name)} + ' ' + Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -82,12 +84,17 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const record = path.join(T, 'claude-calls.ndjson');
   const fakeClaude = path.join(bin, 'fake-claude');
   fs.writeFileSync(fakeClaude, `#!${process.execPath}\n${readFileSync(path.join(HERE, 'fixtures', 'fake-claude.mjs'), 'utf8')}`, { mode: 0o755 });
-  const run = (extraEnv = {}) => {
+  const envFor = (extraEnv) => {
     // Never the real claude: the script must take CC_CLAUDE_BIN, or it would run the one on this machine.
     assert.match(readFileSync(path.join(root, 'custom/immigration/run-daily.sh'), 'utf8'), /\$\{CC_CLAUDE_BIN:-/, 'run-daily.sh must run claude through CC_CLAUDE_BIN');
     // TZ passes through: the job dates its log and digest by its local day, which the specs compute in this process's zone.
     // CC_NODE_BIN: the node running these specs, pinned as the plist pins one; run-daily.sh puts Homebrew first on PATH.
-    const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, CC_NODE_BIN: process.execPath, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
+    return { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, CC_NODE_BIN: process.execPath, HOME: home, TMPDIR: tmp, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), CAREER_OPS_ROOT: data, CC_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_RECORD: record, FAKE_CLAUDE_VERSION: `${APPROVED[0]} (Claude Code)`, ...extraEnv };
+  };
+  // The job started in its own process group, as the Control Center runner starts it, for a spec that signals it mid-run.
+  const start = (extraEnv = {}) => spawn('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env: envFor(extraEnv), stdio: 'ignore', detached: true });
+  const run = (extraEnv = {}) => {
+    const env = envFor(extraEnv);
     const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
@@ -100,10 +107,11 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
     const stepTokens = fs.existsSync(tokenLog) ? readFileSync(tokenLog, 'utf8') : '';
+    const stepEnv = fs.existsSync(envLog) ? readFileSync(envLog, 'utf8') : '';
     const stepNodes = fs.existsSync(nodeLog) ? [...new Set(readFileSync(nodeLog, 'utf8').trim().split('\n'))] : [];
-    return { stepNodes, stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    return { stepEnv, stepNodes, stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
-  return { T, root, data, home, fakeClaude, run };
+  return { T, root, data, home, tmp, fakeClaude, run, start };
 }
 
 const flagValue = (argv, flag) => argv[argv.indexOf(flag) + 1];
@@ -513,6 +521,29 @@ jobTest('a rank call killed by rank-pipeline\'s timeout fails the step and leave
   assert.equal(fs.existsSync(`${pids}.woke`), false, 'the claude was killed at the timeout, not left to run to its end');
 });
 
+for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]]) {
+  jobTest(`a run cancelled with ${signal} during the rank step removes the shim folder that holds the OAuth token (R11-scripts-a-L1-01)`, async () => {
+    const w = dailyWorld();
+    const pids = path.join(w.T, 'rank-claude.pids');
+    const child = w.start({ FAKE_CLAUDE_RANK_SLEEP_MS: '30000', FAKE_CLAUDE_PIDS: pids });
+    const exited = new Promise((resolve) => child.on('exit', (status, sig) => resolve({ status, sig })));
+    for (let i = 0; i < 600 && !fs.existsSync(pids); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(fs.existsSync(pids), 'the rank call never started');
+    assert.equal(fs.readdirSync(w.tmp).filter((f) => f.startsWith('career-ops-rank-shim.')).length, 1, 'the token folder exists while the rank runs');
+    // The lock holder, the bash that runs the steps and the cleanup; the started bash only waits on lockf.
+    const imm = path.join(w.data, 'data', 'immigration');
+    const holder = Number(readFileSync(path.join(imm, '.run-daily.pid'), 'utf8'));
+    // The runner's cancel: the signal goes to the whole process group.
+    process.kill(-child.pid, signal);
+    const end = await exited;
+    assert.notEqual(end.status, 0, `the cancelled run must not read as a success (${JSON.stringify(end)})`);
+    for (let i = 0; i < 600 && alive(holder); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(alive(holder), false, 'the lock holder exits on the signal');
+    assert.deepEqual(fs.readdirSync(w.tmp), [], `the token outlived the cancelled rank step (expected exit ${code})`);
+    assert.equal(fs.existsSync(path.join(imm, '.run-daily.pid')), false, 'the pidfile goes too');
+  });
+}
+
 test('the rank wrapper sets its TERM/INT trap before it starts the shim, so a timeout that comes first still records the failure and orphans nothing', () => {
   const body = readFileSync(RUN_DAILY, 'utf8');
   const wrapper = body.slice(body.indexOf('rank_top() {'));
@@ -536,6 +567,21 @@ jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan
   assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
   assert.equal(r.rankCalls.length, 1);
   assert.equal(r.rankCalls[0].token, true, 'the rank call reaches claude with the token, through the shim only');
+});
+
+jobTest('no step sees an inherited ANTHROPIC_* variable or a credential CLAUDE_CODE_* one, and the claude calls still get the Keychain token', () => {
+  const w = dailyWorld();
+  const scrubbed = { ANTHROPIC_API_KEY: 'sk-ant-x', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_BASE_URL: 'https://proxy.example', ANTHROPIC_CUSTOM_HEADERS: 'X-Key: k', CLAUDE_CODE_API_KEY_HELPER: '/bin/k', CLAUDE_CODE_CLIENT_CERT: '/c.pem', CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: 'p', CLAUDE_CODE_SECRET: 's', CLAUDE_CODE_PASSWORD: 'p', CLAUDE_CODE_CREDENTIALS: 'c', CLAUDE_CODE_CREDENTIAL_FILE: 'f', CLAUDE_CODE_EXTRA_HEADER: 'h' };
+  const r = w.run({ ...scrubbed, CLAUDE_CODE_USE_BEDROCK: '0' });
+  assert.equal(r.status, 0, r.log);
+  const lines = r.stepEnv.trim().split('\n');
+  for (const step of ['watch', 'scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) {
+    const line = lines.find((l) => l.startsWith(`${step} `));
+    assert.ok(line, `${step} did not run:\n${r.stepEnv}`);
+    assert.deepEqual(line.slice(step.length + 1).split(',').filter(Boolean), ['CLAUDE_CODE_USE_BEDROCK'], `${step} saw a credential variable: ${line}`);
+  }
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
 });
 
 test('the daily policy pass and the Control Center immigration-policy session may write exactly the same files (parity with modes.ts)', () => {

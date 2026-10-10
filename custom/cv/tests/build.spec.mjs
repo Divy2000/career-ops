@@ -75,6 +75,16 @@ test('given a project whose URL matches a Recent Achievements link, when checked
   assert.match(r.errors.join('\n'), /"Search Tool".*Recent Achievements/);
 });
 
+test('given a project whose URL matches a bare (scheme-less) Recent Achievements link, when checked, then it is an error (R11-scripts-a-X-01)', () => {
+  const cv = [
+    '## Projects', '', '- **Search Tool** (doi.org/10.1000/example.2) -- x', '',
+    '## Recent Achievements', '', '- **A Differently Titled Paper** -- Materials Letters, 2022 (doi.org/10.1000/example.2)', '',
+  ].join('\n');
+  assert.deepEqual(recentAchievements(cv)[0].urls, ['doi.org/10.1000/example.2']);
+  const r = checkPayload({ projects: [{ name: 'Search Tool', url: 'https://doi.org/10.1000/example.2', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+  assert.match(r.errors.join('\n'), /"Search Tool".*Recent Achievements/);
+});
+
 test('given a library entry whose kind is not project, when used as a project, then it is an error', () => {
   const r = checkPayload({ projects: [{ name: 'Old Research Work', bullets: ['x'] }] }, { cvText: '', libraryText: LIBRARY });
   assert.match(r.errors.join('\n'), /"Old Research Work".*publication/);
@@ -165,6 +175,49 @@ test('given a project in neither the library nor cv.md, when built, then it fail
   assert.equal(r.html, null);
 });
 
+test('given a project named after an employer, a role, a section or a skill category in cv.md, when checked, then it is an error: only the Projects section is a project source (R11-scripts-a-L3-02)', () => {
+  const cv = cvMarkdownFor(loadFixture());
+  for (const name of ['Software Engineer', 'Northwind Devices', 'Work Experience', 'Languages']) {
+    assert.ok(cv.includes(name), `the fixture cv.md lists ${name}`);
+    const r = checkPayload({ projects: [{ name, bullets: ['Built an internal tool'] }] }, { cvText: cv, libraryText: null });
+    assert.match(r.errors.join('\n'), new RegExp(`project "${name}" is in neither article-digest\\.md nor cv\\.md`), name);
+  }
+});
+
+test('given a project under a level-3 heading of a Personal Projects section, when checked, then its cv.md link is used (R11-scripts-a-L3-02)', () => {
+  const cv = '## Work Experience\n\n### Graph Co -- Austin\n\n- built github.com/me/work\n\n## Personal Projects\n\n### Graph Tool\n\n- see github.com/me/graph-tool\n\n## Skills\n';
+  assert.deepEqual(checkPayload({ projects: [{ name: 'Graph Tool', url: 'https://github.com/me/graph-tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, []);
+  assert.match(checkPayload({ projects: [{ name: 'Graph Co', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors.join('\n'), /"Graph Co" is in neither/);
+});
+
+test('given an entry under a section that is about something else but names projects (Project Management), when checked, then it is not a project source (R11-scripts-a-L3-02 review)', () => {
+  for (const title of ['Project Management', 'Projects & Publications']) {
+    const cv = `## ${title}\n\n### Secret Tool\n- https://github.com/me/tool\n\n## Skills\n`;
+    const r = checkPayload({ projects: [{ name: 'Secret Tool', url: 'https://github.com/me/tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+    assert.match(r.errors.join('\n'), /"Secret Tool" is in neither/, title);
+  }
+  // A CV with a single project may title its section in the singular.
+  for (const title of ['Projects', 'Selected Projects', 'Side-Projects', 'Project', '[Selected Projects](https://example.com/p)', '**Projects**']) {
+    const cv = `## ${title}\n\n### Secret Tool\n- https://github.com/me/tool\n\n## Skills\n`;
+    assert.deepEqual(checkPayload({ projects: [{ name: 'Secret Tool', url: 'https://github.com/me/tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, [], title);
+  }
+});
+
+test('given a top-level heading after the Projects section, when checked, then the entries under it are not project sources (R11-scripts-a-L3-02 review)', () => {
+  const cv = '## Projects\n\n### Real Tool\n- x\n\n# Appendix\n\n### Secret Tool\n- y\n';
+  assert.deepEqual(checkPayload({ projects: [{ name: 'Real Tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, []);
+  assert.match(checkPayload({ projects: [{ name: 'Secret Tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors.join('\n'), /"Secret Tool" is in neither/);
+});
+
+test('given a project named after a job title in cv.md, when built, then it fails and no HTML is written (R11-scripts-a-L3-02)', () => {
+  const fixture = loadFixture();
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const r = build(root, { ...fixture, projects: [{ name: 'Software Engineer', bullets: ['Built an internal tool'] }] });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /project "Software Engineer" is in neither article-digest\.md nor cv\.md/);
+  assert.equal(r.html, null);
+});
+
 test('given no sections.awards, when built, then the awards section is titled "Recent Achievements" and uses the fork template', () => {
   const fixture = loadFixture();
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
@@ -197,6 +250,15 @@ test('given missing arguments or an unknown flag, when run, then it exits non-ze
   const r = spawnSync(process.execPath, [BUILD], { cwd: REPO, encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /Usage/);
-  const flag = spawnSync(process.execPath, [BUILD, 'a.json', 'b.html', '--template=x'], { cwd: REPO, encoding: 'utf8' });
-  assert.notEqual(flag.status, 0);
+  // A payload that builds without the flag, so only the flag check can fail the run (R11-tests-custom-L3-03).
+  const fixture = loadFixture();
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const input = path.join(root, 'payload.json');
+  const output = path.join(root, 'output', 'cv.html');
+  fs.writeFileSync(input, JSON.stringify(fixture));
+  const flag = spawnSync(process.execPath, [BUILD, input, output, '--template=x'], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
+  assert.equal(flag.status, 1, flag.stderr);
+  assert.match(flag.stderr, /unrecognized flag\(s\): --template=x/);
+  assert.equal(fs.existsSync(output), false, 'no HTML is written');
+  assert.equal(build(root, fixture).status, 0, 'the same payload builds without the flag');
 });

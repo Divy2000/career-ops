@@ -119,30 +119,47 @@ async function loadTiers(allCompanies, today) {
   return { tiers: withNameless(companies.map((c) => [c, cache[c].tier])), looked };
 }
 
+// Trailing words that name a company's legal form, not the company: "Acme Robotics, Inc." is "Acme Robotics".
+const CORPORATE_SUFFIXES = new Set(['inc', 'incorporated', 'llc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'plc', 'gmbh', 'ag', 'sa', 'bv', 'holdings', 'group']);
+
+// A web domain joined by a dot to a word ("Amazon.com") names the brand; a standalone "Co" or "AI" stays a word.
+const DOMAIN_SUFFIX = /(?<=[\p{L}\p{N}])\.(?:com|io|ai|net|org|co|app|dev)(?![\p{L}\p{N}]|\.[\p{L}\p{N}])/giu;
+
+function normalizeCompanyName(name) {
+  const words = String(name ?? '').replace(DOMAIN_SUFFIX, '').toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').split(/\s+/).filter(Boolean);
+  while (words.length > 1 && CORPORATE_SUFFIXES.has(words.at(-1))) words.pop();
+  return words.join(' ');
+}
+
+const slugOf = (name) => {
+  try {
+    return companySlug(name);
+  } catch {
+    return null; // no usable company name (e.g. "Inc."): nothing to match by slug
+  }
+};
+
+// An alert applies to a company only when it names that company: equal slugs (the alert's slug column, or its company
+// slugged like the pipeline rows, since the writing session's rule may have differed: AT&T as at-t, a kept
+// "corporation"), or equal names once stripped of a dotted domain suffix, lowercased, stripped of punctuation and of
+// trailing corporate suffixes. A longer
+// or shorter name is another company ("Meta Labs" is not "Meta"). Of every alert that applies, the newest wins.
 async function loadAlerts(companies) {
   if (!existsSync(ALERTS)) return new Map();
-  const bySlug = parseCompanyAlerts(await readFile(ALERTS, 'utf8'));
-  // The slug column is whatever the writing session derived; the company name, slugged here like the pipeline rows,
-  // matches even when its rule differed (AT&T as at-t, a kept "corporation").
-  for (const [, alert] of [...bySlug]) {
-    let own;
-    try {
-      own = companySlug(alert.company);
-    } catch {
-      continue;
-    }
-    const prev = bySlug.get(own);
-    if (!prev || alert.date >= prev.date) bySlug.set(own, alert);
-  }
+  const alerts = [...parseCompanyAlerts(await readFile(ALERTS, 'utf8'))].map(([slug, alert]) => ({
+    slugs: new Set([slug, slugOf(alert.company)].filter(Boolean)),
+    name: normalizeCompanyName(alert.company),
+    alert,
+  }));
   const out = new Map();
   for (const c of companies) {
-    let slug;
-    try {
-      slug = companySlug(c);
-    } catch {
-      continue; // feed gave no usable company name (e.g. "Inc."); nothing to match
+    const slug = slugOf(c);
+    const name = normalizeCompanyName(c);
+    let hit = null;
+    for (const a of alerts) {
+      if (!(slug && a.slugs.has(slug)) && !(name && a.name === name)) continue;
+      if (!hit || a.alert.date > hit.date) hit = a.alert;
     }
-    const hit = bySlug.get(slug) ?? [...bySlug].find(([s]) => slug.startsWith(`${s}-`))?.[1];
     if (hit) out.set(c, hit);
   }
   return out;

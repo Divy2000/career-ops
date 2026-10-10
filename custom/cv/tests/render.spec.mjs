@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fitToPages, setDensity, countPdfPages, DENSITIES } from '../lib.mjs';
 import { HERE, REPO, loadFixture, cvMarkdownFor, dataRoot, envFor } from './helpers.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const BUILD = path.join(HERE, '..', 'build-html.mjs');
 const RENDER = path.join(HERE, '..', 'render-pdf.mjs');
@@ -116,6 +117,7 @@ test('integration: given the made-up 6-role CV, when rendered with a 1-page budg
   assert.ok(density !== undefined, 'density attribute written back');
   assert.match(r.stdout, new RegExp(`density ${density}, 1 page`));
   assert.match(r.stdout, /Fact check passed/);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-')), [], 'the scratch folder is removed from the data root (R11-tests-custom-L3-06)');
 });
 
 test('given every density overflowing, when run with --strict-pages, then it exits non-zero; without it, it warns and exits 0', { timeout: 240000 }, () => {
@@ -168,6 +170,7 @@ test('given an indexed CV with the same file names, when a strict re-render of i
   assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the indexed PDF is not overwritten by an overflowing draft');
   assert.equal(fs.readFileSync(index, 'utf8'), indexed);
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), ['cv-test.html', 'cv-test.pdf']);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-')), [], 'the scratch folder is removed from the data root (R11-tests-custom-L3-06)');
 });
 
 test('given generate-pdf.mjs failing the fact check, when run, then it passes the message through and leaves the input untouched', { timeout: 120000 }, () => {
@@ -181,6 +184,7 @@ test('given generate-pdf.mjs failing the fact check, when run, then it passes th
   assert.match(r.stdout + r.stderr, /5 hours/);
   assert.equal(fs.readFileSync(html, 'utf8'), before, 'a failed run leaves the input HTML as it was');
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no PDF and no draft is left behind');
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-')), [], 'the scratch folder is removed from the data root (R11-tests-custom-L3-06)');
 });
 
 test('given an output folder that does not exist yet, when rendered, then it is created as upstream does and the PDF lands there (review of SW5-tests-01)', { timeout: 240000 }, () => {
@@ -235,6 +239,167 @@ test('given an output path that is an existing folder, when the final render fai
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.readFileSync(html, 'utf8'), before, 'the chosen density is not kept when nothing was published');
   assert.deepEqual(fs.readdirSync(pdf), []);
+});
+
+// The start of a NODE_OPTIONS --import preload that singles out the render-pdf children: isGenerate in every
+// generate-pdf.mjs, isFinal in the one that publishes (its input is the real HTML, not a density draft).
+const PRELOAD_ARGS = "const args = process.argv.slice(2);\nconst html = args.findIndex((a) => a.endsWith('.html'));\nconst isGenerate = process.argv.some((a) => a.endsWith('generate-pdf.mjs'));\nconst isFinal = isGenerate && html !== -1 && !args[html].includes('.render-pdf-');\n";
+
+// A render started in the background, for the specs that stop it with a signal partway through.
+// Its own TMPDIR, so a spec can check that a stopped render leaves nothing there either (Chromium keeps its profile in it).
+const startRender = (root, html, args) => {
+  const tmp = fs.realpathSync(tempDir('render-tmp-'));
+  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], { cwd: REPO, env: { ...envFor(root), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+  child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
+  const exited = new Promise((resolve) => child.on('close', (status, signal) => resolve({ status, signal, out })));
+  return { child, exited, tmp };
+};
+const waitFor = async (check, what, ms = 120000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 10))) if (check()) return;
+  assert.fail(`timed out waiting for ${what}`);
+};
+const scratchIn = (root) => fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-'));
+
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  test(`given a render stopped with ${signal} while a density draft renders, then no draft or scratch folder is left and the input is untouched (R11-scripts-a-L1-02)`, { timeout: 240000 }, async () => {
+    const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+    const html = buildInto(root, fixture);
+    const before = fs.readFileSync(html, 'utf8');
+    const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
+    await waitFor(() => fs.readdirSync(path.join(root, 'output')).some((f) => f.includes('.render-pdf-')), 'the draft HTML');
+    child.kill(signal);
+    const end = await exited;
+    assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'the draft HTML is removed');
+    assert.deepEqual(scratchIn(root), [], 'the scratch folder is removed');
+    assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
+    assert.equal(fs.readFileSync(html, 'utf8'), before);
+  });
+}
+
+test('given a render stopped with SIGTERM while it publishes the chosen layout, then that render finishes, so the input HTML and the PDF agree (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
+  // The input changes only when the chosen layout is written to it, right before the final render.
+  await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
+  assert.equal(fs.existsSync(pdf), false, 'the signal lands before the final render wrote the PDF');
+  child.kill('SIGTERM');
+  const end = await exited;
+  assert.equal(end.status, 143, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+  assert.match(fs.readFileSync(html, 'utf8'), /<html[^>]*data-density="\d"/, 'the input keeps the published layout');
+  assert.equal(countPdfPages(fs.readFileSync(pdf)), 1, 'the PDF of that layout was published');
+  assert.deepEqual(scratchIn(root), []);
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
+});
+
+test('given a render and its final generate-pdf stopped together while publishing (a process-group cancel), then the input HTML gets back the layout it had (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
+  await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
+  const kids = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
+  assert.equal(kids.length, 1, 'the final generate-pdf.mjs runs');
+  process.kill(kids[0], 'SIGTERM');
+  child.kill('SIGTERM');
+  const end = await exited;
+  assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'nothing was published, so the input keeps its layout');
+  assert.deepEqual(scratchIn(root), []);
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
+});
+
+test('given a final render that publishes the PDF and then exits non-zero, when run, then the input keeps the layout of the published PDF (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  // Loaded into every node of the run: only the final generate-pdf.mjs (its input is the real HTML, not a draft) is made
+  // to exit 1 after it finished, as a cancel that lands after the PDF and its index row were written does.
+  const preload = path.join(root, 'fail-after-publish.mjs');
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isFinal) process.on('exit', () => { process.exitCode = 1; });\n`);
+  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1', '--report=12'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  assert.equal(countPdfPages(fs.readFileSync(pdf)), 1, 'the PDF was published');
+  assert.match(fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8'), /^12\toutput\/cv-test\.pdf\t/m, 'and indexed');
+  const kept = fs.readFileSync(html, 'utf8');
+  assert.notEqual(kept, before, 'the input keeps the layout the published PDF shows');
+  assert.match(kept, /<html[^>]*data-density="\d"/);
+  assert.deepEqual(scratchIn(root), []);
+});
+
+test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the render stops with an error instead of buffering it all (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const tmp = fs.realpathSync(tempDir('render-tmp-'));
+  const preload = path.join(root, 'flood.mjs');
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isGenerate) process.stdout.write('x'.repeat(17 * 1024 * 1024));\n`);
+  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp }, encoding: 'utf8', timeout: 240000, maxBuffer: 64 * 1024 * 1024,
+  });
+  assert.equal(r.status, 1, r.stderr.slice(0, 2000));
+  assert.match(r.stderr, /render-pdf failed: generate-pdf\.mjs printed more than 16 MiB/);
+  // The stopped child may have started Chromium already: its profile must not stay behind in TMPDIR.
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
+  assert.equal(fs.readFileSync(html, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html']);
+  assert.deepEqual(scratchIn(root), []);
+});
+
+test('given a final render that overflows the budget under --strict-pages, when run, then the input, the indexed PDF and the index stay as they were (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(longPayload()) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  // An overflowing page for the final render only: the drafts fit, the publish does not, as when the final render's
+  // layout differs from its draft's. generate-pdf.mjs writes that PDF before it refuses the overflow.
+  const long = path.join(root, 'long.html');
+  fs.copyFileSync(buildInto(root, longPayload()), long);
+  fs.writeFileSync(html, before);
+  const preload = path.join(root, 'overflow-final.mjs');
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isFinal) process.argv[process.argv.indexOf(args[html])] = ${JSON.stringify(long)};\n`);
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const goodPdf = pdfWith(1);
+  fs.writeFileSync(pdf, goodPdf);
+  const index = path.join(root, 'data', 'pdf-index.tsv');
+  fs.mkdirSync(path.dirname(index), { recursive: true });
+  const indexed = '# report\tpdf\thtml\tformat\tdate\tkind - written by generate-pdf.mjs, do not edit\n12\toutput/cv-test.pdf\toutput/cv-test.html\tletter\t2026-10-01\tcv\n';
+  fs.writeFileSync(index, indexed);
+  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1', '--strict-pages', '--report=12'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /--strict-pages requested/);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'the input keeps its layout');
+  assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the indexed PDF is put back');
+  assert.equal(fs.readFileSync(index, 'utf8'), indexed);
+  assert.deepEqual(scratchIn(root), []);
+});
+
+test('given a final render stopped while it writes the PDF, leaving a truncated file, when run, then the input and the indexed PDF stay as they were (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const goodPdf = pdfWith(1);
+  fs.writeFileSync(pdf, goodPdf);
+  // Only the final generate-pdf.mjs: its PDF is cut short and it exits 1, as a stop in the middle of the write leaves it.
+  const preload = path.join(root, 'truncate-final.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';\n${PRELOAD_ARGS}const pdf = args.find((a) => a.endsWith('.pdf'));\nif (isFinal) process.on('exit', () => { fs.writeFileSync(pdf, fs.readFileSync(pdf).subarray(0, 200)); process.exitCode = 1; });\n`);
+  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'the input keeps its layout');
+  assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the earlier PDF is put back');
+  assert.deepEqual(scratchIn(root), []);
 });
 
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
