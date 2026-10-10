@@ -59,6 +59,15 @@ describe('immigration overview', () => {
     expect(parseDailyLog(text, '2026-10-05')).toMatchObject({ status: 'running', startedAt: '2026-10-05 10:15:00', finishedAt: null, failedCount: null, failedSteps: [] });
   });
 
+  it('a failed step with no done line yet reads running with its failed step, since run-daily.sh step() moves on to the next steps (R12-srv-dom-a-L1-01)', async () => {
+    const text = '=== 2026-10-05 07:00:00 start\n--- 07:00:05 scan\n!!! step failed: scan\n--- 07:02:00 policy pass\n';
+    const log = parseDailyLog(text, '2026-10-05');
+    expect(log).toMatchObject({ status: 'running', failedSteps: ['scan'], finishedAt: null });
+    expect(log.steps[0]!.failed).toBe(true);
+    expect((await withJobState(log, '2026-10-05', async () => false, noRunToday)).status).toBe('interrupted');
+    expect(parseDailyLog(`${text}=== 2026-10-05 07:09:00 done (failed=1)\n`, '2026-10-05').status).toBe('failed');
+  });
+
   it('a run with no done line reads interrupted once the job is known not to run, and stays running while it runs or nobody knows', async () => {
     const log = parseDailyLog('=== 2026-10-05 08:00:00 start\nERROR: Keychain item missing\n', '2026-10-05');
     expect((await withJobState(log, '2026-10-05', async () => false, noRunToday)).status).toBe('interrupted');

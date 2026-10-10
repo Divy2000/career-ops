@@ -126,8 +126,9 @@ export function parseDailyLog(text: string, date: string): DailyLog {
       if (step) step.failed = true;
     } else if ((m = line.match(/^!!!\s+(.+)$/))) problems.push(m[1]!.trim());
   }
-  // A failure line fails the run even with no done line: the scripts write one and exit.
-  const failed = failedSteps.length > 0 || problems.length > 0 || (failedCount ?? 0) > 0;
+  // A bare `!!!` problem fails the run even with no done line: the scripts write one and exit. A failed step does not:
+  // run-daily.sh's step() records it and moves on to the next steps, so the run is over only at its done line.
+  const failed = problems.length > 0 || (failedCount ?? 0) > 0 || (failedSteps.length > 0 && finishedAt !== null);
   const status: DailyLog['status'] = !startedAt ? 'empty' : failed ? 'failed' : !finishedAt ? 'running' : 'ok';
   return { date, startedAt, finishedAt, status, steps, failedSteps, problems, failedCount };
 }
