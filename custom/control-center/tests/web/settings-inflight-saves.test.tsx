@@ -187,6 +187,25 @@ describe('blacklist editor: the draft while the confirmed write is on its way', 
 });
 
 describe('a double click on Save', () => {
+  it('Save blacklist asks once and writes once', async () => {
+    files = { '/api/blacklist': { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', rows: [], preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] } };
+    const { BlacklistEditor } = await import('@web/features/settings/BlacklistEditor');
+    await mount(createElement(BlacklistEditor, {}));
+    await type(await until(() => labelled<HTMLInputElement>('Blacklist company or domain'), 'the company field'), 'Globex');
+    await click(button('Add row')!);
+    const save = button('Save blacklist')!;
+    await act(async () => {
+      save.click();
+      save.click();
+    });
+    await click(await until(() => button('Write blacklist'), 'the confirm dialog'));
+    await until(() => /Blacklist written/.test(document.body.textContent ?? ''), 'the written note');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(writes()).toHaveLength(1);
+    expect(button('Add row')).toBeDefined();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
   it('Save cadence writes once and reports the save, not a conflict', async () => {
     files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
     const { CadenceForm } = await import('@web/features/settings/ProfileForm');
