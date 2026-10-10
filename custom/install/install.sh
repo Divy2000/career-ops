@@ -276,6 +276,29 @@ keychain_present() { security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev
 
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
 
+# Whether the Control Center is already running on this data root, read from its
+# supervisor.lock (the file the supervisor keeps via acquireInstanceLock). Running
+# means the lock names a PID that is alive; a missing, unreadable or stale lock
+# (its holder gone) is not running. npm ci deletes node_modules, so a re-run must
+# not reinstall under a running instance (its blue/green reload would race the
+# deletion), and the finish must not start a second instance that would refuse
+# the lock.
+cc_running() {
+  local lock="$DATA/data/control-center/supervisor.lock"
+  [ -f "$lock" ] || return 1
+  node -e '
+const fs = require("fs");
+let pid = 0;
+try {
+  const l = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  pid = Number.isInteger(l.pid) && l.pid > 0 ? l.pid : 0;
+} catch { /* a damaged lock is not a running instance */ }
+if (!pid) process.exit(1);
+try { process.kill(pid, 0); process.exit(0); }
+catch (e) { process.exit(e.code === "EPERM" ? 0 : 1); }
+' "$lock"
+}
+
 # CAREER_OPS_ROOT, else CAREER_OPS_DATA_DIR, each trimmed like path-resolver.mjs does; empty when neither is set.
 env_data_root() {
   local v
@@ -556,7 +579,9 @@ else
     die 1 "${root_install[*]} failed in $DIR. See $LOG_FILE."
   fi
   if [ "$MAC_FEATURES" = 1 ]; then
-    if ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
+    if cc_running; then
+      say "  Control Center is running; leaving its dependencies as they are (restart it to pick up changes)"
+    elif ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
       die 1 "npm ci for the Control Center failed. See $LOG_FILE."
     fi
   fi
@@ -945,8 +970,12 @@ fi
 # A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
 # above (and exit 3) stay what the run ends with.
 if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
-  say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
-  exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
+  if cc_running; then
+    say "Control Center is already running; not starting a second instance"
+  else
+    say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
+    exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
+  fi
 fi
 if [ "${#PENDING[@]}" -gt 0 ]; then exit 3; fi
 exit 0
