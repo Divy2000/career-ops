@@ -5,6 +5,7 @@ export const WINDOW_DAYS = 15;
 export const BASELINE_DAYS = 7;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+// Stryker disable next-line all: tests/lib.spec.mjs reads this regex from the source text, which a mutant switch would break.
 const LEGAL_SUFFIXES = /\b(inc|llc|ltd|corp|corporation|co|plc|gmbh)\b\.?/g;
 
 const RELEVANT = [
