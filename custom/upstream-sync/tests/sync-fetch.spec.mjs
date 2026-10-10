@@ -355,6 +355,22 @@ test('the lock marker the re-exec sets stays out of every child of the locked ru
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('a sync whose claude is too old to keep the token out of hooks and tools stops before it touches the worktree (R15-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const wt = path.join(home, '.career-ops-sync');
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(path.join(wt, 'kept.txt'), 'an earlier run\n');
+  const old = path.join(w.base, 'old-claude');
+  stub(old, 'claude', 'echo "2.1.200 (Claude Code)"');
+  try {
+    const res = runSync(w, { home, security: 'echo tok-123', inherited: { CC_CLAUDE_BIN: path.join(old, 'claude') } });
+    assert.equal(res.status, 1, res.log + res.stderr);
+    assert.match(res.log, /^!!! Claude Code 2\.1\.200 at .*old-claude\/claude is older than 2\.1\.288/m);
+    assert.equal(readFileSync(path.join(wt, 'kept.txt'), 'utf8'), 'an earlier run\n');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
   const w = makeWorld({ upstreamAhead: false });
   const home = path.join(w.base, 'home');
@@ -533,7 +549,7 @@ test('resolving a conflict is allowed, but an upstream file slipped into the mer
 test('sync.sh records the merge result in memory after the README step and before Claude runs, and fails the run when it cannot', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const snap = sync.indexOf('MERGE_SNAPSHOT="$(merge_snapshot)" || fail ');
-  assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('claude -p'), `merge_snapshot at ${snap}`);
+  assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('"$CLAUDE_BIN" -p'), `merge_snapshot at ${snap}`);
   assert.equal(/merge-snapshot|merge_snapshot >/.test(sync), false, 'the snapshot is never written to a file');
 });
 
@@ -571,7 +587,7 @@ test('sync.sh keeps the baseline dependency tree in memory before Claude, then c
   const sync = readFileSync(SYNC, 'utf8');
   const install = sync.indexOf('install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"');
   const tree = sync.indexOf('BASE_DEPS_TREE="$(root_deps_tree)" || fail ');
-  const claude = sync.indexOf('claude -p');
+  const claude = sync.indexOf('"$CLAUDE_BIN" -p');
   const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")"');
   const clean = sync.indexOf('clean_sync_worktree "$WT" || fail ');
   const refresh = sync.indexOf('refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail ');

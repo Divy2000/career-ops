@@ -21,6 +21,45 @@ fetch_main() {
   fi
 }
 
+# version_ge <a> <b>: true when dotted version <a> is at least <b>, compared number by number.
+version_ge() {
+  local IFS=. i
+  local -a a=($1) b=($2)
+  for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
+    if ((10#${a[i]:-0} > 10#${b[i]:-0})); then return 0; fi
+    if ((10#${a[i]:-0} < 10#${b[i]:-0})); then return 1; fi
+  done
+  return 0
+}
+
+# sync_claude_bin <min version>: the claude the sync gives the subscription token
+# to, printed as a path: CC_CLAUDE_BIN when set (absolute), else the first claude
+# on PATH. A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
+# would hand the token to hooks and to the Bash children Claude runs (npm scripts,
+# upstream's suite), so it is refused, as is one whose version cannot be read. The
+# reason goes to stdout, with exit 1.
+sync_claude_bin() {
+  local min="$1" bin out version
+  if [ -n "${CC_CLAUDE_BIN:-}" ]; then
+    case "$CC_CLAUDE_BIN" in
+      /*) bin="$CC_CLAUDE_BIN" ;;
+      *) echo "CC_CLAUDE_BIN must be an absolute path (got $CC_CLAUDE_BIN)"; return 1 ;;
+    esac
+  elif ! bin="$(command -v claude)"; then
+    echo "no claude found on PATH; install Claude Code or pin one with CC_CLAUDE_BIN"
+    return 1
+  fi
+  if [ ! -f "$bin" ] || [ ! -x "$bin" ]; then echo "claude $bin is not an executable"; return 1; fi
+  out="$(DISABLE_AUTOUPDATER=1 "$bin" --version 2>/dev/null)"
+  version="${out%% *}"
+  if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then echo "cannot read the Claude Code version of $bin"; return 1; fi
+  if ! version_ge "$version" "$min"; then
+    echo "Claude Code $version at $bin is older than $min, which keeps the token out of hooks and tools; update it or pin a newer one with CC_CLAUDE_BIN"
+    return 1
+  fi
+  printf '%s' "$bin"
+}
+
 # install_root_deps <ignore-scripts|run-scripts>: install the checkout's root
 # dependencies (run from the repo root). Upstream ships no root package-lock.json,
 # so "npm ci" only works when one is tracked; otherwise install without writing a
