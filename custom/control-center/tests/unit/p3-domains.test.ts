@@ -363,6 +363,13 @@ describe('launchd schedule helpers', () => {
     const sameDayLater = computeNextFire(now, 23, 0, 6);
     expect(sameDayLater.getDate()).toBe(3);
   });
+  it('treats Weekday 7 as Sunday, as launchd does, so the next fire is the coming Sunday (R18-feat-b-L3-03)', () => {
+    const monday = new Date(2026, 9, 12, 9, 0); // Monday 2026-10-12 09:00 local
+    const next = computeNextFire(monday, 3, 0, 7);
+    expect(next.getDay()).toBe(0);
+    expect(next.getDate()).toBe(18);
+    expect(next.getHours()).toBe(3);
+  });
   it('parses launchctl print output', () => {
     expect(parseLaunchctlPrint('gui/501/com.x = {\n\tstate = waiting\n\tlast exit code = 0\n}')).toEqual({ state: 'waiting', lastExit: 0, lastSignal: null, runs: null });
     expect(parseLaunchctlPrint('\tstate = running\n\tlast exit code = (never exited)\n')).toEqual({ state: 'running', lastExit: null, lastSignal: null, runs: null });

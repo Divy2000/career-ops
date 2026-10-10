@@ -124,9 +124,11 @@ export function renderPlist(codeRoot: string, job: ScheduleJob, t: { hour: numbe
 
 /** Next local fire time for a StartCalendarInterval of hour/minute (and weekday for weekly jobs). */
 export function computeNextFire(now: Date, hour: number, minute: number, weekday: number | null): Date {
+  // launchd reads Weekday 7 as Sunday; getDay() never returns 7.
+  const day = weekday === null ? null : weekday % 7;
   const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
   for (let i = 0; i < 8; i += 1) {
-    const matchesDay = weekday === null || candidate.getDay() === weekday;
+    const matchesDay = day === null || candidate.getDay() === day;
     if (matchesDay && candidate.getTime() > now.getTime()) return candidate;
     candidate.setDate(candidate.getDate() + 1);
   }
