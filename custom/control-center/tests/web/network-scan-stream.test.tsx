@@ -32,6 +32,7 @@ let root: Root;
 
 beforeEach(async () => {
   FakeEventSource.all = [];
+  sessionStorage.clear();
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
@@ -40,12 +41,20 @@ beforeEach(async () => {
       return new Response(JSON.stringify(body), { status: url === '/api/actions/scan.network' ? 202 : 200, headers: { 'content-type': 'application/json' } });
     }),
   );
-  const { NetworkScan } = await import('@web/features/discover/DiscoverPage');
   host = document.createElement('div');
   document.body.append(host);
+  await mount();
+});
+async function mount() {
+  const { NetworkScan } = await import('@web/features/discover/DiscoverPage');
   root = createRoot(host);
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(NetworkScan))));
-});
+}
+async function runScan() {
+  await act(async () => host.querySelector<HTMLFormElement>('form[aria-label="Network scan filters"]')!.requestSubmit());
+  return await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && !s.closed), 'the run stream');
+}
+const summaryLine = (summary: unknown) => ({ line: JSON.stringify(summary), stream: 'stdout', seq: 2, ts: 't' });
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
@@ -64,5 +73,34 @@ describe('Network scan run stream', () => {
     expect(host.querySelector('[aria-label="Scan log"]')!.textContent).toContain('scanning greenhouse');
     // Counted once the results and the log have both mounted: either one opening its own stream shows here.
     expect(FakeEventSource.all.filter((s) => s.url === '/api/runs/r1/events')).toHaveLength(1);
+  });
+
+  it('a scan whose company lists could not be loaded says so instead of "No postings matched" (R13-feat-a-L3-02)', async () => {
+    const stream = await runScan();
+    await act(async () => stream.emit('line', summaryLine({ companiesAvailable: 0, companiesScanned: 0, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'empty', lever: 'empty' }, unreachableBoards: 0, offers: [] })));
+    await act(async () => stream.emit('run.done', { status: 'done' }));
+    await until(() => host.textContent?.includes('scan done'), 'the end of the scan');
+    expect(host.textContent).toContain('could not load the company list for greenhouse, lever');
+    expect(host.textContent).not.toContain('No postings matched these filters.');
+  });
+
+  it('a scan on an expired cached list or with unreachable boards says it is degraded (R13-feat-a-L3-02)', async () => {
+    const stream = await runScan();
+    await act(async () => stream.emit('line', summaryLine({ companiesAvailable: 900, companiesScanned: 100, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'stale', lever: 'ok' }, unreachableBoards: 7, offers: [] })));
+    await act(async () => stream.emit('run.done', { status: 'done' }));
+    await until(() => host.textContent?.includes('scan done'), 'the end of the scan');
+    expect(host.textContent).toContain('an expired cached company list for greenhouse');
+    expect(host.textContent).toContain('7 boards could not be reached');
+    expect(host.textContent).toContain('No postings matched these filters.');
+  });
+
+  it('leaving the tab while a scan runs and coming back follows the same run again (R13-feat-a-L1-06)', async () => {
+    const first = await runScan();
+    await act(async () => root.unmount());
+    expect(first.closed).toBe(true);
+    await mount();
+    const again = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && s !== first), 'the run stream after coming back');
+    await act(async () => again.emit('line', summaryLine({ companiesAvailable: 1, companiesScanned: 1, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'ok' }, offers: [{ company: 'Back Co', title: 'SRE', url: 'https://boards.example.com/back/1', source: 'greenhouse' }] })));
+    await until(() => host.textContent?.includes('Back Co'), 'the results');
   });
 });

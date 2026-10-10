@@ -11,6 +11,9 @@ let root: Root;
 let sent: Array<{ method: string; url: string; body: unknown }>;
 let fanoutResponse: { status: number; body: unknown };
 let started: number;
+// GET /api/sessions: what the server lists after a fan-out that failed part way.
+let listed: unknown[] | null;
+let fetchHook: ((url: string) => void) | null;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -29,8 +32,10 @@ async function mount(component: 'BatchTab' | { inboxUrls: string[] } = 'BatchTab
       const url = String(input);
       const method = init?.method ?? 'GET';
       sent.push({ method, url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : null });
+      fetchHook?.(url);
       if (url === '/api/sessions/fanout' && method === 'POST') return json(fanoutResponse.status, fanoutResponse.body);
       if (url === '/api/actions') return json(200, []);
+      if (url === '/api/sessions' && method === 'GET' && listed) return json(200, listed);
       return json(404, { error: 'not stubbed' });
     }),
   );
@@ -65,6 +70,8 @@ const type = (el: HTMLTextAreaElement, value: string) =>
 
 beforeEach(() => {
   document.body.innerHTML = '';
+  listed = null;
+  fetchHook = null;
   fanoutResponse = { status: 202, body: { sessions: [{ id: 's1' }, { id: 's2' }], reserved: [12, 13] } };
 });
 afterEach(async () => {
@@ -107,6 +114,33 @@ describe('Pipeline > Batch', () => {
     expect(alert.textContent).toMatch(/Could not start the evaluations: .*reserve-report-num failed/);
     expect(textarea().value).toBe('https://jobs.example.com/1');
     expect(started).toBe(0);
+  });
+
+  it('a fan-out that fails after starting some sessions keeps only the URLs that did not start (R13-feat-b-p-02)', async () => {
+    fanoutResponse = { status: 502, body: { error: 'spawn failed' } };
+    await mount();
+    await type(textarea(), 'https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    await click(button('Batch evaluate')!);
+    // Before the start the server lists an older evaluation of the second URL; that one was not started by this batch.
+    const older = { id: 's0', mode: 'oferta', status: 'done', target: { type: 'url', value: 'https://jobs.example.com/2' }, createdAt: '2030-01-01T00:00:00.000Z' };
+    listed = [older];
+    fetchHook = (url) => {
+      // The server started the first one before the second start threw; its clock is not the page's.
+      if (url === '/api/sessions/fanout') listed = [older, { id: 's1', mode: 'oferta', status: 'queued', target: { type: 'url', value: 'https://jobs.example.com/1' }, createdAt: '2001-01-01T00:00:00.000Z' }];
+    };
+    await click(button('Start them')!);
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the error');
+    expect(alert.textContent).toMatch(/Could not start the evaluations: spawn failed/);
+    expect(alert.textContent).toMatch(/1 started before the failure/);
+    expect(textarea().value).toBe('https://jobs.example.com/2');
+  });
+
+  it('a pasted saved-JD reference or other non-posting entry is refused before anything starts (R13-feat-b-L3-02)', async () => {
+    await mount();
+    await type(textarea(), 'local:jds/acme.md\nhttps://jobs.example.com/1\nfile:///etc/hosts\nhttps://user:secret@jobs.example.com/2');
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+    expect(host.textContent).toContain('Not posting URLs: local:jds/acme.md, file:///etc/hosts, https://user:secret@jobs.example.com/2');
+    expect(host.textContent).toContain('Evaluate JD');
   });
 
   it('counts the pasted URLs in words that fit the number', async () => {

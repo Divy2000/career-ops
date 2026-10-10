@@ -9,6 +9,32 @@ import { isPlainObject } from '../../lib/yamlOpsClient';
 import type { InterviewsRead } from '@shared/api';
 import { localDate } from '@shared/local-date';
 
+/**
+ * story-provenance-check.mjs counts: a pill per claim list, and lowConfidence (its diagnosis, {reason, message} or
+ * null) as a note that the result is inconclusive, never as a count.
+ */
+export function ProvenancePills({ json }: { json: unknown }) {
+  if (!isPlainObject(json)) return null;
+  const { lowConfidence, ...counts } = json;
+  const diagnosis = isPlainObject(lowConfidence) && typeof lowConfidence.message === 'string' ? lowConfidence.message : null;
+  return (
+    <>
+      <div className="row gap" style={{ flexWrap: 'wrap' }}>
+        {Object.entries(counts).map(([k, v]) => (
+          <Pill key={k} tone={k === 'supportedByResume' || k === 'existing' ? 'ok' : k === 'derivedUnverified' ? 'warn' : k === 'userCannotConfirm' ? 'danger' : 'neutral'}>
+            {k}: {Array.isArray(v) ? v.length : isPlainObject(v) ? Object.keys(v).length : String(v)}
+          </Pill>
+        ))}
+      </div>
+      {diagnosis && (
+        <p role="status" className="small" style={{ margin: 0 }}>
+          <Pill tone="warn">inconclusive</Pill> Low confidence: {diagnosis}
+        </p>
+      )}
+    </>
+  );
+}
+
 /** Rows in rejection-latency output that name a company become explicit "Add to blacklist" suggestions; nothing is written here. */
 export function companySuggestions(json: unknown): string[] {
   const out = new Set<string>();
@@ -63,14 +89,7 @@ export function InterviewsPage() {
             <ScriptTab script="storyProvenance" title="Story provenance (story-provenance-check.mjs)">
               {(read) => (
                 <div className="stack">
-                  <div className="row gap" style={{ flexWrap: 'wrap' }}>
-                    {isPlainObject(read.json) &&
-                      Object.entries(read.json).map(([k, v]) => (
-                        <Pill key={k} tone={k === 'supportedByResume' || k === 'existing' ? 'ok' : k === 'derivedUnverified' || k === 'lowConfidence' ? 'warn' : k === 'userCannotConfirm' ? 'danger' : 'neutral'}>
-                          {k}: {Array.isArray(v) ? v.length : isPlainObject(v) ? Object.keys(v).length : String(v)}
-                        </Pill>
-                      ))}
-                  </div>
+                  <ProvenancePills json={read.json} />
                   <JsonView value={read.json} />
                 </div>
               )}

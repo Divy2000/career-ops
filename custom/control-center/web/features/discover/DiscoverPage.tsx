@@ -9,6 +9,7 @@ import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
 import { addNote } from './addNote';
 import { ModeLauncher } from '../../components/ModeLauncher';
+import { lastSession } from '../../lib/lastSession';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
 import { NETWORK_SCAN_SOURCES, type NetworkScanSource } from '@shared/network-scan';
@@ -29,9 +30,17 @@ export interface ScanSummary {
   postings: ScanPosting[];
   capHit?: boolean;
   stoppedEarly?: boolean;
-  datasetStatus?: string;
+  /** Per source: 'ok', 'stale' (an expired cached company list) or 'empty' (no company list at all). */
+  datasetStatus?: Record<string, string>;
   companiesScanned?: number;
   companiesAvailable?: number;
+  unreachableBoards?: number;
+}
+
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+function statusRecord(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string'));
 }
 
 /** scan-ats-full --json prints one JSON object on stdout; progress goes to stderr. A SIGTERM partial says stoppedEarly, a DNS-outage stop says stoppedByOutage. */
@@ -41,7 +50,7 @@ export function parseScanOutput(lines: RawLine[]): ScanSummary | null {
     try {
       const obj = JSON.parse(l.line) as Record<string, unknown>;
       const list = (obj.postings ?? obj.offers ?? obj.results ?? []) as ScanPosting[];
-      return { postings: Array.isArray(list) ? list : [], capHit: Boolean(obj.capHit), stoppedEarly: Boolean(obj.stoppedEarly || obj.stoppedByOutage), datasetStatus: obj.datasetStatus as string | undefined, companiesScanned: obj.companiesScanned as number | undefined, companiesAvailable: obj.companiesAvailable as number | undefined };
+      return { postings: Array.isArray(list) ? list : [], capHit: Boolean(obj.capHit), stoppedEarly: Boolean(obj.stoppedEarly || obj.stoppedByOutage), datasetStatus: statusRecord(obj.datasetStatus), companiesScanned: num(obj.companiesScanned), companiesAvailable: num(obj.companiesAvailable), unreachableBoards: num(obj.unreachableBoards) };
     } catch {
       /* not the summary line */
     }
@@ -78,6 +87,7 @@ export function DiscoverPage() {
           <AiSearchTab />
           <ModeLauncher
             heading="AI scan modes"
+            rememberAs="cc.discover.modes"
             modes={[
               { id: 'scan', label: 'AI portal scan', prompt: 'Scan the configured portals with judgment and add strong matches to the pipeline.' },
               { id: 'discover', label: 'Discover ATS boards', prompt: 'Find the ATS boards for these companies and append them to portals.yml: ' },
@@ -163,6 +173,22 @@ function RunLog({ lines, status }: { lines: RawLine[]; status: string | null }) 
   );
 }
 
+/** Why a finished scan saw fewer postings than its filters allow: missing or expired company lists, unreachable boards. */
+function scanDegradations(summary: ScanSummary): { notes: string[]; noData: boolean } {
+  const sources = Object.entries(summary.datasetStatus ?? {});
+  const empty = sources.filter(([, st]) => st === 'empty').map(([name]) => name);
+  const stale = sources.filter(([, st]) => st === 'stale').map(([name]) => name);
+  const notes: string[] = [];
+  if (empty.length) notes.push(`Degraded: the scan could not load the company list for ${empty.join(', ')}, so it checked no boards there. Check the network and run it again.`);
+  if (stale.length) notes.push(`Degraded: the scan used an expired cached company list for ${stale.join(', ')}, since the download failed.`);
+  const unreachable = summary.unreachableBoards ?? 0;
+  if (unreachable > 0) notes.push(`${unreachable} ${unreachable === 1 ? 'board' : 'boards'} could not be reached.`);
+  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 };
+}
+
+// The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
+const networkRun = lastSession('cc.discover.networkScan');
+
 export function NetworkScan() {
   const actions = useActions();
   const qc = useQueryClient();
@@ -173,7 +199,11 @@ export function NetworkScan() {
   const [sinceDays, setSinceDays] = useState<1 | 3 | 7 | 14 | 30>(7);
   const [ats, setAts] = useState<NetworkScanSource[]>(['greenhouse', 'lever']);
   const [limit, setLimit] = useState(100);
-  const [runId, setRunId] = useState<string | null>(null);
+  const [runId, setRunIdState] = useState<string | null>(networkRun.read);
+  const setRunId = (id: string) => {
+    networkRun.write(id);
+    setRunIdState(id);
+  };
   const [filter, setFilter] = useState('');
   const { lines, status } = useRunLines(runId);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
@@ -198,6 +228,7 @@ export function NetworkScan() {
     }
     await qc.invalidateQueries({ queryKey: ['pipeline'] });
   };
+  const degraded = summary ? scanDegradations(summary) : { notes: [], noData: false };
   const visible = (summary?.postings ?? []).filter((p) => !filter || `${p.company} ${p.title} ${p.location ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div className="stack">
@@ -264,12 +295,17 @@ export function NetworkScan() {
           </div>
           {summary?.capHit && <p className="muted">Capped: the depth limit stopped the sweep early. Raise the depth to see more.</p>}
           {summary?.stoppedEarly && <p className="muted">Degraded: the scan stopped before finishing its sources.</p>}
+          {degraded.notes.map((note) => (
+            <p key={note} className="muted">
+              {note}
+            </p>
+          ))}
           {status === 'failed' && (
             <p role="alert" className="danger-text">
               The scan failed. See the log below and the run on Runs & Schedule.
             </p>
           )}
-          {summary && summary.postings.length === 0 && status === 'done' && <Empty>No postings matched these filters.</Empty>}
+          {summary && summary.postings.length === 0 && status === 'done' && !degraded.noData && <Empty>No postings matched these filters.</Empty>}
           {summary && summary.postings.length > 0 && (
             <>
               <div className="toolbar">

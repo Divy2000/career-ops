@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
+import { ConfirmProvider } from '@web/components/ConfirmDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,7 +49,7 @@ afterEach(async () => {
 });
 
 const button = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith(name));
-const render = (el: ReturnType<typeof createElement>) => act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, el)));
+const render = (el: ReturnType<typeof createElement>) => act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, el))));
 
 describe('one paid session per click', () => {
   it('the command palette mode launch', async () => {

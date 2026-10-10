@@ -10,6 +10,7 @@ import { describeError } from '../../lib/actions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useUnsaved } from '../../lib/unsaved';
 import { SessionPanel } from '../../components/SessionPanel';
+import { useParseSession } from './parseSession';
 import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
 import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
 import { KIND_OPTIONS, describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, findRenamed, hostOf, moveItem, rebaseDraft, type DraftField, type EntryOrigin, type ProjectDraft } from './projectsDraft';
@@ -89,7 +90,29 @@ export function ProjectsLibrary() {
   }
   const refresh = () => qc.invalidateQueries({ queryKey: QUERY_KEY });
 
-  const remove = async (entry: ProjectView) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+
+  const asking = useRef(false);
+
+  const remove = async (...args: Parameters<typeof removeAsked>) => {
+
+    if (asking.current) return;
+
+    asking.current = true;
+
+    try {
+
+      await removeAsked(...args);
+
+    } finally {
+
+      asking.current = false;
+
+    }
+
+  };
+
+  const removeAsked = async (entry: ProjectView) => {
     const ok = await confirm({ title: `Delete ${entry.title}?`, body: 'Removes the entry from article-digest.md. cv.md is not changed.', confirmLabel: 'Delete', danger: true });
     if (!ok) return;
     try {
@@ -388,7 +411,8 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const [text, setText] = useState('');
   // A preview remembers the source it was made for, so Append never pairs it with a newer one.
   const [previewed, setPreviewed] = useState<{ result: ConvertResult; source: string | null } | null>(null);
-  useUnsaved('the projects import', text.trim() !== '' || previewed !== null);
+  const parse = useParseSession();
+  useUnsaved('the projects import', text.trim() !== '' || previewed !== null || parse.parsing);
   const preview = previewed?.result ?? null;
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
@@ -400,18 +424,21 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const generation = useRef(0);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
+    parse.begin(p);
     setUploadPath(p);
   };
+  const parseDone = parse.done;
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
       if (kind !== 'projects' || currentUpload.current !== forPath) return;
+      parseDone();
       generation.current += 1;
       setSource(forPath);
       setFormat('markdown');
       setText((payload as { markdown: string }).markdown);
       setPreviewed(null);
     },
-    [],
+    [parseDone],
   );
   const onUploadEnvelope = useMemo(() => (uploadPath ? envelopeFor(uploadPath) : undefined), [uploadPath, envelopeFor]);
 
@@ -422,23 +449,28 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
     setPreviewed(null);
     setSource(null);
     showUpload(null);
-    if (/\.(json|md|markdown|txt)$/i.test(file.name)) {
-      const content = await file.text();
+    try {
+      if (/\.(json|md|markdown|txt)$/i.test(file.name)) {
+        const content = await file.text();
+        if (!current()) return;
+        setFormat(/\.json$/i.test(file.name) ? 'json' : 'markdown');
+        setText(content);
+        return;
+      }
+      // A PDF is kept under documents/projects/ as an intake source; the server refuses what intake cannot read.
+      const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
+      const res = await fetch(`/api/projects/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
+      const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
       if (!current()) return;
-      setFormat(/\.json$/i.test(file.name) ? 'json' : 'markdown');
-      setText(content);
-      return;
+      if (!res.ok || !body?.path) {
+        setError(body?.error ?? `Upload failed (${res.status}). JSON, Markdown or PDF only.`);
+        return;
+      }
+      showUpload(body.path);
+    } catch (err) {
+      // The server is down or restarting, or the file could not be read.
+      if (current()) setError(`Upload failed: ${describeError(err)}`);
     }
-    // A PDF is kept under documents/projects/ as an intake source; the server refuses what intake cannot read.
-    const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream');
-    const res = await fetch(`/api/projects/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type, 'X-CC': '1' }, body: file });
-    const body = (await res.json().catch(() => null)) as { error?: string; path?: string } | null;
-    if (!current()) return;
-    if (!res.ok || !body?.path) {
-      setError(body?.error ?? `Upload failed (${res.status}). JSON, Markdown or PDF only.`);
-      return;
-    }
-    showUpload(body.path);
   };
 
   // A manual edit or format change makes the draft the user's own: it no longer restates the document, so provenance goes.
@@ -464,10 +496,13 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
     }
   };
 
+  // One append at a time: a second one on the same ETag would come back 409 after the first succeeded.
+  const [appending, setAppending] = useState(false);
   const append = async () => {
-    if (!previewed?.result.markdown) return;
+    if (!previewed?.result.markdown || appending) return;
     const { result, source: forSource } = previewed;
     const mine = generation.current;
+    setAppending(true);
     try {
       const out = await apiSend<{ recorded?: boolean; warning?: string }>('POST', '/api/projects/append', { markdown: result.markdown, ...(forSource ? { source: forSource } : {}) }, ifMatch(etag));
       toast.success(out.recorded ? `Imported into article-digest.md; documents/${forSource} is recorded as ingested` : 'Imported into article-digest.md');
@@ -481,6 +516,8 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
     } catch (err) {
       const body = err instanceof ApiError ? (err.body as { errors?: string[] }) : null;
       setError(body?.errors?.join(' ') ?? describeError(err));
+    } finally {
+      setAppending(false);
     }
   };
 
@@ -502,6 +539,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       {uploadPath && (
         <SessionPanel
           key={uploadPath}
+          {...parse.panelFor(uploadPath)}
           mode="projects-ingest"
           title="Parse the uploaded document"
           target={{ type: 'text', value: uploadPath }}
@@ -523,7 +561,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           Preview
         </button>
         {preview && (
-          <button type="button" className="button--primary" disabled={!preview.markdown || preview.errors.length > 0} onClick={() => void append()}>
+          <button type="button" className="button--primary" disabled={appending || !preview.markdown || preview.errors.length > 0} onClick={() => void append()}>
             Append {plural(fresh, 'project')}
           </button>
         )}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFollowups } from '../../lib/queries';
@@ -77,7 +77,7 @@ export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone
   );
 }
 
-function CadenceTab() {
+export function CadenceTab() {
   const q = useFollowups();
   const qc = useQueryClient();
   const [logging, setLogging] = useState<number | null>(null);
@@ -85,24 +85,46 @@ function CadenceTab() {
   const [message, setMessage] = useState<string | null>(null);
   const confirm = useConfirm();
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['followups'] }), qc.invalidateQueries({ queryKey: ['tracker'] })]);
-  const pin = async (appNum: number, date: string | null) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored. Each action has
+  // its own guard, released once its write answered (the refresh runs on its own), so another action is not blocked.
+  const pinning = useRef(false);
+  const removing = useRef(false);
+  const pin = async (...args: Parameters<typeof pinAsked>) => {
+    if (pinning.current) return;
+    pinning.current = true;
+    try {
+      await pinAsked(...args);
+    } finally {
+      pinning.current = false;
+    }
+  };
+  const pinAsked = async (appNum: number, date: string | null) => {
     // Clearing removes a date the user chose: it asks first, as a delete does.
     if (!date && !(await confirm({ title: 'Clear the pinned follow-up date?', body: 'The next follow-up goes back to the cadence date. data/follow-ups.md is rewritten.', confirmLabel: 'Clear pin', danger: true }))) return;
     try {
       if (date) await apiSend('POST', '/api/followups/override', { appNum, date });
       else await apiSend('DELETE', '/api/followups/override', { appNum });
       setMessage(date ? `Next follow-up pinned to ${date}` : 'Pin cleared');
-      await refresh();
+      void refresh();
     } catch (err) {
       setMessage(`Could not update pin: ${describeError(err)}`);
     }
   };
-  const remove = async (num: number) => {
+  const remove = async (...args: Parameters<typeof removeAsked>) => {
+    if (removing.current) return;
+    removing.current = true;
+    try {
+      await removeAsked(...args);
+    } finally {
+      removing.current = false;
+    }
+  };
+  const removeAsked = async (num: number) => {
     if (!(await confirm({ title: `Delete follow-up #${num}?`, body: 'The entry is removed from data/follow-ups.md.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await apiSend('DELETE', '/api/followups/log', { num });
       setMessage(`Deleted follow-up #${num}`);
-      await refresh();
+      void refresh();
     } catch (err) {
       setMessage(`Could not delete: ${describeError(err)}`);
     }
@@ -111,6 +133,7 @@ function CadenceTab() {
     <>
       <ModeLauncher
         heading="AI drafts"
+        rememberAs="cc.followups.cadence"
         modes={[
           { id: 'followup', label: 'Draft follow-ups', prompt: 'Draft follow-up messages for every overdue and urgent application.' },
           { id: 'reply-watch', label: 'Reply watch', prompt: 'Review the reply candidates and suggest status changes (ask before any change).' },
@@ -171,7 +194,7 @@ function CadenceTab() {
   );
 }
 
-function RepliesTab() {
+export function RepliesTab() {
   const actions = useActions();
   const { run, message, busy } = useRunAction();
   const [subject, setSubject] = useState('');
@@ -197,11 +220,15 @@ function RepliesTab() {
       <div className="card" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Match an interview invite</h2>
         <textarea aria-label="Invite text" rows={4} placeholder="Paste the invite text to match it to a tracker row" value={invite} onChange={(e) => setInvite(e.target.value)} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'followups.inviteMatch')} disabled={busy !== null || !invite.trim()} params={{ text: invite }} onRun={(p) => void run('followups.inviteMatch', p).then((out) => out && 'result' in out && setResult(out.result))} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'followups.inviteMatch')} disabled={busy !== null || !invite.trim()} params={{ text: invite }} onRun={(p) => {
+            // A failed match must not leave the previous invite's row under the new text.
+            setResult(null);
+            void run('followups.inviteMatch', p).then((out) => out && 'result' in out && setResult(out.result));
+          }} />
         {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
       </div>
       <Message message={message} />
-      <ModeLauncher heading="Reply watch session" modes={[{ id: 'reply-watch', label: 'Reply watch', prompt: 'Review the reply candidates and suggest status changes (ask before any change).' }]} />
+      <ModeLauncher heading="Reply watch session" rememberAs="cc.followups.replies" modes={[{ id: 'reply-watch', label: 'Reply watch', prompt: 'Review the reply candidates and suggest status changes (ask before any change).' }]} />
     </div>
   );
 }
@@ -360,7 +387,8 @@ function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete
             <button type="button" aria-label={`Log follow-up for ${e.company}`} onClick={onLog}>
               Log
             </button>
-            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, localDatePlusDays(7))}>
+            {/* The cadence keeps a retired application retired whatever date is pinned: logging a follow-up revives it. */}
+            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, localDatePlusDays(7))} disabled={e.urgency === 'retired'} title={e.urgency === 'retired' ? 'Retired: log a follow-up to bring it back into the cadence' : undefined}>
               +7d
             </button>
             <button type="button" aria-label={`Clear pinned date for ${e.company}`} onClick={() => onPin(e.num, null)} disabled={!e.nextOverride}>

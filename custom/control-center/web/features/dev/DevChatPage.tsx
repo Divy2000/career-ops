@@ -1,5 +1,5 @@
 import { useConfirm } from '../../components/ConfirmDialog';
-import { useCallback, useEffect, useState } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
@@ -71,7 +71,18 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
     if (sessionId && !live) void qc.invalidateQueries({ queryKey: ['dev', 'changes', sessionId] });
   }, [live, sessionId, qc]);
   const confirm = useConfirm();
-  const revert = async (turn: number, abs?: string) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+  const asking = useRef(false);
+  const revert = async (...args: Parameters<typeof revertAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await revertAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const revertAsked = async (turn: number, abs?: string) => {
     if (!sessionId) return;
     if (!(await confirm({ title: abs ? 'Revert this file?' : `Revert turn ${turn}?`, body: abs ? `${abs} goes back to its bytes before turn ${turn}.` : `Every file turn ${turn} changed goes back to its earlier bytes.`, confirmLabel: 'Revert', danger: true }))) return;
     try {
@@ -92,7 +103,12 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
           {note}
         </p>
       )}
-      {turns.length === 0 && <Empty>No turns yet.</Empty>}
+      {q.isError && (
+        <p role="alert" className="danger-text small">
+          Could not load the changes: {describeError(q.error)}
+        </p>
+      )}
+      {turns.length === 0 && q.isSuccess && <Empty>No turns yet.</Empty>}
       {turns.map((t) => (
         <div key={t.n} className="card">
           <div className="row gap" style={{ justifyContent: 'space-between' }}>
@@ -128,13 +144,18 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
   );
 }
 
-function GitDiff() {
+export function GitDiff() {
   const q = useQuery({ queryKey: ['dev', 'git-diff'], queryFn: () => apiGet<{ ok: boolean; stat: string; diff: string; error: string | null }>('/api/dev/git-diff'), refetchInterval: 10_000 });
   return (
     <details className="card">
       <summary>git diff for custom/ {q.data?.stat ? <span className="faint small">({q.data.stat.trim().split('\n').at(-1)})</span> : null}</summary>
+      {q.isError && (
+        <p role="alert" className="danger-text small">
+          Could not load the git diff: {describeError(q.error)}
+        </p>
+      )}
       {q.data?.error && <p className="danger-text small">{q.data.error}</p>}
-      <pre tabIndex={0} className="log mono small">{q.data?.diff || 'clean'}</pre>
+      {q.data && <pre tabIndex={0} className="log mono small">{q.data.diff || 'clean'}</pre>}
     </details>
   );
 }

@@ -10,12 +10,21 @@ import { PIPELINE_OFFER_LIMITS } from '@shared/pipeline-add';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let emitEnvelope: ((kind: string, payload: unknown, turn: number) => void) | null = null;
-vi.mock('@web/components/SessionPanel', () => ({
-  SessionPanel: (props: { onEnvelope?: (kind: string, payload: unknown, turn: number) => void }) => {
-    emitEnvelope = props.onEnvelope ?? null;
-    return null;
-  },
-}));
+type PanelProps = { sessionId?: string | null; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void };
+let panel: PanelProps | null = null;
+// Each panel mount, so a test can tell a remount (a fresh start form) from a re-render.
+const mounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@web/components/SessionPanel', async () => {
+  const { useEffect } = await import('react');
+  return {
+    SessionPanel: (props: PanelProps) => {
+      emitEnvelope = props.onEnvelope ?? null;
+      panel = props;
+      useEffect(() => void (mounts.count += 1), []);
+      return null;
+    },
+  };
+});
 
 type Offer = { url: string; company: string; title: string; location?: string; portal?: string; postedAt?: string };
 let posted: Array<{ offers: Offer[] }>;
@@ -35,6 +44,7 @@ function routeLike(body: { offers: Offer[] }): Response {
 
 beforeEach(async () => {
   document.body.innerHTML = '';
+  sessionStorage.clear();
   posted = [];
   addResponse = routeLike;
   vi.stubGlobal(
@@ -52,13 +62,16 @@ beforeEach(async () => {
       return json(404, { error: 'not stubbed' });
     }),
   );
-  const { AiSearchTab } = await import('@web/features/discover/AiSearchTab');
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
   document.body.append(host);
+  await mount();
+});
+async function mount() {
+  const { AiSearchTab } = await import('@web/features/discover/AiSearchTab');
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root = createRoot(host);
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(AiSearchTab))));
-});
+}
 afterEach(async () => {
   await act(async () => root.unmount());
   vi.unstubAllGlobals();
@@ -135,5 +148,80 @@ describe('Discover > AI search: add', () => {
     await act(async () => button('Add all new').click());
     await until(() => status().startsWith('Could not add'), 'the refusal');
     expect(status()).toBe('Could not add: pipeline is busy, try again in a moment');
+  });
+
+  it('a double click on Add all new sends one add, and the rows stay added (R13-feat-a-L3-03)', async () => {
+    let release: () => void = () => {};
+    // The first add is held until both clicks landed.
+    const gate = new Promise<void>((r) => (release = r));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/a', company: 'Acme', title: 'SRE' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/b', company: 'Globex', title: 'SRE' }, 1));
+    const fetchMock = vi.mocked(fetch);
+    const inner = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/pipeline/add') await gate;
+      return inner(input as RequestInfo, init);
+    });
+    await act(async () => {
+      button('Add all new').click();
+      button('Add all new').click();
+    });
+    expect(button('Add all new').disabled).toBe(true);
+    release();
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(posted).toHaveLength(1);
+    expect(status()).toBe('Added 2 to the pipeline');
+    expect([...host.querySelectorAll('tbody tr')].map((tr) => tr.querySelectorAll('td')[3]!.textContent)).toEqual(['added', 'added']);
+  });
+
+  it('an offer whose URL the route refuses is marked not addable, and Add all new adds the rest (R13-feat-a-L2-02)', async () => {
+    addResponse = (body) => (body.offers.some((o) => !/^https?:\/\//.test(o.url) || o.url.includes('@')) ? json(400, { error: 'invalid body' }) : json(200, { added: body.offers.length, skipped: 0 }));
+    await act(async () => emitEnvelope!('offer', { url: 'mailto:careers@acme.example', company: 'Acme', title: 'Eng' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://user:pw@jobs.example.com/x', company: 'Initech', title: 'Eng' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/ok', company: 'Globex', title: 'Eng' }, 1));
+    expect(button('Add all new').textContent).toContain('(1)');
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(status()).toBe('Added 1 to the pipeline');
+    expect(posted.flatMap((b) => b.offers.map((o) => o.url))).toEqual(['https://jobs.example.com/ok']);
+    const rows = [...host.querySelectorAll('tbody tr')];
+    expect(rows[0]!.textContent).toContain('not a posting URL');
+    expect(rows[0]!.querySelector('button')!.disabled).toBe(true);
+  });
+
+  it('leaving the tab and coming back re-attaches the search session, whose replayed offers rebuild the table (R13-feat-a-L1-02)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/kept', company: 'Acme', title: 'SRE' }, 1));
+    await act(async () => root.unmount());
+    panel = null;
+    await mount();
+    expect(panel!.sessionId).toBe('s-ai-1');
+  });
+
+  it('after a finished search, New search offers the start form again and clears the old offers (review)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    await act(async () => panel!.onStatus!('done', null));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/old', company: 'Old Co', title: 'SRE' }, 1));
+    await act(async () => button('New search').click());
+    expect(panel!.sessionId ?? null).toBeNull();
+    expect(host.textContent).not.toContain('Old Co');
+    expect(sessionStorage.getItem('cc.discover.ai')).toBeNull();
+  });
+
+  it('a search deleted while the tab is open gives the start form back (review)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    const before = mounts.count;
+    await act(async () => panel!.onStatus!('gone', null));
+    // A fresh panel with no session (its own started id dropped): the start form again.
+    expect(mounts.count).toBe(before + 1);
+    expect(panel!.sessionId ?? null).toBeNull();
+  });
+
+  it('a search deleted elsewhere takes its results with it, so they do not mix into the next search (merge review)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/gone', company: 'Gone Co', title: 'SRE' }, 1));
+    expect(host.textContent).toContain('Gone Co');
+    await act(async () => panel!.onStatus!('gone', null));
+    expect(host.textContent).not.toContain('Gone Co');
   });
 });

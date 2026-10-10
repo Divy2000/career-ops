@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
+import { ConfirmProvider } from '@web/components/ConfirmDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -56,7 +57,7 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ApplyPage))));
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(ApplyPage)))));
   await until(() => host.querySelector('select[aria-label="Cover letter text"]'), 'the document pickers');
 });
 afterEach(async () => {
