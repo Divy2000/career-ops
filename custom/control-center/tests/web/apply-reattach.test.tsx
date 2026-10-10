@@ -253,6 +253,15 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect(generate()!.disabled).toBe(true);
   });
 
+  it('Generate CV PDF stays off while the tailored CV session waits for the user\'s reply', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    pdfStatus = 'awaiting_user';
+    sessionStorage.setItem('cc.pdf.12', 's-pdf-12');
+    await openApply();
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-12"]'), 'the link to the waiting session');
+    expect(generate()!.disabled).toBe(true);
+  });
+
   it('Generate CV PDF comes back once the tailored CV session ended', async () => {
     docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
     pdfStatus = 'error';

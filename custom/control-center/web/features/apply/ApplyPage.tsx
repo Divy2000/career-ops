@@ -164,7 +164,8 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const pdfStream = useSessionStream(pdfId);
   const { onStatus: pdfOnStatus, onStarting: pdfOnStarting, onSessionId: pdfOnSessionId, onStartFailed: pdfOnStartFailed } = pdfSession.panel;
   useEffect(() => {
-    if (pdfId) pdfOnStatus(pdfStream.gone ? 'gone' : pdfStream.transcript.status);
+    // A session waiting for the user's reply is still the row's CV run: the reply finishes it, so it stays live here.
+    if (pdfId) pdfOnStatus(pdfStream.gone ? 'gone' : pdfStream.transcript.status === 'awaiting_user' ? 'running' : pdfStream.transcript.status);
   }, [pdfId, pdfStream.gone, pdfStream.transcript.status, pdfOnStatus]);
   const [generating, setGenerating] = useState(false);
   const generatePdf = async () => {
