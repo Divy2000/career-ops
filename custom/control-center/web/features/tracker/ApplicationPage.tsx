@@ -14,6 +14,7 @@ import { reasonLabel } from '../../lib/format';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 import { sponsorCheckCompany } from '../sponsorship/companyKey';
+import { postingHref } from '../today/evaluate';
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -106,7 +107,7 @@ export function ApplicationPage() {
                 {q.data.row.summary?.legitimacy && <Pill>{q.data.row.summary.legitimacy}</Pill>}
                 <SponsorPill tier={q.data.sponsorship.companyFile?.verdict ?? q.data.sponsorship.companyFile?.dolTier} />
                 {q.data.row.url && (
-                  <a className="button-link" href={q.data.row.url} target="_blank" rel="noreferrer noopener">
+                  <a className="button-link" href={postingHref(q.data.row.url)} target="_blank" rel="noreferrer noopener">
                     Open posting
                   </a>
                 )}
