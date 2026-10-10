@@ -68,3 +68,53 @@ describe('Apply drafted answers: select fields', () => {
     expect([...select.options].map((o) => o.value)).toEqual(['No', 'Yes']);
   });
 });
+
+describe('Apply drafted answers: any field with fixed options (SW7-web-a-05)', () => {
+  it('a combobox or other single-choice field with options is a choice between them, not free text', async () => {
+    for (const type of ['combobox', 'dropdown']) {
+      const select = await mount([{ ...field('No'), type }]);
+      expect(select, type).not.toBeNull();
+      expect([...select.options].map((o) => o.value), type).toEqual(['No', 'Yes']);
+      expect(select.value, type).toBe('No');
+      expect(host.querySelector('input'), type).toBeNull();
+    }
+  });
+
+  it('a checkbox group is shown as set by hand on the form: its options and the drafted answer, nothing to edit (review fix)', async () => {
+    await act(async () => root.render(createElement(Harness, { initial: [{ id: 'langs', label: 'Languages you speak', type: 'checkbox', options: ['English', 'German', 'French'], required: false, value: 'English, German', needsConfirmation: false }] })));
+    const manual = host.querySelector('[data-manual-field="langs"]')!;
+    expect(manual).not.toBeNull();
+    expect([...manual.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['English', 'German', 'French']);
+    expect(manual.textContent).toContain('Set this on the form yourself');
+    expect(manual.textContent).toContain('Drafted: English, German');
+    expect(host.querySelector('select, input, textarea')).toBeNull();
+  });
+
+  it('a radio group is shown as set by hand on the form too: the fill turn may skip radios (modes/apply.md, Lever), so no choice here is one the app sets (review fix 2)', async () => {
+    await act(async () => root.render(createElement(Harness, { initial: [{ ...field('No'), type: 'radio' }] })));
+    const manual = host.querySelector('[data-manual-field="spons"]')!;
+    expect(manual).not.toBeNull();
+    expect([...manual.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['No', 'Yes']);
+    expect(manual.textContent).toContain('Set this on the form yourself');
+    expect(manual.textContent).toContain('Drafted: No');
+    expect(host.querySelector('select, input, textarea')).toBeNull();
+  });
+
+  it('a single checkbox or a radio with no options listed is set by hand too, with its drafted answer (review fix 3)', async () => {
+    for (const [type, options] of [['checkbox', undefined], ['radio', []]] as const) {
+      await act(async () => root.render(createElement(Harness, { initial: [{ ...field('Yes'), type, options: options as string[] | undefined }] })));
+      const manual = host.querySelector('[data-manual-field="spons"]');
+      expect(manual, type).not.toBeNull();
+      expect(manual!.textContent, type).toContain('Set this on the form yourself');
+      expect(manual!.textContent, type).toContain('Drafted: Yes');
+      expect(manual!.querySelector('ul'), type).toBeNull();
+      expect(host.querySelector('select, input, textarea'), type).toBeNull();
+    }
+  });
+
+  it('any other field whose options list is empty stays a text box', async () => {
+    await act(async () => root.render(createElement(Harness, { initial: [{ ...field('x'), type: 'combobox', options: [] }] })));
+    expect(host.querySelector('select')).toBeNull();
+    expect(host.querySelector('input')!.value).toBe('x');
+  });
+});

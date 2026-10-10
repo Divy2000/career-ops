@@ -61,7 +61,7 @@ describe('Recompute that fails (SW4-web-b-02)', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => (String(input).includes('recompute=1') ? new Response('server child unavailable: connect ECONNREFUSED 127.0.0.1:4318', { status: 502, headers: { 'content-type': 'text/plain' } }) : ok(input, init)));
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Recompute')!;
     await act(async () => button.click());
-    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    await until(() => host.querySelector('[role="alert"]'), 'the recompute error');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('Could not recompute: server child unavailable: connect ECONNREFUSED 127.0.0.1:4318');
     expect(button.disabled).toBe(false);
     expect(host.textContent).toContain('rows');

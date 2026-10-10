@@ -5,6 +5,7 @@ import { Pill } from '../../components/ui';
 import { fanOut } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
+import { fanoutOutcome } from '../../lib/fanoutOutcome';
 
 /**
  * Pipeline > Batch: each URL becomes one oferta evaluation in its own confined session (the fan-out reserves the
@@ -25,9 +26,12 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     setMessage(null);
     try {
       const r = await fanOut('oferta', list);
-      setUrls('');
-      setMessage({ tone: 'ok', text: `Started ${r.sessions.length} evaluations with report numbers ${r.reserved.join(', ')}.` });
-      onStarted?.();
+      const outcome = fanoutOutcome(r);
+      // Only the URLs that did not start stay in the box, so a retry does not evaluate a started one twice.
+      setUrls(outcome.failedUrls.join('\n'));
+      setMessage({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
+      // The page moves to Sessions on onStarted, which would hide a failure and the URLs kept for the retry.
+      if (outcome.failedUrls.length === 0) onStarted?.();
     } catch (err) {
       setMessage({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {
@@ -44,7 +48,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
           Batch evaluate <Pill tone="warn">Uses tokens</Pill>
         </button>
         <span className={tooMany ? 'danger-text' : 'faint'}>
-          {list.length} URLs{tooMany ? `; at most ${BATCH_MAX_URLS} URLs per batch` : ''}
+          {list.length} URL{list.length === 1 ? '' : 's'}{tooMany ? `; at most ${BATCH_MAX_URLS} URLs per batch` : ''}
         </span>
       </div>
       <Message message={message} />

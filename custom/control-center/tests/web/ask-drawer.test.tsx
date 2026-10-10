@@ -76,6 +76,32 @@ describe('Ask drawer: proposed actions', () => {
     expect([...item.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Run', 'Dismiss']);
   });
 
+  it('the drawer runs exactly the actions the advisor is told about (SW7-web-a-01)', async () => {
+    const { ASK_ACTIONS } = await import('@web/components/AskDrawer');
+    const { ASK_ACTION_SPECS } = await import('@shared/ask-actions');
+    expect(Object.keys(ASK_ACTIONS).sort()).toEqual(ASK_ACTION_SPECS.map((a) => a.name).sort());
+  });
+
+  it('navigate without a path fails instead of opening Today (SW7-web-a-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'navigate', params: { path: '/tracker/12' } }, 1));
+    await act(async () => host.querySelector<HTMLButtonElement>('li.proposal button')!.click());
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('navigate needs "to"');
+    expect(navigations).toEqual([]);
+  });
+
+  it('navigate to a protocol-relative path (another site) fails without navigating (review fix)', async () => {
+    for (const to of ['//attacker.example/path', '/\\attacker.example/path']) {
+      await act(async () => emitEnvelope!('act', { action: 'navigate', params: { to } }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(item.dataset.proposalState, to).toBe('failed');
+      expect(item.textContent, to).toContain('navigate needs "to"');
+      expect(navigations, to).toEqual([]);
+    }
+  });
+
   it('Filter the pipeline opens the Inbox filtered by the proposed query (SW-web-a-07)', async () => {
     await act(async () => emitEnvelope!('act', { action: 'filterPipeline', params: { q: 'Stripe' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
@@ -129,10 +155,67 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(item.textContent).toContain('declined');
   });
 
+  it('an evaluate without a posting URL fails before asking, and starts nothing (review fix)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: {} }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog__title')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('evaluate needs "url"');
+    expect(posts).toEqual([]);
+  });
+
+  it('any action missing a required param fails before asking, naming the param, and runs nothing (review fix 2)', async () => {
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ['generatePdf', {}, 'generatePdf needs "row"'],
+      ['research', { topic: '  ' }, 'research needs "topic"'],
+      ['evaluateCompany', {}, 'evaluateCompany needs "company"'],
+      ['setStatus', { row: 3 }, 'setStatus needs "state"'],
+    ];
+    for (const [action, params, note] of cases) {
+      await act(async () => emitEnvelope!('act', { action, params }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog__title'), action).toBeNull();
+      expect(item.dataset.proposalState, action).toBe('failed');
+      expect(item.textContent, action).toContain(note);
+    }
+    expect(posts).toEqual([]);
+  });
+
+  it('a row that is not a tracker row number fails before asking, and runs nothing (review fix 4)', async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['setStatus', { row: 'abc', state: 'Applied' }],
+      ['generatePdf', { row: '1.5' }],
+      ['generatePdf', { n: 0 }],
+      ['apply', { row: -2 }],
+    ];
+    for (const [action, params] of cases) {
+      await act(async () => emitEnvelope!('act', { action, params }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog__title'), action).toBeNull();
+      expect(item.dataset.proposalState, action).toBe('failed');
+      expect(item.textContent, action).toContain(`${action} needs "row", the tracker row number`);
+    }
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([]);
+  });
+
   it('confirming runs the write with the proposed params', async () => {
     const item = await propose();
     await act(async () => bodyButton('Do it')!.click());
     expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 1, state: 'Responded' } } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('a setStatus naming its row by the older key "n" sets that row, as the other row actions do (review fix 3)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { n: 3, state: 'Applied' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    expect(item.textContent).toContain('Set row #3 to Applied');
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 3, state: 'Applied' } } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
 });
@@ -189,3 +272,94 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
   });
 });
 
+
+describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  const row = (url: string, company: string, done = false) => ({ url, company, role: 'Engineer', location: null, compensation: null, done, section: done ? 'done' : 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });
+  let rows: ReturnType<typeof row>[];
+  beforeEach(() => {
+    posts = [];
+    rows = [row('https://jobs.acme.example/1', 'Acme'), row('https://jobs.acme.example/2', ' acme '), row('https://jobs.acme.example/3', 'Acme', true), row('https://jobs.globex.example/1', 'Globex')];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          return url === '/api/sessions/fanout' ? json({ sessions: [{ id: 's1' }, { id: 's2' }], reserved: [50, 51] }, 202) : json({ error: 'unexpected' }, 500);
+        }
+        if (url === '/api/pipeline')
+          return json({
+            kind: 'ok',
+            path: 'data/pipeline.md',
+            etag: 'e1',
+            rows,
+          });
+        return json([]);
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const runProposal = async (company: string) => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    return item;
+  };
+
+  it('asks with the number of evaluations it will start, before starting any (review fix)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')?.textContent).toContain('2 pending Inbox postings at Acme');
+    expect(posts).toEqual([]);
+  });
+
+  it('above three evaluations, asks the way Evaluate visible does: Start N evaluation sessions? (review fix)', async () => {
+    rows.push(row('https://jobs.acme.example/4', 'Acme'), row('https://jobs.acme.example/5', 'Acme'));
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog__title')?.textContent).toBe('Start 4 evaluation sessions?');
+    await act(async () => bodyButton('Start them')!.click());
+    expect(posts).toHaveLength(1);
+    expect((posts[0]!.body as { urls: string[] }).urls).toHaveLength(4);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it("evaluates each of the company's pending Inbox postings by URL, so each row moves to Processed once its report is written", async () => {
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+    expect(navigations).toEqual([{ to: '/sessions' }]);
+  });
+
+  it('a fan-out whose sessions fail to start is reported, names the postings left pending, and stays on the page (review fix)', async () => {
+    const session = (id: string, url: string, status: string) => ({ id, status, target: { type: 'url', value: url }, reportNum: null, error: status === 'error' ? 'the Claude CLI is not approved' : null });
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return json({ sessions: [session('s1', 'https://jobs.acme.example/1', 'queued'), session('s2', 'https://jobs.acme.example/2', 'error')], reserved: [50, 51] }, 202);
+      }
+      return String(url) === '/api/pipeline' ? json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows }) : json([]);
+    });
+    const item = await runProposal('Acme');
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Started 1 of 2 evaluations with report number 50. 1 could not start: the Claude CLI is not approved');
+    expect(item.textContent).toContain('Not started: https://jobs.acme.example/2');
+    expect(navigations).toEqual([]);
+  });
+
+  it('with no pending posting at that company, starts nothing and says so, without asking', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('No pending Inbox posting at Initech');
+  });
+});

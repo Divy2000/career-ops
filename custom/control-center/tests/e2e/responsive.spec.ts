@@ -56,8 +56,13 @@ test.describe('narrow window (390x844)', () => {
     await page.goto('/');
     const region = page.getByRole('region', { name: /shortlist/i });
     await expect(region).toBeVisible();
-    await page.keyboard.press('Tab');
-    await region.focus();
+    // Reached with Tab presses as a keyboard user would, so a region left out of the tab order fails here.
+    let reached = false;
+    for (let i = 0; i < 60 && !reached; i++) {
+      await page.keyboard.press('Tab');
+      reached = await region.evaluate((el) => el === document.activeElement);
+    }
+    expect(reached, 'Tab reaches the shortlist region').toBe(true);
     await expect(region).toBeFocused();
     const outline = await region.evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(outline).not.toBe('none');

@@ -49,3 +49,52 @@ export function lastSession(key: string): LastSession {
   };
   return { read, write, forget: (id) => void (read() === id && write(null)), starting, setStarting };
 }
+
+const MODE_ID = /^[\w/-]{1,100}$/;
+
+export interface Launch {
+  mode: string;
+  id: string;
+}
+
+// A launcher's panel may report its started session after the launcher unmounted (the page was left before
+// POST /api/sessions answered). The report is added to the store directly, and a launcher mounted under the key hears it.
+const launchListeners = new Map<string, Set<() => void>>();
+
+/**
+ * Every session a mode launcher started in this browser tab, newest first, so coming back shows each one again. `add`
+ * records one start and tells every launcher mounted under the key (`subscribe`).
+ */
+export function rememberedLaunches(key: string): { read(): Launch[]; write(launches: Launch[]): void; add(launch: Launch): void; subscribe(fn: () => void): () => void } {
+  const read = (): Launch[] => {
+    try {
+      const parsed: unknown = JSON.parse(sessionStorage.getItem(key) ?? '[]');
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((l): l is Launch => typeof l?.mode === 'string' && MODE_ID.test(l.mode) && typeof l?.id === 'string' && SESSION_ID.test(l.id));
+    } catch {
+      return [];
+    }
+  };
+  const write = (launches: Launch[]): void => {
+    try {
+      if (launches.length) sessionStorage.setItem(key, JSON.stringify(launches));
+      else sessionStorage.removeItem(key);
+    } catch {
+      // storage refused: only the re-attaching is lost
+    }
+  };
+  const add = (launch: Launch): void => {
+    write([launch, ...read().filter((l) => l.id !== launch.id)]);
+    for (const fn of launchListeners.get(key) ?? []) fn();
+  };
+  const subscribe = (fn: () => void) => {
+    const set = launchListeners.get(key) ?? new Set();
+    set.add(fn);
+    launchListeners.set(key, set);
+    return () => {
+      set.delete(fn);
+      if (set.size === 0) launchListeners.delete(key);
+    };
+  };
+  return { read, write, add, subscribe };
+}

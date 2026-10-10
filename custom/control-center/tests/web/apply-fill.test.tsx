@@ -103,6 +103,28 @@ describe('Apply: the chosen documents reach the session', () => {
     return () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Fill real form')!;
   }
 
+  it('the fill turn leaves checkbox and radio groups to the user: their drafted values are not sent as values to fill (SW7-web-a-05 review)', async () => {
+    await pick('Posting URL', 'https://jobs.lever.co/acme/1');
+    await act(async () => {
+      panel.onSessionId!('s1');
+      panel.onStatus!('done');
+      panel.onEnvelope!('answers', {
+        fields: [
+          { id: 'name', label: 'Name', type: 'text', required: true, value: 'Jane', needsConfirmation: false },
+          { id: 'langs', label: 'Languages you speak', type: 'checkbox', options: ['English', 'German'], required: false, value: 'English, German', needsConfirmation: false },
+          { id: 'spons', label: 'Will you need sponsorship?', type: 'radio', options: ['No', 'Yes'], required: true, value: 'No', needsConfirmation: true },
+          { id: 'consent', label: 'I agree to the privacy policy', type: 'checkbox', required: true, value: 'Yes', needsConfirmation: false },
+        ],
+      });
+    });
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Fill real form')!.click());
+    await until(() => turns.length > 0, 'the fill turn');
+    const prompt = turns[0]!.prompt;
+    const sent = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { fields: Array<{ id: string; value: string }> };
+    expect(sent.fields).toEqual([{ id: 'name', label: 'Name', value: 'Jane' }]);
+    expect(prompt).toContain('Leave these to the user, who sets them on the form: "Languages you speak", "Will you need sponsorship?", "I agree to the privacy policy"');
+  });
+
   it('a double click on Fill real form sends one fill turn (SW4-web-a-05)', async () => {
     turnAnswer = () => json({ id: 's1' });
     const fillButton = await draft();

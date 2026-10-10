@@ -59,7 +59,7 @@ describe('Inbox Evaluate visible', () => {
   it('a refused fan-out can be retried', async () => {
     await act(async () => evaluate().click());
     await act(async () => answer(json(503, { error: 'Claude is not available' })));
-    expect(host.querySelector('[role="status"]')?.textContent).toBe('Could not start the evaluations: Claude is not available');
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe('Could not start the evaluations: Claude is not available');
     expect(evaluate().disabled).toBe(false);
     await act(async () => evaluate().click());
     expect(posts).toHaveLength(2);

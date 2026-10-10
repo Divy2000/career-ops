@@ -1,5 +1,6 @@
 // Envelope contract: one per line, outside code fences: <<cc:KIND {json}>>.
 import { z } from 'zod';
+import { splitEnvelopes } from '../../shared/envelope-text.js';
 
 export const ENVELOPE_SCHEMAS = {
   answers: z.object({
@@ -34,49 +35,14 @@ export type EnvelopeKind = keyof typeof ENVELOPE_SCHEMAS;
 
 export type Envelope = { ok: true; kind: EnvelopeKind; payload: unknown; raw: string } | { ok: false; kind: string; error: string; raw: string };
 
-// Non-greedy braces end at the first `}>>`, which is the envelope's own closer even with nested objects.
-const ENVELOPE_RE = /<<cc:([a-z-]+)\s+(\{.*?\})>>/g;
-
 /**
  * Pull envelopes out of assistant text. Fenced lines are left alone, a partial
  * opener at the end is hidden while streaming (alpha behavior), and every
  * payload is validated; invalid ones come back as warnings, never dropped.
  */
 export function extractEnvelopes(text: string, streaming: boolean): { envelopes: Envelope[]; visibleText: string } {
-  const envelopes: Envelope[] = [];
-  const visible: string[] = [];
-  let inFence = false;
-  const lines = text.split('\n');
-  lines.forEach((line, i) => {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      visible.push(line);
-      return;
-    }
-    if (inFence) {
-      visible.push(line);
-      return;
-    }
-    let found = false;
-    const rest = line.replace(ENVELOPE_RE, (raw, kind: string, json: string) => {
-      found = true;
-      envelopes.push(validate(kind, json, raw));
-      return '';
-    });
-    if (found) {
-      if (rest.trim()) visible.push(rest.trimEnd());
-      return;
-    }
-    if (streaming && i === lines.length - 1) {
-      const open = line.lastIndexOf('<<cc:');
-      if (open !== -1 && !line.slice(open).includes('>>')) {
-        visible.push(line.slice(0, open));
-        return;
-      }
-    }
-    visible.push(line);
-  });
-  return { envelopes, visibleText: visible.join('\n') };
+  const { found, visibleText } = splitEnvelopes(text, streaming);
+  return { envelopes: found.map((e) => validate(e.kind, e.json, e.raw)), visibleText };
 }
 
 function validate(kind: string, json: string, raw: string): Envelope {

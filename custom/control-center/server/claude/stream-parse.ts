@@ -37,6 +37,10 @@ export class StreamParser {
   text = '';
   /** The text of every assistant message so far: envelopes may sit in any of them, not only the last one (the result). */
   private said: string[] = [];
+  /** A message ended: the next streamed text starts a new one, set off by a blank line. */
+  private messageEnded = false;
+  /** The last message's visible text (the result's): what the honesty gate reads, as before text.done held every message. */
+  lastVisibleText = '';
 
   /** One stdout line in, zero or more normalized events out. Non-JSON lines surface as stderr text. */
   push(line: string): SessionEvent[] {
@@ -56,15 +60,20 @@ export class StreamParser {
         const ev = (obj.event ?? {}) as Json;
         const delta = (ev.delta ?? {}) as Json;
         if (ev.type === 'content_block_delta' && typeof delta.text === 'string') {
-          this.text += delta.text;
-          return [{ type: 'text.delta', text: delta.text }];
+          const text = this.messageEnded && this.text ? `\n\n${delta.text}` : delta.text;
+          this.messageEnded = false;
+          this.text += text;
+          return [{ type: 'text.delta', text }];
         }
         return [];
       }
       case 'assistant': {
         const blocks = this.blocks(obj);
         const text = blocks.map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('');
-        if (text) this.said.push(text);
+        if (text) {
+          this.said.push(text);
+          this.messageEnded = true;
+        }
         return blocks.flatMap((b) => (b.type === 'tool_use' ? [{ type: 'tool.use', id: String(b.id), name: String(b.name), summary: toolSummary(String(b.name), b.input) } as SessionEvent] : []));
       }
       case 'user':
@@ -72,8 +81,16 @@ export class StreamParser {
       case 'result': {
         const out: SessionEvent[] = [];
         for (const d of (Array.isArray(obj.permission_denials) ? obj.permission_denials : []) as Json[]) out.push({ type: 'permission.denied', tool: String(d.tool_name ?? ''), input: d.tool_input });
-        const finalText = typeof obj.result === 'string' && obj.result ? obj.result : this.text;
-        const { visibleText } = extractEnvelopes(finalText, false);
+        const result = typeof obj.result === 'string' ? obj.result : '';
+        const finalText = result || this.text;
+        this.lastVisibleText = extractEnvelopes(finalText, false).visibleText;
+        // What the transcript shows: every message of the turn, not only the last one, so text written before a tool call stays.
+        // Without a result, the streamed text is those same messages joined: they are shown once, as said.
+        const messages = !result || this.said.at(-1) === result ? this.said : [...this.said, result];
+        const visibleText = (messages.length ? messages : [finalText])
+          .map((m) => extractEnvelopes(m, false).visibleText.trim())
+          .filter(Boolean)
+          .join('\n\n');
         // The result is only the last assistant message: an envelope written before a later tool call is in an earlier
         // one. Every message's envelopes count, in order, and one repeated word for word (the last message is also the
         // result) counts once.

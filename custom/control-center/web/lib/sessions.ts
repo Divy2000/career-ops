@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, apiGet, apiSend } from './api';
 import { onAppStreamOpen, subscribeAppEvents } from './sse';
 import type { SessionEvent, SessionMeta, StoredEvent } from '@shared/api';
+import { splitEnvelopes } from '@shared/envelope-text';
 
 export interface ToolView {
   id: string;
@@ -15,6 +16,8 @@ export interface ToolView {
 export interface TurnView {
   n: number;
   text: string;
+  /** The streamed text as it arrived, envelopes included; `text` is what is shown. */
+  raw?: string;
   tools: ToolView[];
   stderr: string[];
 }
@@ -61,12 +64,19 @@ export function reduceEvent(prev: Transcript, ev: SessionEvent): Transcript {
     case 'session.init':
       t.model = ev.model;
       return t;
-    case 'text.delta':
-      current(t).text += ev.text;
+    case 'text.delta': {
+      // The raw stream, envelopes and all; the reader sees it with the envelopes (and a half-written one) taken out.
+      const turn = current(t);
+      turn.raw = (turn.raw ?? '') + ev.text;
+      turn.text = splitEnvelopes(turn.raw, true).visibleText;
       return t;
-    case 'text.done':
-      current(t).text = ev.text;
+    }
+    case 'text.done': {
+      const turn = current(t);
+      turn.text = ev.text;
+      turn.raw = ev.text;
       return t;
+    }
     case 'tool.use':
       current(t).tools.push({ id: ev.id, name: ev.name, summary: ev.summary, ok: null, result: null });
       return t;

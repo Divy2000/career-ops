@@ -164,11 +164,25 @@ describe('one session across its turns', () => {
   let failing: number;
   let missing: boolean;
   let notASession: boolean;
+  // A second, ordinary session followed next to s1, whose re-read on a stream open says the open was handled.
+  let withControl: boolean;
+  let control: { meta: SessionMeta | null };
+  // Bodies of s1 that the panel read to the end.
+  let s1Read: number;
   const retry = { ...SESSION_LOAD_RETRY };
+
+  class ReadCounted extends Response {
+    override async text() {
+      const body = await super.text();
+      s1Read += 1;
+      return body;
+    }
+  }
 
   function Probe() {
     useLiveInvalidation();
     latest = useSessionStream('s1');
+    control = useSessionStream(withControl ? 's2' : null);
     return null;
   }
   const appStream = () => FakeEventSource.all.find((s) => s.url === '/api/events')!;
@@ -182,7 +196,7 @@ describe('one session across its turns', () => {
     root = createRoot(host);
     await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(Probe))));
   }
-  const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+  const reads = (id: string) => (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === `/api/sessions/${id}`).length;
 
   beforeEach(() => {
     FakeEventSource.all = [];
@@ -193,6 +207,8 @@ describe('one session across its turns', () => {
     failing = 0;
     missing = false;
     notASession = false;
+    withControl = false;
+    s1Read = 0;
     // The load's retry backoff in milliseconds instead of seconds, so the outage test does not wait on real delays.
     Object.assign(SESSION_LOAD_RETRY, { baseMs: 5, maxMs: 20 });
     vi.stubGlobal('EventSource', FakeEventSource);
@@ -200,7 +216,8 @@ describe('one session across its turns', () => {
       'fetch',
       vi.fn(async (url: string) => {
         // Another route under /api/sessions/ (engine) answers 200 with no session record.
-        if (url === '/api/sessions/s1' && notASession) return new Response('{"playwrightAvailable":false,"modes":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+        if (url === '/api/sessions/s2') return new Response(JSON.stringify({ meta: { id: 's2', status: 'running', turns: [] }, events: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        if (url === '/api/sessions/s1' && notASession) return new ReadCounted('{"playwrightAvailable":false,"modes":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
         if (url === '/api/sessions/s1' && missing) return new Response('{"error":"session not found"}', { status: 404, headers: { 'content-type': 'application/json' } });
         if (url === '/api/sessions/s1' && failing > 0) {
           failing -= 1;
@@ -288,7 +305,8 @@ describe('one session across its turns', () => {
     events = [...TURN_1, TURN_2[0]!];
     state = 'running';
     for (const answer of heldMeta.splice(0)) await act(async () => answer());
-    await settle();
+    // The stale answer (its events end before the turn that started) makes the panel ask again.
+    await until(() => heldMeta.length > 0, 'the meta asked again');
     for (const answer of heldMeta.splice(0)) await act(async () => answer());
     await until(() => latest.meta?.status === 'running', 'the meta asked again');
     expect(latest.transcript.status).toBe('running');
@@ -318,8 +336,7 @@ describe('one session across its turns', () => {
     events = [TURN_1[0]!, stored(2, { type: 'text.delta', text: 'a' })];
     await mount();
     await act(async () => appStream().open());
-    await until(() => latest.transcript.turns[0]?.text === 'a', 'the stored events');
-    await settle();
+    await until(() => latest.transcript.turns[0]?.text === 'a' && reads('s1') === 2 && latest.meta?.status === 'running', 'the stored events, read again on the open');
     // Seq 3 never arrives on the stream (sent by another server process on the same data, say).
     events = [...events, stored(3, { type: 'text.delta', text: 'b' }), stored(4, { type: 'text.delta', text: 'c' })];
     await frames([events[3]!]);
@@ -332,7 +349,7 @@ describe('one session across its turns', () => {
     // The first read and the one a live frame asks for both fail (the server is restarting), then it answers.
     failing = 2;
     await mount();
-    await settle();
+    await until(() => failing < 2, 'the first read to fail');
     events = [...events, stored(3, { type: 'text.delta', text: 'b' })];
     await frames([events[2]!]);
     await until(() => latest.transcript.turns[0]?.text === 'ab' && latest.meta?.status === 'running', 'the whole history');
@@ -341,23 +358,25 @@ describe('one session across its turns', () => {
 
   it('a session the server does not have (deleted, or a stale id) is reported gone, and is not asked for again', async () => {
     missing = true;
+    withControl = true;
     await mount();
-    await until(() => latest.gone, 'the session to be reported gone');
+    await until(() => latest.gone && control.meta, 'the session to be reported gone');
     await act(async () => appStream().open());
-    await settle();
-    const reads = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === '/api/sessions/s1');
-    expect(reads).toHaveLength(1);
+    await until(() => reads('s2') === 2, 'the open to read the other session again');
+    expect(reads('s1')).toBe(1);
     expect(latest.transcript.turns).toEqual([]);
   });
 
   it('an id that names another route (engine), answered with no session record, is left alone: no meta, not gone, not read again', async () => {
     notASession = true;
+    withControl = true;
     await mount();
-    await settle();
+    await until(() => s1Read === 1 && control.meta, 'the answer to be read');
+    // One turn of the event loop for the read answer to reach the panel, which has nothing to show for it.
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
     await act(async () => appStream().open());
-    await settle();
-    const reads = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === '/api/sessions/s1');
-    expect(reads).toHaveLength(1);
+    await until(() => reads('s2') === 2, 'the open to read the other session again');
+    expect(reads('s1')).toBe(1);
     expect(latest.meta).toBeNull();
     expect(latest.gone).toBe(false);
     expect(latest.transcript.turns).toEqual([]);

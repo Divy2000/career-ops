@@ -95,5 +95,27 @@ describe('Sponsorship AI policy pass', () => {
     expect(passButton()!.disabled).toBe(false);
     expect(passButton()!.textContent).toContain('Run AI policy pass');
   });
-});
 
+  it('after a failed start, a pass started from the panel itself turns the button off again while it runs (SW7-web-b-01)', async () => {
+    await openPage();
+    await act(async () => passButton()!.click());
+    await act(async () => lastPanel()!.onStartFailed!());
+    expect(passButton()!.disabled).toBe(false);
+    // The panel's own Start session, once pending.json is fixed.
+    await act(async () => lastPanel()!.onSessionId!('pass-retry'));
+    await act(async () => lastPanel()!.onStatus!('running', null));
+    expect(passButton()!.disabled).toBe(true);
+    expect(sessionStorage.getItem('cc.sponsorship.policyPass')).toBe('pass-retry');
+  });
+
+  it('a start that came back as an errored session, then answered in its panel, turns the button off while that turn runs (SW7-web-b-01)', async () => {
+    await openPage();
+    await act(async () => passButton()!.click());
+    await act(async () => lastPanel()!.onSessionId!('pass-error'));
+    await act(async () => lastPanel()!.onStartFailed!());
+    await act(async () => lastPanel()!.onStatus!('error', 'no token'));
+    expect(passButton()!.disabled).toBe(false);
+    await act(async () => lastPanel()!.onStatus!('running', null));
+    expect(passButton()!.disabled).toBe(true);
+  });
+});

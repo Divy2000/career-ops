@@ -40,6 +40,14 @@ describe('session transcript reducer', () => {
     expect(t.reason).toBe('question');
   });
 
+  it('hides envelopes while a turn streams, a half-written one included, and keeps the text around them (SW7-web-a-04)', () => {
+    const text = (events: StoredEvent[]) => reduceAll([at(1, { type: 'status', status: 'running', turn: 1 }), ...events]).turns[0]!.text;
+    expect(text([at(2, { type: 'text.delta', text: 'Found one:\n<<cc:offer {"url":"https://jobs.example.com/1","company":"C","title":"T"}>>\nLet me' })])).toBe('Found one:\nLet me');
+    expect(text([at(2, { type: 'text.delta', text: 'Found one:\n<<cc:offer {"url":"https://jo' })])).toBe('Found one:\n');
+    // A fenced example is the model's text, not an envelope.
+    expect(text([at(2, { type: 'text.delta', text: '```\n<<cc:act {"action":"navigate","params":{}}>>\n```' })])).toBe('```\n<<cc:act {"action":"navigate","params":{}}>>\n```');
+  });
+
   it('does not mutate the previous transcript and surfaces errors', () => {
     const first = reduceEvent(EMPTY_TRANSCRIPT, { type: 'text.delta', text: 'a' });
     const second = reduceEvent(first, { type: 'text.delta', text: 'b' });

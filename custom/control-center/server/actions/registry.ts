@@ -1,6 +1,5 @@
 // Static action registry: the only way the client runs anything. Every entry
 // builds an argv array; the client never sends a command string.
-import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
@@ -16,6 +15,7 @@ import { prefillUrlProblem } from '../../shared/prefill.js';
 import { outputFileProblem } from '../../shared/output-path.js';
 import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { writeTmpInput } from './tmp-inputs.js';
+import { replyWatchRefused } from '../domains/replyCandidates.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
 
@@ -557,9 +557,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: false,
     params: none,
-    // reply-watch.mjs writes a set of mock emails to data/reply-candidates.json when the file is missing, and paste-reply
-    // only ever appends to it, so a digest before the first pasted reply would make them permanent.
-    check: (_p, ctx) => (fs.existsSync(path.join(ctx.dataRoot, 'data', 'reply-candidates.json')) ? null : 'No replies to review yet. Paste a reply first, then run the digest.'),
+    check: (_p, ctx) => replyWatchRefused(ctx.dataRoot),
     build: (_p, ctx) => node(ctx, 'replyWatch', []),
   }),
   define({ id: 'followups.inviteMatch', label: 'Match invite text', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ text: z.string().min(1).max(20_000) }), build: (p, ctx) => node(ctx, 'inviteMatch', ['--file', tmpFile(ctx, 'txt', p.text)]) }),

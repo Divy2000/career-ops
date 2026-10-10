@@ -4,10 +4,14 @@ import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { SessionPanel } from './SessionPanel';
 import { Pill } from './ui';
-import { apiSend } from '../lib/api';
+import { apiGet, apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
-import { startSession, startTailoredCvSession } from '../lib/sessions';
+import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
 import { afterFocusSettles } from '../lib/focus';
+import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@shared/ask-actions';
+import { fanoutOutcome } from '../lib/fanoutOutcome';
+import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
+import type { PipelineRead } from '@shared/api';
 
 export interface Proposal {
   id: number;
@@ -17,26 +21,42 @@ export interface Proposal {
   note: string | null;
 }
 
-/** Advisor action allowlist (alpha parity). `confirm` gates everything that writes. */
-export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) => string; confirm: boolean; writes: boolean }> = {
-  navigate: { label: (p) => `Open ${String(p.to ?? '/')}`, confirm: false, writes: false },
-  filterPipeline: { label: (p) => `Filter the pipeline by "${String(p.q ?? p.query ?? '')}"`, confirm: false, writes: false },
-  evaluate: { label: (p) => `Evaluate ${String(p.url ?? '')} (uses tokens)`, confirm: true, writes: true },
-  evaluateCompany: { label: (p) => `Evaluate every posting at ${String(p.company ?? '')} (uses tokens)`, confirm: true, writes: true },
-  explore: { label: () => 'Open Discover (network scan)', confirm: false, writes: false },
-  research: { label: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`, confirm: true, writes: false },
-  generatePdf: { label: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`, confirm: true, writes: true },
-  setStatus: { label: (p) => `Set row #${String(p.row ?? '')} to ${String(p.state ?? '')}`, confirm: true, writes: true },
-  apply: { label: (p) => `Open Apply for row #${String(p.row ?? p.n ?? '')}`, confirm: false, writes: false },
-  setApplyField: { label: (p) => `Set the apply field ${String(p.id ?? '')}`, confirm: false, writes: false },
-  remember: { label: (p) => `Remember: ${String(p.fact ?? '')}`, confirm: true, writes: true },
-  setProfile: { label: () => 'Change profile.yml', confirm: true, writes: true },
-  setPortals: { label: () => 'Change portals.yml', confirm: true, writes: true },
+const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
+  navigate: (p) => `Open ${String(p.to ?? '(no path)')}`,
+  filterPipeline: (p) => `Filter the pipeline by "${String(p.q ?? p.query ?? '')}"`,
+  evaluate: (p) => `Evaluate ${String(p.url ?? '')} (uses tokens)`,
+  evaluateCompany: (p) => `Evaluate every pending Inbox posting at ${String(p.company ?? '')} (uses tokens)`,
+  explore: () => 'Open Discover (network scan)',
+  research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
+  generatePdf: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`,
+  setStatus: (p) => `Set row #${String(p.row ?? p.n ?? '')} to ${String(p.state ?? '')}`,
+  apply: (p) => `Open Apply for row #${String(p.row ?? p.n ?? '')}`,
+  setApplyField: (p) => `Set the apply field ${String(p.id ?? '')}`,
+  remember: (p) => `Remember: ${String(p.fact ?? '')}`,
+  setProfile: () => 'Change profile.yml',
+  setPortals: () => 'Change portals.yml',
 };
+
+/** Advisor action allowlist (alpha parity), built from the list the advisor's contract is written from. `confirm` gates everything that writes. */
+export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) => string; confirm: boolean; writes: boolean }> = Object.fromEntries(
+  ASK_ACTION_SPECS.map((a) => [a.name, { label: LABELS[a.name], confirm: a.confirm, writes: a.writes }]),
+);
 
 /** Own keys only: an advisor-named action like `toString` must not reach Object.prototype. */
 function askAction(name: string): (typeof ASK_ACTIONS)[string] | null {
   return Object.hasOwn(ASK_ACTIONS, name) ? ASK_ACTIONS[name]! : null;
+}
+
+/**
+ * The company's pending Inbox postings, one evaluation each by URL as Evaluate visible does: only a URL-targeted evaluation
+ * moves its row to Processed once the report is written, so a company-targeted session left them all pending.
+ */
+async function pendingUrlsAt(company: string): Promise<string[]> {
+  const pipeline = await apiGet<PipelineRead>('/api/pipeline');
+  const urls = [...new Set((pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && r.company.trim().toLowerCase() === company.toLowerCase()).map((r) => r.url))];
+  if (urls.length === 0) throw new Error(`No pending Inbox posting at ${company}.`);
+  if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
+  return urls;
 }
 
 export function useAskHotkey(toggle: () => void): void {
@@ -50,6 +70,29 @@ export function useAskHotkey(toggle: () => void): void {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [toggle]);
+}
+
+// Older keys the run switch still reads in place of a param's name (row or n, topic or company, q or query).
+const PARAM_ALIASES: Record<string, string> = { row: 'n', topic: 'company', q: 'query' };
+
+/**
+ * Why a proposal's params cannot run, or null: every param the advisor's contract marks required must be there, not
+ * blank, and a row is a tracker row number. A navigate stays in the app (`//host` or `/\\host` would leave it) and an
+ * evaluate takes a posting URL.
+ */
+function invalidParams(p: { action: string; params: Record<string, unknown> }): string | null {
+  const spec = (ASK_ACTION_SPECS as readonly AskActionSpec[]).find((a) => a.name === p.action);
+  for (const param of spec?.params ?? []) {
+    const alias = PARAM_ALIASES[param.name];
+    const value = p.params[param.name] ?? (alias ? p.params[alias] : undefined);
+    const missing = value === undefined || value === null || String(value).trim() === '';
+    if (param.required && missing) return `${p.action} needs "${param.name}", ${param.about}`;
+    // A row the tracker cannot have (abc, 1.5, 0) would only fail after the user confirmed it.
+    if (param.name === 'row' && !missing && !/^[1-9]\d*$/.test(String(value).trim())) return `${p.action} needs "row", ${param.about}`;
+  }
+  if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
+  if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
+  return null;
 }
 
 export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -75,15 +118,39 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     if (!def) return;
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
-    if (def.confirm && !(await confirm({ title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true }))) {
+    // Checked before the question: a proposal that cannot run is not offered to the user as a write to approve.
+    const invalid = invalidParams(p);
+    if (invalid) {
+      update(p.id, { state: 'failed', note: invalid });
+      return;
+    }
+    // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
+    const company = String(p.params.company ?? '').trim();
+    let companyUrls: string[] = [];
+    if (p.action === 'evaluateCompany') {
+      try {
+        companyUrls = await pendingUrlsAt(company);
+      } catch (err) {
+        update(p.id, { state: 'failed', note: describeError(err) });
+        return;
+      }
+    }
+    const question =
+      p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
+        ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.`, confirmLabel: 'Start them', focusCancel: true }
+        : p.action === 'evaluateCompany'
+          ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens). Continue?`, confirmLabel: 'Do it', danger: true }
+          : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
+    if (def.confirm && !(await confirm(question))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
     }
     try {
       switch (p.action) {
-        case 'navigate':
-          await router.navigate({ to: String(p.params.to ?? '/') as '/' });
+        case 'navigate': {
+          await router.navigate({ to: String(p.params.to).trim() as '/' });
           break;
+        }
         case 'filterPipeline': {
           const q = String(p.params.q ?? p.params.query ?? '').trim();
           await router.navigate({ to: '/pipeline', search: { tab: 'inbox', ...(q ? { q } : {}) } });
@@ -96,13 +163,19 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await router.navigate({ to: '/apply/$n', params: { n: String(p.params.row ?? p.params.n ?? '') } });
           break;
         case 'evaluate': {
-          const m = await startSession({ mode: 'oferta', target: { type: 'url', value: String(p.params.url) }, prompt: `Evaluate this job posting following the mode file: ${String(p.params.url)}` });
+          const url = String(p.params.url).trim();
+          const m = await startSession({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
         case 'evaluateCompany': {
-          const m = await startSession({ mode: 'oferta', target: { type: 'company', value: String(p.params.company) }, prompt: `Evaluate every pending pipeline posting at ${String(p.params.company)}.` });
-          await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
+          const outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
+          // A posting that did not start stays pending in the Inbox; the note names it, and the page stays to say why.
+          if (outcome.failedUrls.length > 0) {
+            update(p.id, { state: 'failed', note: `${outcome.text}. Not started: ${outcome.failedUrls.join(', ')}` });
+            return;
+          }
+          await router.navigate({ to: '/sessions' });
           break;
         }
         case 'research': {
@@ -117,7 +190,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'setStatus':
-          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
+          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row ?? p.params.n), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
           await qc.invalidateQueries({ queryKey: ['tracker'] });
           break;
         case 'remember': {

@@ -278,8 +278,8 @@ function ProfileSections() {
           )}
         </div>
         <div className="stack">
-          <ModeLauncher heading="AI flows" modes={AI_FLOWS} />
-          <ModeLauncher heading="Exports" modes={[{ id: 'text', label: 'Plain text CV', prompt: 'Export my CV as plain text.' }, { id: 'latex', label: 'LaTeX CV', prompt: 'Export my CV to LaTeX.' }, { id: 'latex-tex', label: 'LaTeX from .tex source', prompt: 'Rebuild the PDF from my .tex source.' }]} />
+          <ModeLauncher heading="AI flows" rememberAs="cc.profile.ai" modes={AI_FLOWS} />
+          <ModeLauncher heading="Exports" rememberAs="cc.profile.exports" modes={[{ id: 'text', label: 'Plain text CV', prompt: 'Export my CV as plain text.' }, { id: 'latex', label: 'LaTeX CV', prompt: 'Export my CV to LaTeX.' }, { id: 'latex-tex', label: 'LaTeX from .tex source', prompt: 'Rebuild the PDF from my .tex source.' }]} />
         </div>
       </div>
     </section>

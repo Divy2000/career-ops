@@ -37,9 +37,11 @@ export function InsightsPage() {
         value={tab}
         onChange={(t: InsightsTab) => void navigate({ search: { tab: t } })}
       />
-      {tab === 'ai' && (
+      {/* Hidden, not unmounted, on the other tabs: a prompt typed but not started stays, and a running analysis keeps its panel. */}
+      <div hidden={tab !== 'ai'}>
         <ModeLauncher
           heading="AI analyses"
+          rememberAs="cc.insights.ai"
           modes={[
             { id: 'patterns', label: 'Patterns', prompt: 'Analyze the patterns across my evaluations and outcomes.' },
             { id: 'calibrate', label: 'Calibrate', prompt: 'Calibrate my scoring against outcomes so far.' },
@@ -47,7 +49,7 @@ export function InsightsPage() {
             { id: 'titles', label: 'Titles', prompt: 'Which job titles should I target, given my profile and results?' },
           ]}
         />
-      )}
+      </div>
       {tab === 'velocity' && <ScriptTab script="funnelVelocity" title="Funnel velocity (funnel-velocity.mjs)" />}
       {tab === 'patterns' && <ScriptTab script="analyzePatterns" title="Patterns (analyze-patterns.mjs)" />}
       {tab === 'salary' && <ScriptTab script="salaryGap" title="Salary gap (salary-gap.mjs)" />}
