@@ -1724,6 +1724,28 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('a fan-out session that fails after its run started keeps its number, so no other evaluation is handed it (review fix)', async () => {
+    const app = await freshApp();
+    try {
+      const begin = app.sessions.store.beginTurn.bind(app.sessions.store);
+      let calls = 0;
+      vi.spyOn(app.sessions.store, 'beginTurn').mockImplementation((id, input) => {
+        calls += 1;
+        if (calls === 1) throw new Error('could not write the session record');
+        return begin(id, input);
+      });
+      const res = await withScenario(scenarioFile(SLOW), async () => call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/41'] }));
+      expect(res.statusCode).toBe(202);
+      expect(res.json().sessions[0]).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: 8 });
+      expect(fs.existsSync(path.join(app.cfg.dataRoot, 'reports', '008-RESERVED.md'))).toBe(true);
+      // Its run was stopped.
+      await until(() => app.runner.store.list().every((r) => !['queued', 'running'].includes(r.status)));
+      expect(app.runner.store.list().map((r) => r.status)).toEqual(['cancelled']);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {

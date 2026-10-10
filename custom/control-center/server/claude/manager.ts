@@ -228,8 +228,11 @@ export class SessionManager {
         } catch (err) {
           // One URL that cannot start must not hide the ones that did: the caller keeps only the failed URLs for a retry.
           const message = (err as Error).message;
-          const recorded: SessionMeta | null = created;
-          if (recorded) {
+          const recorded = created as SessionMeta | null;
+          if (recorded && err instanceof TurnStartedError) {
+            handed.add(num);
+            sessions.push({ ...recorded, status: 'error', error: message, lastReason: message });
+          } else if (recorded) {
             // The session holds the number now and releases it as a first turn that cannot start does.
             handed.add(num);
             sessions.push(await this.failBeforeSpawn(recorded, message));
@@ -424,11 +427,22 @@ export class SessionManager {
       // Nothing was spawned (its run record could not be created): the turn fails like any other that cannot start.
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
-    const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
-    this.emit(meta.id, { type: 'status', status: 'running', turn: n });
-    this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
-    this.track(meta.id, n, run.id, policy, state, token);
-    return began;
+    try {
+      const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
+      this.emit(meta.id, { type: 'status', status: 'running', turn: n });
+      this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
+      this.track(meta.id, n, run.id, policy, state, token);
+      return began;
+    } catch (err) {
+      // The run exists and may already be writing: it is stopped, and any report number stays with the session (released
+      // at the next reconcile, once the process is long gone) rather than going back to the pool while it could be used.
+      try {
+        this.runner.cancel(run.id);
+      } catch {
+        /* nothing more can be done for it here */
+      }
+      throw new TurnStartedError((err as Error).message);
+    }
   }
 
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
@@ -723,6 +737,8 @@ export function parseReservedRange(stdout: string): number[] {
 }
 
 export class BusyError extends Error {}
+/** A turn whose run was started (and is now being stopped) but could not be recorded on its session. */
+export class TurnStartedError extends Error {}
 export class NotFoundError extends Error {}
 /** The mode never runs as a session (sessionRefusal); the message says why and what to use instead. */
 export class ModeRefusedError extends Error {}
