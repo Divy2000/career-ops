@@ -57,7 +57,6 @@ async function render(component: () => ReactNode, search: Record<string, unknown
 }
 // The advisor drawer is a dialog too; only confirm dialogs count.
 const dialogs = () => document.querySelectorAll('[role="dialog"]:not(.drawer)').length;
-const byLabel = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const byText = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(text));
 async function doubleClickAsksOnce(target: () => HTMLButtonElement | null | undefined, confirmLabel: string) {
   const el = await until(target, 'the button');
