@@ -98,7 +98,6 @@ const bundleReport = (file: string): number | null => {
  * indexed under that report, sits in that report's application folder, or is claimed by no report at all.
  */
 export function rerenderProblem(index: PdfIndexRow[], report: number, html: string, pdf: string): string | null {
-  if (index.some((r) => r.report === report && r.pdf === pdf)) return null;
   if (bundleReport(pdf) === report && bundleReport(html) === report) return null;
   for (const file of [pdf, html]) {
     const indexed = index.find((r) => r.report !== report && (r.pdf === file || r.html === file))?.report;

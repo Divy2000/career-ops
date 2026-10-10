@@ -66,4 +66,18 @@ describe('rerenderProblem', () => {
       'output/099-acme-robotics-platform/cv/tailored/v001/cv.pdf belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.',
     );
   });
+
+  it('fails closed when the indexed pdf belongs to this report but its html twin is indexed under another report (R17-review-docs-01)', () => {
+    const conflict = [row(1, 'output/acme-cv.pdf'), row(99, '', 'output/acme-cv.html')];
+    expect(rerenderProblem(conflict, 1, 'output/acme-cv.html', 'output/acme-cv.pdf')).toBe(
+      'output/acme-cv.html belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.',
+    );
+  });
+
+  it('fails closed when one PDF is claimed by more than one report (R17-review-docs-01)', () => {
+    const dup = [row(1, 'output/acme-cv.pdf', 'output/acme-cv.html'), row(99, 'output/acme-cv.pdf', 'output/acme-cv.html')];
+    expect(rerenderProblem(dup, 1, 'output/acme-cv.html', 'output/acme-cv.pdf')).toBe(
+      'output/acme-cv.pdf belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.',
+    );
+  });
 });
