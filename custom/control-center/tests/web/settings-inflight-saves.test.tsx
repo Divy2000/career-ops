@@ -171,3 +171,45 @@ describe('blacklist editor: the draft while the confirmed write is on its way', 
     expect(labelled<HTMLInputElement>('Blacklist company or domain')!.value).toBe('Umbrella');
   });
 });
+
+describe('a double click on Save', () => {
+  it('Save cadence writes once and reports the save, not a conflict', async () => {
+    files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    held = [];
+    const save = button('Save cadence')!;
+    await act(async () => {
+      save.click();
+      save.click();
+    });
+    await until(() => held!.length >= 1, 'the save on its way');
+    await release();
+    await until(() => /Follow-up cadence saved/.test(document.body.textContent ?? ''), 'the saved note');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(writes()).toHaveLength(1);
+    expect(alerts()).toBe('');
+  });
+
+  it('Validate and save on the raw YAML writes once and reports the save, not a conflict', async () => {
+    files = { '/api/config/portals': { key: 'portals', path: 'portals.yml', kind: 'ok', raw: 'a: 1\n', etag: 'p1', doc: { a: 1 }, parseError: null } };
+    const { ConfigEditor } = await import('@web/features/settings/RawConfigEditor');
+    await mount(createElement(ConfigEditor, { fileKey: 'portals', label: 'portals.yml', validator: 'validate-portals.mjs' }));
+    const editor = await until(() => labelled<HTMLTextAreaElement>('portals.yml YAML')?.value === 'a: 1\n' && labelled<HTMLTextAreaElement>('portals.yml YAML'), 'the editor');
+    await type(editor, 'a: 2\n');
+    held = [];
+    const save = button('Validate and save')!;
+    await act(async () => {
+      save.click();
+      save.click();
+    });
+    await until(() => held!.length >= 1, 'the save on its way');
+    await release();
+    await until(() => /Saved portals\.yml/.test(document.body.textContent ?? ''), 'the saved note');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(writes()).toHaveLength(1);
+    expect(alerts()).toBe('');
+  });
+});

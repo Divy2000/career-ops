@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
@@ -85,7 +85,12 @@ export function CadenceForm() {
   useUnsaved('the follow-up cadence', Object.keys(draft).length > 0);
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const value = (k: string) => draft[k] ?? (q.data?.cadence[k] !== undefined ? String(q.data.cadence[k]) : '');
+  // One save at a time: a second click would send the same ETag, get the 409 once the first lands, and report a
+  // conflict for a write that happened.
+  const [saving, setSaving] = useState(false);
+  const inFlight = useRef(false);
   const save = async () => {
+    if (inFlight.current) return;
     const cadence: Record<string, number | null> = {};
     for (const [k, v] of Object.entries(draft)) cadence[k] = v.trim() === '' ? null : Number(v);
     if (Object.values(cadence).some((v) => v !== null && (!Number.isInteger(v) || v < 0))) {
@@ -93,6 +98,8 @@ export function CadenceForm() {
       return;
     }
     const from = edit.base ?? q.data;
+    inFlight.current = true;
+    setSaving(true);
     try {
       await apiSend('PUT', '/api/followups/cadence', { cadence }, from?.etag ? { 'If-Match': from.etag } : {});
       edit.rebase(null);
@@ -108,6 +115,9 @@ export function CadenceForm() {
         edit.rebase(qc.getQueryData<CadenceRead>(['config', 'cadence']) ?? null);
         setNote({ tone: 'danger', text: 'config/profile.yml changed on disk since you started editing; nothing was written. Your values are still in the form: save again to apply them over the current version.' });
       } else setNote({ tone: 'danger', text: `Could not save cadence: ${describeError(err)}` });
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
     }
   };
   return (
@@ -130,7 +140,7 @@ export function CadenceForm() {
           ))}
         </div>
         <div className="row gap">
-          <button type="button" className="button--primary" disabled={Object.keys(draft).length === 0} onClick={() => void save()}>
+          <button type="button" className="button--primary" disabled={Object.keys(draft).length === 0 || saving} onClick={() => void save()}>
             Save cadence
           </button>
         </div>

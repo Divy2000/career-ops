@@ -28,7 +28,14 @@ export function ConfigEditor({ fileKey, label, validator }: { fileKey: 'portals'
     latestDraft.current = value;
     setDraft(value);
   };
+  // One save at a time: a second click would send the same ETag, get the 409 once the first lands, and report a
+  // conflict for a write that happened.
+  const [saving, setSaving] = useState(false);
+  const inFlight = useRef(false);
   const save = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSaving(true);
     setNote(null);
     const from = edit.base ?? q.data;
     const currentEtag = from?.etag ?? null;
@@ -56,6 +63,9 @@ export function ConfigEditor({ fileKey, label, validator }: { fileKey: 'portals'
         setNote({ tone: 'danger', text: 'The file changed on disk since you loaded it. Save again to overwrite it, or copy your edits from this box into the current version below.', details: b.current.raw });
       } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
       toast.error(`Could not save ${label}`);
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
     }
   };
   return (
@@ -64,7 +74,7 @@ export function ConfigEditor({ fileKey, label, validator }: { fileKey: 'portals'
         <h2 style={{ margin: 0 }}>
           {label} {q.data?.kind === 'missing' && <Pill tone="warn">not created yet</Pill>} <Pill>validated by {validator}</Pill>
         </h2>
-        <button type="button" onClick={() => void save()} disabled={!q.data || raw === q.data.raw}>
+        <button type="button" onClick={() => void save()} disabled={!q.data || raw === q.data.raw || saving}>
           Validate and save
         </button>
       </div>
