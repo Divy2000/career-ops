@@ -18,7 +18,8 @@
     "derive:modes": "tsx scripts/derive-mode-policies.ts",
     "probe:claude": "node scripts/claude-probe.mjs",
     "probe:reads": "node scripts/claude-probe-reads.mjs",
-    "preflight": "tsx supervisor/preflight-cli.ts"
+    "preflight": "tsx supervisor/preflight-cli.ts",
+    "mutate": "stryker run"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
@@ -51,6 +52,8 @@
     "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/diff": "^7.0.2",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
