@@ -45,6 +45,9 @@ const filled = (v: unknown) => typeof v === 'string' && v.trim() !== '';
 export function trackedCompanyProblem(row: Record<string, unknown>): string | null {
   if (row.enabled === false) return null;
   if (filled(row.careers_url) || filled(row.api) || filled(row.provider)) return null;
+  // A personio slug and a getro_collection id resolve those providers' detect() without a careers_url; the collection id
+  // is a positive integer or all-digit string (getro.mjs resolveCollectionOverride).
+  if (filled(row.personio) || (row.getro_collection !== null && row.getro_collection !== undefined && /^\d*[1-9]\d*$/.test(String(row.getro_collection).trim()))) return null;
   if (isPlainObject(row.parser) && filled(row.parser.command)) return null;
   if (row.scan_method === 'websearch' && (filled(row.scan_query) || filled(row.search_query))) return null;
   const name = filled(row.name) ? String(row.name) : 'A company';
