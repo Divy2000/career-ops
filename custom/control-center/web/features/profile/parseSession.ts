@@ -58,9 +58,10 @@ export function useParseSession() {
         if (retiredStarts.current.delete(path)) void cancelSession(id).catch(() => undefined);
         else if (forPath.current === path && id !== sessionId.current) {
           // The first id, or a fork's new session: that is the one to cancel now. A fork runs for a result again.
+          // A retry after a failed start (settled with no id yet) runs for a result too.
           const fork = sessionId.current !== null;
           sessionId.current = id;
-          if (fork) arm();
+          if (fork || settled.current) arm();
         }
       },
       onStatus: (status: string) => {

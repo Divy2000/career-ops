@@ -157,6 +157,21 @@ describe('Import CV parse sessions', () => {
     expect(panels.get('/data/uploads/cv.pdf')!.onStatus).toBe(first.onStatus);
   });
 
+  it('a retry after a failed start is tracked: leaving asks, and a newer pick cancels it (merge review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onStartFailed!());
+    await act(async () => panel.onSessionId!('s-retry'));
+    await act(async () => button('Leave').click());
+    expect((await until(dialog, 'the discard question')).textContent).toContain('the CV import');
+    await act(async () => [...dialog()!.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!.click());
+    await until(() => !dialog(), 'the question to close');
+    await choose('CV file', 'two.pdf');
+    await until(() => sent('POST', '/api/sessions/s-retry/cancel') === 1, 'the cancel of the retried parse');
+  });
+
   it('picking another PDF cancels the parse still running for the first', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));
