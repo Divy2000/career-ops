@@ -115,6 +115,8 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
+  /** The postings (mode and URL) a fan-out is starting right now, before their sessions exist. */
+  private fanningOut = new Set<string>();
   readonly playwrightAvailable: boolean;
 
   constructor(
@@ -210,6 +212,31 @@ export class SessionManager {
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
   async fanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
     this.turnPolicy(input.mode);
+    // A second evaluation of a posting a live session of the mode evaluates (one waiting for the user's reply too: the
+    // reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
+    const live = new Map<string, string>();
+    for (const m of this.store.list()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
+    const key = (url: string) => `${input.mode}\0${url}`;
+    const refused: SessionMeta[] = [];
+    const urls: string[] = [];
+    for (const url of input.urls) {
+      const holder = live.get(url);
+      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
+      if (why) refused.push(unstartedMeta(input.mode, { type: 'url', value: url }, input.model ?? null, why));
+      else urls.push(url);
+    }
+    if (urls.length === 0) return { sessions: refused, reserved: [] };
+    for (const url of urls) this.fanningOut.add(key(url));
+    try {
+      // The i-th reserved number goes to the i-th session, so the refused ones come after the started ones.
+      const out = await this.startFanOut({ ...input, urls });
+      return { sessions: [...out.sessions, ...refused], reserved: out.reserved };
+    } finally {
+      for (const url of urls) this.fanningOut.delete(key(url));
+    }
+  }
+
+  private async startFanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
     const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(input.urls.length)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
     if (r.code !== 0) throw new Error(`reserve-report-num failed (exit ${r.code}): ${r.stderr.trim().slice(-400)}`);
     const reserved = parseReservedRange(r.stdout);
@@ -749,6 +776,8 @@ export class SessionManager {
 }
 
 /** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
+const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
+
 function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
   const now = new Date().toISOString();
   return { id: '', claudeSessionId: '', mode, policyClass: getModePolicy(mode)?.policyClass ?? 'read-only', target, model, status: 'error', createdAt: now, updatedAt: now, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error, reportNum: null, lastReason: error };
