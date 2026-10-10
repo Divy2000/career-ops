@@ -13,20 +13,22 @@ const freshApp = () => makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tem
 // A fan-out starts real runs. app.close() clears timers but does not kill a running child, which would keep writing
 // into its data root after teardown and leave a directory behind. Stop every started run and wait for it to end.
 const quiet = async (app: TestApp) => {
-  const busy = (s: { status: string; turns: unknown[] }) => ['running', 'queued', 'awaiting_user'].includes(s.status) && s.turns.length > 0;
-  // The unreadable-meta test leaves a session whose meta.json is invalid; reading it must not throw here.
+  // A fan-out starts real runs. app.close() clears timers but does not kill a running child, which would keep writing
+  // into its data root after teardown and leave a directory behind. Cancel the runs whose turn is still open and wait
+  // for those turns to end (a cancelled session's status flips at once, so wait on the turn's endedAt, not the status).
   const safe = () => {
-    const out: Array<{ status: string; turns: unknown[]; id: string }> = [];
+    const out: Array<{ id: string; status: string; turns: Array<{ endedAt: string | null }> }> = [];
     const dir = path.join(app.cfg.dataRoot, 'data', 'control-center', 'sessions');
-    let names: string[] = [];
+    let names: string[];
     try { names = fs.readdirSync(dir); } catch { return out; }
     for (const n of names) {
       try { const m = app.sessions.read(n); if (m) out.push(m); } catch { /* unreadable or half-written meta */ }
     }
     return out;
   };
-  for (const s of safe()) if (busy(s)) app.sessions.cancel(s.id);
-  for (let i = 0; i < 400 && safe().some(busy); i += 1) await new Promise((r) => setTimeout(r, 25));
+  const open = (s: { turns: Array<{ endedAt: string | null }> }) => { const last = s.turns.at(-1); return !!last && !last.endedAt; };
+  for (const s of safe()) if (open(s) && (s.status === 'running' || s.status === 'queued')) app.sessions.cancel(s.id);
+  for (let i = 0; i < 400 && safe().some(open); i += 1) await new Promise((r) => setTimeout(r, 25));
 };
 const LIVE_URL = 'https://jobs.example.com/synthetic/71';
 const OTHER_URL = 'https://jobs.example.com/synthetic/72';
@@ -56,6 +58,20 @@ describe('fan-out and a live evaluation of the same posting', () => {
       }
     });
   }
+
+  it('refuses a single start of a posting a live session of the same mode already evaluates (R16-feata-01 review)', async () => {
+    const app = await freshApp();
+    try {
+      const live = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: LIVE_URL }, model: null, reportNum: null });
+      app.sessions.store.setStatus(live.id, 'running');
+      const res = await call(app, '/api/sessions', { mode: 'oferta', target: { type: 'url', value: LIVE_URL }, prompt: 'evaluate' });
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(live.id);
+    } finally {
+      await quiet(app);
+      await app.close();
+    }
+  });
 
   it('starts an evaluation of a URL whose earlier session ended', async () => {
     const app = await freshApp();

@@ -183,6 +183,15 @@ export class SessionManager {
     return target.type === 'url' && !!target.value && this.fanningOut.has(`${mode}\0${target.value}`);
   }
 
+  /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
+  liveEvaluationFor(mode: string, target: SessionMeta['target']): string | null {
+    if (target.type !== 'url' || !target.value) return null;
+    for (const m of this.readableSessions()) {
+      if (m.mode === mode && m.target.type === 'url' && m.target.value === target.value && LIVE_STATUSES.has(m.status)) return m.id;
+    }
+    return null;
+  }
+
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const meta = this.must(id);
     assertCurrentPolicy(meta);
