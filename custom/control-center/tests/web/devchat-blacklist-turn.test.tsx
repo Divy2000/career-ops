@@ -22,6 +22,10 @@ class FakeEventSource {
   addEventListener(type: string, fn: (ev: MessageEvent) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
+  /** Whether the session panel has subscribed: an event emitted before that goes nowhere. */
+  get listening() {
+    return (this.listeners.get('session.event') ?? []).length > 0;
+  }
   /** One stored event of session s-1, as the server sends it: a session.event frame on the app event stream. */
   emit(seq: number, event: { type: string; [k: string]: unknown }) {
     const data = JSON.stringify({ sessionId: 's-1', stored: { seq, ts: '2026-10-05T12:00:00.000Z', event }, ts: '2026-10-05T12:00:00.000Z' });
@@ -65,6 +69,8 @@ async function click(el: HTMLElement) {
 
 beforeEach(async () => {
   sent = [];
+  // A stream left from the previous test would satisfy the stream waits at once.
+  FakeEventSource.last = null;
   // Dev Chat reopens the tab's last session from sessionStorage; each test starts a new conversation.
   sessionStorage.clear();
   vi.stubGlobal('EventSource', FakeEventSource);
@@ -116,7 +122,7 @@ describe('Dev Chat blacklist unlock', () => {
     await click(checkbox());
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'Block Initech');
     await click(button('Send'));
-    await until(() => FakeEventSource.last, 'the session event stream');
+    await until(() => FakeEventSource.last?.listening, 'the session event stream');
     await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
     await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the reply field');
     await type(host.querySelector('input[aria-label="Reply to the session"]')!, 'Now tidy the notes');
@@ -131,7 +137,7 @@ describe('Dev Chat blacklist unlock', () => {
   it('given the box is ticked after a turn, when the reply is forked, then the fork carries the unlock and the box clears (SW-web-b-12)', async () => {
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'A plain turn');
     await click(button('Send'));
-    await until(() => FakeEventSource.last, 'the session event stream');
+    await until(() => FakeEventSource.last?.listening, 'the session event stream');
     await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
     await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the reply field');
     await click(checkbox());
@@ -167,7 +173,7 @@ describe('Dev Chat blacklist unlock', () => {
   it('given a later turn answers 202 with status error, when it fails to start, then the box stays ticked for the retry (SW5-tests-06)', async () => {
     await type(host.querySelector('textarea[aria-label="Prompt for devchat"]')!, 'A plain turn');
     await click(button('Send'));
-    await until(() => FakeEventSource.last, 'the session event stream');
+    await until(() => FakeEventSource.last?.listening, 'the session event stream');
     await act(async () => FakeEventSource.last!.emit(1, { type: 'status', status: 'done', turn: 1 }));
     await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the reply field');
     const failed = { ...meta, status: 'error', error: 'the Claude CLI is not approved' };
