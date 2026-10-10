@@ -23,7 +23,7 @@
 // the drafts are removed; a publishing render is let finish, and the input keeps
 // the chosen layout only when that render published it.
 
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -151,8 +151,20 @@ async function main() {
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, onSignal);
   // The scratch folder lives until the last render ends, however the run ends.
   process.on('exit', removeDrafts);
+  // generate-pdf.mjs writes .career-ops-render-<uuid>.html, a full copy of the CV, beside the HTML it renders, and
+  // removes it in a finally that a stop can skip (a second SIGINT makes Playwright exit at once). One still there once
+  // its render has ended is that render's leftover; the ones there before it started belong to other renders.
+  const renderTemps = (dir) => {
+    try {
+      return readdirSync(dir).filter((f) => f.startsWith('.career-ops-render-') && f.endsWith('.html'));
+    } catch {
+      return [];
+    }
+  };
   const generate = (from, to, extra, env = process.env) => new Promise((resolve, reject) => {
     if (stopping) return;
+    const tempDir = path.dirname(from);
+    const tempsBefore = new Set(renderTemps(tempDir));
     const child = spawn(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
       cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -175,6 +187,7 @@ async function main() {
     child.on('error', (err) => { if (!stopping) reject(err); });
     child.on('close', (status, signal) => {
       if (running === child) running = null;
+      for (const f of renderTemps(tempDir)) if (!tempsBefore.has(f)) rmSync(path.join(tempDir, f), { force: true });
       child.result = { status, signal, stdout, stderr };
       if (stopping) return;
       if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));
