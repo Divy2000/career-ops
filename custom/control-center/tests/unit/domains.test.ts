@@ -177,6 +177,21 @@ describe('immigration overview', () => {
     expect((o.tiers as Record<string, { tier: string }>)['Acme Robotics']).toMatchObject({ tier: 'strong', matched: 'Acme Robotics, Inc.' });
   });
 
+  it('reads a headerless company-alerts.tsv history by position, as the core reader does (R12-srv-dom-a-L2-01, R12-srv-dom-a-L3-01)', async () => {
+    const headerless = copyFixtureRoot();
+    fs.writeFileSync(
+      path.join(headerless, 'data/immigration/company-alerts.tsv'),
+      '2026-09-01\tAcme\tacme\tpaused\tAcme pauses H-1B\thttps://a\n2026-09-05\tGlobex\tglobex\tstopped\tGlobex stops\thttps://g\n',
+    );
+    const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, headerless, '2026-10-04');
+    expect(o.alerts.history).toEqual([
+      { date: '2026-09-01', company: 'Acme', slug: 'acme', status: 'paused', headline: 'Acme pauses H-1B', url: 'https://a' },
+      { date: '2026-09-05', company: 'Globex', slug: 'globex', status: 'stopped', headline: 'Globex stops', url: 'https://g' },
+    ]);
+    expect(o.alerts.latest).toHaveLength(2);
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).alerts.history[0]).toMatchObject({ date: '2026-10-02', company: 'Initech Cloud', status: 'paused' });
+  });
+
   it('counts the watcher queue from pending.json and reports null when there is none', async () => {
     expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).pendingCount).toBeNull();
     const withQueue = copyFixtureRoot();
