@@ -28,11 +28,14 @@ const SEEDED_MOCKS = new Set(
   ].map((k) => k.join('\n')),
 );
 
-/** The file's entries, or null when it is not a JSON list (reply-watch.mjs and paste-reply.mjs both fail on it). */
+/**
+ * The file's entries, or null when it is not a JSON list of reply objects (reply-watch.mjs and paste-reply.mjs both fail
+ * on a file that is not a list, and reply-watch.mjs on a null entry).
+ */
 function readEntries(file: string): unknown[] | null {
   try {
     const entries: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(entries) ? entries : null;
+    return Array.isArray(entries) && entries.every((e) => typeof e === 'object' && e !== null && !Array.isArray(e)) ? entries : null;
   } catch {
     return null;
   }
