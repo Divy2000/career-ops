@@ -123,10 +123,13 @@ describe('DNS budget: every lookup of one call shares one deadline, well inside 
     expect([...started].sort()).toEqual(['a.example.org', 'b.example.org', 'c.example.org', 'd.example.org']);
   });
 
-  it('a host that hangs next to a host that resolves to the metadata address: refused within the budget', async () => {
+  // The verdict waits for every host, so the hanging one decides the reason; the metadata address itself is refused by
+  // 'a public name that resolves to a loopback or private address is refused' above.
+  it('a host that hangs next to a host that resolves to the metadata address: refused at the budget as unresolved', async () => {
     const lookup: Lookup = (host) => (host === 'meta.example.org' ? Promise.resolve([{ address: '169.254.169.254', family: 4 }]) : new Promise(() => {}));
     const answer = await answeredWithin(() => checkFetchUrls(['https://slow.example.org/x', 'https://meta.example.org/latest'], lookup, { budgetMs: 300 }), 300);
-    expect(answer?.why).toEqual(expect.any(String));
+    expect(answer?.why).toMatch(/^WebFetch: could not resolve slow\.example\.org, meta\.example\.org \(.*\); refused$/);
+    expect(await answeredWithin(() => checkFetchUrls(['https://slow.example.org/x', 'https://meta.example.org/latest'], lookup, { budgetMs: 300 }), 299)).toBeNull();
   });
 
   it('more than 4 distinct hosts in one call are refused before any lookup; 4 public hosts pass', async () => {
