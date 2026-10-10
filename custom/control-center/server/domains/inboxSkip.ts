@@ -5,11 +5,40 @@ import { localJdPath } from '../../shared/local-jd.js';
 const MAX_URL_LEN = 2048;
 // `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
-// The Pending and Processed headings every shipped modes/*/pipeline.md writes (modes/pipeline.md: they "may be in EN,
-// ES, or any other language a market mode set writes them in"), plus the older done/hecho; tests/unit/upstream-formats
-// checks the list against the mode files.
-const PENDING_HEADINGS = ['Pending', 'Pendientes', 'Pendentes', 'Offen', 'Afventer', 'En attente', 'In attesa', 'In afwachting', 'Menunggu', 'Oczekujące', 'Ожидающие', 'Очікуючі', 'Bekleyenler', 'लंबित', '대기'];
-const PROCESSED_HEADINGS = ['Processed', 'Procesadas', 'Processadas', 'Verarbeitet', 'Behandlede', 'Traitees', 'Traitées', 'Elaborati', 'Verwerkt', 'Diproses', 'Przetworzone', 'Обработанные', 'Оброблені', 'İşlenenler', 'संसाधित', '처리 완료', 'Done', 'Hecho'];
+// The Pending and Processed headings every shipped modes/*/pipeline.md writes, as pairs (modes/pipeline.md: they "may be
+// in EN, ES, or any other language a market mode set writes them in"); tests/unit/upstream-formats checks the list
+// against the mode files. Done and Hecho are older processed headings no mode writes any more.
+const HEADING_PAIRS: ReadonlyArray<readonly [pending: string, processed: string]> = [
+  ['Pending', 'Processed'],
+  ['Pendientes', 'Procesadas'],
+  ['Pendentes', 'Processadas'],
+  ['Offen', 'Verarbeitet'],
+  ['Afventer', 'Behandlede'],
+  ['En attente', 'Traitees'],
+  ['In attesa', 'Elaborati'],
+  ['In afwachting', 'Verwerkt'],
+  ['Menunggu', 'Diproses'],
+  ['Oczekujące', 'Przetworzone'],
+  ['Ожидающие', 'Обработанные'],
+  ['Очікуючі', 'Оброблені'],
+  ['Bekleyenler', 'İşlenenler'],
+  ['लंबित', 'संसाधित'],
+  ['대기', '처리 완료'],
+];
+const PENDING_HEADINGS = HEADING_PAIRS.map(([p]) => p);
+const PROCESSED_HEADINGS = [...HEADING_PAIRS.map(([, p]) => p), 'Traitées', 'Done', 'Hecho'];
+
+const same = (a: string, b: string) => a.trim().toLowerCase() === b.toLowerCase();
+
+/** The Processed heading that pairs with a whole Pending heading title (`Offen` gives `Verarbeitet`), or null. */
+export function processedHeadingFor(pendingTitle: string): string | null {
+  return HEADING_PAIRS.find(([p]) => same(pendingTitle, p))?.[1] ?? null;
+}
+
+/** Whether a whole heading title is a Processed heading a pipeline mode writes. */
+export function isProcessedHeading(title: string): boolean {
+  return HEADING_PAIRS.some(([, p]) => same(title, p));
+}
 
 const startsWithHeading = (title: string, names: string[]): boolean => {
   const t = title.toLowerCase();

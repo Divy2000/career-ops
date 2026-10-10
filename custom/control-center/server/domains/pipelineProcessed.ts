@@ -9,11 +9,11 @@ import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReport } from './reports.js';
 import { inside } from '../lib/paths.js';
-import { unescapeMarkdownUrl } from './inboxSkip.js';
+import { isProcessedHeading, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
 import { WRITTEN_SEGMENT } from './pipeline.js';
 
-const PENDING_RE = /^##\s+(Pendientes|Pending)\s*$/i;
-const PROCESSED_RE = /^##\s+(Procesadas|Processed)\s*$/i;
+const HEADING_RE = /^##\s+(.+?)\s*$/;
+const headingTitle = (line: string): string | null => line.match(HEADING_RE)?.[1] ?? null;
 const SECTION_RE = /^##\s+/;
 const PENDING_ITEM_RE = /^- \[ \]\s+/;
 
@@ -78,9 +78,10 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
   const lines = text.split(/\r?\n/);
   const endedWithNl = lines.length > 1 && lines[lines.length - 1] === '';
   if (endedWithNl) lines.pop();
-  const pendStart = lines.findIndex((l) => PENDING_RE.test(l));
+  // The Pending and Processed headings of any shipped mode language; a new Processed section takes the Pending one's.
+  const pendStart = lines.findIndex((l) => processedHeadingFor(headingTitle(l) ?? '') !== null);
   if (pendStart < 0) return { text, moved: false };
-  const procStart = lines.findIndex((l) => PROCESSED_RE.test(l));
+  const procStart = lines.findIndex((l) => isProcessedHeading(headingTitle(l) ?? ''));
   const sectionEnd = (start: number) => {
     for (let i = start + 1; i < lines.length; i++) if (SECTION_RE.test(lines[i]!)) return i;
     return lines.length;
@@ -126,7 +127,7 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
   }
   if (procStart < 0 && processedLine) {
     if (out.length && out[out.length - 1]!.trim() !== '') out.push('');
-    out.push(PENDING_RE.exec(lines[pendStart]!)![1]!.toLowerCase() === 'pending' ? '## Processed' : '## Procesadas', '', processedLine);
+    out.push(`## ${processedHeadingFor(headingTitle(lines[pendStart]!)!)}`, '', processedLine);
   }
   return { text: out.join(nl) + (endedWithNl ? nl : ''), moved: true };
 }
