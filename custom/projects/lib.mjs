@@ -40,18 +40,22 @@ const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 // `[text](url)` at the start of `s`, with balanced parentheses inside the URL
 // (https://example.com/a_(b)). `rest` is whatever follows the closing paren.
+// The text may hold backslash-escaped characters (`\]`), as markdown allows and mdLinkText writes.
 function readMdLink(s) {
-  const m = s.match(/^\[([^\]]*)\]\(/);
+  const m = s.match(/^\[((?:\\.|[^\]\\])*)\]\(/);
   if (!m) return null;
+  const text = m[1].replace(/\\([\\[\]])/g, '$1');
   let depth = 1;
   let i = m[0].length;
   for (; i < s.length; i++) {
     if (s[i] === '(') depth++;
     else if (s[i] === ')' && --depth === 0) break;
   }
-  if (depth !== 0) return { text: m[1], url: null, rest: '', unbalanced: true };
-  return { text: m[1], url: s.slice(m[0].length, i).trim(), rest: s.slice(i + 1) };
+  if (depth !== 0) return { text, url: null, rest: '', unbalanced: true };
+  return { text, url: s.slice(m[0].length, i).trim(), rest: s.slice(i + 1) };
 }
+
+const mdLinkText = (title) => title.replace(/[\\[\]]/g, '\\$&');
 
 function parseLink(text) {
   const md = readMdLink(text);
@@ -273,7 +277,7 @@ function entryLines(entry) {
   if (url && !HTTP_URL.test(url)) throw new Error(`link for "${title}" must be http(s), got "${url}"`);
   const tagline = oneLine(entry.tagline) || null;
   let heading;
-  if (url && tagline) heading = `## [${title}](${url}) -- ${tagline}`;
+  if (url && tagline) heading = `## [${mdLinkText(title)}](${url}) -- ${tagline}`;
   else if (url) heading = `## ${title} -- ${url}`;
   else if (tagline) heading = `## ${title} -- ${tagline}`;
   else heading = `## ${title}`;
@@ -383,8 +387,16 @@ export function appendBlock(text, block) {
 
 export function appendEntry(text, entry) {
   const block = serializeEntry(entry);
-  assertNewTitle(parseLibrary(text).entries, entry.title, null);
-  return appendBlock(text, block);
+  const { entries } = parseLibrary(text);
+  assertNewTitle(entries, entry.title, null);
+  const out = appendBlock(text, block);
+  const want = parseLibrary(block).entries[0];
+  const got = parseLibrary(out).entries;
+  if (got.length !== entries.length + 1 || EDITED_FIELDS.some((f) => JSON.stringify(got.at(-1)[f]) !== JSON.stringify(want[f]))
+    || titleKey(want.title) !== titleKey(entry.title)) {
+    throw new Error(`"${oneLine(entry.title)}" cannot be added: it would not read back as entered; edit article-digest.md directly`);
+  }
+  return out;
 }
 
 const stringList = (value, field, where) => {
