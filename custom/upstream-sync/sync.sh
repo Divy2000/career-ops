@@ -32,6 +32,21 @@ if [ -z "$DATA" ] || [ ! -d "$DATA" ]; then
   exit 1
 fi
 STATE_DIR="$DATA/data/upstream-sync"
+# One run at a time: a second run (a manual one during the scheduled one) would remove the first one's worktree
+# mid-suite and share its day files. The lock is keyed on the worktree, which every run uses whatever data root it
+# resolves. Re-exec under a kernel lock, released when the process exits, so a crash never leaves it stale; -k keeps
+# the file so every run locks the same inode, and lockf exits 75 while another run holds it. Taken before the
+# CAREER_OPS_* variables are dropped below, so the re-exec'd run resolves the same data root.
+if [ -z "${CC_SYNC_LOCKED:-}" ]; then
+  CC_SYNC_LOCKED=1 /usr/bin/lockf -k -t 0 "$WT.lockf" /bin/bash "$0" "$@"
+  rc=$?
+  if [ "$rc" = 75 ]; then
+    msg="another upstream sync is running (it holds $WT.lockf); not started"
+    echo "upstream-sync: $msg" >&2
+    mkdir -p "$STATE_DIR" && echo "=== $(date '+%Y-%m-%d %H:%M:%S') $msg" >> "$STATE_DIR/$(date +%Y-%m-%d).log"
+  fi
+  exit "$rc"
+fi
 # The log and reports go to STATE_DIR, resolved above. Everything after this runs code from the sync worktree
 # (installs, both upstream suite runs, the custom and control-center checks, Claude), which must never see the
 # user's data root: test-all's live archive test, for one, writes into getCareerOpsRoot()/jds.

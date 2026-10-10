@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
@@ -310,6 +310,32 @@ test('Given the plist pins a data root (CAREER_OPS_*), sync.sh logs there but ev
     assert.match(res.log, /Keychain item career-ops-claude-token not found/, 'the log still goes to the pinned root');
     assert.equal(readFileSync(seen, 'utf8'), '');
   } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a sync started while another holds the run lock is refused before it touches that run\'s worktree (R11-scripts-b-L1-02)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const wt = path.join(home, '.career-ops-sync');
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(path.join(wt, 'mid-suite.txt'), 'the scheduled run is still testing here\n');
+  // Past the Keychain the run would go on to replace the worktree; npm then fails, so nothing reaches a registry.
+  stub(path.join(w.base, 'bin'), 'npm', 'exit 1');
+  const ready = path.join(w.base, 'holder-ready');
+  // The scheduled run, still going: it holds the lock while the manual run starts.
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/bin/sh', '-c', `touch "${ready}"; sleep 60`], { stdio: 'ignore' });
+  try {
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
+    assert.ok(existsSync(ready), 'the holder never took the lock');
+    const res = runSync(w, { home, security: 'echo tok-123' });
+    assert.equal(res.status, 75, res.log + res.stderr);
+    assert.match(res.stderr, /another upstream sync is running \(it holds .*\.career-ops-sync\.lockf\); not started/);
+    assert.match(res.log, /another upstream sync is running .*; not started/);
+    assert.equal(readFileSync(path.join(wt, 'mid-suite.txt'), 'utf8'), 'the scheduled run is still testing here\n');
+  } finally {
+    holder.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
 });
 
 test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
