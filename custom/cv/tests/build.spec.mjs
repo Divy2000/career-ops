@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { normalizePayload, checkPayload, recentAchievements } from '../lib.mjs';
 import { HERE, REPO, loadFixture, cvMarkdownFor, dataRoot, envFor } from './helpers.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const BUILD = path.join(HERE, '..', 'build-html.mjs');
 const PAPER_CV = [
@@ -261,4 +262,37 @@ test('given missing arguments or an unknown flag, when run, then it exits non-ze
   assert.match(flag.stderr, /unrecognized flag\(s\): --template=x/);
   assert.equal(fs.existsSync(output), false, 'no HTML is written');
   assert.equal(build(root, fixture).status, 0, 'the same payload builds without the flag');
+});
+
+test('a build cancelled with SIGTERM leaves no cv-build-* dir holding the payload in TMPDIR (R17-scripts-a-L1-02)', async () => {
+  const fixture = loadFixture();
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const input = path.join(root, 'payload.json');
+  const output = path.join(root, 'output', 'cv.html');
+  fs.writeFileSync(input, JSON.stringify(fixture));
+  // Only the child build-cv-html.mjs (argv[1] ends with its name) waits, so the parent stays blocked in its
+  // spawnSync while the cv-build-* dir exists and holds the staged payload. The wait is async (not a busy loop):
+  // a busy loop blocks the child's event loop too, so it could never process the SIGTERM and the cancel would not land.
+  const preload = path.join(root, 'slow-build.mjs');
+  fs.writeFileSync(preload, `if (process.argv[1] && process.argv[1].endsWith('build-cv-html.mjs')) { await new Promise((r) => setTimeout(r, 5000)); }\n`);
+  const tmp = fs.realpathSync(tempDir('cv-build-tmp-'));
+  const child = spawn(process.execPath, [BUILD, input, output], {
+    cwd: REPO,
+    env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+  child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
+  const exited = new Promise((r) => child.on('close', (status, signal) => r({ status, signal })));
+  const waitFor = async (check, what) => {
+    for (const end = Date.now() + 15000; Date.now() < end; await new Promise((r) => setTimeout(r, 10))) if (check()) return;
+    assert.fail(`timed out waiting for ${what}: ${out}`);
+  };
+  await waitFor(() => fs.readdirSync(tmp).some((f) => f.startsWith('cv-build-')), 'the cv-build-* dir');
+  process.kill(-child.pid, 'SIGTERM');
+  const end = await exited;
+  assert.notEqual(end.status, 0, `a cancelled build must not read as a success: ${JSON.stringify(end)}`);
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
 });

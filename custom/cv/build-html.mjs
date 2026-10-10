@@ -48,12 +48,27 @@ if (errors.length) {
 }
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'cv-build-'));
+// A cancelled build (SIGTERM/SIGINT/SIGHUP) or a spawn error must not leave the full CV payload in TMPDIR. The exit
+// handler runs even when process.exit() skips a finally, and the signal handlers run when a cancel lands while the
+// event loop is free.
+const cleanup = () => rmSync(tmp, { recursive: true, force: true });
+process.on('exit', cleanup);
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => {
+    cleanup();
+    process.exit(128 + os.constants.signals[signal]);
+  });
+}
 try {
   const staged = path.join(tmp, 'payload.json');
   writeFileSync(staged, JSON.stringify(normalizePayload(payload)));
   const r = spawnSync(process.execPath, [path.join(CODE, 'build-cv-html.mjs'), staged, output, TEMPLATE], { cwd: CODE, stdio: 'inherit' });
-  if (r.error) fail(`could not run build-cv-html.mjs: ${r.error.message}`);
-  process.exitCode = r.status ?? 1;
+  if (r.error) {
+    process.stderr.write(`build-html failed: could not run build-cv-html.mjs: ${r.error.message}\n`);
+    process.exitCode = 1;
+  } else {
+    process.exitCode = r.status ?? 1;
+  }
 } finally {
-  rmSync(tmp, { recursive: true, force: true });
+  cleanup();
 }
