@@ -109,7 +109,7 @@ export function authorLetter(heading: string): string | null {
 // check-jd-archive.mjs reads the section by (NEXT_REPORT_SECTION_RE). A named section is the whole heading, or the name
 // followed by a note ("Liveness gate (URL inputs)", "Step 0 - ..."): a JD's "## Risk Summary and Mitigations" is the JD's.
 const JD_HEADING = /^Job Description\b/;
-const REPORT_SECTION = /^(?:[A-Z]\)|Block\s[A-Z]\b|(?:Machine Summary|Keywords extracted|Keyword Coverage|Score Evidence|Risk Summary|Cover Letter Draft|Post-evaluation|Liveness gate|Blacklist gate|Bounded Research Budget|Step 0)\s*(?:$|[(:\u2014\u2013-]))/i;
+const REPORT_SECTION = /^(?:[A-Z]\)|Block\s[A-Z]\s*(?:$|[(:\u2014\u2013-])|(?:Machine Summary|Keywords extracted|Keyword Coverage|Score Evidence|Risk Summary|Cover Letter Draft|Post-evaluation|Liveness gate|Blacklist gate|Bounded Research Budget|Step 0)\s*(?:$|[(:\u2014\u2013-]))/i;
 
 export function splitSections(body: string): { intro: string; sections: ReportSection[] } {
   const intro: string[] = [];

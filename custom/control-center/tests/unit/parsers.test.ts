@@ -79,6 +79,13 @@ describe('reports', () => {
     expect(sections[0]!.content).toContain('## Step 0 of onboarding');
   });
 
+  it('keeps a JD heading that only starts like a Block heading inside the archived JD, while a template Block heading still ends it', () => {
+    const dash = String.fromCharCode(0x2014);
+    const { sections } = splitSections(`## Job Description (archived verbatim)\nPosted: today\n\n## Block A Benefits\nHealth and dental.\n\n## Block B -- Match with CV\nStrong.\n\n## Block C ${dash} Level and Strategy\nSenior.`);
+    expect(sections.map((s) => s.heading)).toEqual(['Job Description (archived verbatim)', 'Block B -- Match with CV', `Block C ${dash} Level and Strategy`]);
+    expect(sections[0]!.content).toBe('Posted: today\n\n## Block A Benefits\nHealth and dental.');
+  });
+
   it('keeps a report\'s **URL:** only when it is a real http(s) URL, cleaned the way merge-tracker.mjs cleans it (SW2-server-06)', () => {
     const url = (value: string) => parseReport(`# Evaluation: Acme - Eng\n\n**URL:** ${value}\n**Score:** 4/5\n`, '010-acme.md', 10).url;
     // N/A is legitimate for recruiter-sourced roles (merge-tracker.mjs resolveReportUrl).
