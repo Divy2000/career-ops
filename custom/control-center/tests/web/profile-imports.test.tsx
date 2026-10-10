@@ -114,6 +114,17 @@ describe('Import CV parse sessions', () => {
     await until(() => sent('POST', '/api/sessions/s-one/cancel') === 1, 'the cancel of the first parse');
   });
 
+  it('a parse whose start answers after a newer pick is cancelled as soon as its id arrives', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'one.pdf');
+    const first = await until(() => panels.get('/data/uploads/one.pdf'), 'the first parser panel');
+    await choose('CV file', 'two.pdf');
+    await until(() => panels.get('/data/uploads/two.pdf'), 'the second parser panel');
+    await act(async () => first.onSessionId!('s-late'));
+    await until(() => sent('POST', '/api/sessions/s-late/cancel') === 1, 'the cancel of the late parse');
+  });
+
   it('an upload the network drops says it failed', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));

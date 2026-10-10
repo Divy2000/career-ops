@@ -11,6 +11,8 @@ export function useParseSession() {
   const running = useRef(false);
   const forPath = useRef<string | null>(null);
   const sessionId = useRef<string | null>(null);
+  // Uploads retired before their start answered: their session is cancelled as soon as its id arrives.
+  const retiredStarts = useRef(new Set<string>());
   const settle = useCallback(() => {
     running.current = false;
     setParsing(false);
@@ -19,6 +21,7 @@ export function useParseSession() {
     const id = sessionId.current;
     // A cancel that fails leaves a session that already ended or is going away: nothing more to stop.
     if (running.current && id) void cancelSession(id).catch(() => undefined);
+    else if (running.current && forPath.current) retiredStarts.current.add(forPath.current);
     sessionId.current = null;
   }, []);
   useEffect(() => retire, [retire]);
@@ -33,12 +36,14 @@ export function useParseSession() {
   const panelFor = useCallback(
     (path: string) => ({
       onSessionId: (id: string) => {
-        if (forPath.current === path) sessionId.current = id;
+        if (retiredStarts.current.delete(path)) void cancelSession(id).catch(() => undefined);
+        else if (forPath.current === path) sessionId.current = id;
       },
       onStatus: (status: string) => {
         if (forPath.current === path && status !== 'queued' && status !== 'running') settle();
       },
       onStartFailed: () => {
+        retiredStarts.current.delete(path);
         if (forPath.current === path) settle();
       },
     }),
