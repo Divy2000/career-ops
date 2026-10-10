@@ -22,8 +22,12 @@ function pinRe(appNum) {
 
 // followup-cadence.mjs: a `- cleared #N` retirement outranks any pin, so pinning a retired application revives it.
 // The whole CLEARED_RE grammar: a line the cadence does not read as a retirement is the user's text and stays.
-function clearedRe(appNum) {
-  return new RegExp(`^-\\s+cleared\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}(?:\\s*[\u2014\u2013-].*)?\\s*$`, 'i');
+function isCleared(line, appNum) {
+  const m = line.match(new RegExp(`^-\\s+cleared\\s+#${appNum}\\s+(\\d{4}-\\d{2}-\\d{2})(?:\\s*[\u2014\u2013-].*)?\\s*$`, 'i'));
+  if (!m) return false;
+  // followup-cadence.mjs parseDate: an impossible day (2026-02-31) is no retirement.
+  const d = new Date(m[1]);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === m[1];
 }
 
 /**
@@ -69,8 +73,7 @@ export function applyFollowupEdit(text, edit) {
     case 'pin.set': {
       if (!DATE_RE.test(String(edit.date)) || !DATE_RE.test(String(edit.setOn))) return { ok: false, error: 'invalid-date' };
       const re = pinRe(edit.appNum);
-      const cleared = clearedRe(edit.appNum);
-      const kept = lines.filter((l) => !re.test(l) && !cleared.test(l));
+      const kept = lines.filter((l) => !re.test(l) && !isCleared(l, edit.appNum));
       kept.push(`- next #${edit.appNum} ${edit.date} (set ${edit.setOn})`);
       return { ok: true, text: join(kept) };
     }
