@@ -357,31 +357,34 @@ export class Runner {
    * session finalizes instead of waiting forever. Claiming decides which process starts a run, so it runs once.
    */
   reconcile(): void {
-    for (const meta of this.store.list()) {
-      if (meta.status === 'queued') {
-        this.adopt(meta);
-        continue;
-      }
-      if (meta.status !== 'running' || this.active.has(meta.id)) continue;
-      const exit = this.store.readExit(meta.id);
-      const wrapper = this.identity(meta.wrapperPid, meta.wrapperStartedAt);
-      if (exit) {
-        this.finalize(meta, exit);
-      } else if (wrapper !== false) {
-        this.track(meta);
-      } else {
-        // The PID still runs, as ours with another start or as another user's: reused, not just gone.
-        const now = meta.wrapperPid ? this.liveness(meta.wrapperPid) : 'gone';
-        const error =
-          now === 'other'
-            ? "the wrapper PID now belongs to another user's process; the run is gone"
-            : now === 'own'
-              ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone'
-              : 'wrapper process disappeared without an exit record';
-        this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
-        this.dropInputs(meta);
-        this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
-      }
+    for (const meta of this.store.list()) this.reconcileRun(meta);
+  }
+
+  /** One run another process left on disk, settled as at server start: adopted if queued, tracked, finalized or lost if running. */
+  private reconcileRun(meta: RunMeta): void {
+    if (meta.status === 'queued') {
+      this.adopt(meta);
+      return;
+    }
+    if (meta.status !== 'running' || this.active.has(meta.id)) return;
+    const exit = this.store.readExit(meta.id);
+    const wrapper = this.identity(meta.wrapperPid, meta.wrapperStartedAt);
+    if (exit) {
+      this.finalize(meta, exit);
+    } else if (wrapper !== false) {
+      this.track(meta);
+    } else {
+      // The PID still runs, as ours with another start or as another user's: reused, not just gone.
+      const now = meta.wrapperPid ? this.liveness(meta.wrapperPid) : 'gone';
+      const error =
+        now === 'other'
+          ? "the wrapper PID now belongs to another user's process; the run is gone"
+          : now === 'own'
+            ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone'
+            : 'wrapper process disappeared without an exit record';
+      this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
+      this.dropInputs(meta);
+      this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
     }
   }
 
@@ -765,10 +768,14 @@ export class Runner {
     for (const q of this.queue) tracked.add(q.meta.id);
     for (const a of this.active.values()) tracked.add(a.meta.id);
     const pending = [...this.queue.map((q) => q.meta), ...[...this.active.values()].map((a) => a.meta)].filter((m) => m.actionId === actionId);
-    // A run another process left queued or running (a blue/green reload) is still pending here until this process adopts
-    // and settles it: the single-run guard and dailyPending must count it, or a second click starts a second paid job.
+    // A run another process left queued or running after this one reconciled (a blue/green reload) is pending here too, or
+    // a second click starts a second paid job. It is settled as at server start first (adopted, tracked, or finalized or
+    // lost when its wrapper is gone), so a dead server's run never blocks the action for good.
     for (const m of this.store.list()) {
-      if (m.actionId === actionId && (m.status === 'queued' || m.status === 'running') && !tracked.has(m.id)) pending.push(m);
+      if (m.actionId !== actionId || tracked.has(m.id) || (m.status !== 'queued' && m.status !== 'running')) continue;
+      this.reconcileRun(m);
+      const now = this.store.read(m.id);
+      if (now?.status === 'queued' || now?.status === 'running') pending.push(now);
     }
     return pending;
   }
