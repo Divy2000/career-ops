@@ -147,6 +147,25 @@ describe('a start still in flight when the launcher was left', () => {
     expect(openPrompt().disabled).toBe(false);
   });
 
+  it('tracks two starts opened within the same millisecond separately', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      await mount({ rememberAs: 'cc.test.launch' });
+      const first = await openNew();
+      await act(async () => first.onStarting!());
+      const second = await openNew();
+      await act(async () => second.onStarting!());
+      await unmount();
+      await mount({ rememberAs: 'cc.test.launch' });
+      await act(async () => first.onSessionId!('first-1'));
+      expect(openPrompt().disabled).toBe(true);
+      await act(async () => second.onSessionId!('second-1'));
+      expect(openPrompt().disabled).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('does not keep a session that failed to start, so coming back shows no dead panel', async () => {
     const { rememberedLaunches } = await import('@web/lib/lastSession');
     await mount({ rememberAs: 'cc.test.launch' });
