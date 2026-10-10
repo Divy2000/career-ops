@@ -93,4 +93,24 @@ describe('an application page', () => {
     const open = [...host.querySelectorAll('a')].find((a) => a.textContent === 'Open posting');
     expect(open?.getAttribute('href')).toBe('https://jobs.example.com/acme/1');
   });
+
+  it('shows a launcher session again after switching tabs and after leaving the page', async () => {
+    await openApplication();
+    await openTab('Outreach');
+    await act(async () => button('Open prompt')!.click());
+    const started = panels.filter((p) => p.mode === 'cover').pop()!;
+    await act(async () => started.onSessionId!('cover-1'));
+    await openTab('Report');
+    panels = [];
+    await openTab('Outreach');
+    expect(panels.some((p) => p.mode === 'cover' && p.sessionId === 'cover-1')).toBe(true);
+
+    await leave();
+    await openApplication();
+    await openTab('Outreach');
+    expect(panels.some((p) => p.mode === 'cover' && p.sessionId === 'cover-1')).toBe(true);
+    // Another application's launcher does not show it.
+    await openTab('Interview');
+    expect(panels.some((p) => p.sessionId === 'cover-1' && p.mode !== 'cover')).toBe(false);
+  });
 });

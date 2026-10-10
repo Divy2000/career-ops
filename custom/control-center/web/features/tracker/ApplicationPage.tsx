@@ -225,6 +225,7 @@ export function ApplicationPage() {
             {tab === 'outreach' && (
               <ModeLauncher
                 heading="Outreach and research"
+                rememberAs={`cc.application.${q.data.row.num}.outreach`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'cover', label: 'Cover letter', prompt: `Write the cover letter for tracker row #${q.data.row.num} (${q.data.row.company}).` },
@@ -238,6 +239,7 @@ export function ApplicationPage() {
             {tab === 'interview' && (
               <ModeLauncher
                 heading="Interview"
+                rememberAs={`cc.application.${q.data.row.num}.interview`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'interview-prep', label: 'Interview prep', prompt: `Prepare me for the interview at ${q.data.row.company} (row #${q.data.row.num}).` },
@@ -252,6 +254,7 @@ export function ApplicationPage() {
             {tab === 'offer' && (
               <ModeLauncher
                 heading="Offer and outcome"
+                rememberAs={`cc.application.${q.data.row.num}.offer`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'offer-prep', label: 'Offer prep', prompt: `Prepare the offer negotiation for row #${q.data.row.num} (${q.data.row.company}).` },
@@ -267,6 +270,7 @@ export function ApplicationPage() {
                 <DocumentsTab n={q.data.row.num} />
                 <ModeLauncher
                   heading="Generate with AI"
+                  rememberAs={`cc.application.${q.data.row.num}.documents`}
                   target={{ type: 'app', value: String(q.data.row.num) }}
                   modes={[
                     { id: 'pdf', label: 'Tailored CV PDF', prompt: `Generate the tailored CV PDF for tracker row #${q.data.row.num} (${q.data.row.company}).` },
