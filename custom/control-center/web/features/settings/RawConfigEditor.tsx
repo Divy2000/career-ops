@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { apiGet, apiSend, ApiError } from '../../lib/api';
+import { apiSend, ApiError } from '../../lib/api';
 import { DataState, Pill } from '../../components/ui';
 import { useEditBase } from '../../lib/editBase';
 import { useUnsaved } from '../../lib/unsaved';
 import type { ConfigRead } from '@shared/api';
 import { describeError } from '../../lib/actions';
+import { configQuery } from './useStructuredConfig';
 
 /**
  * Raw YAML editor gated by the core validator; a 422 shows the findings and writes nothing, a 409 shows the current
@@ -15,7 +16,7 @@ import { describeError } from '../../lib/actions';
  */
 export function ConfigEditor({ fileKey, label, validator }: { fileKey: 'portals' | 'profile'; label: string; validator: string }) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['config', fileKey], queryFn: () => apiGet<ConfigRead>(`/api/config/${fileKey}`) });
+  const q = useQuery(configQuery(fileKey));
   const edit = useEditBase(q.data);
   const [draft, setDraft] = useState<string | null>(null);
   // The draft as last typed, read after a save's refetch (refs are only touched in handlers).

@@ -21,6 +21,10 @@ let files: Record<string, Doc>;
 let calls: Call[];
 /** While set, writes wait for release() before the server answers, as a validator run keeps them waiting. */
 let held: Array<() => void> | null;
+/** While set, every GET answers 500, as a server restarting under the post-save refetch does. */
+let readsFail: boolean;
+/** While set, the next GET reads the file at once but answers only on releaseRead(), as a slow watcher refetch does. */
+let slowRead: { release?: () => void } | null;
 let host: HTMLElement;
 let root: Root;
 
@@ -31,6 +35,8 @@ function json(status: number, body: unknown) {
 beforeEach(() => {
   calls = [];
   held = null;
+  readsFail = false;
+  slowRead = null;
   vi.stubGlobal('EventSource', class { addEventListener() {} removeEventListener() {} close() {} });
   vi.stubGlobal(
     'fetch',
@@ -43,8 +49,13 @@ beforeEach(() => {
       if (url === '/api/actions') return json(200, []);
       const key = url.startsWith('/api/config/plugins/') ? '/api/plugins' : url;
       if (method !== 'GET' && held) await new Promise<void>((r) => held!.push(r));
+      if (method === 'GET' && readsFail) return json(500, { error: 'internal error' });
       const doc = files[key];
       if (!doc) return json(404, { error: 'not stubbed' });
+      if (method === 'GET' && slowRead && !slowRead.release) {
+        const waiting = slowRead;
+        await new Promise<void>((r) => (waiting.release = r));
+      }
       if (method === 'GET') return json(200, key === '/api/plugins' ? { ...doc, config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag: doc.etag } } : doc);
       // As the real routes: the write lock serializes saves, and each compares If-Match with the version on disk.
       if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
@@ -182,6 +193,52 @@ describe('structured editors: an edit made while a save is on its way', () => {
     expect(writes()[1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'If-Match': 'p2' }) }));
     await until(() => labelled('pending')!.textContent === '0', 'nothing pending');
     expect(alerts()).toBe('');
+  });
+
+  it('a change on disk refetched in the same millisecond the save answered still becomes the base', async () => {
+    await mountHarness();
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await click(button('Set a')!);
+      await click(button('Save')!);
+      await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+      files['/api/config/portals'] = { ...files['/api/config/portals']!, etag: 'p2', doc: { a: 5, b: 1 } };
+      await act(async () => client.invalidateQueries({ queryKey: ['config'] }));
+      await until(() => labelled('doc')!.textContent === JSON.stringify({ a: 5, b: 1 }), 'the version on disk');
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+  });
+
+  it('after a save whose refetch fails, the next edit still saves on the version just written (review)', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    readsFail = true;
+    await click(button('Save')!);
+    await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+    await until(() => calls.some((c) => c.method === 'GET' && c.url === '/api/config/portals' && calls.indexOf(c) > calls.findIndex((w) => w.method !== 'GET')), 'the failed refetch');
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    await click(button('Set b')!);
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
+  });
+
+  it('a read sent before the save that answers after it does not unpin the version just written (review)', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    slowRead = {};
+    const stale = slowRead;
+    void client.refetchQueries({ queryKey: ['config', 'portals'] });
+    await until(() => Boolean(stale.release), 'the slow read reaching the server');
+    await click(button('Save')!);
+    await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+    await act(async () => stale.release!());
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    await click(button('Set b')!);
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
   });
 
   it('Discard does nothing until the save answers, so a later edit is not mistaken for a sent one', async () => {
