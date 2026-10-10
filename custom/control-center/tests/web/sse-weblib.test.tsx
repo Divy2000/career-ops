@@ -103,6 +103,13 @@ describe('a stream the browser closed for good (R13-weblib-L1-01, R13-weblib-L3-
     await until(() => fetches.storyBank === 3, 'a frame on the new stream');
   });
 
+  it('counts the first open after a refused first connection as a reconnect, since changes it missed sent no event', async () => {
+    await act(async () => latest().fail());
+    await until(() => FakeEventSource.all.length === 2, 'a new EventSource');
+    await act(async () => latest().emit('open', null));
+    await until(() => fetches.storyBank === 2 && fetches.insights === 2, 'the refetch on the first open');
+  });
+
   it('a later subscriber attaches to the new stream, not the dead one', async () => {
     await act(async () => latest().fail());
     await until(() => FakeEventSource.all.length === 2, 'a new EventSource');

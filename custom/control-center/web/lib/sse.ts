@@ -43,8 +43,9 @@ function connect(s: SharedStream): void {
   const es = new EventSource('/api/events');
   s.es = es;
   es.addEventListener('open', () => {
+    // An open after a refused connection is a reconnect even when no earlier one opened: what changed meanwhile sent no event.
+    const reconnect = s.opened || s.failures > 0;
     s.failures = 0;
-    const reconnect = s.opened;
     s.opened = true;
     for (const fn of [...s.opens]) fn(reconnect);
   });
