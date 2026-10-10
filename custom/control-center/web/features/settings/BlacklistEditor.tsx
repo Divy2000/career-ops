@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
@@ -33,6 +33,8 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   // The draft is locked while the confirmed write is on its way: its answer replaces the draft, so a row added then
   // would be dropped unsent.
   const [saving, setSaving] = useState(false);
+  // Confirms queue, so a double click would ask twice; the second click is ignored while the first is asking or writing.
+  const inFlight = useRef(false);
   const current = rows ?? q.data?.rows ?? [];
   const dirty = rows !== null;
   // The server refuses a save that would drop these cells (422), so Save stays off until they are moved by hand.
@@ -50,6 +52,15 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     setDraft({ company: '', since: localDate(), scope: 'company', reason: '' });
   };
   const save = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      await confirmAndWrite();
+    } finally {
+      inFlight.current = false;
+    }
+  };
+  const confirmAndWrite = async () => {
     const from = edit.base ?? q.data;
     const added = current.length - (from?.rows.length ?? 0);
     const ok = await confirm({
