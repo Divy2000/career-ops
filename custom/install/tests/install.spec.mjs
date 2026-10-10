@@ -1162,8 +1162,11 @@ test('the pending text for a dirty checkout and for a failed doctor quotes the d
   assert.ok(r.out.includes(`run it in '${D}'`), r.out);
 });
 
-test('INSTALL_SH exists and is executable bash', () => {
+test('INSTALL_SH exists and is executable bash (R11-tests-custom-L1-05)', () => {
   assert.ok(fs.existsSync(INSTALL_SH));
+  // .github/README.md runs it directly, so a lost exec bit is "permission denied" for every user.
+  assert.doesNotThrow(() => fs.accessSync(INSTALL_SH, fs.constants.X_OK), 'install.sh is not executable');
+  assert.match(fs.readFileSync(INSTALL_SH, 'utf8').split('\n')[0], /^#!(\/usr\/bin\/env bash|\/bin\/bash)$/);
 });
 
 // ---- git failing: offline, or a pull that cannot fast-forward (SW2-tests-31) ----
