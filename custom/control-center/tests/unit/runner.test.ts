@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { RunStore, runsDir } from '../../server/runner/store.js';
+import { RunStore, runsDir, type RunMeta } from '../../server/runner/store.js';
 import { Runner, WRAPPER_PATH, pidAlive, processStartTime } from '../../server/runner/runner.js';
 import { childEnv } from '../../server/system/child-env.js';
 import { execNoShell } from '../../server/routes/system.js';
@@ -706,6 +706,22 @@ describe('Runner', () => {
     await until(() => second.store.read(live.id)?.status === 'done', 15_000);
   });
 
+  it('pending(actionId) sees a queued run another process left on disk, so a second daily start is refused during a blue/green handover (R17-srv-core-L3-01)', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const daily = { actionId: 'daily.runNow', label: 'Run the daily job now', cost: 'tokens' as const, resources: ['pipeline'], claude: true, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+    // The old child queued the daily job and drained: the run is on disk, not in this process's queue or active yet.
+    const queued = store.create(daily);
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    // Not reconciled: only the disk knows it. The single-run guard must still see it and refuse a second start.
+    expect(runner.pending('daily.runNow').map((r) => r.id)).toEqual([queued.id]);
+    const started = runner.startUnlessPending(daily);
+    expect('pending' in started).toBe(true);
+    expect((started as { pending: RunMeta }).pending.id).toBe(queued.id);
+    // A run of another action on disk is not this action's pending run.
+    expect(runner.pending('other.action')).toEqual([]);
+  });
 });
 
 describe('two server processes on one data root (SW6-claude-01 review)', () => {

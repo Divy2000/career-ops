@@ -761,7 +761,16 @@ export class Runner {
    */
   pending(actionId: string): RunMeta[] {
     this.dropSettled((q) => q.meta.actionId === actionId);
-    return [...this.queue.map((q) => q.meta), ...[...this.active.values()].map((a) => a.meta)].filter((m) => m.actionId === actionId);
+    const tracked = new Set<string>();
+    for (const q of this.queue) tracked.add(q.meta.id);
+    for (const a of this.active.values()) tracked.add(a.meta.id);
+    const pending = [...this.queue.map((q) => q.meta), ...[...this.active.values()].map((a) => a.meta)].filter((m) => m.actionId === actionId);
+    // A run another process left queued or running (a blue/green reload) is still pending here until this process adopts
+    // and settles it: the single-run guard and dailyPending must count it, or a second click starts a second paid job.
+    for (const m of this.store.list()) {
+      if (m.actionId === actionId && (m.status === 'queued' || m.status === 'running') && !tracked.has(m.id)) pending.push(m);
+    }
+    return pending;
   }
 
   /** Drops queued runs another process settled on disk meanwhile (cancelled, marked lost, or started there). */
