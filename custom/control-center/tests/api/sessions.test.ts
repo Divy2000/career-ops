@@ -1812,4 +1812,26 @@ describe('r18 manager fixes', () => {
       await app.close();
     }
   });
+
+  it('cancel after the run ended but before finalize leaves the completed turn for finalize, not cancelled (R18-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      // A turn that finished cleanly with output (a result event), so its own outcome is "done".
+      const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', `process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'Done.',total_cost_usd:0.01,usage:{},num_turns:1,is_error:false})+'\\n')`], cwd: PACKAGE_ROOT } });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      // The turn's guard folder, as runTurn creates it before the run exists.
+      fs.mkdirSync(path.join(app.sessions.store.guardDirOf(meta.id), 'turns', '1'), { recursive: true });
+      // The run ended, but no tracker finalized the session yet: it still reads running, and Cancel is shown.
+      await until(() => app.runner.store.read(run.id)!.endedAt !== null);
+      expect(app.sessions.read(meta.id)!.status).toBe('running');
+      // Cancel lands after the run ended but before finalize: it must not mark the completed turn cancelled.
+      expect(app.sessions.cancel(meta.id).status).toBe('running');
+      app.sessions.reconcile();
+      await until(() => app.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+      expect(app.sessions.read(meta.id)!.status).toBe('done');
+    } finally {
+      await app.close();
+    }
+  });
 });

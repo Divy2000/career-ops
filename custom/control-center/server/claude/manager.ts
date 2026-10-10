@@ -315,6 +315,11 @@ export class SessionManager {
     const meta = this.must(id);
     const turn = meta.turns.at(-1);
     if (turn && (meta.status === 'running' || meta.status === 'queued')) {
+      // A turn whose run already ended is being finalized (or about to be): marking it cancelled here would turn a
+      // completed turn into "cancelled", keep its pipeline row pending, leave its policy batch unacknowledged and let
+      // the claim go mid-finalize. The run's exit (its endedAt) proves the turn is over, so the cancel is a no-op.
+      const run = this.runner.store.read(turn.runId);
+      if (run && run.endedAt !== null) return meta;
       this.runner.cancel(turn.runId);
       this.store.setStatus(id, 'cancelled');
       this.emit(id, { type: 'status', status: 'cancelled', turn: turn.n, reason: 'cancel requested' });
