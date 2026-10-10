@@ -145,3 +145,29 @@ describe('structured editors: an edit made while a save is on its way', () => {
     expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 3, c: 9 }));
   });
 });
+
+describe('blacklist editor: the draft while the confirmed write is on its way', () => {
+  beforeEach(() => {
+    files = { '/api/blacklist': { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', rows: [{ company: 'Initech', since: '2026-01-01', scope: 'company', reason: '' }], preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] } };
+  });
+
+  it('cannot be changed until the write answers, so no row is dropped unsent', async () => {
+    const { BlacklistEditor } = await import('@web/features/settings/BlacklistEditor');
+    await mount(createElement(BlacklistEditor, {}));
+    await type(await until(() => labelled<HTMLInputElement>('Blacklist company or domain'), 'the company field'), 'Globex');
+    await click(button('Add row')!);
+    held = [];
+    await click(button('Save blacklist')!);
+    await click(await until(() => button('Write blacklist'), 'the confirm dialog'));
+    await until(() => held?.length === 1, 'the write on its way');
+    await type(labelled<HTMLInputElement>('Blacklist company or domain')!, 'Umbrella');
+    expect(button('Add row')!.disabled).toBe(true);
+    expect(button('Remove Initech from the blacklist draft')!.disabled).toBe(true);
+    expect(button('Save blacklist')!.disabled).toBe(true);
+    expect(button('Discard')!.disabled).toBe(true);
+    await release();
+    await until(() => /Blacklist written/.test(document.body.textContent ?? ''), 'the written note');
+    expect(button('Add row')!.disabled).toBe(false);
+    expect(labelled<HTMLInputElement>('Blacklist company or domain')!.value).toBe('Umbrella');
+  });
+});

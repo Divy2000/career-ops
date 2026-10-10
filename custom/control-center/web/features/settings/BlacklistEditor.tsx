@@ -30,6 +30,9 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   };
   const [draft, setDraft] = useState<BlacklistRow>({ company: prefillCompany ?? '', since: localDate(), scope: 'company', reason: '' });
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
+  // The draft is locked while the confirmed write is on its way: its answer replaces the draft, so a row added then
+  // would be dropped unsent.
+  const [saving, setSaving] = useState(false);
   const current = rows ?? q.data?.rows ?? [];
   const dirty = rows !== null;
   useUnsaved('data/blacklist.md', dirty);
@@ -60,6 +63,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
       danger: true,
     });
     if (!ok) return;
+    setSaving(true);
     try {
       await apiSend('PUT', '/api/blacklist', { confirm: true, rows: current }, { 'X-CC-Explicit': 'blacklist', ...(from?.etag ? { 'If-Match': from.etag } : {}) });
       setRows(null);
@@ -73,6 +77,8 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
         setRows(null);
       } else setNote({ tone: 'danger', text: `Could not write the blacklist: ${describeError(err)}` });
       toast.error('Blacklist not written');
+    } finally {
+      setSaving(false);
     }
   };
   return (
@@ -82,10 +88,10 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
           Blacklist {q.data?.kind === 'missing' && <Pill tone="warn">data/blacklist.md not created yet</Pill>}
         </h2>
         <div className="row gap">
-          <button type="button" className="button--ghost" disabled={!dirty} onClick={() => setRows(null)}>
+          <button type="button" className="button--ghost" disabled={!dirty || saving} onClick={() => setRows(null)}>
             Discard
           </button>
-          <button type="button" className="button--danger" disabled={!dirty} onClick={() => void save()}>
+          <button type="button" className="button--danger" disabled={!dirty || saving} onClick={() => void save()}>
             Save blacklist
           </button>
         </div>
@@ -118,7 +124,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
                     </td>
                     <td className="muted">{r.reason}</td>
                     <td>
-                      <button type="button" className="button--ghost" aria-label={`Remove ${r.company} from the blacklist draft`} onClick={() => setRows(current.filter((_, j) => j !== i))}>
+                      <button type="button" className="button--ghost" aria-label={`Remove ${r.company} from the blacklist draft`} disabled={saving} onClick={() => setRows(current.filter((_, j) => j !== i))}>
                         Remove
                       </button>
                     </td>
@@ -136,7 +142,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
             <option value="domain">domain</option>
           </select>
           <input aria-label="Blacklist reason" placeholder="Reason" value={draft.reason} onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
-          <button type="button" onClick={addRow} disabled={!draft.company.trim()}>
+          <button type="button" onClick={addRow} disabled={!draft.company.trim() || saving}>
             Add row
           </button>
         </div>
