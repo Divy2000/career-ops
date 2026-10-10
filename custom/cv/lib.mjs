@@ -29,7 +29,7 @@ export function recentAchievements(cvText) {
     const text = item[1];
     const bold = text.match(/\*\*(.+?)\*\*/);
     const title = (bold ? bold[1] : text.split(/\s+(?:--|\u2014|\u2013)\s+/)[0]).replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
-    out.push({ line: i + 1, title, urls: (text.match(URL_RE) ?? []).map((u) => u.replace(/[.,;]+$/, '')) });
+    out.push({ line: i + 1, title, urls: linksIn(text) });
   }
   return out;
 }

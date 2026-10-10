@@ -75,6 +75,16 @@ test('given a project whose URL matches a Recent Achievements link, when checked
   assert.match(r.errors.join('\n'), /"Search Tool".*Recent Achievements/);
 });
 
+test('given a project whose URL matches a bare (scheme-less) Recent Achievements link, when checked, then it is an error (R11-scripts-a-X-01)', () => {
+  const cv = [
+    '## Projects', '', '- **Search Tool** (doi.org/10.1000/example.2) -- x', '',
+    '## Recent Achievements', '', '- **A Differently Titled Paper** -- Materials Letters, 2022 (doi.org/10.1000/example.2)', '',
+  ].join('\n');
+  assert.deepEqual(recentAchievements(cv)[0].urls, ['doi.org/10.1000/example.2']);
+  const r = checkPayload({ projects: [{ name: 'Search Tool', url: 'https://doi.org/10.1000/example.2', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+  assert.match(r.errors.join('\n'), /"Search Tool".*Recent Achievements/);
+});
+
 test('given a library entry whose kind is not project, when used as a project, then it is an error', () => {
   const r = checkPayload({ projects: [{ name: 'Old Research Work', bullets: ['x'] }] }, { cvText: '', libraryText: LIBRARY });
   assert.match(r.errors.join('\n'), /"Old Research Work".*publication/);
