@@ -706,6 +706,21 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('a relative, space-padded CC_DATA_ROOT resolves against INIT_CWD and is trimmed (R17-supervisor-L2-01)', async () => {
+    const base = tempDir('cc-data-root-base-');
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { env: { CC_DATA_ROOT: '  rel-data  ', INIT_CWD: base } });
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      expect(fs.existsSync(path.join(base, 'rel-data', 'data', 'control-center', 'supervisor.lock')), s.output()).toBe(true);
+      // Not resolved against the package cwd, and the padding is gone.
+      expect(fs.existsSync(path.join(PACKAGE_ROOT, 'rel-data'))).toBe(false);
+      expect(fs.existsSync(path.join(PACKAGE_ROOT, '  rel-data  '))).toBe(false);
+    } finally {
+      await stop(s);
+    }
+  });
+
   it('a launch whose port is taken reconciles nothing on its own data root before it exits', async () => {
     const root = copyFixtureRoot();
     const leftover = queuedRun(root);

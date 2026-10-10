@@ -39,7 +39,15 @@ const SESSION_COOKIE = 'cc_session';
 const CORE_ENTRIES = () => serverEntries(CODE_ROOT, PACKAGE_ROOT, CONTRACT.exports.map((e) => e.module));
 
 async function resolveDataRoot(): Promise<string> {
-  if (process.env.CC_DATA_ROOT) return path.resolve(process.env.CC_DATA_ROOT);
+  const raw = process.env.CC_DATA_ROOT?.trim();
+  if (raw) {
+    // An absolute root is kept as given; a relative one is resolved against the folder the user started from (INIT_CWD,
+    // which npm sets), not npm's package cwd, so launching from anywhere uses the same data root.
+    if (path.isAbsolute(raw)) return path.resolve(raw);
+    const from = process.env.INIT_CWD;
+    const base = from && path.isAbsolute(from) ? from : process.cwd();
+    return path.resolve(base, raw);
+  }
   const mod = (await import(pathToFileURL(path.join(CODE_ROOT, 'path-resolver.mjs')).href)) as { getCareerOpsRoot: () => string };
   const prev = process.cwd();
   process.chdir(CODE_ROOT);
