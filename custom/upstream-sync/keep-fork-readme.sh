@@ -29,8 +29,9 @@ fi
 echo "$FILE conflicts with upstream: keeping the fork's side"
 STAGES="$(git ls-files -u -- "$FILE")"
 HAS_OURS=0; HAS_THEIRS=0
-printf '%s\n' "$STAGES" | grep -q "^[0-9]* [0-9a-f]* 2" && HAS_OURS=1
-printf '%s\n' "$STAGES" | grep -q "^[0-9]* [0-9a-f]* 3" && HAS_THEIRS=1
+# A here-string, not printf | grep -q: under pipefail grep exiting on its match can kill printf with SIGPIPE.
+grep -q "^[0-9]* [0-9a-f]* 2" <<< "$STAGES" && HAS_OURS=1
+grep -q "^[0-9]* [0-9a-f]* 3" <<< "$STAGES" && HAS_THEIRS=1
 
 if [ $HAS_THEIRS = 1 ]; then
   mkdir -p "$STATE_DIR" || exit 1

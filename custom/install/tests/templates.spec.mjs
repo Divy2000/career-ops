@@ -44,6 +44,45 @@ test('the shipped house-rule templates use no em or en dash', () => {
   for (const f of fs.readdirSync(TEMPLATES)) assert.ok(!/[\u2013\u2014]/.test(read(path.join(TEMPLATES, f))), f);
 });
 
+test('the sponsorship house rule names the company-alerts.tsv columns and status vocabulary, never resumption (R17-scripts-b-L2-01)', () => {
+  const text = read(path.join(TEMPLATES, '_custom-sponsorship.md'));
+  for (const col of ['date', 'company', 'slug', 'status', 'headline', 'url']) {
+    assert.ok(text.includes(col), `the template does not name the \`${col}\` column`);
+  }
+  for (const status of ['paused', 'stopped', 'restricted', 'resumed', 'expanded']) {
+    assert.ok(text.includes(status), `the template does not name the \`${status}\` status`);
+  }
+  assert.ok(text.includes('resumed'), 'the template must spell the status resumed');
+  assert.match(text, /never\s+`resumption`/, 'the template must warn that the status is resumed, never resumption');
+});
+
+// readAlerts in custom/immigration/lib.mjs keeps the last row of a slug among rows with the same date, so a
+// newest-first file would let an older same-day row win.
+test('the sponsorship house rule appends company-alerts.tsv rows oldest first, newest last, as the parser reads them (R18-scripts-b-review-03)', () => {
+  const rule = read(path.join(TEMPLATES, '_custom-sponsorship.md')).split('\n').find((l) => l.includes('company-alerts.tsv') && l.includes('append'));
+  assert.ok(rule, 'the template names where to append a company alert');
+  assert.doesNotMatch(rule, /newest first/, rule);
+  assert.match(rule, /at the end of the file \(oldest first, newest last\)/, rule);
+});
+
+test('the sponsorship house rule records every alert status it lists, expansion included (R18-scripts-b-review-04)', () => {
+  const rule = read(path.join(TEMPLATES, '_custom-sponsorship.md')).split('\n').find((l) => l.includes('company-alerts.tsv') && l.includes('append'));
+  assert.ok(rule, 'the template names when to append a company alert');
+  for (const event of ['pause', 'stop', 'restriction', 'resumption', 'expansion']) assert.ok(rule.includes(event), `the trigger does not name ${event}: ${rule}`);
+});
+
+// shortlist.mjs and the evaluation match alerts by companySlug(name), so the rule must spell that normalization out,
+// and every example it gives must be what companySlug returns.
+test('the sponsorship house rule spells out the company slug rule with examples companySlug agrees with (R18-scripts-b-review-09)', async () => {
+  const { companySlug } = await import(path.join(ROOT, 'custom', 'immigration', 'lib.mjs'));
+  const rule = read(path.join(TEMPLATES, '_custom-sponsorship.md')).split('\n').find((l) => l.includes('`<slug>`'));
+  assert.ok(rule, 'the template defines the slug column');
+  const examples = [...rule.matchAll(/`([^`]+)` is `([^`]+)`/g)].map((m) => [m[1], m[2]]);
+  assert.ok(examples.length >= 3, `the slug rule needs examples: ${rule}`);
+  assert.ok(examples.some(([name]) => name.includes('&')), 'an example shows & becoming and');
+  for (const [name, slug] of examples) assert.equal(companySlug(name), slug, `${name} in ${rule}`);
+});
+
 test('the house rule updates the way the README does: the README installs a detached tag checkout, so it switches to main before pulling', () => {
   const readme = read(path.join(ROOT, '.github', 'README.md'));
   const updating = readme.slice(readme.indexOf('## Updating'));

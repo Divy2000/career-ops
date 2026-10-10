@@ -85,6 +85,8 @@ VALIDATED=0
 MAC_FEATURES=0
 CLAUDE_BIN=""
 PREFLIGHT_FAILED=0
+# Set when the Control Center was running at the dependency step, so its npm ci was skipped.
+CC_DEPS_DEFERRED=0
 TTY_OK=0
 PROMPT_OK=0
 CV_COPY=""
@@ -275,6 +277,66 @@ find_claude() {
 keychain_present() { security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; }
 
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
+
+# Whether the Control Center is already running on this data root, read from its
+# supervisor.lock (the file the supervisor keeps via acquireInstanceLock). Running
+# means the lock names a PID that is alive and that started when the lock says it
+# did: a live PID that started at another time is a reused PID, not the Control
+# Center. A missing or stale lock, or a damaged one past its 5 s grace, is not
+# running; one that cannot be read is. npm ci deletes
+# node_modules, so a re-run must not reinstall under a running instance (its
+# blue/green reload would race the deletion), and the finish must not start a
+# second instance that would refuse the lock.
+cc_running() {
+  local lock="$DATA/data/control-center/supervisor.lock"
+  node -e '
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+let text;
+try { text = fs.readFileSync(process.argv[1], "utf8"); }
+catch (e) {
+  // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
+  // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
+  let entry = e.code !== "ENOENT";
+  if (!entry) try { fs.lstatSync(process.argv[1]); entry = true; } catch { /* nothing there */ }
+  process.exit(entry ? 0 : 1);
+}
+let pid = 0, start = null;
+try {
+  const l = JSON.parse(text);
+  if (Number.isInteger(l.pid) && l.pid > 0 && Number.isInteger(l.port)) {
+    pid = l.pid;
+    start = typeof l.start === "number" && Number.isFinite(l.start) ? l.start : null;
+  }
+} catch { /* damaged content, judged below */ }
+// A lock parseHolder in supervisor/instance-lock.ts rejects (no positive integer pid, no integer port) is damaged:
+// the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
+// as running, and replaces an older one, so that does not.
+if (!pid) {
+  let young = false;
+  try { young = Date.now() - fs.statSync(process.argv[1]).mtimeMs < 5000; } catch { /* gone: not running */ }
+  process.exit(young ? 0 : 1);
+}
+// When the PID started, read like processStartTime in supervisor/instance-lock.ts: ps first, since it reads
+// the process of another user too (kill(pid, 0) is refused with EPERM there, which says nothing about reuse). Only
+// when ps cannot answer does the kernel decide: "unknown" when the PID runs, null when it does not.
+const runs = () => { try { process.kill(pid, 0); return "unknown"; } catch (e) { return e.code === "ESRCH" ? null : "unknown"; } };
+let live;
+try {
+  const out = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { LC_ALL: "C", TZ: "UTC" } }).trim();
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  live = m && month !== -1 ? Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000 : runs();
+} catch (e) {
+  live = e.status === 1 && !e.signal && !String(e.stdout || "").trim() ? null : runs();
+}
+// Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
+// With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
+process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
+' "$lock"
+}
 
 # CAREER_OPS_ROOT, else CAREER_OPS_DATA_DIR, each trimmed like path-resolver.mjs does; empty when neither is set.
 env_data_root() {
@@ -556,7 +618,10 @@ else
     die 1 "${root_install[*]} failed in $DIR. See $LOG_FILE."
   fi
   if [ "$MAC_FEATURES" = 1 ]; then
-    if ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
+    if cc_running; then
+      CC_DEPS_DEFERRED=1
+      say "  Control Center is running; leaving its dependencies as they are (stop it, run 'npm --prefix custom/control-center ci', then start it again)"
+    elif ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
       die 1 "npm ci for the Control Center failed. See $LOG_FILE."
     fi
   fi
@@ -945,8 +1010,23 @@ fi
 # A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
 # above (and exit 3) stay what the run ends with.
 if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
-  say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
-  exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
+  if cc_running; then
+    say "Control Center is already running; not starting a second instance"
+  else
+    # It was running when its npm ci was skipped and has stopped since: install what it was left without first, and
+    # check the result again, since the preflight above ran against the dependencies it had then.
+    if [ "$CC_DEPS_DEFERRED" = 1 ]; then
+      if ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
+        die 1 "npm ci for the Control Center failed. See $LOG_FILE."
+      fi
+      if ! (cd "$DIR" && run_logged npm --prefix custom/control-center run preflight); then
+        say "The Control Center preflight failed after its npm ci, so it was not started; run: npm --prefix $(shell_quote "$DIR/custom/control-center") run preflight, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")"
+        exit 3
+      fi
+    fi
+    say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
+    exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
+  fi
 fi
 if [ "${#PENDING[@]}" -gt 0 ]; then exit 3; fi
 exit 0

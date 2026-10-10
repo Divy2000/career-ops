@@ -113,7 +113,7 @@ echo "--- baseline suite on origin/main"
 suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt" || fail "upstream suite run was interrupted"
 # Read once, before Claude runs, and compared from memory: Claude can write to STATE_DIR, so the file could be rewritten.
 BASELINE_FAILURES="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" || fail "cannot read the baseline upstream-suite failures"
-printf '%s\n' "$BASELINE_FAILURES" | grep -q '^SUITE CRASHED' && fail "upstream suite crashed on origin/main before the merge; cannot compare"
+grep -q '^SUITE CRASHED' <<< "$BASELINE_FAILURES" && fail "upstream suite crashed on origin/main before the merge; cannot compare"
 echo "baseline failures: $(printf '%s' "$BASELINE_FAILURES" | grep -c . || true)"
 
 echo "--- merging upstream/main"

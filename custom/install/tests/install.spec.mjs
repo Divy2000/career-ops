@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
 import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands, pythonPtyMissing, PTY_PROBE_OK, SYSTEM_DIRS } from './harness.mjs';
@@ -1000,6 +1000,142 @@ test('the Control Center is not started while the Keychain token is missing', ()
   w.makeCheckout(D, { files: READY_FILES });
   w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
   assert.equal(w.calls('cc').length, 0);
+});
+
+test('a re-run with the Control Center already running skips its npm ci and does not start a second instance (R17-scripts-b-L1-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 0, r.out);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run under a running Control Center');
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
+    assert.match(r.out, /npm --prefix custom\/control-center ci/, 'the skip message names the npm ci command, not a restart');
+    assert.doesNotMatch(r.out, /restart it to pick up changes/, 'a restart does not install dependencies');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a stale Control Center lock whose PID was reused is reinstalled, not skipped (R17-scripts-b-L1-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: Math.floor(Date.now() / 1000) - 100000, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 0, r.out);
+    assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock is stale (reused PID)');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+// PID 1 is launchd, owned by root: kill(1, 0) is refused with EPERM, yet ps still reads when it started.
+test('a stale Control Center lock naming a reused PID of another user is reinstalled, not skipped (R18-scripts-b-review-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: 1, start: 1, port: 4317, nonce: 'test' }));
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock names another user\'s process that started at another time');
+});
+
+// The supervisor rejects a lock without an integer port (parseHolder) and replaces it once it is older than
+// UNREADABLE_LOCK_GRACE_MS, live PID or not.
+test('a malformed Control Center lock past its grace is not running, so npm ci runs and the Control Center starts (R18-scripts-b-review-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null }));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 0, r.out);
+    assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock is malformed');
+    assert.equal(w.calls('cc').length, 1, 'the Control Center starts when the lock is malformed');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+// acquireInstanceLock throws on a lock it cannot read rather than replacing it, so no second instance starts.
+test('a Control Center lock that cannot be read is treated as running: no npm ci, no second start (R18-scripts-b-review-05)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  // A directory in the lock's place: reading it fails (EISDIR) for every user, root included, unlike chmod 000.
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(lock, { recursive: true });
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run while the lock cannot be read');
+  assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+});
+
+test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
+    assert.equal(r.status, 0, r.out);
+    const log = w.log();
+    const ci = log.findIndex((l) => l.startsWith('npm --prefix custom/control-center ci'));
+    assert.ok(ci > log.findIndex((l) => l.startsWith('doctor ')), `npm ci must run after the Control Center stopped: ${log.join('\n')}`);
+    assert.equal(log[log.length - 1], 'cc ', log.join('\n'));
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('the Control Center preflight runs again after the deferred npm ci, before the start (R18-scripts-b-review-07)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
+    assert.equal(r.status, 0, r.out);
+    const log = w.log();
+    const ci = log.findIndex((l) => l.startsWith('npm --prefix custom/control-center ci'));
+    assert.ok(ci !== -1 && log.slice(ci).some((l) => l.startsWith('npm --prefix custom/control-center run preflight')), `the preflight must run after the deferred npm ci: ${log.join('\n')}`);
+    assert.equal(log[log.length - 1], 'cc ', log.join('\n'));
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+// acquireInstanceLock cannot take a lock path that is a dangling symlink (the link fails, the read finds nothing),
+// so it refuses to start: the helpers must not reinstall or start a second instance either.
+test('a Control Center lock that is a dangling symlink is treated as running (R18-scripts-b-review-08)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run');
+  assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
 });
 
 test('a failing doctor is reported as a pending action, not hidden', () => {

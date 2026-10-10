@@ -277,7 +277,7 @@ unexpected_upstream() {
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in custom/* | .github/README.md) continue ;; esac
-    printf '%s\n' "$2" | grep -qxF -- "$f" || printf '%s\n' "$f"
+    grep -qxF -- "$f" <<< "$2" || printf '%s\n' "$f"
   done <<< "$1"
 }
 
@@ -321,7 +321,7 @@ suite_failures() {
         continue
         ;;
     esac
-    if printf '%s\n' "$names" | grep -qxF '::rerun timed out::'; then
+    if grep -qxF '::rerun timed out::' <<< "$names"; then
       # A slow suite may hide a new failure behind its baseline: unique to this run, so it holds the PR.
       named="${named:+$named$'\n'}❌ $suite — node:test suite failed, re-run timed out (see $out)"
     elif [ -n "$names" ]; then
@@ -523,6 +523,67 @@ merge_blockers() {
   printf '%s' "$out"
 }
 
+# control_center_running <data-root>: whether the Control Center is running on
+# <data-root>, read from its supervisor.lock (the file the supervisor keeps via
+# acquireInstanceLock). Running means the lock names a PID that is alive and that
+# started when the lock says it did: a live PID that started at another time is a
+# reused PID, not the Control Center (the same start-time check acquireInstanceLock
+# makes). A missing or stale lock, or a damaged one past its 5 s grace, is not
+# running; one that cannot be read is. npm ci deletes
+# node_modules, so the live update and the installer both consult this before
+# reinstalling the Control Center under a running instance: its blue/green reload
+# would race the deletion and fail.
+control_center_running() {
+  local lock="$1/data/control-center/supervisor.lock"
+  node -e '
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+let text;
+try { text = fs.readFileSync(process.argv[1], "utf8"); }
+catch (e) {
+  // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
+  // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
+  let entry = e.code !== "ENOENT";
+  if (!entry) try { fs.lstatSync(process.argv[1]); entry = true; } catch { /* nothing there */ }
+  process.exit(entry ? 0 : 1);
+}
+let pid = 0, start = null;
+try {
+  const l = JSON.parse(text);
+  if (Number.isInteger(l.pid) && l.pid > 0 && Number.isInteger(l.port)) {
+    pid = l.pid;
+    start = typeof l.start === "number" && Number.isFinite(l.start) ? l.start : null;
+  }
+} catch { /* damaged content, judged below */ }
+// A lock parseHolder in supervisor/instance-lock.ts rejects (no positive integer pid, no integer port) is damaged:
+// the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
+// as running, and replaces an older one, so that does not.
+if (!pid) {
+  let young = false;
+  try { young = Date.now() - fs.statSync(process.argv[1]).mtimeMs < 5000; } catch { /* gone: not running */ }
+  process.exit(young ? 0 : 1);
+}
+// When the PID started, read like processStartTime in supervisor/instance-lock.ts: ps first, since it reads
+// the process of another user too (kill(pid, 0) is refused with EPERM there, which says nothing about reuse). Only
+// when ps cannot answer does the kernel decide: "unknown" when the PID runs, null when it does not.
+const runs = () => { try { process.kill(pid, 0); return "unknown"; } catch (e) { return e.code === "ESRCH" ? null : "unknown"; } };
+let live;
+try {
+  const out = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { LC_ALL: "C", TZ: "UTC" } }).trim();
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  live = m && month !== -1 ? Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000 : runs();
+} catch (e) {
+  live = e.status === 1 && !e.signal && !String(e.stdout || "").trim() ? null : runs();
+}
+// Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
+// With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
+process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
+' "$lock"
+}
+
 # update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
 # merged, bring the live checkout (the current directory) up to <commit>, the
 # tested sync commit the fork's main was moved to: this never moves it past
@@ -540,7 +601,7 @@ merge_blockers() {
 # main, local changes, already past <commit>, or the daily job still running), 1
 # when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed="" rc
+  local deps_before cc_before failed="" deferred="" data_root rc
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
     if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
       echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
@@ -550,11 +611,15 @@ update_live_checkout() {
     # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
     # While it holds the lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
     # lock held by the update waits for it instead of skipping the day (run-daily.sh).
-    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid"
+    # The daily lock's path is re-passed as $4 so the re-exec'd run can resolve the data root it names.
+    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "$4" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid" "$1"
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
   fi
+  # The daily job's lock always lives at <data-root>/data/immigration/.run-daily.lockf, so the data root is its
+  # grandparent's parent. The Control Center's supervisor.lock sits under that root.
+  data_root="$(dirname "$(dirname "$(dirname "$1")")")"
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
@@ -569,13 +634,23 @@ update_live_checkout() {
   if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
     failed="npm install"
   fi
-  if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ] &&
-    ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
-    failed="${failed:+$failed and }npm --prefix custom/control-center ci"
+  if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
+    if control_center_running "$data_root"; then
+      # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the
+      # running instance's dependencies alone; a restart alone never installs them (bin/cc only checks node_modules
+      # exists), so point the user at the one command that does.
+      deferred="the Control Center is running, so its dependencies were not reinstalled; stop it, run 'npm --prefix custom/control-center ci', then start it again"
+    elif ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
+      failed="${failed:+$failed and }npm --prefix custom/control-center ci"
+    fi
   fi
   if [ -n "$failed" ]; then
-    echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand"
+    echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand${deferred:+; $deferred}"
     return 3
+  fi
+  if [ -n "$deferred" ]; then
+    echo "live checkout now at $(git rev-parse --short HEAD); $deferred"
+    return 0
   fi
   echo "live checkout now at $(git rev-parse --short HEAD)"
 }

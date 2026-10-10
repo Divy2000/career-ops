@@ -4,7 +4,7 @@ import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync, utimesSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -899,6 +899,150 @@ test('update_live_checkout moves the live checkout to the verified sync merge, n
     assert.equal(w.head(), w.target);
     assert.equal(res.stdout, `live checkout now at ${w.target.slice(0, 7)}`);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+// A Control Center that is running leaves its supervisor.lock naming a live PID; the live update must not run npm ci
+// under it, because that deletes node_modules while the fast-forward's blue/green reload starts the new server child.
+// `start` is the holder's process start time in seconds (or null, when it could not be read): a live PID whose start
+// differs from the lock's is a reused PID, not the Control Center.
+function holdRunningControlCenter(w, child, start = null) {
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start, port: 4317, nonce: 'test' }));
+}
+
+test('a running Control Center leaves the live update to skip its npm ci, so the reload is not raced (R17-scripts-b-L1-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  holdRunningControlCenter(w, child);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
+    assert.match(res.stdout, /Control Center is running/);
+    assert.match(res.stdout, /npm --prefix custom\/control-center ci/, 'the deferred message names the npm ci command, not a restart');
+    assert.doesNotMatch(res.stdout, /restart it to pick them up/, 'a restart does not install dependencies');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('a stale Control Center lock whose PID was reused is not treated as running, so npm ci still runs (R17-scripts-b-L1-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  holdRunningControlCenter(w, child, Math.floor(Date.now() / 1000) - 100000);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock is stale (reused PID)');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+// PID 1 is launchd, owned by root: kill(1, 0) is refused with EPERM, yet ps still reads when it started.
+test('a stale Control Center lock naming a reused PID of another user is not treated as running, so npm ci still runs (R18-scripts-b-review-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  holdRunningControlCenter(w, { pid: 1 }, 1);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock names another user\'s process that started at another time');
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+// The supervisor rejects a lock without an integer port (parseHolder). It leaves a malformed lock younger than
+// UNREADABLE_LOCK_GRACE_MS (5 s) alone, refusing to start, and replaces an older one, live PID or not.
+function writeControlCenterLock(w, text, ageMs) {
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, text);
+  const at = new Date(Date.now() - ageMs);
+  utimesSync(lock, at, at);
+}
+
+test('a malformed Control Center lock past its grace is not treated as running, so npm ci still runs (R18-scripts-b-review-02)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  writeControlCenterLock(w, JSON.stringify({ pid: child.pid, start: null }), 60000);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock has no port');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('a malformed Control Center lock within its grace is treated as running, as the supervisor does (R18-scripts-b-review-02)', () => {
+  const w = liveWorld({ ccChange: true });
+  writeControlCenterLock(w, '{"pid":', 0);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.npm(), '', 'npm ci must not run while a malformed lock is within its grace');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+// acquireInstanceLock throws on a lock it cannot read rather than replacing it, so no second instance starts.
+test('a Control Center lock that cannot be read is treated as running, as the supervisor refuses to replace it (R18-scripts-b-review-05)', () => {
+  const w = liveWorld({ ccChange: true });
+  // A directory in the lock's place: reading it fails (EISDIR) for every user, root included, unlike chmod 000.
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(lock, { recursive: true });
+  const at = new Date(Date.now() - 60000);
+  utimesSync(lock, at, at);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.npm(), '', 'npm ci must not run while the lock cannot be read');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+// acquireInstanceLock cannot take a lock path that is a dangling symlink (the link fails, the read finds nothing).
+test('a Control Center lock that is a dangling symlink is treated as running, as the supervisor cannot take it (R18-scripts-b-review-08)', () => {
+  const w = liveWorld({ ccChange: true });
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  symlinkSync(path.join(w.base, 'nowhere'), lock);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.npm(), '', 'npm ci must not run while the lock path is a dangling symlink');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('a running Control Center with a failed root install still reports the skipped Control Center deps (R17-scripts-b-L1-01)', () => {
+  const w = liveWorld({ depsChange: true, ccChange: true, npmExit: 1 });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  holdRunningControlCenter(w, child);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 3, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.match(res.stdout, /npm install failed; run it by hand/);
+    assert.match(res.stdout, /Control Center is running/, 'the deferred Control Center deps are still reported when the root install also failed');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
 });
 
 /**
