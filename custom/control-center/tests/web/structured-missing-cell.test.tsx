@@ -134,3 +134,18 @@ describe('Add row in a boolean column', () => {
     expect(ops).toEqual([{ op: 'insert', path: ['tracked_companies'], value: { name: 'Globex', enabled: false } }]);
   });
 });
+
+describe('Add row in a column with no typed value yet', () => {
+  it.each([
+    ['no', false],
+    ['False', false],
+    ['off', false],
+    ['Yes', true],
+    ['TRUE', true],
+    ['on', true],
+  ])('typing %j as the first enabled value adds the boolean %s, which the scanners test (review)', async (word, value) => {
+    const ops = await mount([beta]);
+    await addRow({ name: 'Globex', enabled: word });
+    expect(ops).toEqual([{ op: 'insert', path: ['tracked_companies'], value: { name: 'Globex', enabled: value } }]);
+  });
+});
