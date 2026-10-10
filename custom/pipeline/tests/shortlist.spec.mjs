@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import http from 'node:http';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
@@ -281,4 +282,48 @@ test('a row with no usable company name reads the same without a backend, and tr
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stderr, '');
   assert.deepEqual(sponsorCells(root), [['4', '4', 'no company name'], ['3.5', '3.5', 'no company name']]);
+});
+
+// ---- tier cache is persisted incrementally and atomically (R17-scripts-a-L1-01) ----
+
+const waitFor = async (check, what, ms = 15000) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+};
+
+test('a run killed mid-lookup keeps the tier lookups already done and leaves no torn cache (R17-scripts-a-L1-01)', async () => {
+  let globexSeen = false;
+  const server = http.createServer((req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') ?? '').toLowerCase();
+    if (q.startsWith('globex')) {
+      globexSeen = true;
+      return; // hang: Globex never answers, so the run stays in its lookup
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const root = rankedRoot();
+  try {
+    const child = spawn(process.execPath, [SHORTLIST], {
+      cwd: REPO,
+      env: rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` }),
+      stdio: 'ignore',
+    });
+    const exited = new Promise((r) => child.on('exit', r));
+    await waitFor(() => globexSeen, 'the Globex lookup, meaning Acme was already looked up');
+    child.kill('SIGKILL');
+    await exited;
+    const cachePath = path.join(root, 'data', 'immigration', 'sponsor-tiers.json');
+    const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    assert.ok(cache['Acme'], `Acme was persisted before the kill:\n${JSON.stringify(cache)}`);
+    assert.equal(cache['Globex'], undefined, 'the never-finished Globex lookup is not cached');
+    assert.deepEqual(fs.readdirSync(path.join(root, 'data', 'immigration')).filter((f) => f.includes('.tmp-')), [], 'no torn temp file is left behind');
+  } finally {
+    server.close();
+  }
 });

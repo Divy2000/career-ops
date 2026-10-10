@@ -6,7 +6,7 @@
 //
 //   node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -88,6 +88,15 @@ function lookupError(err) {
 // A URL-only row has no company, and a feed can give only a legal suffix ("Inc."): nothing to look up or score.
 const usableName = (c) => Boolean(c.replace(/\b(inc|llc|ltd|corp)\b\.?/gi, '').trim());
 
+// The tier cache is written through a temp file + rename, so a torn or overlapping write can never leave a
+// half-written cache that makes every later shortlist run fail on JSON.parse.
+async function writeTiers(cache) {
+  await mkdir(path.dirname(TIER_CACHE), { recursive: true });
+  const tmp = `${TIER_CACHE}.tmp-${process.pid}`;
+  await writeFile(tmp, JSON.stringify(cache, null, 2) + '\n');
+  await rename(tmp, TIER_CACHE);
+}
+
 async function loadTiers(allCompanies, today) {
   const cache = existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {};
   const fresh = (e) => e && !e.error && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
@@ -112,10 +121,9 @@ async function loadTiers(allCompanies, today) {
       cache[c] = { tier: 'lookup failed', matched: null, checked: today, error: true };
     }
     looked++;
+    // Persist after each lookup: a cancel partway through keeps the lookups already done instead of losing all of them.
+    await writeTiers(cache);
   }
-  // data/immigration exists only once the daily job or a sponsorship check ran.
-  await mkdir(path.dirname(TIER_CACHE), { recursive: true });
-  await writeFile(TIER_CACHE, JSON.stringify(cache, null, 2) + '\n');
   return { tiers: withNameless(companies.map((c) => [c, cache[c].tier])), looked };
 }
 
