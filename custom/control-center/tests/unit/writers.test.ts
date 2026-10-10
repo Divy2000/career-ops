@@ -48,6 +48,13 @@ describe('inbox skip port', () => {
     expect(restored.text).toBe(flagged);
     const plain = applyInboxSkip(flagged.replace('- [ ] https://a.example/9', '- [x] https://a.example/9'), 'https://a.example/9', false);
     expect(plain.ok && plain.text).toBe(flagged);
+    // The localized forms the modes write, and a hand note that is not a fetch error.
+    for (const note of ['-- Fehler: Login erforderlich', '-- Erreur : login requis', `${String.fromCharCode(0x2014)} \u9519\u8bef\uff1a\u9700\u8981\u767b\u5f55`]) {
+      const r = applyInboxSkip(`## Pending\n- [x] https://b.example/1 ${note}\n`, 'https://b.example/1', false);
+      expect(r.ok && r.text, note).toBe(`## Pending\n- [!] https://b.example/1 ${note}\n`);
+    }
+    const hand = applyInboxSkip('## Pending\n- [x] https://b.example/2 - recruiter asked to wait\n', 'https://b.example/2', false);
+    expect(hand.ok && hand.text).toBe('## Pending\n- [ ] https://b.example/2 - recruiter asked to wait\n');
   });
   it('skips a [!] row that waits for its JD, keeping its error note (SW5-tests-02)', () => {
     const text = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n`;
