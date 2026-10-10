@@ -7,6 +7,7 @@ export function buildReadDenyRules(roots: string[], guardRoot?: string): string[
 export function assertRootsConfinable(codeRoot: string, dataRoot: string, home: string): void;
 export const GUARD_HOOK_PATH: string;
 export const ALWAYS_DENIED_WRITES: string[];
+export function trackerDenyGlobs(dataRoot: string, codeRoot?: string, env?: NodeJS.ProcessEnv): string[];
 export function shellQuote(s: string): string;
 export function guardHookCommand(nodePath?: string, hookPath?: string): string;
 export const PRE_TOOL_MATCHER: string;
