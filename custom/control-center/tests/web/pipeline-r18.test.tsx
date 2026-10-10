@@ -136,6 +136,29 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
   });
 });
 
+describe('A finished Process inbox run beside evaluations of its rows (R18-feat-b-L3-02)', () => {
+  it('given a pending row being evaluated, the finished run offers no reply or Fork, and says why', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-old');
+    sessions = [session('s-busy', 'running', { type: 'url', value: 'https://jobs.example.com/busy' })];
+    await mount();
+    await until(() => pipelinePanel(), 'the re-attached panel');
+    await act(async () => pipelinePanel()!.onStatus!('done', null));
+    await until(() => host.textContent?.includes('1 pending row is being evaluated'), 'the note');
+    expect(button('Send')!.matches(':disabled')).toBe(true);
+    expect(button('Fork')!.matches(':disabled')).toBe(true);
+  });
+
+  it('given no row being evaluated, the finished run can be replied to', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-old');
+    await mount();
+    await until(() => pipelinePanel(), 'the re-attached panel');
+    await act(async () => pipelinePanel()!.onStatus!('done', null));
+    await until(() => button('Evaluate visible (2)'), 'the sessions list');
+    expect(button('Send')!.matches(':disabled')).toBe(false);
+    expect(button('Fork')!.matches(':disabled')).toBe(false);
+  });
+});
+
 describe('A saved-JD evaluation and Process inbox (R18-feat-b-L3-04)', () => {
   it('given Evaluate JD running on a local:jds/ row, Process inbox still offers its start form', async () => {
     sessions = [session('s-jd', 'running', { type: 'text', value: 'local:jds/acme.md' })];

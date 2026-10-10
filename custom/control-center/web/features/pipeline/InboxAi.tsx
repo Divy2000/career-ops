@@ -125,6 +125,11 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
       setBusy(false);
     }
   };
+  // Rows being evaluated (or about to be) that Process inbox would evaluate again: no start, reply or fork until they end.
+  const heldBack = busy || pendingEvaluating > 0;
+  const heldBackText = `${busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again.`;
+  // A finished run's panel keeps its reply and Fork, which carry the run on over the pending rows.
+  const replyHeld = process.shown && !process.busy && heldBack;
   return (
     <div className="stack">
       <div className="toolbar" aria-label="Inbox AI actions">
@@ -169,12 +174,22 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           <p role="alert" className="danger-text small">
             Could not check for a running Process inbox, so it cannot start until the sessions list loads.
           </p>
-        ) : !process.shown && (busy || pendingEvaluating > 0) ? (
+        ) : !process.shown && heldBack ? (
           <p role="status" className="muted small">
-            {busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again. It can start once they finish.
+            {heldBackText} It can start once they finish.
           </p>
         ) : (
-          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+          <>
+            {replyHeld && (
+              <p role="status" className="muted small">
+                {heldBackText} Replying to this run can wait until they finish.
+              </p>
+            )}
+            {/* Always wrapped, so holding the reply back does not remount the panel and drop what it shows. */}
+            <fieldset disabled={replyHeld} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+            </fieldset>
+          </>
         ))}
     </div>
   );
