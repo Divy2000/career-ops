@@ -667,7 +667,7 @@ export class SessionManager {
     }
   }
 
-  /** Waits (up to RUN_END_WAIT_MS) for a run to leave queued and running; false when it has not. */
+  /** Waits (up to RUN_END_WAIT_MS) for a run to record its exit; false when it has not. */
   private async runEnded(runId: string): Promise<boolean> {
     const deadline = Date.now() + RUN_END_WAIT_MS;
     for (;;) {
