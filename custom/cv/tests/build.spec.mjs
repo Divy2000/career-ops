@@ -203,6 +203,12 @@ test('given an entry under a section that is about something else but names proj
   }
 });
 
+test('given a top-level heading after the Projects section, when checked, then the entries under it are not project sources (R11-scripts-a-L3-02 review)', () => {
+  const cv = '## Projects\n\n### Real Tool\n- x\n\n# Appendix\n\n### Secret Tool\n- y\n';
+  assert.deepEqual(checkPayload({ projects: [{ name: 'Real Tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, []);
+  assert.match(checkPayload({ projects: [{ name: 'Secret Tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors.join('\n'), /"Secret Tool" is in neither/);
+});
+
 test('given a project named after a job title in cv.md, when built, then it fails and no HTML is written (R11-scripts-a-L3-02)', () => {
   const fixture = loadFixture();
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });

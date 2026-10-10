@@ -41,8 +41,13 @@ function projectSections(cvText) {
   const out = [];
   let inside = false;
   for (const line of lines) {
-    const section = line.match(/^##(?!#)\s+(.*\S)\s*$/);
+    // A `#` heading ends a section as a `##` one does, and starts no projects section.
+    const section = line.match(/^#{1,2}(?!#)\s+(.*\S)\s*$/);
     if (section) {
+      if (!line.startsWith('##')) {
+        inside = false;
+        continue;
+      }
       // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
       inside = /\bprojects?$/i.test(section[1].replace(/[^A-Za-z]+$/, ''));
       continue;
