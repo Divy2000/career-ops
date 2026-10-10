@@ -145,6 +145,21 @@ describe('structured editors: an edit made while a save is on its way', () => {
     expect(labelled('pending')!.textContent).toBe('2');
     expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 3, c: 9 }));
   });
+
+  it('after a save with no edit mid-flight, the editor keeps the just-written version, so the next edit is not a false 409 (R17-feat-c-L1-02)', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    await click(button('Save')!);
+    await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+    // The editor shows the version just written, not the pre-save copy.
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 1 }));
+    // An edit made right after the save is on the version just written, so it saves without a false conflict.
+    await click(button('Set b')!);
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ body: { ops: [{ op: 'set', path: ['b'], value: 3 }] }, headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
+    expect(alerts()).toBe('');
+  });
   it('Discard does nothing until the save answers, so a later edit is not mistaken for a sent one', async () => {
     await mountHarness();
     await click(button('Set a')!);

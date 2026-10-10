@@ -71,8 +71,10 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       const rest = latest.current.slice(sent.length);
       setPending(rest);
       setConflict(null);
-      // Ops added meanwhile were made on top of the sent ones, which is the version just written.
-      edit.rebase(rest.length > 0 && server ? { ...server, doc: applyOpsJs(server.doc, sent), etag: r.etag } : null);
+      // Ops added meanwhile were made on top of the sent ones, which is the version just written; with none added, the
+      // editor still moves onto that version instead of falling back to the pre-save copy, so the next edit is not a
+      // false 409 against the stale ETag.
+      edit.rebase(server ? { ...server, doc: applyOpsJs(server.doc, sent), etag: r.etag } : null);
       setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${sent.length} change${sent.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
       toast.success(`Saved ${server?.path ?? fileKey}`);
       await qc.invalidateQueries({ queryKey: ['config'] });
