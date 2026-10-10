@@ -47,6 +47,24 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     },
     [rememberProcessStatus],
   );
+  // This panel's own start, from the click until the server answers: its session is in no list yet.
+  const [startingHere, setStartingHere] = useState(false);
+  const { onStarting: markStarting, onStartFailed: markStartFailed, onSessionId: rememberProcessId } = process.panel;
+  const onProcessStarting = useCallback(() => {
+    setStartingHere(true);
+    markStarting();
+  }, [markStarting]);
+  const onProcessStartFailed = useCallback(() => {
+    setStartingHere(false);
+    markStartFailed();
+  }, [markStartFailed]);
+  const onProcessId = useCallback(
+    (id: string) => {
+      setStartingHere(false);
+      rememberProcessId(id);
+    },
+    [rememberProcessId],
+  );
   // The session New run let go of: a sessions list read before it ended may still list it as live.
   const [letGo, setLetGo] = useState<string | null>(null);
   const newRun = () => {
@@ -61,7 +79,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   // bill it a second time: while either runs, the other does not start.
   const sessions = useSessions();
   const livePipeline = (sessions.data ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== letGo)?.id ?? null;
-  const pipelineLive = process.busy || livePipeline !== null;
+  const pipelineLive = process.busy || startingHere || livePipeline !== null;
   // The remembered session is this browser tab's only: a live one started in another tab (or before this tab was
   // reopened) is re-attached, so the button shows it instead of a start form for a second run.
   const { sessionId: processId, onSessionId: attachProcess } = process.panel;
@@ -149,7 +167,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
             {busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again. It can start once they finish.
           </p>
         ) : (
-          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
         ))}
     </div>
   );

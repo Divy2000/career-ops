@@ -11,7 +11,7 @@ import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type PanelProps = { mode: string; sessionId?: string | null; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void };
+type PanelProps = { mode: string; sessionId?: string | null; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void; onStarting?: () => void; onStartFailed?: () => void };
 let panels: PanelProps[];
 vi.mock('@web/components/SessionPanel', () => ({
   SessionPanel: (props: PanelProps) => {
@@ -200,6 +200,17 @@ describe('Process inbox guard after review', () => {
     await until(() => pipelinePanel(), 'the re-attached panel');
     await act(async () => pipelinePanel()!.onStatus!('awaiting_user', null));
     expect(button('New run')).toBeUndefined();
+  });
+
+  it('given a Process inbox start in flight, Evaluate visible is off until the start fails (review)', async () => {
+    await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => pipelinePanel(), 'the Process inbox panel');
+    await act(async () => pipelinePanel()!.onStarting!());
+    expect(button('Evaluate visible (2)')!.disabled).toBe(true);
+    await act(async () => pipelinePanel()!.onStartFailed!());
+    expect(button('Evaluate visible (2)')!.disabled).toBe(false);
   });
 
   it('given a sessions list whose refresh failed, Process inbox offers no start form on the stale list (review)', async () => {
