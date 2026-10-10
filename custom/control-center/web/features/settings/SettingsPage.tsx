@@ -46,7 +46,7 @@ function EngineTab() {
                 )}
               </dd>
               <dt>Keychain token</dt>
-              <dd>{s.keychainTokenPresent ? <Pill tone="ok">present</Pill> : <Pill tone="danger">missing (claude setup-token, then security add-generic-password -s career-ops-claude-token)</Pill>}</dd>
+              <dd>{s.keychainTokenPresent ? <Pill tone="ok">present</Pill> : <Pill tone="danger">missing (claude setup-token, then security add-generic-password -U -a "$USER" -s career-ops-claude-token -w)</Pill>}</dd>
               <dt>ANTHROPIC_API_KEY in the server shell</dt>
               <dd>{s.anthropicApiKeySet ? <Pill tone="warn">set (sessions force it empty)</Pill> : <Pill tone="ok">empty</Pill>}</dd>
               <dt>Playwright MCP</dt>
