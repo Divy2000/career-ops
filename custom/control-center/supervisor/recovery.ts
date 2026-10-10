@@ -429,6 +429,43 @@ export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (
   });
 }
 
+/**
+ * A queued run a dead server left behind is over only because no server will start it (runEnded above), but it is still
+ * `queued` on disk with its request.json, so the next server's reconcile() would re-adopt and re-run it over the revert
+ * it just allowed. Mark each such run of the session lost first. A run with a `starting` file may still have its wrapper
+ * running, so its processes decide and it is left alone.
+ */
+export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
+  const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
+  let names: string[];
+  try {
+    names = fs.readdirSync(runs);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const dir = path.join(runs, name);
+    if (fs.existsSync(path.join(dir, 'starting'))) continue;
+    let meta: Record<string, unknown> | null;
+    try {
+      meta = readJson<Record<string, unknown>>(path.join(dir, 'meta.json'));
+    } catch {
+      continue;
+    }
+    if (!meta || meta.status !== 'queued') continue;
+    if ((meta.params as { sessionId?: unknown } | undefined)?.sessionId !== sessionId) continue;
+    if (!fs.existsSync(path.join(dir, 'request.json'))) continue;
+    const tmp = path.join(dir, 'meta.json.tmp');
+    const lost = { ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'the server was down and this queued run was reverted before it started' };
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(lost, null, 2));
+      fs.renameSync(tmp, path.join(dir, 'meta.json'));
+    } catch {
+      /* Best effort: a run that cannot be marked still does not block the revert (runEnded already said it ended). */
+    }
+  }
+}
+
 /** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
 export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null; serverRunning?: boolean }): { status: number; text: string } {
   const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
@@ -443,6 +480,8 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     if (!last || !runEnded(opts.ctx.dataRoot, last.runId, processStartTime, false) || !sessionRunsEnded(opts.ctx.dataRoot, meta.id, processStartTime, false)) {
       return { status: 409, text: 'the session is still running (one of its runs has not ended); wait for it to finish before reverting' };
     }
+    // A queued run is over only because no server will start it: mark it lost so the next server does not re-run it.
+    markQueuedRunsLost(opts.ctx.dataRoot, meta.id);
     const offset = turnOffset(sessionDir, last.n);
     if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
   }
