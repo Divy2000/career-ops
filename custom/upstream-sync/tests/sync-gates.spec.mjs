@@ -122,7 +122,7 @@ test('sync.sh runs the control-center checks after the custom tests and before p
   assert.ok(custom > -1 && cc > custom && push > cc, `order was custom=${custom} cc=${cc} push=${push}`);
 });
 
-const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
+const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '', MAIN_MOVED: '' };
 // Each gate that must hold the PR for a human, alone, and the reason the PR comment gives for it.
 const BLOCKING = [
   [{ CUSTOM_OK: '0' }, 'custom tests FAIL'],
@@ -133,6 +133,7 @@ const BLOCKING = [
   [{ UNEXPECTED_UPSTREAM: 'scan.mjs\nmodes/oferta.md' }, 'upstream files edited outside conflict resolution: scan.mjs, modes/oferta.md'],
   [{ CLAUDE_HOLD: 'the sync Claude asked for a human: check X' }, 'the sync Claude asked for a human: check X'],
   [{ PROTECTED_EDITS: 'custom/a/tests/x.spec.mjs\ncustom/upstream-sync/lib.sh' }, 'fork tests, gates or guard files edited by the sync (review by hand): custom/a/tests/x.spec.mjs, custom/upstream-sync/lib.sh'],
+  [{ MAIN_MOVED: 'origin/main moved during the sync (tested 111111111111, now 222222222222); re-run the sync' }, 'origin/main moved during the sync (tested 111111111111, now 222222222222); re-run the sync'],
 ];
 
 function mergeBlockers(vars) {
@@ -151,7 +152,7 @@ test('merge_blockers names each gate that holds the PR, alone or together', () =
 });
 
 test('merge_blockers holds the PR when a gate was never decided', () => {
-  assert.equal(mergeBlockers({}).split('; ').length, 5, 'the four pass/fail flags and an unread Claude verdict block when unset; empty failure lists do not');
+  assert.equal(mergeBlockers({}).split('; ').length, 6, 'the four pass/fail flags, an unread Claude verdict and an unchecked origin/main block when unset; empty failure lists do not');
 });
 
 test('sync.sh auto-merges exactly when merge_blockers finds nothing', () => {

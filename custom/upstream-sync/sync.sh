@@ -192,9 +192,12 @@ else
 fi
 echo "PR: $PR_URL"
 
+# Every gate compared with BASE_REV: a main that moved since (another PR merged meanwhile) holds the PR, and the merge
+# itself is pinned to the head commit that was tested.
+MAIN_MOVED="$(main_moved "$BASE_REV")"
 BLOCKERS="$(merge_blockers)"
 if [ -z "$BLOCKERS" ]; then
-  gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
+  gh pr merge "$PR_URL" --merge --match-head-commit "$(git rev-parse HEAD)" --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
   cd "$LIVE" || fail "live checkout missing"
   LIVE_UPDATE="$(update_live_checkout)"

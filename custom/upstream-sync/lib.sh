@@ -448,11 +448,27 @@ sync_verdict() {
   esac
 }
 
+# main_moved <base-rev>: why the sync PR must not merge because the fork's main
+# is no longer <base-rev>, the commit every gate compared with, or nothing.
+# Fetches origin's main first: GitHub would merge the branch into whatever main
+# is now, a combination nothing tested. A failed fetch holds the PR too.
+main_moved() {
+  local now
+  if ! fetch_main origin; then
+    printf 'cannot confirm origin/main is still the commit the sync tested (the fetch failed)'
+    return 0
+  fi
+  now="$(git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}')"
+  [ -n "$1" ] && [ "$now" = "$1" ] && return 0
+  printf 'origin/main moved during the sync (tested %s, now %s); re-run the sync' "${1:0:12}" "${now:0:12}"
+}
+
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons
 # joined by "; ", or nothing when it may auto-merge. Reads CUSTOM_OK, CC_OK,
 # AUTO_MERGE and KEPT_README (an unset flag blocks), NEW_FAILURES and
-# UNEXPECTED_UPSTREAM and PROTECTED_EDITS (one entry per line), and CLAUDE_HOLD (sync_verdict's
-# reason; unset blocks, since the verdict was never read).
+# UNEXPECTED_UPSTREAM and PROTECTED_EDITS (one entry per line), CLAUDE_HOLD (sync_verdict's
+# reason; unset blocks, since the verdict was never read) and MAIN_MOVED (main_moved's
+# reason; unset blocks, since origin/main was never checked).
 merge_blockers() {
   local why=() out="" w
   [ "${CUSTOM_OK:-0}" = 1 ] || why+=("custom tests FAIL")
@@ -463,6 +479,7 @@ merge_blockers() {
   [ -z "${UNEXPECTED_UPSTREAM:-}" ] || why+=("upstream files edited outside conflict resolution: ${UNEXPECTED_UPSTREAM//$'\n'/, }")
   [ -z "${PROTECTED_EDITS:-}" ] || why+=("fork tests, gates or guard files edited by the sync (review by hand): ${PROTECTED_EDITS//$'\n'/, }")
   if [ -z "${CLAUDE_HOLD+set}" ]; then why+=("the sync Claude verdict was never read"); elif [ -n "$CLAUDE_HOLD" ]; then why+=("$CLAUDE_HOLD"); fi
+  if [ -z "${MAIN_MOVED+set}" ]; then why+=("whether origin/main moved during the sync was never checked"); elif [ -n "$MAIN_MOVED" ]; then why+=("$MAIN_MOVED"); fi
   for w in ${why[@]+"${why[@]}"}; do out="${out:+$out; }$w"; done
   printf '%s' "$out"
 }
