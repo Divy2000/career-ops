@@ -18,6 +18,8 @@ let root: Root;
 let router: AnyRouter;
 let sessions: Array<{ id: string; mode: string; status: string; target: { type: string; value: string | null } }>;
 let posts: Array<{ mode: string; target: { type: string; value: string } }>;
+/** While set, POST /api/sessions waits for release before answering. */
+let held: Array<() => void> | null;
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const row = (rank: number, company: string, url: string | null): ShortlistRow => ({ rank, score: 4, relevance: null, sponsor: 'strong', sponsorTier: 'strong', sponsorNote: null, company, role: `${company} engineer`, url, location: null, posted: null, why: null }) as ShortlistRow;
@@ -26,6 +28,7 @@ let shortlist: ShortlistRead;
 beforeEach(() => {
   sessions = [];
   posts = [];
+  held = null;
   shortlist = { kind: 'ok', path: 'data/shortlist.md', date: '2026-10-10', summary: null, etag: 's1', excluded: [], rows: [row(1, 'Acme', 'local:jds/acme.md'), row(2, 'Globex', 'https://jobs.example.com/globex/1')] };
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
   vi.stubGlobal(
@@ -34,6 +37,7 @@ beforeEach(() => {
       if (url === '/api/sessions' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as { mode: string; target: { type: string; value: string } };
         posts.push(body);
+        if (held) await new Promise<void>((r) => held!.push(r));
         const meta = { id: `s${posts.length}`, mode: body.mode, status: 'queued', target: body.target };
         sessions.push(meta);
         return json(202, meta);
@@ -120,5 +124,24 @@ describe('a posting whose evaluation is still active', () => {
     await click([...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Evaluate URL')!);
     await until(() => router.state.location.pathname === '/sessions/run-1', 'the active session');
     expect(posts).toHaveLength(0);
+  });
+
+  it('a second start for the same posting while the first is still on its way joins it instead of starting another', async () => {
+    await today();
+    held = [];
+    await click(evaluateIn('Globex')!);
+    await until(() => held?.length === 1, 'the first start on its way');
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Posting URL to evaluate"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'https://jobs.example.com/globex/1');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Evaluate URL')!);
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');
+    expect(posts).toHaveLength(1);
   });
 });

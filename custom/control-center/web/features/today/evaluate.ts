@@ -21,6 +21,10 @@ export function useActiveEvaluation() {
   return (ref: string): SessionMeta | undefined => sessions.data?.find((s) => s.mode === 'oferta' && ACTIVE.has(s.status) && s.target.value === ref);
 }
 
+// Starts still waiting on POST /api/sessions, by posting reference: a second Evaluate of the same posting meanwhile
+// (its shortlist row and Quick evaluate) joins the first instead of sending another.
+const starting = new Map<string, Promise<SessionMeta>>();
+
 /**
  * Starts the oferta session for a posting reference: a saved JD as its file (no URL to check or fetch), anything else
  * as a posting URL. The new session goes into the sessions list at once, so coming back before the next poll already
@@ -28,10 +32,17 @@ export function useActiveEvaluation() {
  */
 export function useStartEvaluation() {
   const qc = useQueryClient();
-  return async (ref: string): Promise<SessionMeta> => {
+  return (ref: string): Promise<SessionMeta> => {
+    const pending = starting.get(ref);
+    if (pending) return pending;
     const jd = localJdPath(ref);
-    const m = jd === null ? await startEvaluateSession(ref) : await startSavedJdSession(ref, jd);
-    qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => (prev ? [m, ...prev.filter((s) => s.id !== m.id)] : prev));
-    return m;
+    const start = (jd === null ? startEvaluateSession(ref) : startSavedJdSession(ref, jd))
+      .then((m) => {
+        qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => (prev ? [m, ...prev.filter((s) => s.id !== m.id)] : prev));
+        return m;
+      })
+      .finally(() => starting.delete(ref));
+    starting.set(ref, start);
+    return start;
   };
 }
