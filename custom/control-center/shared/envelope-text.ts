@@ -30,9 +30,10 @@ function jsonObjectEnd(line: string, start: number): number {
 
 /**
  * Takes the envelopes out of one line. A well-formed object ends at its balanced `}` (so a `}>>` inside a string is
- * kept); malformed JSON ends at the first `}>>`, so it still comes back as an envelope the server flags.
+ * kept); malformed JSON ends at the first `}>>`, so it still comes back as an envelope the server flags. With
+ * `hidePartial` (the streaming tail), an envelope still open at the end of the line is hidden from its opener on.
  */
-function takeEnvelopes(line: string, found: RawEnvelope[]): { rest: string; matched: boolean } {
+function takeEnvelopes(line: string, found: RawEnvelope[], hidePartial: boolean): { rest: string; matched: boolean } {
   let rest = '';
   let pos = 0;
   let matched = false;
@@ -40,6 +41,7 @@ function takeEnvelopes(line: string, found: RawEnvelope[]): { rest: string; matc
   for (let m = OPENER_RE.exec(line); m; m = OPENER_RE.exec(line)) {
     const brace = m.index + m[0].length - 1;
     const close = jsonObjectEnd(line, brace);
+    if (close === -1 && hidePartial) return { rest: rest + line.slice(pos, m.index), matched };
     const end = close !== -1 && line.startsWith('>>', close + 1) ? close : line.indexOf('}>>', brace);
     if (end === -1) {
       OPENER_RE.lastIndex = m.index + 1;
@@ -51,7 +53,12 @@ function takeEnvelopes(line: string, found: RawEnvelope[]): { rest: string; matc
     pos = end + 3;
     OPENER_RE.lastIndex = pos;
   }
-  return { rest: rest + line.slice(pos), matched };
+  rest += line.slice(pos);
+  if (hidePartial) {
+    const open = rest.lastIndexOf('<<cc:');
+    if (open !== -1 && !rest.slice(open).includes('>>')) rest = rest.slice(0, open);
+  }
+  return { rest, matched };
 }
 
 /**
@@ -73,19 +80,9 @@ export function splitEnvelopes(text: string, streaming: boolean): { found: RawEn
       visible.push(line);
       return;
     }
-    const { rest, matched } = takeEnvelopes(line, found);
-    if (matched) {
-      if (rest.trim()) visible.push(rest.trimEnd());
-      return;
-    }
-    if (streaming && i === lines.length - 1) {
-      const open = line.lastIndexOf('<<cc:');
-      if (open !== -1 && !line.slice(open).includes('>>')) {
-        visible.push(line.slice(0, open));
-        return;
-      }
-    }
-    visible.push(line);
+    const { rest, matched } = takeEnvelopes(line, found, streaming && i === lines.length - 1);
+    if (!matched) visible.push(rest);
+    else if (rest.trim()) visible.push(rest.trimEnd());
   });
   return { found, visibleText: visible.join('\n') };
 }

@@ -1674,6 +1674,14 @@ describe('envelopes', () => {
     expect(bad.visibleText).toBe(' tail');
   });
 
+  it('while streaming, a partial envelope after a complete one on the same line is hidden', () => {
+    const r = extractEnvelopes('Go <<cc:act {"action":"a"}>> next <<cc:act {"action":"', true);
+    expect(r.envelopes).toEqual([expect.objectContaining({ ok: true, kind: 'act' })]);
+    expect(r.visibleText).toBe('Go  next');
+    // A string still open at the end of the stream is a partial envelope, even when it already holds a "}>>".
+    expect(extractEnvelopes('Saved <<cc:cv {"markdown":"a }>> b', true)).toEqual({ envelopes: [], visibleText: 'Saved ' });
+  });
+
   it('an envelope kind named after an Object property is an unknown kind, never a crash', () => {
     for (const kind of ['constructor', 'tostring', 'hasownproperty', 'valueof', 'isprototypeof']) {
       const r = extractEnvelopes(`Done.\n<<cc:${kind} {}>>`, false);
