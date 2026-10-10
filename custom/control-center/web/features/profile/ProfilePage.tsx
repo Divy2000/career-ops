@@ -139,6 +139,11 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     parse.begin(p);
     setUploadPath(p);
   };
+  // Typing during a parse makes the draft the user's own: the parse is stopped, so its late result cannot replace it.
+  const editDraft = (text: string) => {
+    if (parse.parsing) showUpload(null);
+    setDraft(text);
+  };
   const parseDone = parse.done;
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
@@ -230,7 +235,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
         <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf" onFile={(f) => void onFile(f)} />
       </div>
       {uploadPath && <SessionPanel key={uploadPath} {...parse.panelFor(uploadPath)} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
-      <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="# Your name ..." />
+      <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => editDraft(e.target.value)} placeholder="# Your name ..." />
       <div className="row gap">
         <button type="button" disabled={saving || !draft.trim()} onClick={() => void save()}>
           Save as cv.md

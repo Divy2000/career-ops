@@ -81,6 +81,14 @@ async function choose(label: string, name: string) {
 const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(text))!;
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 const sent = (method: string, url: string) => calls.filter((c) => c.method === method && c.url === url).length;
+async function typeInto(label: string, text: string) {
+  const area = host.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, text);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+const textOf = (label: string) => host.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)!.value;
 
 describe('Import CV parse sessions', () => {
   it('leaving while the PDF parse runs asks first, since its result would be lost', async () => {
@@ -170,6 +178,19 @@ describe('Import CV parse sessions', () => {
     await until(() => !dialog(), 'the question to close');
     await choose('CV file', 'two.pdf');
     await until(() => sent('POST', '/api/sessions/s-retry/cancel') === 1, 'the cancel of the retried parse');
+  });
+
+  it('a draft typed while the parse runs is kept: the parse is cancelled and its late result dropped (R18-feat-b-X-01)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => panel.onStatus!('running', null));
+    await typeInto('CV markdown', '# Typed by hand');
+    await until(() => sent('POST', '/api/sessions/s-cv/cancel') === 1, 'the cancel of the parse');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# From the parser' }, 1));
+    expect(textOf('CV markdown')).toBe('# Typed by hand');
   });
 
   it('picking another PDF cancels the parse still running for the first', async () => {
