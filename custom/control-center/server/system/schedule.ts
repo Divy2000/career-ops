@@ -156,6 +156,22 @@ interface PlistJson {
   StartCalendarInterval?: { Hour?: number; Minute?: number; Weekday?: number } | Array<{ Hour?: number; Minute?: number; Weekday?: number }>;
 }
 
+// One save per plist at a time, across every ScheduleService in this process: two saves at once (a double click, Save
+// then Disable) would otherwise share the temp plist and interleave their launchctl steps.
+const writeLocks = new Map<string, Promise<unknown>>();
+
+function withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (writeLocks.get(key) ?? Promise.resolve()).then(fn, fn);
+  const settled = run.catch(() => undefined);
+  writeLocks.set(key, settled);
+  void settled.then(() => {
+    if (writeLocks.get(key) === settled) writeLocks.delete(key);
+  });
+  return run;
+}
+
+export type ScheduleWriteResult = { ok: true; state: ScheduleState } | { ok: false; status: number; error: string; stderr: string };
+
 export class ScheduleService {
   constructor(
     private deps: { exec: Exec; agentsDir: string; uid: number; codeRoot: string; dataRoot: string; dataRootFromEnv?: boolean; claudeBin?: string; nodeBin?: string; now?: () => Date },
@@ -221,7 +237,11 @@ export class ScheduleService {
    * bootstrap; disabling runs launchctl disable (persistent: launchd would
    * otherwise load the plist again at the next login) and bootout.
    */
-  async write(job: ScheduleJob, input: ScheduleInput): Promise<{ ok: true; state: ScheduleState } | { ok: false; status: number; error: string; stderr: string }> {
+  write(job: ScheduleJob, input: ScheduleInput): Promise<ScheduleWriteResult> {
+    return withWriteLock(this.plistPath(job), () => this.writeLocked(job, input));
+  }
+
+  private async writeLocked(job: ScheduleJob, input: ScheduleInput): Promise<ScheduleWriteResult> {
     const plistPath = this.plistPath(job);
     // Every save boots the job out, and bootout of a LaunchAgent launchd is running stops that run mid-step (a half-done
     // policy pass, an unacked queue, a half-installed node_modules). Only launchd's own instance is at risk: a run

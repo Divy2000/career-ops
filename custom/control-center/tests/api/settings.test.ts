@@ -465,6 +465,29 @@ describe('launchd schedule through the injectable executor (never the real launc
       fake.fail.clear();
     }
   });
+  it('two saves at once both succeed, run one after the other, and the plist holds the later one (R12-srv-core-L3-01, R12-srv-core-02)', async () => {
+    const base = fakeLaunchdExec();
+    // The first lint is slow, so without serialization the second save writes and lints while the first one waits.
+    let lints = 0;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'plutil' && args[0] === '-lint' && lints++ === 0) await new Promise((r) => setTimeout(r, 50));
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      const [a, b] = await Promise.all([put({ hour: 4, minute: 30, weekday: 0, enabled: true }), put({ hour: 6, minute: 15, weekday: 0, enabled: false })]);
+      expect(a.statusCode, a.body).toBe(200);
+      expect(b.statusCode, b.body).toBe(200);
+      const xml = fs.readFileSync(path.join(app.cfg.launchAgentsDir, `${label}.plist`), 'utf8');
+      expect(xml).toContain('<key>Hour</key><integer>6</integer><key>Minute</key><integer>15</integer>');
+      expect(b.json()).toMatchObject({ loaded: false, disabled: true, hour: 6, minute: 15 });
+      expect(fs.readdirSync(app.cfg.launchAgentsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
   it('refuses to save or disable a schedule while launchd is running that job, since bootout would kill the run mid-step (SW3-server-01)', async () => {
     expect((await send('PUT', '/api/schedule/com.career-ops.upstream-sync', { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
     const plist = path.join(t.cfg.launchAgentsDir, 'com.career-ops.upstream-sync.plist');
