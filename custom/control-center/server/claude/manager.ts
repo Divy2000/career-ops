@@ -475,12 +475,9 @@ export class SessionManager {
     let finalText = '';
     // A line that cannot be processed fails this session (its run is stopped), never the server that tracks it.
     let failure: string | null = null;
-    // Whether the run could be told to stop; when it could not, it may still write, so its report number is kept.
-    let runStopped = false;
     const stopRun = () => {
       try {
         this.runner.cancel(runId);
-        runStopped = true;
       } catch {
         /* the run record is unreadable too: the turn is settled without it */
       }
@@ -553,11 +550,12 @@ export class SessionManager {
       try {
         run = this.runner.store.read(runId);
       } catch (err) {
-        // Without its run record the turn cannot be followed or finalized: it ends now, in error.
+        // Without its run record the turn cannot be followed or finalized: it ends now, in error. Nothing confirms the
+        // stopped run has ended, so it may still write its report: the session keeps its number.
         fail(err);
         clearInterval(timer);
         this.active.delete(id);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: !runStopped }, err);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err);
         return;
       }
       if (!run || run.status === 'running' || run.status === 'queued') return;

@@ -1669,7 +1669,10 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
-  it('a run record that cannot be read while its turn is tracked ends the turn in error, even when the cancel cannot read it either (R14-claude-L1-01 review)', async () => {
+  it.each([
+    ['once', 1],
+    ['also by the cancel', 2],
+  ])('a run record that cannot be read (%s) while its turn is tracked ends the turn in error and keeps its report number (R14-claude-L1-01 review)', async (_label, unreadable) => {
     const app = await freshApp();
     try {
       const sentinel = reserve(app, 69);
@@ -1677,7 +1680,7 @@ describe('report reservations and session trackers survive failures (r16-claude)
       await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
       const runId = app.sessions.read(id)!.turns[0]!.runId;
       const read = app.runner.store.read.bind(app.runner.store);
-      let failing = 2;
+      let failing = unreadable;
       vi.spyOn(app.runner.store, 'read').mockImplementation((rid) => {
         if (rid === runId && failing > 0) {
           failing -= 1;
@@ -1686,7 +1689,7 @@ describe('report reservations and session trackers survive failures (r16-claude)
         return read(rid);
       });
       await until(() => app.sessions.read(id)!.turns[0]!.endedAt !== null);
-      // The run could not be stopped, so it may still write its report: the number stays reserved.
+      // Whether or not the run could be told to stop, nothing confirms it has ended: it may still write its report.
       expect(app.sessions.read(id)).toMatchObject({ status: 'error', error: expect.stringMatching(/could not record the session output: EIO/), reportNum: 69 });
       expect(fs.existsSync(sentinel)).toBe(true);
     } finally {
