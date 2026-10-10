@@ -21,8 +21,9 @@ function pinRe(appNum) {
 }
 
 // followup-cadence.mjs: a `- cleared #N` retirement outranks any pin, so pinning a retired application revives it.
+// The whole CLEARED_RE grammar: a line the cadence does not read as a retirement is the user's text and stays.
 function clearedRe(appNum) {
-  return new RegExp(`^-\\s+cleared\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}`, 'i');
+  return new RegExp(`^-\\s+cleared\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}(?:\\s*[\u2014\u2013-].*)?\\s*$`, 'i');
 }
 
 /**

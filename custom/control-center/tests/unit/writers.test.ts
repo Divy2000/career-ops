@@ -141,6 +141,9 @@ describe('follow-ups edits', () => {
     expect(set.text).not.toMatch(/^- cleared #1 /m);
     expect(set.text).toContain('- cleared #6 2026-10-05');
     expect(set.text).toContain('- next #1 2026-10-20 (set 2026-10-06)');
+    // Only a line the cadence reads as a retirement: anything else is the user's text.
+    const note = applyFollowupEdit(`${FOLLOWUPS}- cleared #1 2026-10-05x - keep this note\n`, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-10-06' });
+    expect(note.ok && note.text).toContain('- cleared #1 2026-10-05x - keep this note');
   });
   it('logs into an existing table with other header labels, numbering after every row in the file (R13-feat-a-L2-01)', () => {
     const text = '# Follow-ups\n\n| # | App | Date | Company | Role | Channel | Contact | Notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n';
