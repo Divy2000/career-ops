@@ -20,6 +20,8 @@ let sessions: Array<{ id: string; mode: string; status: string; target: { type: 
 let posts: Array<{ mode: string; target: { type: string; value: string } }>;
 /** While set, POST /api/sessions waits for release before answering. */
 let held: Array<() => void> | null;
+/** While set, GET /api/sessions waits, as on a slow first load. */
+let slowList: Array<() => void> | null;
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const row = (rank: number, company: string, url: string | null): ShortlistRow => ({ rank, score: 4, relevance: null, sponsor: 'strong', sponsorTier: 'strong', sponsorNote: null, company, role: `${company} engineer`, url, location: null, posted: null, why: null }) as ShortlistRow;
@@ -29,6 +31,7 @@ beforeEach(() => {
   sessions = [];
   posts = [];
   held = null;
+  slowList = null;
   shortlist = { kind: 'ok', path: 'data/shortlist.md', date: '2026-10-10', summary: null, etag: 's1', excluded: [], rows: [row(1, 'Acme', 'local:jds/acme.md'), row(2, 'Globex', 'https://jobs.example.com/globex/1')] };
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
   vi.stubGlobal(
@@ -42,6 +45,7 @@ beforeEach(() => {
         sessions.push(meta);
         return json(202, meta);
       }
+      if (url === '/api/sessions' && slowList) await new Promise<void>((r) => slowList!.push(r));
       if (url === '/api/sessions') return json(200, sessions);
       if (url === '/api/shortlist') return json(200, shortlist);
       return json(502, { error: 'not stubbed' });
@@ -143,5 +147,18 @@ describe('a posting whose evaluation is still active', () => {
     await act(async () => waiting.forEach((r) => r()));
     await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');
     expect(posts).toHaveLength(1);
+  });
+
+  it('an evaluation started before the sessions list first loads still shows as running on coming back', async () => {
+    slowList = [];
+    await today();
+    await click(evaluateIn('Globex')!);
+    await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');
+    await act(async () => router.history.back());
+    await until(() => rowOf('Globex'), 'Today again');
+    expect(evaluateIn('Globex')).toBeUndefined();
+    const waiting = slowList!;
+    slowList = null;
+    await act(async () => waiting.forEach((r) => r()));
   });
 });

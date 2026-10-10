@@ -38,7 +38,7 @@ export function useStartEvaluation() {
     const jd = localJdPath(ref);
     const start = (jd === null ? startEvaluateSession(ref) : startSavedJdSession(ref, jd))
       .then((m) => {
-        qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => (prev ? [m, ...prev.filter((s) => s.id !== m.id)] : prev));
+        qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => [m, ...(prev ?? []).filter((s) => s.id !== m.id)]);
         return m;
       })
       .finally(() => starting.delete(ref));
