@@ -503,9 +503,10 @@ merge_blockers() {
 
 # update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
 # merged, bring the live checkout (the current directory) up to <commit>, the
-# sync PR's verified merge commit (never a later origin/main, which this run did
-# not test): fetch, then fast-forward only when it is on main with no tracked
-# local changes. Then reinstall what the merge changed, as a user's own install would:
+# sync PR's verified merge commit: this never moves it past <commit> to a later
+# origin/main, which this run did not test (a checkout someone already pulled
+# further is theirs, and is left where it is). Fetch, then fast-forward only
+# when it is on main with no tracked local changes. Then reinstall what the merge changed, as a user's own install would:
 # the root dependencies (lifecycle scripts included) when deps_fingerprint
 # changed, and the Control Center's (npm ci) when its tracked lockfile changed,
 # since bin/cc only checks that its node_modules exists. All of it runs holding
