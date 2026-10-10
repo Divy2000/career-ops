@@ -861,6 +861,41 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(here.store.read(theirs.id)?.status).toBe('done');
   });
 
+  it('a recorded wrapper whose PID now belongs to a process that started after the wrapper recorded itself is gone: the run ends lost and frees its slot, instead of tracking that process', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const reused = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(reused);
+    const recordedAt = new Date(Date.now() - 3_600_000).toISOString();
+    fs.writeFileSync(path.join(new RunStore(root).dirOf(theirs.id), 'wrapper.json'), JSON.stringify({ wrapperPid: reused.pid, childPid: reused.pid, startedAt: recordedAt }));
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(here);
+    const mine = here.start(req(['0'], { claude: true }));
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(theirs.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/wrapper/) });
+    expect(reused.exitCode).toBeNull();
+  });
+
+  it('cancelling a run taken over from a dead server never signals its recorded child PID once that PID belongs to a process that started after the wrapper recorded it', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const wrapper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(wrapper);
+    await wait(1200);
+    const recordedAt = new Date().toISOString();
+    await wait(1200);
+    // Its own process group, as a run's command has: what cancel would signal.
+    const reused = spawn('sleep', ['30'], { stdio: 'ignore', detached: true });
+    others.push(reused);
+    fs.writeFileSync(path.join(new RunStore(root).dirOf(theirs.id), 'wrapper.json'), JSON.stringify({ wrapperPid: wrapper.pid, childPid: reused.pid, startedAt: recordedAt }));
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    here.cancel(theirs.id);
+    await wait(1000);
+    expect(reused.exitCode).toBeNull();
+    expect(reused.signalCode).toBeNull();
+  });
+
   it('a server killed after spawning a wrapper that recorded nothing yet: the run ends lost, its wrapper told to stop, and it is never started again', async () => {
     const root = tmpRoot();
     // A wrapper stand-in that never gets as far as recording anything.

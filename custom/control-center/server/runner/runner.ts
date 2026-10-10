@@ -276,7 +276,24 @@ export class Runner {
       return this.store.read(meta.id) ?? begun;
     }
     if (wrapper) {
-      const running: RunMeta = { ...begun, status: 'running', wrapperStartedAt: this.recordStart(wrapper.wrapperPid), childStartedAt: wrapper.childPid ? this.recordStart(wrapper.childPid) : null };
+      const recordedAt = Date.parse(String((wrapper as { startedAt?: unknown }).startedAt));
+      const wrapperStartedAt = this.startRecordedBy(wrapper.wrapperPid, recordedAt);
+      if (wrapperStartedAt === false) {
+        const lateExit = this.store.readExit(meta.id);
+        if (lateExit) {
+          this.finalize(begun, lateExit);
+          return this.store.read(meta.id) ?? begun;
+        }
+        const gone: RunMeta = { ...begun, status: 'lost', endedAt: new Date().toISOString(), error: 'the server stopped while starting this run, and its wrapper is gone without an exit record (its PID is free or now belongs to another process)' };
+        this.store.write(gone);
+        this.envById.delete(meta.id);
+        this.dropInputs(gone);
+        this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+        return gone;
+      }
+      // A child PID now held by a process that started later is never recorded as the run's: nothing signals it.
+      const childStartedAt = wrapper.childPid ? this.startRecordedBy(wrapper.childPid, recordedAt) : null;
+      const running: RunMeta = { ...begun, status: 'running', wrapperStartedAt, childStartedAt: childStartedAt === false ? null : childStartedAt };
       this.store.write(running);
       this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
       this.track(running);
@@ -300,6 +317,17 @@ export class Runner {
     this.dropInputs(lost);
     this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
     return lost;
+  }
+
+  /**
+   * The start of a PID a wrapper recorded at `recordedAtMs` (its wrapper.json), read now: false when the PID is not ours
+   * or the process holding it started after that record (the PID was reused); null when its start cannot be read.
+   */
+  private startRecordedBy(pid: number, recordedAtMs: number): number | null | false {
+    if (!this.ours(pid)) return false;
+    const start = this.procStart(pid);
+    if (typeof start !== 'number') return null;
+    return Number.isFinite(recordedAtMs) && start > recordedAtMs / 1000 ? false : start;
   }
 
   /** A file's mtime in ms; 0 when it is gone. */
