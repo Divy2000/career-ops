@@ -153,6 +153,26 @@ describe('Process inbox', () => {
   });
 });
 
+describe('Process inbox and the evaluations do not run over the same rows', () => {
+  const pipelineSession = (id: string, status: string): SessionMeta => ({ ...session(id, status, { type: 'none', value: null }), mode: 'pipeline' });
+
+  it('given a Process inbox session running, Evaluate visible is off and says why (R17-feat-b-L1-01)', async () => {
+    sessions = [pipelineSession('s-pipe', 'running')];
+    await mount();
+    await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the note');
+    expect(button('Evaluate visible')!.disabled).toBe(true);
+  });
+
+  it('given an evaluation running on a pending row, Process inbox offers no start form and says why (R17-feat-b-L1-01)', async () => {
+    sessions = [session('s-busy', 'running', { type: 'url', value: 'https://jobs.example.com/busy' })];
+    await mount();
+    await until(() => button('Evaluate visible (1)'), 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => host.textContent?.includes('1 pending row is being evaluated'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
+  });
+});
+
 describe('Process inbox new run', () => {
   it('after a finished run, New run offers the start form again instead of the old session (review)', async () => {
     sessionStorage.setItem('cc.pipeline.process', 's-old');

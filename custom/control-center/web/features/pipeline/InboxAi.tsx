@@ -3,7 +3,9 @@ import { useNavigate } from '@tanstack/react-router';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { fanOut } from '../../lib/sessions';
+import { fanOut, useSessions } from '../../lib/sessions';
+import { usePipeline } from '../../lib/queries';
+import { evaluatingTargets } from './evaluating';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
@@ -14,6 +16,9 @@ import { useRememberedSession } from '../../lib/useRememberedSession';
  * hands check-liveness.mjs; the guard refuses a line that is not an http(s) URL, which fails the sweep. Saved-JD rows
  * (local:jds/) are left out, and each is evaluated from its own row (Evaluate JD).
  */
+// A session waiting for the user's reply still owns the rows it works on: answering it carries on.
+const LIVE = new Set(['queued', 'running', 'awaiting_user']);
+
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
 
@@ -37,6 +42,13 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     setFresh((n) => n + 1);
   };
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
+  // Process inbox evaluates every pending row, and an evaluation started for one of them would evaluate, report and
+  // bill it a second time: while either runs, the other does not start.
+  const sessions = useSessions();
+  const pipelineLive = process.busy || (sessions.data ?? []).some((s) => s.mode === 'pipeline' && LIVE.has(s.status));
+  const pipeline = usePipeline();
+  const beingEvaluated = evaluatingTargets(sessions.data);
+  const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
   // One fan-out takes at most BATCH_MAX_URLS. Splitting a bigger set into several requests would leave a partial start
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
   const unique = [...new Set(urls)];
@@ -72,9 +84,10 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
         <button type="button" onClick={() => setOpen((o) => (process.busy ? true : !o))} aria-expanded={open}>
           Process inbox <Pill tone="warn">Uses tokens</Pill>
         </button>
-        <button type="button" disabled={busy || checking || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
+        <button type="button" disabled={busy || checking || pipelineLive || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
+        {pipelineLive && <span className="muted small">Process inbox is processing the pending rows, so Evaluate visible is off until it ends.</span>}
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
         {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
         {savedJds > 0 && (
@@ -100,7 +113,14 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           </button>
         </div>
       )}
-      {open && <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />}
+      {open &&
+        (!process.shown && (busy || pendingEvaluating > 0) ? (
+          <p role="status" className="muted small">
+            {busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again. It can start once they finish.
+          </p>
+        ) : (
+          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+        ))}
     </div>
   );
 }

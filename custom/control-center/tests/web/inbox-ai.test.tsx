@@ -3,6 +3,7 @@
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,6 +27,8 @@ beforeEach(async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn((_url: string, init?: RequestInit) => {
+      // The reads InboxAi makes for its guards (the sessions list, the pipeline): nothing is running.
+      if (!init?.method) return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
       posts.push(JSON.parse(String(init?.body)));
       return new Promise<Response>((resolve) => (answer = resolve));
     }),
@@ -35,7 +38,7 @@ beforeEach(async () => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(ConfirmProvider, null, createElement(InboxAi, { urls: URLS }))));
+  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(InboxAi, { urls: URLS })))));
 });
 afterEach(async () => {
   await act(async () => root.unmount());
