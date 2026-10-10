@@ -52,6 +52,17 @@ afterEach(async () => {
   await act(async () => root.unmount());
 });
 
+// Remount the drawer with a fresh QueryClient so the sessions list (useSessions) loads from the current fetch stub:
+// the shared beforeEach mounts before each describe stubs fetch.
+async function remountDrawer() {
+  const { AskDrawer } = await import('@web/components/AskDrawer');
+  const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(AskDrawer, { open: true, onClose: () => undefined })))));
+}
+
 describe('Ask drawer: proposed actions', () => {
   it('an act envelope naming an Object property is shown as not allowlisted and offers nothing to run', async () => {
     for (const action of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
@@ -228,6 +239,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 3, state: 'Applied' } } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
+
+  it('a remember fact over 300 characters fails before asking, matching the server limit (R17-shared-comp-L2-04)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'remember', params: { fact: 'x'.repeat(301) } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('at most 300 characters');
+    expect(posts).toEqual([]);
+  });
 });
 
 describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25)', () => {
@@ -249,6 +270,68 @@ describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25
     await act(async () => button('Do it').click());
     expect(item.dataset.proposalState).toBe('done');
     expect(item.textContent).toContain('Already remembered');
+  });
+});
+
+describe('Ask drawer: research a company runs deep, not the Portfolio research virtual mode (R17-shared-comp-L2-03)', () => {
+  let body: Record<string, unknown> | null;
+  beforeEach(() => {
+    body = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && url === '/api/sessions') {
+          body = JSON.parse(String(init.body));
+          return Promise.resolve(new Response(JSON.stringify({ id: 's-deep', mode: 'deep', status: 'queued' }), { status: 202, headers: { 'content-type': 'application/json' } }));
+        }
+        return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('starts a deep session (which WebSearch covers) with the topic as its text target', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'research', params: { topic: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(body?.mode).toBe('deep');
+    expect(body?.target).toEqual({ type: 'text', value: 'Acme' });
+    expect(item.dataset.proposalState).toBe('done');
+  });
+});
+
+describe('Ask drawer: a 202 whose session already failed shows failed, not done (R17-shared-comp-X-02)', () => {
+  const FAILED = { id: 's-fail', mode: 'oferta', status: 'error', error: 'Claude CLI not approved', target: { type: 'url', value: 'https://jobs.example.com/1' } };
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && url === '/api/sessions') {
+          return Promise.resolve(new Response(JSON.stringify(FAILED), { status: 202, headers: { 'content-type': 'application/json' } }));
+        }
+        return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it.each([
+    ['evaluate', { url: 'https://jobs.example.com/1' }],
+    ['research', { topic: 'Acme' }],
+    ['generatePdf', { row: '2' }],
+  ] as const)('%s reports the start failure instead of done', async (action, params) => {
+    await act(async () => emitEnvelope!('act', { action, params }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Claude CLI not approved');
+    expect(navigations).toEqual([]);
   });
 });
 
@@ -282,6 +365,130 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
   });
 });
 
+describe('Ask drawer: evaluate joins an already-running evaluation (R17-shared-comp-L1-01)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  const ACTIVE = { id: 's-active', mode: 'oferta', status: 'running', target: { type: 'url', value: 'https://jobs.example.com/1' } };
+  beforeEach(async () => {
+    posts = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) });
+        if (url === '/api/sessions' && init?.method !== 'POST') return new Response(JSON.stringify([ACTIVE]), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('opens the live oferta session instead of starting a second paid one', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.example.com/1' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-active' } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+});
+
+
+describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shared-comp-L3-03)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  let listed: Array<Record<string, unknown>>;
+  beforeEach(async () => {
+    posts = [];
+    listed = [];
+    sessionStorage.clear();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          return new Response(JSON.stringify({ id: 's-new', mode: 'pdf', status: 'queued', target: { type: 'app', value: '2' } }), { status: 202, headers: { 'content-type': 'application/json' } });
+        }
+        if (url === '/api/sessions') return new Response(JSON.stringify(listed), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const run = async (row = '2') => {
+    await act(async () => emitEnvelope!('act', { action: 'generatePdf', params: { row } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    return item;
+  };
+
+  it('starts the session, writes cc.pdf.N, and clears the in-flight mark', async () => {
+    const item = await run();
+    expect(posts).toHaveLength(1);
+    expect(sessionStorage.getItem('cc.pdf.2')).toBe('s-new');
+    expect(sessionStorage.getItem('cc.pdf.2:starting')).toBeNull();
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-new' } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('opens a live pdf session for the row instead of starting a second', async () => {
+    listed = [{ id: 's-pdf', mode: 'pdf', status: 'running', target: { type: 'app', value: '2' } }];
+    await remountDrawer();
+    await run();
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-pdf' } }]);
+  });
+
+  it('refuses to start while another mount is starting the row\'s CV', async () => {
+    sessionStorage.setItem('cc.pdf.2:starting', String(Date.now()));
+    await remountDrawer();
+    const item = await run();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('already starting');
+  });
+
+  it('starts after an orphaned starting mark has expired, so a reload mid-start does not block the row forever', async () => {
+    sessionStorage.setItem('cc.pdf.2:starting', String(Date.now() - 16_000));
+    await remountDrawer();
+    const item = await run();
+    expect(posts).toHaveLength(1);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+});
+
+
+describe('Ask drawer: setStatus names its row and shows the note it writes (R17-shared-comp-L3-01)', () => {
+  const TRACKER = { kind: 'ok', path: 'data/applications.md', etag: 'e', rows: [{ num: 1, date: '2026-10-01', company: 'Acme', role: 'Engineer' }] };
+  beforeEach(async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return new Response(JSON.stringify({ result: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        if (url === '/api/tracker') return new Response(JSON.stringify(TRACKER), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('shows the note it writes and names the row by company and role', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 1, state: 'Applied', note: 're-linked report 12' } }, 1));
+    await act(async () => bodyButton('Review and run')!.click());
+    const dialog = document.body.querySelector('.dialog')!;
+    expect(dialog.textContent).toContain('Acme');
+    expect(dialog.textContent).toContain('Engineer');
+    expect(dialog.textContent).toContain('re-linked report 12');
+  });
+});
 
 describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
   let posts: Array<{ url: string; body: unknown }>;
@@ -350,6 +557,24 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     rows.push(row('local:jds/2026-10-06_acme_pm.pdf', 'Acme'), { ...row('https://www.linkedin.com/jobs/view/4100000001', 'Acme'), needsJd: true } as ReturnType<typeof row>);
     const item = await runProposal('Acme');
     expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('leaves a posting already being evaluated out, as Evaluate visible does (R17-shared-comp-L1-01)', async () => {
+    const active = { id: 's-active', mode: 'oferta', status: 'running', target: { type: 'url', value: 'https://jobs.acme.example/1' } };
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return json({ sessions: [{ id: 's1' }], reserved: [50] }, 202);
+      }
+      if (String(url) === '/api/pipeline') return json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows });
+      if (String(url) === '/api/sessions') return json([active]);
+      return json([]);
+    });
+    await remountDrawer();
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/2'] } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
 

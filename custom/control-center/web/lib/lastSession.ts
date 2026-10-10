@@ -1,15 +1,33 @@
 // The last session a page started in this browser tab, so coming back to the page re-attaches it instead of losing it.
 // Kept in sessionStorage: a storage that throws (a private window) only loses that re-attaching.
 const SESSION_ID = /^[\w-]{1,80}$/;
-// Marks a start as this page load's: a reload drops the request, so a mark left by an earlier load means nothing.
-const LOAD = Math.random().toString(36).slice(2);
+
+// A start still marked but not reported within this window was lost (its page reloaded and the POST never came back);
+// the mark is cleared so the start form is not disabled forever.
+export const START_REPORT_WINDOW_MS = 15_000;
+
+// Cross-mount notification: a write/setStarting through a raw lastSession (AskDrawer's generatePdf) must reach every
+// useRememberedSession mounted under the same key (the Apply page's pdf guard), so they re-sync their busy state.
+const sessionListeners = new Map<string, Set<() => void>>();
+export function subscribeSession(key: string, fn: () => void): () => void {
+  const set = sessionListeners.get(key) ?? new Set();
+  set.add(fn);
+  sessionListeners.set(key, set);
+  return () => {
+    set.delete(fn);
+    if (set.size === 0) sessionListeners.delete(key);
+  };
+}
+export function notifySession(key: string): void {
+  for (const fn of [...(sessionListeners.get(key) ?? [])]) fn();
+}
 
 export interface LastSession {
   read(): string | null;
   write(id: string | null): void;
   /** Called when the session is deleted, so it is not re-attached. */
   forget(id: string): void;
-  /** A start this page load sent that has not reported its session or its failure yet. */
+  /** A start this browser tab sent that has not reported its session or its failure yet. */
   starting(): boolean;
   setStarting(on: boolean): void;
 }
@@ -30,22 +48,29 @@ export function lastSession(key: string): LastSession {
     } catch {
       // storage refused: only the re-attaching is lost
     }
+    notifySession(key);
   };
   const startKey = `${key}:starting`;
+  // The mark self-expires: a start that never reports (its page reloaded and the POST was lost) must not leave the
+  // start form disabled forever. `starting()` is true only while the mark is set AND still within the window.
   const starting = (): boolean => {
     try {
-      return sessionStorage.getItem(startKey) === LOAD;
+      const raw = sessionStorage.getItem(startKey);
+      if (raw === null) return false;
+      const at = Number(raw);
+      return Number.isFinite(at) && Date.now() - at <= START_REPORT_WINDOW_MS;
     } catch {
       return false;
     }
   };
   const setStarting = (on: boolean): void => {
     try {
-      if (on) sessionStorage.setItem(startKey, LOAD);
+      if (on) sessionStorage.setItem(startKey, String(Date.now()));
       else sessionStorage.removeItem(startKey);
     } catch {
       // storage refused: a page mounted mid-start only misses that the start is under way
     }
+    notifySession(key);
   };
   return { read, write, forget: (id) => void (read() === id && write(null)), starting, setStarting };
 }

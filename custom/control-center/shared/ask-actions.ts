@@ -29,10 +29,10 @@ export const ASK_ACTION_SPECS = [
   { name: 'explore', params: [], confirm: false, writes: false, runs: true },
   { name: 'research', params: [param('topic', 'a company or topic')], confirm: true, writes: false, runs: true },
   { name: 'generatePdf', params: [param('row', 'the tracker row number')], confirm: true, writes: true, runs: true },
-  { name: 'setStatus', params: [param('row', 'the tracker row number'), param('state', 'a status from templates/states.yml, such as Applied'), param('note', 'a short note for the status log', false)], confirm: true, writes: true, runs: true },
+  { name: 'setStatus', params: [param('row', 'the tracker row number'), param('state', 'one of the exact statuses: Evaluated, Applied, Responded, Interview, Offer, Hired, Rejected, Discarded, SKIP'), param('note', 'a short note for the status log', false)], confirm: true, writes: true, runs: true },
   { name: 'apply', params: [param('row', 'the tracker row number')], confirm: false, writes: false, runs: true },
   { name: 'setApplyField', params: [param('id', 'the form field id'), param('value', 'the value')], confirm: false, writes: false, runs: false },
-  { name: 'remember', params: [param('fact', 'one line to add to modes/_profile.md')], confirm: true, writes: true, runs: true },
+  { name: 'remember', params: [param('fact', 'one line (at most 300 characters) to add to modes/_profile.md')], confirm: true, writes: true, runs: true },
   { name: 'setProfile', params: [], confirm: true, writes: true, runs: false },
   { name: 'setPortals', params: [], confirm: true, writes: true, runs: false },
 ] as const satisfies readonly AskActionSpec[];

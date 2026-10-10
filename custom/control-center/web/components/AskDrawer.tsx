@@ -6,13 +6,16 @@ import { SessionPanel } from './SessionPanel';
 import { Pill } from './ui';
 import { apiGet, apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
-import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
+import { fanOut, startSession, startTailoredCvSession, useSessions } from '../lib/sessions';
+import { lastSession } from '../lib/lastSession';
 import { afterFocusSettles } from '../lib/focus';
 import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@shared/ask-actions';
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
-import type { PipelineRead } from '@shared/api';
+import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
+import { useTracker } from '../lib/queries';
+import type { PipelineRead, SessionMeta } from '@shared/api';
 
 export interface Proposal {
   id: number;
@@ -36,7 +39,7 @@ const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   explore: () => 'Open Discover (network scan)',
   research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
   generatePdf: (p) => `Generate the tailored CV PDF for ${rowOf(p)} (uses tokens)`,
-  setStatus: (p) => `Set ${rowOf(p)} to ${String(p.state ?? '')}`,
+  setStatus: (p) => `Set ${rowOf(p)} to ${String(p.state ?? '')}${p.note ? ` with note "${String(p.note)}"` : ''}`,
   apply: (p) => `Open Apply for ${rowOf(p)}`,
   setApplyField: (p) => `Set the apply field ${String(p.id ?? '')}`,
   remember: (p) => `Remember: ${String(p.fact ?? '')}`,
@@ -83,6 +86,9 @@ export function useAskHotkey(toggle: () => void): void {
 // Older keys the run switch still reads in place of a param's name (row or n, topic or company, q or query).
 const PARAM_ALIASES: Record<string, string> = { row: 'n', topic: 'company', q: 'query' };
 
+/** Statuses that still own their row or posting: a second paid session for the same target must not start. */
+const LIVE = new Set(['queued', 'running', 'awaiting_user']);
+
 /**
  * Why a proposal's params cannot run, or null: every param the advisor's contract marks required must be there, not
  * blank, and a row is a tracker row number. A navigate stays in the app (`//host` or `/\\host` would leave it) and an
@@ -100,6 +106,8 @@ function invalidParams(p: { action: string; params: Record<string, unknown> }): 
   }
   if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
   if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
+  // The /api/memory route refuses a fact over 300 characters, so a longer one fails before the user approves it.
+  if (p.action === 'remember' && String(p.params.fact ?? '').length > 300) return 'remember needs "fact", at most 300 characters';
   return null;
 }
 
@@ -109,6 +117,13 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const confirm = useConfirm();
+  // The oferta guard the Evaluate entry points share: an active session for a posting is opened, and a start is deduped.
+  const activeFor = useActiveEvaluation();
+  const startEvaluation = useStartEvaluation();
+  // The sessions list also backs the per-row tailored-CV guard (cc.pdf.N) the Apply page shares.
+  const sessions = useSessions();
+  // The tracker names a row by company and role in the setStatus confirm, whose note can re-link reports.
+  const tracker = useTracker();
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (open) return afterFocusSettles(() => drawerRef.current?.focus());
@@ -140,18 +155,32 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     let companyUrls: string[] = [];
     if (p.action === 'evaluateCompany') {
       try {
-        companyUrls = await pendingUrlsAt(company);
+        companyUrls = (await pendingUrlsAt(company)).filter((u) => !activeFor(u));
+        if (companyUrls.length === 0) {
+          update(p.id, { state: 'failed', note: `Every pending Inbox posting at ${company} is already being evaluated.` });
+          return;
+        }
       } catch (err) {
         update(p.id, { state: 'failed', note: describeError(err) });
         return;
       }
     }
+    // A row named by number only is easy to confuse with another application: the setStatus confirm names it by
+    // company and role, and shows the note it appends to the Notes cell (which can re-link reports).
+    const nameRow = (p: Record<string, unknown>): string => {
+      const n = String(p.row ?? p.n ?? '').trim();
+      const num = Number(n);
+      const row = Number.isInteger(num) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === num) : undefined;
+      return row ? `row #${n} (${row.company}${row.role ? ` - ${row.role}` : ''})` : `row #${n}`;
+    };
     const question =
       p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
         ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.`, confirmLabel: 'Start them', focusCancel: true }
         : p.action === 'evaluateCompany'
           ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens). Continue?`, confirmLabel: 'Do it', danger: true }
-          : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
+          : p.action === 'setStatus'
+            ? { title: 'The advisor proposes a write', body: `Set ${nameRow(p.params)} to ${String(p.params.state ?? '')}${p.params.note ? `, writing the note "${String(p.params.note)}" into its Notes cell` : ''}. Continue?`, confirmLabel: 'Do it', danger: true }
+            : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
     if (def.confirm && !(await confirm(question))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
@@ -175,7 +204,17 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         case 'evaluate': {
           const url = String(p.params.url).trim();
-          const m = await startSession({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
+          // A posting still being evaluated opens that session rather than a second paid one, as Evaluate visible does.
+          const active = activeFor(url);
+          if (active) {
+            await router.navigate({ to: '/sessions/$id', params: { id: active.id } });
+            break;
+          }
+          const m = await startEvaluation(url);
+          if (m.status === 'error') {
+            update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+            return;
+          }
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
@@ -190,14 +229,46 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'research': {
-          const m = await startSession({ mode: 'research', target: { type: 'text', value: String(p.params.topic ?? p.params.company ?? '') }, prompt: `Research: ${String(p.params.topic ?? p.params.company ?? '')}` });
+          const m = await startSession({ mode: 'deep', target: { type: 'text', value: String(p.params.topic ?? p.params.company ?? '') }, prompt: `Research: ${String(p.params.topic ?? p.params.company ?? '')}` });
+          if (m.status === 'error') {
+            update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+            return;
+          }
           await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           break;
         }
         case 'generatePdf': {
           const n = String(p.params.row ?? p.params.n ?? '');
-          const m = await startTailoredCvSession(n);
-          await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
+          // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled.
+          const live = sessions.data?.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.value === n);
+          if (live) {
+            await router.navigate({ to: '/sessions/$id', params: { id: live.id } });
+            break;
+          }
+          const store = lastSession(`cc.pdf.${n}`);
+          if (store.starting()) {
+            update(p.id, { state: 'failed', note: `A tailored CV session for row #${n} is already starting.` });
+            return;
+          }
+          store.setStarting(true);
+          try {
+            const m = await startTailoredCvSession(n);
+            if (m.status === 'error') {
+              store.setStarting(false);
+              update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+              return;
+            }
+            store.write(m.id);
+            store.setStarting(false);
+            // The new session goes into the sessions list at once, so a second generatePdf for the same row inside the
+            // poll window opens this one instead of starting a second paid session (as startEvaluation does).
+            await qc.cancelQueries({ queryKey: ['sessions'], exact: true });
+            qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => [m, ...(prev ?? []).filter((s) => s.id !== m.id)]);
+            await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
+          } catch (err) {
+            store.setStarting(false);
+            throw err;
+          }
           break;
         }
         case 'setStatus':
