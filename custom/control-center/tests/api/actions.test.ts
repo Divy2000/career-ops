@@ -82,6 +82,15 @@ describe('action registry', () => {
     }
   });
 
+  it('saves a status note that starts with "--", which set-status would otherwise read as a missing value (R12-srv-core-L2-02)', async () => {
+    const res = await post('/api/actions/tracker.setStatus', { params: { row: 3, state: 'Interview', note: '--> phone screen Tue' } });
+    expect(res.statusCode, res.body).toBe(200);
+    const tracker = (await get('/api/tracker')).json();
+    const row = tracker.rows.find((r: { num: number }) => r.num === 3);
+    expect(row.status).toBe('Interview');
+    expect(row.notes).toContain('--> phone screen Tue');
+  });
+
   it('maps set-status exit codes to HTTP statuses', async () => {
     const missing = await post('/api/actions/tracker.setStatus', { params: { row: 99, state: 'Applied' } });
     expect(missing.statusCode).toBe(404);
@@ -621,6 +630,10 @@ describe('Hired Wall answers (R7-01)', () => {
       const send = (id: string, params: Record<string, unknown>) => app.app.inject({ method: 'POST', url: `/api/actions/${id}`, headers: app.authedWrite, payload: { params } });
       const draft = await send('tracker.hiredShare', { report: row.reportLabel, anonymity: 'role' });
       expect(draft.statusCode, draft.body).toBe(200);
+      // A story that starts with "--" reaches hired-share as the story, not as a missing value (R12-srv-core-L2-02).
+      const story = await send('tracker.hiredShare', { report: row.reportLabel, anonymity: 'role', story: '--- best search tool I used' });
+      expect(story.statusCode, story.body).toBe(200);
+      expect(story.body).toContain('best search tool I used');
       const mark = await send('tracker.hiredMark', { report: row.reportLabel, mark: 'later' });
       expect(mark.statusCode, mark.body).toBe(200);
       const state = JSON.parse(fs.readFileSync(path.join(dataRoot, 'data', '.hired-share-state.json'), 'utf8'));
