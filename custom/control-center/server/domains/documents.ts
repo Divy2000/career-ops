@@ -44,9 +44,47 @@ export function parsePdfIndex(text: string): PdfIndexRow[] {
   return rows;
 }
 
+/**
+ * Where generate-pdf.mjs writes the manifest: tracker-utils.mjs resolvePdfIndexPath(rawTrackerPath(dataRoot)), that is
+ * CAREER_OPS_PDF_INDEX, else data/pdf-index.tsv in the tracker's workspace (CAREER_OPS_TRACKER may move it out of the
+ * data root). A synchronous port, kept in step by tests/unit/documents-index.test.ts.
+ */
+export function pdfIndexPath(dataRoot: string): string {
+  return path.resolve(process.env.CAREER_OPS_PDF_INDEX || path.join(trackerWorkspace(dataRoot), 'data', 'pdf-index.tsv'));
+}
+
+/** tracker-utils.mjs resolveWorkspaceRoot(path-resolver.mjs rawTrackerPath(dataRoot)): the folder above the tracker's data/. */
+function trackerWorkspace(dataRoot: string): string {
+  const env = process.env.CAREER_OPS_TRACKER?.trim();
+  const tracker = env || (fs.existsSync(path.join(dataRoot, 'data', 'applications.md')) ? path.join(dataRoot, 'data', 'applications.md') : path.join(dataRoot, 'applications.md'));
+  const dir = path.dirname(path.resolve(tracker));
+  return path.basename(dir) === 'data' ? path.dirname(dir) : dir;
+}
+
+/**
+ * The manifest's rows with their paths made relative to the data root (the writer stores them relative to the tracker
+ * workspace); a row whose PDF lies outside the data root cannot be served and is left out.
+ */
+function loadPdfIndex(dataRoot: string): { present: boolean; rows: PdfIndexRow[] } {
+  const indexPath = pdfIndexPath(dataRoot);
+  if (!fs.existsSync(indexPath)) return { present: false, rows: [] };
+  const workspace = trackerWorkspace(dataRoot);
+  const root = path.resolve(dataRoot);
+  const toDataRoot = (rel: string): string | null => {
+    if (!rel) return rel;
+    const abs = path.resolve(workspace, rel);
+    return inside(root, abs) ? path.relative(root, abs).split(path.sep).join('/') : null;
+  };
+  const rows: PdfIndexRow[] = [];
+  for (const r of parsePdfIndex(fs.readFileSync(indexPath, 'utf8'))) {
+    const pdf = toDataRoot(r.pdf);
+    if (pdf) rows.push({ ...r, pdf, html: toDataRoot(r.html) ?? '' });
+  }
+  return { present: true, rows };
+}
+
 export function readPdfIndex(dataRoot: string): PdfIndexRow[] {
-  const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
-  return fs.existsSync(indexPath) ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
+  return loadPdfIndex(dataRoot).rows;
 }
 
 const BUNDLE = /^output\/(\d+)-[^/]+\//;
@@ -98,13 +136,12 @@ function mtime(dataRoot: string, rel: string): number {
 
 /** PDFs from the index for the row's report first, then output/ files matching the company, newest first. pdf-index.tsv and jds/ are keyed by report number, never by tracker row. */
 export function readDocuments(dataRoot: string, report: number | null, company: string): DocumentsRead {
-  const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
-  const indexPresent = fs.existsSync(indexPath);
-  const rows = indexPresent ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
+  const { present: indexPresent, rows } = loadPdfIndex(dataRoot);
   const files: DocumentFile[] = [];
   const seen = new Set<string>();
   for (const r of report === null ? [] : rows.filter((x) => x.report === report)) {
-    if (seen.has(r.pdf)) continue;
+    // outcome.mjs --clean-output archives indexed PDFs and leaves their rows: a missing file is not offered as a link.
+    if (seen.has(r.pdf) || !exists(dataRoot, r.pdf)) continue;
     seen.add(r.pdf);
     files.push({ path: r.pdf, html: r.html && exists(dataRoot, r.html) ? r.html : null, kind: documentKind(r.kind, r.pdf), format: r.format || null, date: r.date || null, source: 'index', rerenderBlock: null });
   }
@@ -197,8 +234,7 @@ function walkOutput(dataRoot: string): string[] {
  * Everything about that row is keyed by its report number (pdf-index.tsv and the application bundles), never by the row number.
  */
 export function readApplyDocuments(dataRoot: string, row: { report: number | null; company: string } | null): ApplyDocuments {
-  const indexPath = path.join(dataRoot, 'data', 'pdf-index.tsv');
-  const index = fs.existsSync(indexPath) ? parsePdfIndex(fs.readFileSync(indexPath, 'utf8')) : [];
+  const index = readPdfIndex(dataRoot);
   // The generator's manifest records the kind it rendered; the name is only the fallback, as in generate-pdf.mjs.
   const manifestKind = new Map(index.map((r) => [r.pdf, r.kind]));
   const files = walkOutput(dataRoot).sort((a, b) => mtime(dataRoot, b) - mtime(dataRoot, a));
