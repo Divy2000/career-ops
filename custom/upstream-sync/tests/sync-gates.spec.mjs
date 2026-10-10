@@ -40,6 +40,28 @@ test('the headless sync Claude gets the OAuth token but runs with subprocess env
   assert.match(env, /^ANTHROPIC_API_KEY=$/m);
 });
 
+test('a report left by an earlier run the same day never reaches this run\'s PR body when this Claude writes none (R11-scripts-b-L2-01)', () => {
+  const dir = tempDir('sync-report-');
+  const bin = path.join(dir, 'bin');
+  const today = '2026-10-11';
+  // The earlier run's Claude wrote a report, then that run failed after it (a failed push, say).
+  writeFileSync(path.join(dir, `${today}.report.md`), 'resolved scan.mjs by keeping ours (an earlier run)\n');
+  stub(bin, 'claude', 'echo "SYNC: ok"');
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('echo "--- headless Claude'));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith('CLAUDE_RC=$?'));
+  const bodyFrom = lines.findIndex((l) => l.startsWith('BODY='));
+  const bodyTo = lines.findIndex((l, i) => i > bodyFrom && l.startsWith('} > "$BODY"'));
+  assert.ok(from > -1 && to > from && bodyFrom > to && bodyTo > bodyFrom, 'no Claude or PR body block in sync.sh');
+  const vars = `LIVE="${path.resolve(HERE, '../../..')}" STATE_DIR="${dir}" TODAY=${today} BEHIND=2 CONFLICTS= BASELINE_FAILURES= TOKEN=t MODEL=m LOG="${dir}/log" CUSTOM_OK=1 CC_OK=1 KEPT_README=0`;
+  const script = `${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const body = readFileSync(path.join(dir, `${today}.pr-body.md`), 'utf8');
+  assert.match(body, /## Claude report\n\(no report written\)\n$/, body);
+  assert.doesNotMatch(body, /an earlier run/);
+});
+
 test('the headless sync Claude runs at an explicit medium effort, not whatever the user settings default to', () => {
   const dir = tempDir('sync-claude-effort-');
   const bin = path.join(dir, 'bin');

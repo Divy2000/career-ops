@@ -128,7 +128,10 @@ fi
 MERGE_SNAPSHOT="$(merge_snapshot)" || fail "cannot record the merge result before Claude runs"
 
 echo "--- headless Claude ($MODEL)"
-PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$BASELINE_FAILURES" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
+REPORT="$STATE_DIR/$TODAY.report.md"
+# A report from an earlier run of the same day describes another resolution: only this run's Claude may fill the PR body.
+rm -f "$REPORT" || fail "cannot remove an earlier report at $REPORT"
+PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$BASELINE_FAILURES" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$REPORT" node -e '
 const fs = require("fs");
 let t = fs.readFileSync(process.argv[1], "utf8");
 // A replacer function: a string replacement would expand $& and the like inside test output.
@@ -196,7 +199,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   fi
   echo
   echo "## Claude report"
-  cat "$STATE_DIR/$TODAY.report.md" 2>/dev/null || echo "(no report written)"
+  cat "$REPORT" 2>/dev/null || echo "(no report written)"
 } > "$BODY"
 PR_URL="$(gh pr list --repo "$FORK" --head "$BRANCH" --state open --json url -q '.[0].url')"
 if [ -z "$PR_URL" ]; then
