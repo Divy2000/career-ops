@@ -73,9 +73,9 @@ function decodeXmlText(raw) {
   // surrogate code points (0xD800-0xDFFF) are left as-is: String.fromCodePoint throws on a surrogate.
   const NAMED = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
   return text
-    .replace(/&(lt|gt|quot|apos|amp|#x[0-9a-fA-F]+|#\d+);/g, (match, body) => {
+    .replace(/&(lt|gt|quot|apos|amp|#[xX][0-9a-fA-F]+|#\d+);/g, (match, body) => {
       if (body in NAMED) return NAMED[body];
-      const hex = body.startsWith('#x');
+      const hex = body.startsWith('#x') || body.startsWith('#X');
       const cp = parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);
       return cp >= 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) ? String.fromCodePoint(cp) : match;
     })
