@@ -231,6 +231,15 @@ test('given missing arguments or an unknown flag, when run, then it exits non-ze
   const r = spawnSync(process.execPath, [BUILD], { cwd: REPO, encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /Usage/);
-  const flag = spawnSync(process.execPath, [BUILD, 'a.json', 'b.html', '--template=x'], { cwd: REPO, encoding: 'utf8' });
-  assert.notEqual(flag.status, 0);
+  // A payload that builds without the flag, so only the flag check can fail the run (R11-tests-custom-L3-03).
+  const fixture = loadFixture();
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const input = path.join(root, 'payload.json');
+  const output = path.join(root, 'output', 'cv.html');
+  fs.writeFileSync(input, JSON.stringify(fixture));
+  const flag = spawnSync(process.execPath, [BUILD, input, output, '--template=x'], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
+  assert.equal(flag.status, 1, flag.stderr);
+  assert.match(flag.stderr, /unrecognized flag\(s\): --template=x/);
+  assert.equal(fs.existsSync(output), false, 'no HTML is written');
+  assert.equal(build(root, fixture).status, 0, 'the same payload builds without the flag');
 });
