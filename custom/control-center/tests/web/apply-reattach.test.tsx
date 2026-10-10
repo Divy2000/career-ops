@@ -171,6 +171,27 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
   });
 
+  it('a draft with edited answers deleted elsewhere drops them without asking, so the next draft cannot fill them', async () => {
+    await openApply();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Drafted answers"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Jane Q. Smith');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => applyPanel()!.onStatus!('gone', null));
+    await until(() => draftButton(), 'the Draft answers button');
+    // The deleted session's answers cannot be kept: no discard question that could keep them on Cancel.
+    expect(dialog()).toBeNull();
+    expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
+
+    // The next draft's id arrives before its answers envelope: Fill is not offered with the old session's edits.
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12b'));
+    expect(fillButton()).toBeUndefined();
+  });
+
   it('on a tracker row, a typed apply link comes back with the re-attached draft, so prefill uses it', async () => {
     await openApply();
     const input = host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!;
