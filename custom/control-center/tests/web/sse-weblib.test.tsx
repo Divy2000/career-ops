@@ -83,4 +83,8 @@ describe('what each domain refetches', () => {
     await until(() => fetches.storyBank === 2, 'the story-bank refetch');
   });
 
+  it.each(['config', 'pipeline', 'followups'])('a %s change refetches the Insights scripts that read its files (R13-weblib-L2-02)', async (domain) => {
+    await act(async () => latest().emit('data.changed', { domain, paths: [] }));
+    await until(() => fetches.insights === 2, `the insights refetch after ${domain}`);
+  });
 });

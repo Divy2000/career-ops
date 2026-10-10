@@ -5,15 +5,16 @@ import { useQueryClient } from '@tanstack/react-query';
 export const DOMAIN_KEYS: Record<string, string[][]> = {
   tracker: [['tracker'], ['insights'], ['followups']],
   reports: [['tracker'], ['insights']],
-  pipeline: [['pipeline']],
+  // The Insights scripts read cv.md, profile.yml, portals.yml, scan-history.tsv, pipeline.md and follow-ups.md.
+  pipeline: [['pipeline'], ['insights']],
   shortlist: [['shortlist']],
   // An application's detail carries its company sponsorship file and alert.
   immigration: [['immigration'], ['sponsorship'], ['tracker', 'row']],
   // interview-prep/story-bank.md is also a Profile user file.
   interviews: [['tracker', 'interviews'], ['insights'], ['config', 'user-file']],
   documents: [['tracker', 'documents'], ['apply', 'documents']],
-  followups: [['followups'], ['tracker']],
-  config: [['config'], ['system']],
+  followups: [['followups'], ['tracker'], ['insights']],
+  config: [['config'], ['system'], ['insights']],
   runs: [['runs']],
   sessions: [['sessions']],
 };
