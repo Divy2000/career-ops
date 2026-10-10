@@ -100,6 +100,8 @@ function invalidParams(p: { action: string; params: Record<string, unknown> }): 
   }
   if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
   if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
+  // The /api/memory route refuses a fact over 300 characters, so a longer one fails before the user approves it.
+  if (p.action === 'remember' && String(p.params.fact ?? '').length > 300) return 'remember needs "fact", at most 300 characters';
   return null;
 }
 

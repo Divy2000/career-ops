@@ -228,6 +228,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 3, state: 'Applied' } } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
+
+  it('a remember fact over 300 characters fails before asking, matching the server limit (R17-shared-comp-L2-04)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'remember', params: { fact: 'x'.repeat(301) } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('at most 300 characters');
+    expect(posts).toEqual([]);
+  });
 });
 
 describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25)', () => {
