@@ -474,6 +474,35 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     });
   const signIn = async (port: number) => (await request(port, 'GET', '/__recovery?t=supervisor-instance-test-token')).setCookie.split(';')[0]!;
 
+  it('a server child killed mid-response ends the proxied response, so an open event stream closes instead of hanging (R14-supervisor-L1-01)', async () => {
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true });
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      const cookie = await signIn(port);
+      const { activePid } = JSON.parse((await request(port, 'GET', '/__supervisor/status', { cookie })).body) as { activePid: number };
+      expect(activePid).toBeGreaterThan(0);
+      const outcome = new Promise<string>((resolve) => {
+        const req = http.request({ host: '127.0.0.1', port, path: '/api/events', method: 'GET', headers: { host: `127.0.0.1:${port}`, cookie, accept: 'text/event-stream' } }, (res) => {
+          if (res.statusCode !== 200) resolve(`status ${res.statusCode}`);
+          res.on('data', () => undefined);
+          res.on('end', () => resolve('ended'));
+          res.on('close', () => resolve('closed'));
+          res.on('error', () => resolve('closed'));
+          // The stream is open and relayed: the child dies under it.
+          process.kill(activePid, 'SIGKILL');
+        });
+        req.on('error', () => resolve('closed'));
+        req.end();
+      });
+      const result = await Promise.race([outcome, new Promise<string>((r) => setTimeout(() => r('still open after 10 s'), 10_000))]);
+      expect(result, s.output()).toMatch(/^(ended|closed)$/);
+      expect(s.proc.exitCode).toBeNull();
+    } finally {
+      await stop(s);
+    }
+  });
+
   it('with CC_NO_RELOAD set, a server child that cannot start still stops the supervisor with exit 1 (SW2-claude-05 review)', async () => {
     const held = await heldPort();
     const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_CHILD_PORT: String(held.port) } });

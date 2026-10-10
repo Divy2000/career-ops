@@ -5,6 +5,7 @@
 // change sets can be reverted even when the server child is broken.
 import http from 'node:http';
 import net from 'node:net';
+import { pipeline } from 'node:stream';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -336,7 +337,10 @@ async function main(): Promise<void> {
       }
       const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
         res.writeHead(ures.statusCode ?? 502, ures.headers);
-        ures.pipe(res);
+        // pipeline, not pipe: a child that dies mid-response (killed, crashed, or SIGKILLed after a drain) aborts `ures`
+        // without an 'end', and pipe would leave the browser's response open forever (an event stream never errors,
+        // so it never reconnects). pipeline destroys `res` then, and the client sees the connection end.
+        pipeline(ures, res, () => undefined);
       });
       upstream.on('error', (err) => {
         if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
