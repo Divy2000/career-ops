@@ -1,25 +1,34 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { startEvaluateSession } from '../../lib/sessions';
+import { useActiveEvaluation, useStartEvaluation } from './evaluate';
 import { describeError } from '../../lib/actions';
 import { Pill } from '../../components/ui';
 
-/** Global "Evaluate URL": starts an oferta session and opens it (spec 1a). */
+/** Global "Evaluate URL": starts an oferta session and opens it (spec 1a), or opens the one still evaluating that URL. */
 export function QuickEvaluate() {
   const navigate = useNavigate();
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const activeFor = useActiveEvaluation();
+  const startEvaluation = useStartEvaluation();
   const go = async () => {
     const u = url.trim();
     if (!/^https?:\/\//.test(u)) {
       setError('Paste a full http(s) posting URL.');
       return;
     }
+    // A posting still being evaluated opens that session rather than a second paid one.
+    const active = activeFor(u);
+    if (active) {
+      setError(null);
+      await navigate({ to: '/sessions/$id', params: { id: active.id } });
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const m = await startEvaluateSession(u);
+      const m = await startEvaluation(u);
       await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(describeError(err));

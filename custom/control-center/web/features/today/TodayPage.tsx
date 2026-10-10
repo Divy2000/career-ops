@@ -6,7 +6,7 @@ import { summarizeDigest, type DigestSpan } from '../../lib/digestSummary';
 import { QuickEvaluate } from './QuickEvaluate';
 import { localDate } from '@shared/local-date';
 import type { ShortlistRow, TrackerRow } from '@shared/api';
-import { startEvaluateSession } from '../../lib/sessions';
+import { postingHref, useActiveEvaluation, useStartEvaluation } from './evaluate';
 import { describeError } from '../../lib/actions';
 import { DiscardReasonPicker, StatusMessage, useSetStatus } from '../tracker/StatusControl';
 
@@ -57,18 +57,24 @@ function DigestChip() {
   return <Pill tone={stale > 2 ? 'warn' : 'neutral'}>Digest {stale > 2 ? `${stale} days old` : 'fresh'}</Pill>;
 }
 
-/** Starts the oferta session for a shortlist row's posting and opens it, like Quick evaluate. */
+/**
+ * Starts the oferta session for a shortlist row's posting (or its saved JD) and opens it, like Quick evaluate. While an
+ * evaluation of the posting is still active, the row links to it instead of starting a second paid one.
+ */
 function EvaluateButton({ row }: { row: ShortlistRow }) {
   const navigate = useNavigate();
+  const activeFor = useActiveEvaluation();
+  const startEvaluation = useStartEvaluation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const url = row.url;
+  const active = url ? activeFor(url) : undefined;
   const go = async () => {
     if (!url) return;
     setBusy(true);
     setError(null);
     try {
-      const m = await startEvaluateSession(url);
+      const m = await startEvaluation(url);
       await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(describeError(err));
@@ -76,6 +82,12 @@ function EvaluateButton({ row }: { row: ShortlistRow }) {
       setBusy(false);
     }
   };
+  if (active)
+    return (
+      <Link to="/sessions/$id" params={{ id: active.id }}>
+        Evaluation running
+      </Link>
+    );
   return (
     <div className="stack-tight">
       <button type="button" disabled={busy || !url} title={url ? 'Starts an evaluation session for this posting (uses tokens)' : 'This row has no posting link to evaluate'} onClick={() => void go()}>
@@ -224,7 +236,7 @@ export function TodayPage() {
                               </td>
                               <td>
                                 <div className="clamp-2" title={r.role}>
-                                  {r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}
+                                  {r.url ? <a href={postingHref(r.url)} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}
                                 </div>
                               </td>
                               <td className="mono muted">{r.posted ?? ''}</td>
@@ -243,7 +255,7 @@ export function TodayPage() {
                       <ul>
                         {shortlist.data.excluded.map((e) => (
                           <li key={`${e.company} ${e.url ?? e.role}`}>
-                            <strong>{e.company}</strong> {e.url ? <a href={e.url} target="_blank" rel="noreferrer noopener">{e.role}</a> : e.role} <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
+                            <strong>{e.company}</strong> {e.url ? <a href={postingHref(e.url)} target="_blank" rel="noreferrer noopener">{e.role}</a> : e.role} <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
                           </li>
                         ))}
                       </ul>
