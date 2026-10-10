@@ -28,3 +28,16 @@ describe('GET /api/system/status: the stored token', () => {
     });
   }
 });
+
+describe('execNoShell: a command that runs out of time (R17-srv-core-L3-02)', () => {
+  it('reports a timeout as timed out (exit 124), not as exit 1, so no exit map reads it as a script failure', async () => {
+    const r = await execNoShell(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], { timeoutMs: 300 });
+    expect(r).toMatchObject({ code: 124, timedOut: true });
+    expect(r.stderr).toMatch(/timed out after 0\.3 s/);
+  });
+
+  it('still reports a command that fails on its own with its exit code', async () => {
+    const r = await execNoShell(process.execPath, ['-e', 'process.exit(1)'], { timeoutMs: 10_000 });
+    expect(r).toMatchObject({ code: 1, timedOut: false });
+  });
+});
