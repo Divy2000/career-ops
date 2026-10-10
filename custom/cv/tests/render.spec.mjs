@@ -325,6 +325,22 @@ test('given a final render that publishes the PDF and then exits non-zero, when 
   assert.deepEqual(scratchIn(root), []);
 });
 
+test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the render stops with an error instead of buffering it all (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const preload = path.join(root, 'flood.mjs');
+  fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs')) process.stdout.write('x'.repeat(17 * 1024 * 1024));\n`);
+  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000, maxBuffer: 64 * 1024 * 1024,
+  });
+  assert.equal(r.status, 1, r.stderr.slice(0, 2000));
+  assert.match(r.stderr, /render-pdf failed: generate-pdf\.mjs printed more than 16 MiB/);
+  assert.equal(fs.readFileSync(html, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html']);
+  assert.deepEqual(scratchIn(root), []);
+});
+
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);

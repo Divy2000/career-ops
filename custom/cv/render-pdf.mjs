@@ -35,6 +35,7 @@ import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const CODE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const GENERATE = path.join(CODE, 'generate-pdf.mjs');
+const MAX_OUTPUT = 16 * 1024 * 1024;
 const VALUE_FLAGS = ['--max-pages', '--format', '--report', '--kind'];
 const PASS_THROUGH = ['--format', '--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check'];
 const USAGE = `Usage: node custom/cv/render-pdf.mjs <input.html> <output.pdf> [--max-pages=N] [--strict-pages] [${PASS_THROUGH.join('] [')}]`;
@@ -130,12 +131,24 @@ async function main() {
     running = child;
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (d) => { stdout += d; });
-    child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
+    // Bounded like the spawnSync maxBuffer it replaced: a child printing without end is stopped, not buffered.
+    let flooded = false;
+    const collect = (append) => (d) => {
+      if (flooded) return;
+      append(d);
+      if (stdout.length + stderr.length > MAX_OUTPUT) {
+        flooded = true;
+        child.kill('SIGTERM');
+      }
+    };
+    child.stdout.setEncoding('utf8').on('data', collect((d) => { stdout += d; }));
+    child.stderr.setEncoding('utf8').on('data', collect((d) => { stderr += d; }));
     child.on('error', (err) => { if (!stopping) reject(err); });
     child.on('close', (status, signal) => {
       if (running === child) running = null;
-      if (!stopping) resolve({ status, signal, stdout, stderr });
+      if (stopping) return;
+      if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));
+      else resolve({ status, signal, stdout, stderr });
     });
   });
   const render = async (candidate) => {
