@@ -138,6 +138,13 @@ describe('Dev Chat session in the URL', () => {
     expect(host.querySelector('textarea[aria-label="Prompt for devchat"]')).not.toBeNull();
   });
 
+  it('given a running session, New conversation is not offered, so a second file-editing session cannot start beside it', async () => {
+    streamStatus = 'running';
+    await open('/dev?session=s-7');
+    await until(() => host.querySelector('[aria-label="Reply to the session"]'), 'the running session');
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'New conversation')).toBe(false);
+  });
+
   it('given a start in flight, when the user leaves for Runs before it answers, then they stay on Runs and /dev reopens the session later', async () => {
     let release!: () => void;
     startGate = new Promise((r) => (release = r));
