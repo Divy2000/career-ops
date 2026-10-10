@@ -205,7 +205,8 @@ function scanDegradations(summary: ScanSummary): { notes: string[]; noData: bool
   if (stale.length) notes.push(`Degraded: the scan used an expired cached company list for ${stale.join(', ')}, since the download failed.`);
   const unreachable = summary.unreachableBoards ?? 0;
   if (unreachable > 0) notes.push(`${unreachable} ${unreachable === 1 ? 'board' : 'boards'} could not be reached.`);
-  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 };
+  // A scan stopped before it finished (a DNS outage) found no reliable "no matches", so the empty state is withheld.
+  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 || summary.stoppedEarly };
 }
 
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
