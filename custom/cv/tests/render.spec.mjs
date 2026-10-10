@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fitToPages, setDensity, countPdfPages, DENSITIES } from '../lib.mjs';
 import { HERE, REPO, loadFixture, cvMarkdownFor, dataRoot, envFor } from './helpers.mjs';
 
@@ -235,6 +235,51 @@ test('given an output path that is an existing folder, when the final render fai
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.readFileSync(html, 'utf8'), before, 'the chosen density is not kept when nothing was published');
   assert.deepEqual(fs.readdirSync(pdf), []);
+});
+
+// A render started in the background, for the specs that stop it with a signal partway through.
+const startRender = (root, html, args) => {
+  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], { cwd: REPO, env: envFor(root), stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+  child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
+  const exited = new Promise((resolve) => child.on('close', (status, signal) => resolve({ status, signal, out })));
+  return { child, exited };
+};
+const waitFor = async (check, what, ms = 120000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 10))) if (check()) return;
+  assert.fail(`timed out waiting for ${what}`);
+};
+const scratchIn = (root) => fs.readdirSync(root).filter((f) => f.startsWith('.render-pdf-'));
+
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  test(`given a render stopped with ${signal} while a density draft renders, then no draft or scratch folder is left and the input is untouched (R11-scripts-a-L1-02)`, { timeout: 240000 }, async () => {
+    const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+    const html = buildInto(root, fixture);
+    const before = fs.readFileSync(html, 'utf8');
+    const { child, exited } = startRender(root, html, ['--max-pages=1']);
+    await waitFor(() => fs.readdirSync(path.join(root, 'output')).some((f) => f.includes('.render-pdf-')), 'the draft HTML');
+    child.kill(signal);
+    const end = await exited;
+    assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'the draft HTML is removed');
+    assert.deepEqual(scratchIn(root), [], 'the scratch folder is removed');
+    assert.equal(fs.readFileSync(html, 'utf8'), before);
+  });
+}
+
+test('given a render stopped with SIGTERM while it publishes the chosen layout, then the input HTML gets back the layout it had (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const { child, exited } = startRender(root, html, ['--max-pages=1']);
+  // The input changes only when the chosen layout is written to it, right before the final render.
+  await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
+  child.kill('SIGTERM');
+  const end = await exited;
+  assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'nothing was published, so the input keeps its layout');
+  assert.deepEqual(scratchIn(root), []);
 });
 
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {

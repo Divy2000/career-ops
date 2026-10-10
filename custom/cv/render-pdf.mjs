@@ -18,10 +18,13 @@
 // real input, output and index stay untouched until a layout is chosen. Only
 // then is the chosen HTML written to the input and rendered once more to the
 // output, which publishes the PDF for --report. A failed run, including a
-// --strict-pages overflow, leaves an already indexed CV exactly as it was.
+// --strict-pages overflow, leaves an already indexed CV exactly as it was. So
+// does a run stopped by SIGTERM, SIGINT or SIGHUP: the running render is stopped,
+// the drafts are removed and the input gets back its layout before the exit.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fitToPages, countPdfPages } from './lib.mjs';
@@ -77,16 +80,48 @@ async function main() {
     process.stdout.write(real(attempt.stdout));
     process.stderr.write(real(attempt.stderr));
   };
-  const generate = (from, to, extra, env = process.env) => {
-    const attempt = spawnSync(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
-      cwd: CODE, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-    });
-    if (attempt.error) throw attempt.error;
-    return attempt;
+  // A signal stops the render in progress, removes the drafts and, while the chosen layout is being published, puts the
+  // input's layout back. The renders run asynchronously so the handler can run while one is in progress; once stopping,
+  // no render result is acted on and no new render starts.
+  let running = null;
+  let stopping = false;
+  let restoreInput = false;
+  const removeDrafts = () => {
+    rmSync(draftHtml, { force: true });
+    rmSync(scratch, { recursive: true, force: true });
   };
+  const onSignal = async (signal) => {
+    if (stopping) return;
+    stopping = true;
+    if (running && running.exitCode === null && running.signalCode === null) {
+      const closed = new Promise((resolve) => running.once('close', resolve));
+      running.kill(signal);
+      await closed;
+    }
+    removeDrafts();
+    if (restoreInput) writeFileSync(input, html);
+    process.exit(128 + os.constants.signals[signal]);
+  };
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, onSignal);
+  const generate = (from, to, extra, env = process.env) => new Promise((resolve, reject) => {
+    if (stopping) return;
+    const child = spawn(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
+      cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    running = child;
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (d) => { stdout += d; });
+    child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
+    child.on('error', (err) => { if (!stopping) reject(err); });
+    child.on('close', (status, signal) => {
+      if (running === child) running = null;
+      if (!stopping) resolve({ status, signal, stdout, stderr });
+    });
+  });
   const render = async (candidate) => {
     writeFileSync(draftHtml, candidate);
-    const attempt = generate(draftHtml, draftPdf, ['--strict-pages'], draftEnv);
+    const attempt = await generate(draftHtml, draftPdf, ['--strict-pages'], draftEnv);
     // generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, nothing else is.
     const overflowed = attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
     if (attempt.status !== 0 && !overflowed) throw new RenderFailed(attempt);
@@ -103,18 +138,19 @@ async function main() {
     }
     throw err;
   } finally {
-    rmSync(draftHtml, { force: true });
-    rmSync(scratch, { recursive: true, force: true });
+    removeDrafts();
   }
   let published = null;
   if (result.fits || !strict) {
     // Publish the chosen layout: the input keeps its density and this render indexes the PDF.
+    restoreInput = true;
     writeFileSync(input, result.html);
     try {
-      published = generate(input, output, result.fits ? ['--strict-pages'] : []);
+      published = await generate(input, output, result.fits ? ['--strict-pages'] : []);
     } finally {
       // Nothing was published, so the input keeps the layout it had.
       if (published?.status !== 0) writeFileSync(input, html);
+      restoreInput = false;
     }
     if (published.status !== 0) {
       print(published);
