@@ -22,27 +22,39 @@ function JobCard({ job }: { job: ScheduleState }) {
   const qc = useQueryClient();
   const actions = useActions();
   const { run, message } = useRunAction();
-  const [hour, setHour] = useState(String(job.hour ?? (job.kind === 'daily' ? 8 : 3)));
-  const [minute, setMinute] = useState(String(job.minute ?? 0));
-  const [weekday, setWeekday] = useState(String(job.weekday ?? 0));
+  // The fields show the plist's time until the user types: a time saved elsewhere (another tab, install.sh) shows up.
+  const onDisk = { hour: String(job.hour ?? (job.kind === 'daily' ? 8 : 3)), minute: String(job.minute ?? 0), weekday: String(job.weekday ?? 0) };
+  const [edits, setEdits] = useState<{ hour?: string; minute?: string; weekday?: string }>({});
+  const hour = edits.hour ?? onDisk.hour;
+  const minute = edits.minute ?? onDisk.minute;
+  const weekday = edits.weekday ?? onDisk.weekday;
   const [error, setError] = useState<string | null>(null);
+  // One launchd update at a time: two in flight race on the server's temp plist and can undo each other.
+  const [busy, setBusy] = useState(false);
   const put = async (enabled: boolean) => {
     setError(null);
-    const h = timeField(hour, 23);
-    const m = timeField(minute, 59);
+    // Disable keeps the schedule on disk; only Save time writes the typed one.
+    const from = enabled ? { hour, minute, weekday } : onDisk;
+    const h = timeField(from.hour, 23);
+    const m = timeField(from.minute, 59);
     if (h === null || m === null) {
       setError(h === null ? 'Hour must be a whole number from 0 to 23.' : 'Minute must be a whole number from 0 to 59.');
       return;
     }
+    setBusy(true);
     try {
       const body: Record<string, unknown> = { hour: h, minute: m, enabled };
-      if (job.kind === 'weekly') body.weekday = Number(weekday);
+      if (job.kind === 'weekly') body.weekday = Number(from.weekday);
       await apiSend('PUT', `/api/schedule/${job.label}`, body);
       toast.success(enabled ? `${job.title} scheduled at ${pad(h)}:${pad(m)}` : `${job.title} disabled`);
       await qc.invalidateQueries({ queryKey: ['system', 'schedule'] });
+      // The refetched plist now holds the saved time.
+      if (enabled) setEdits({});
     } catch (err) {
       setError(`Could not update launchd: ${describeError(err)}`);
       toast.error('launchd update failed');
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -78,7 +90,7 @@ function JobCard({ job }: { job: ScheduleState }) {
         {job.kind === 'weekly' && (
           <label>
             <span className="muted small">Weekday</span>{' '}
-            <select aria-label={`${job.title} weekday`} value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+            <select aria-label={`${job.title} weekday`} value={weekday} onChange={(e) => setEdits((prev) => ({ ...prev, weekday: e.target.value }))}>
               {WEEKDAYS.map((d, i) => (
                 <option key={d} value={i}>
                   {d}
@@ -88,15 +100,15 @@ function JobCard({ job }: { job: ScheduleState }) {
           </label>
         )}
         <label>
-          <span className="muted small">Hour</span> <input aria-label={`${job.title} hour`} type="number" min={0} max={23} value={hour} onChange={(e) => setHour(e.target.value)} style={{ width: 72 }} />
+          <span className="muted small">Hour</span> <input aria-label={`${job.title} hour`} type="number" min={0} max={23} value={hour} onChange={(e) => setEdits((prev) => ({ ...prev, hour: e.target.value }))} style={{ width: 72 }} />
         </label>
         <label>
-          <span className="muted small">Minute</span> <input aria-label={`${job.title} minute`} type="number" min={0} max={59} value={minute} onChange={(e) => setMinute(e.target.value)} style={{ width: 72 }} />
+          <span className="muted small">Minute</span> <input aria-label={`${job.title} minute`} type="number" min={0} max={59} value={minute} onChange={(e) => setEdits((prev) => ({ ...prev, minute: e.target.value }))} style={{ width: 72 }} />
         </label>
-        <button type="button" className="button--primary" onClick={() => void put(true)}>
+        <button type="button" className="button--primary" disabled={busy} onClick={() => void put(true)}>
           {job.loaded ? 'Save time' : 'Install and enable'}
         </button>
-        <button type="button" disabled={job.plist === 'missing' || (!job.loaded && job.disabled)} onClick={() => void put(false)}>
+        <button type="button" disabled={busy || job.plist === 'missing' || (!job.loaded && job.disabled)} onClick={() => void put(false)}>
           Disable
         </button>
         {job.kind === 'daily' && <ActionButton meta={actions.data?.find((a) => a.id === 'daily.runNow')} onRun={(_p, o) => void run('daily.runNow', {}, undefined, o)} />}
