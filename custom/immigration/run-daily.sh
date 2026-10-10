@@ -207,8 +207,9 @@ process.stdout.write(t.replaceAll("{{TODAY}}", () => process.env.TODAY).replaceA
   # policy pinned by its sha256: WebFetch only to public addresses (never loopback, private or the
   # cloud metadata address), reads inside the roots and never of secret files, writes only under
   # data/immigration/.
-  settings_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
-  SETTINGS_DIR="$settings_dir"
+  # Straight into the global the EXIT trap removes: a signal is handled between commands, never inside this one.
+  SETTINGS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-policy-pass.XXXXXX")" || return 1
+  settings_dir="$SETTINGS_DIR"
   if ! policy_sha="$(ROOT="$ROOT" DATA="$DATA" IMM="$IMM" DIR="$settings_dir" node --input-type=module -e '
 import fs from "node:fs";
 import os from "node:os";
@@ -280,8 +281,9 @@ rank_top() {
     echo "Claude Code changed since the job checked it ($CLAUDE_GATE, now $now); the rank is not run"
     return 1
   fi
-  shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
-  SHIM_DIR="$shim_dir"
+  # Straight into the global the EXIT trap removes: a signal is handled between commands, never inside this one.
+  SHIM_DIR="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-rank-shim.XXXXXX")" || return 1
+  shim_dir="$SHIM_DIR"
   if ! DIR="$shim_dir" node --input-type=module -e '
 import fs from "node:fs";
 import path from "node:path";
