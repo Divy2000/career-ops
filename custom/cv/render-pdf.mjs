@@ -19,8 +19,9 @@
 // then is the chosen HTML written to the input and rendered once more to the
 // output, which publishes the PDF for --report. A failed run, including a
 // --strict-pages overflow, leaves an already indexed CV exactly as it was. So
-// does a run stopped by SIGTERM, SIGINT or SIGHUP: the running render is stopped,
-// the drafts are removed and the input gets back its layout before the exit.
+// does a run stopped by SIGTERM, SIGINT or SIGHUP: a density render is stopped and
+// the drafts are removed; a publishing render is let finish, and the input keeps
+// the chosen layout only when that render published it.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -80,9 +81,11 @@ async function main() {
     process.stdout.write(real(attempt.stdout));
     process.stderr.write(real(attempt.stderr));
   };
-  // A signal stops the render in progress, removes the drafts and, while the chosen layout is being published, puts the
-  // input's layout back. The renders run asynchronously so the handler can run while one is in progress; once stopping,
-  // no render result is acted on and no new render starts.
+  // A signal stops a density render in progress and removes the drafts. The final render that publishes the chosen
+  // layout is let finish instead, so the input and the PDF agree: the input keeps the layout when it was published and
+  // gets its own back when it was not (that render stopped by the same signal, as a process-group cancel does). The
+  // renders run asynchronously so the handler can run while one is in progress; once stopping, no render result is
+  // acted on and no new render starts.
   let running = null;
   let stopping = false;
   let restoreInput = false;
@@ -95,8 +98,9 @@ async function main() {
     stopping = true;
     if (running && running.exitCode === null && running.signalCode === null) {
       const closed = new Promise((resolve) => running.once('close', resolve));
-      running.kill(signal);
-      await closed;
+      if (!restoreInput) running.kill(signal);
+      const status = await closed;
+      if (restoreInput && status === 0) restoreInput = false;
     }
     removeDrafts();
     if (restoreInput) writeFileSync(input, html);

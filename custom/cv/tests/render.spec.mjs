@@ -271,13 +271,32 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   });
 }
 
-test('given a render stopped with SIGTERM while it publishes the chosen layout, then the input HTML gets back the layout it had (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
+test('given a render stopped with SIGTERM while it publishes the chosen layout, then that render finishes, so the input HTML and the PDF agree (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const { child, exited } = startRender(root, html, ['--max-pages=1']);
+  // The input changes only when the chosen layout is written to it, right before the final render.
+  await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
+  assert.equal(fs.existsSync(pdf), false, 'the signal lands before the final render wrote the PDF');
+  child.kill('SIGTERM');
+  const end = await exited;
+  assert.equal(end.status, 143, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+  assert.match(fs.readFileSync(html, 'utf8'), /<html[^>]*data-density="\d"/, 'the input keeps the published layout');
+  assert.equal(countPdfPages(fs.readFileSync(pdf)), 1, 'the PDF of that layout was published');
+  assert.deepEqual(scratchIn(root), []);
+});
+
+test('given a render and its final generate-pdf stopped together while publishing (a process-group cancel), then the input HTML gets back the layout it had (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
   const before = fs.readFileSync(html, 'utf8');
   const { child, exited } = startRender(root, html, ['--max-pages=1']);
-  // The input changes only when the chosen layout is written to it, right before the final render.
   await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
+  const kids = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
+  assert.equal(kids.length, 1, 'the final generate-pdf.mjs runs');
+  process.kill(kids[0], 'SIGTERM');
   child.kill('SIGTERM');
   const end = await exited;
   assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
