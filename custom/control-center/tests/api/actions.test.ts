@@ -278,6 +278,23 @@ describe('action registry', () => {
     }
   });
 
+  it('Run plugin hook while a plugin run from here is still live is refused with 409 and starts nothing (R18-feat-c-L3-02)', async () => {
+    const app = await makeTestApp();
+    // A live export: plugins.mjs run takes its time against the plugin's API.
+    const live = app.runner.start({ actionId: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, params: { id: 'notion', hook: 'export', args: [] }, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    try {
+      const res = await app.app.inject({ method: 'POST', url: '/api/actions/plugins.run', headers: app.authedWrite, payload: { params: { id: 'notion', hook: 'export' } } });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toMatch(/^Skipped: a plugin hook is already (queued|running)/);
+      expect(res.json().error).toContain(live.id);
+      expect(app.runner.pending('plugins.run').map((m) => m.id)).toEqual([live.id]);
+    } finally {
+      app.runner.cancel(live.id);
+      for (let i = 0; i < 200 && !app.runner.store.readExit(live.id); i++) await new Promise((r) => setTimeout(r, 50));
+      await app.close();
+    }
+  });
+
   it('Run the daily job now while this app\'s own daily run is still queued is refused, and only one daily run is queued (SW6-server-03)', async () => {
     const app = await makeTestApp();
     // A scan holds the pipeline resource, so the first daily run waits behind it, with no pidfile yet.
