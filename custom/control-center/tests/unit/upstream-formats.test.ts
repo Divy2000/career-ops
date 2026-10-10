@@ -293,6 +293,16 @@ describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
     expect(readScanHistory(root)).toEqual([expected]);
   });
 
+  it('reads columns by position under an older 7-column header, so posted_at from later appended rows is kept (R12-srv-dom-b-L2-01)', () => {
+    const root = tempDir('cc-scan-history-contract-');
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(
+      path.join(root, 'data', 'scan-history.tsv'),
+      'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://jobs.example.com/new\t2026-10-01\tgreenhouse-api\tEngineer\tNewCo\tadded\tRemote\tfp1\t2026-09-30\t0.9\t\tnewco\n',
+    );
+    expect(readScanHistory(root)).toEqual([{ url: 'https://jobs.example.com/new', firstSeen: '2026-10-01', portal: 'greenhouse-api', title: 'Engineer', company: 'NewCo', status: 'added', location: 'Remote', postedAt: '2026-09-30' }]);
+  });
+
   it('reads a legacy 7-column file with no header', () => {
     const root = tempDir('cc-scan-history-contract-');
     fs.mkdirSync(path.join(root, 'data'));

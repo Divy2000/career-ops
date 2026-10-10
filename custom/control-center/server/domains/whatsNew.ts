@@ -1,5 +1,5 @@
 import { localDate } from '../../shared/local-date.js';
-import type { ScanHistoryRow } from './pipeline.js';
+import { portalSource, type ScanHistoryRow } from './pipeline.js';
 
 export type NormalizeTextKey = (value: unknown, separator?: string) => string;
 
@@ -72,7 +72,7 @@ export function collectWhatsNew(opts: {
         location: row.location.trim(),
         postedAt: /^\d{4}-\d{2}-\d{2}$/.test(row.postedAt) ? row.postedAt : '',
         firstSeen: row.firstSeen,
-        ats: row.portal.replace(/-full$/, '').trim() || 'other',
+        ats: portalSource(row.portal) || 'other',
       });
     }
   }

@@ -247,6 +247,14 @@ describe('fresh matches (whats-new port)', () => {
     }
   });
 
+  it('names the source the way the Inbox does, without the -api or -full suffix scan.mjs records (R12-srv-dom-b-L2-02)', () => {
+    const norm = (v: unknown) => String(v ?? '').toLowerCase().trim();
+    const row = (portal: string, n: number) => ({ url: `https://jobs.example.com/${n}`, firstSeen: '2026-10-05', portal, title: `Engineer ${n}`, company: `Co ${n}`, status: 'added', location: '', postedAt: '' }) as ScanHistoryRow;
+    const history = [row('greenhouse-api', 1), row('lever-full', 2), row('', 3)];
+    const ats = collectWhatsNew({ history, applications: [], norm, now: new Date(2026, 9, 5, 12).getTime(), days: 7, limit: 50 }).offers.map((o) => o.ats).sort();
+    expect(ats).toEqual(['greenhouse', 'lever', 'other']);
+  });
+
   it('returns recent, unevaluated, non-skipped rows newest first with a complete count', async () => {
     const { normalizeTextKey } = await importCore<{ normalizeTextKey: (v: unknown, sep?: string) => string }>(DEFAULT_CODE_ROOT, 'tracker-parse.mjs');
     const tracker = await readTracker(DEFAULT_CODE_ROOT, root);
