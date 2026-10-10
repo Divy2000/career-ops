@@ -76,4 +76,18 @@ describe('schedule job card', () => {
     await until(() => puts.length === 1 || undefined, 'the update');
     expect(puts[0]).toEqual({ hour: 9, minute: 30, enabled: false });
   });
+
+  it('a weekly job whose plist holds Weekday 7 (Sunday) shows Sunday and sends weekday 0, so Disable and Save time do not 400 (R17-feat-b-L2-01)', async () => {
+    job = { ...job, kind: 'weekly', title: 'Weekly upstream sync', weekday: 7, hour: 3, minute: 0 };
+    await act(async () => qc.invalidateQueries({ queryKey: ['system', 'schedule'] }));
+    const weekday = await until(() => host.querySelector<HTMLSelectElement>('select[aria-label="Weekly upstream sync weekday"]'), 'the weekday select');
+    // Weekday 7 is Sunday in launchd: the select holds Sunday (0), not a value no option matches.
+    expect(weekday.value).toBe('0');
+    await act(async () => button('Disable').click());
+    await until(() => puts.length === 1 || undefined, 'the disable update');
+    expect(puts[0]).toEqual({ hour: 3, minute: 0, weekday: 0, enabled: false });
+    await act(async () => button('Save time').click());
+    await until(() => puts.length === 2 || undefined, 'the save update');
+    expect(puts[1]).toEqual({ hour: 3, minute: 0, weekday: 0, enabled: true });
+  });
 });
