@@ -178,6 +178,11 @@ export class SessionManager {
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
   }
 
+  /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
+  isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
+    return target.type === 'url' && !!target.value && this.fanningOut.has(`${mode}\0${target.value}`);
+  }
+
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const meta = this.must(id);
     assertCurrentPolicy(meta);
