@@ -102,6 +102,7 @@ describe('structured editors: an edit made while a save is on its way', () => {
         createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['a'], value: 2 }) }, 'Set a'),
         createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['b'], value: 3 }) }, 'Set b'),
         createElement('button', { type: 'button', onClick: () => void s.save() }, 'Save'),
+        createElement('button', { type: 'button', onClick: s.discard }, 'Discard'),
         createElement('output', { 'aria-label': 'doc' }, JSON.stringify(s.doc)),
         createElement('output', { 'aria-label': 'pending' }, String(s.pending.length)),
         createElement(EditorNoteView, { note: s.note }),
@@ -143,6 +144,19 @@ describe('structured editors: an edit made while a save is on its way', () => {
     expect(alerts()).toMatch(/Your 2 pending edit\(s\)/);
     expect(labelled('pending')!.textContent).toBe('2');
     expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 3, c: 9 }));
+  });
+  it('Discard does nothing until the save answers, so a later edit is not mistaken for a sent one', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    held = [];
+    await click(button('Save')!);
+    await until(() => held?.length === 1, 'the save on its way');
+    await click(button('Discard')!);
+    await click(button('Set b')!);
+    await release();
+    await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+    expect(labelled('pending')!.textContent).toBe('1');
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 3 }));
   });
 });
 

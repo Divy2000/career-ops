@@ -49,7 +49,10 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
     edit.pin();
     setPending([...latest.current, op]);
   };
+  // The save's answer splits the queue at the ops it sent, so the queue is not cleared under it.
+  const savingNow = useRef(false);
   const discard = () => {
+    if (savingNow.current) return;
     setPending([]);
     setConflict(null);
     setNote(null);
@@ -57,7 +60,8 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   };
   const save = async () => {
     const sent = latest.current;
-    if (sent.length === 0 || saving) return;
+    if (sent.length === 0 || savingNow.current) return;
+    savingNow.current = true;
     setSaving(true);
     setNote(null);
     try {
@@ -94,6 +98,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
       toast.error('Save failed');
     } finally {
+      savingNow.current = false;
       setSaving(false);
     }
   };
