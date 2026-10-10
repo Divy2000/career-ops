@@ -97,8 +97,9 @@ export async function fileRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const dir = path.join(cfg.dataRoot, 'data', 'control-center', 'uploads');
     fs.mkdirSync(dir, { recursive: true });
     const safeName = (req.query.name ?? 'cv').replace(/[^\w.-]+/g, '_').replace(/\.[^.]*$/, '').slice(0, 60) || 'cv';
-    const abs = path.join(dir, `${Date.now()}-${safeName}${ext}`);
-    fs.writeFileSync(abs, req.body);
+    // The random part keeps two uploads of the same name in the same millisecond apart; wx refuses to overwrite either way.
+    const abs = path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${safeName}${ext}`);
+    fs.writeFileSync(abs, req.body, { flag: 'wx' });
     return { path: abs, bytes: req.body.length };
   });
 }
