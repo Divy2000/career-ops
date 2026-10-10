@@ -128,11 +128,13 @@ test('Node 22.22.2, 24.15.0, 26.0.0 and 26.4.0 are accepted', () => {
   }
 });
 
-test('a missing npm is a failure (exit 1) that names npm', () => {
-  const { w, args } = fresh({ tools: ['git', 'node', 'security', 'uname', 'launchctl', 'plutil', 'claude'] });
+test('a missing npm is a failure (exit 1) that names npm, found by the prerequisite check before anything is cloned (R11-tests-custom-L3-07)', () => {
+  const { w, D, args } = fresh({ tools: ['git', 'node', 'security', 'uname', 'launchctl', 'plutil', 'claude'] });
   const r = w.run(args());
   assert.equal(r.status, 1);
-  assert.match(r.out, /npm/);
+  assert.match(r.out, /missing: npm/, r.out);
+  assert.equal(exists(D), false, 'no half-installed checkout is left behind');
+  assert.deepEqual(w.calls('git'), []);
 });
 
 test('Linux without --core-only exits 1 and lists what needs macOS', () => {
