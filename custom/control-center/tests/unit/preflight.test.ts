@@ -244,6 +244,19 @@ describe('resolveClaudeBin', () => {
     expect(claudeCandidates('claude', { env: { PATH: linkDir }, home, candidates: [] })).toEqual([link]);
   });
 
+  it('an explicit bare name other than claude is never swapped for a claude found in the usual install locations (R14-supervisor-X-02)', () => {
+    const home = tempDir('cc-home-');
+    touch(path.join(home, '.local', 'bin'));
+    const brew = touch(tempDir('cc-brew-'));
+    expect(resolveClaudeBin('work-claude', { env: { PATH: '/nonexistent' }, home, candidates: [brew] })).toBe('work-claude');
+    expect(claudeCandidates('work-claude', { env: { PATH: '/nonexistent' }, home, candidates: [brew] })).toEqual([]);
+    // Its own name in the native installer's folder still counts.
+    const own = path.join(home, '.local', 'bin', 'work-claude');
+    fs.copyFileSync(path.join(home, '.local', 'bin', 'claude'), own);
+    fs.chmodSync(own, 0o755);
+    expect(resolveClaudeBin('work-claude', { env: { PATH: '/nonexistent' }, home, candidates: [brew] })).toBe(own);
+  });
+
   it('returns the bare name when nothing is found so the probe can report ENOENT', () => {
     expect(resolveClaudeBin('claude', { env: { PATH: '/nonexistent' }, home: '/nonexistent-home', candidates: [] })).toBe('claude');
   });
