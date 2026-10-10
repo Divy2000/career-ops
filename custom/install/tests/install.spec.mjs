@@ -1015,6 +1015,8 @@ test('a re-run with the Control Center already running skips its npm ci and does
     assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run under a running Control Center');
     assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
     assert.match(r.out, /already running/);
+    assert.match(r.out, /npm --prefix custom\/control-center ci/, 'the skip message names the npm ci command, not a restart');
+    assert.doesNotMatch(r.out, /restart it to pick up changes/, 'a restart does not install dependencies');
   } finally {
     child.kill('SIGKILL');
   }

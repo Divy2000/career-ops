@@ -597,7 +597,7 @@ else
   fi
   if [ "$MAC_FEATURES" = 1 ]; then
     if cc_running; then
-      say "  Control Center is running; leaving its dependencies as they are (restart it to pick up changes)"
+      say "  Control Center is running; leaving its dependencies as they are (stop it, run 'npm --prefix custom/control-center ci', then start it again)"
     elif ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
       die 1 "npm ci for the Control Center failed. See $LOG_FILE."
     fi

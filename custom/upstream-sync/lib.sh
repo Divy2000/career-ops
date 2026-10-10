@@ -617,8 +617,9 @@ update_live_checkout() {
   if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
     if control_center_running "$data_root"; then
       # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the
-      # running instance's dependencies alone; its next restart installs whatever the merge changed.
-      deferred="the Control Center is running, so its dependencies were not reinstalled; restart it to pick them up"
+      # running instance's dependencies alone; a restart alone never installs them (bin/cc only checks node_modules
+      # exists), so point the user at the one command that does.
+      deferred="the Control Center is running, so its dependencies were not reinstalled; stop it, run 'npm --prefix custom/control-center ci', then start it again"
     elif ! npm --prefix custom/control-center ci >/dev/null 2>&1; then
       failed="${failed:+$failed and }npm --prefix custom/control-center ci"
     fi

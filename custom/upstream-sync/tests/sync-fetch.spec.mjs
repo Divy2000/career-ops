@@ -921,6 +921,8 @@ test('a running Control Center leaves the live update to skip its npm ci, so the
     assert.equal(w.head(), w.target, 'the fast-forward still happens');
     assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
     assert.match(res.stdout, /Control Center is running/);
+    assert.match(res.stdout, /npm --prefix custom\/control-center ci/, 'the deferred message names the npm ci command, not a restart');
+    assert.doesNotMatch(res.stdout, /restart it to pick them up/, 'a restart does not install dependencies');
   } finally {
     child.kill('SIGKILL');
     rmSync(w.base, { recursive: true, force: true });
