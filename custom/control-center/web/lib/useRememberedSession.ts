@@ -8,6 +8,10 @@ const listeners = new Map<string, Set<() => void>>();
 function changed(key: string) {
   for (const fn of listeners.get(key) ?? []) fn();
 }
+
+// A start still marked but not reported within this window was lost (its page reloaded and the POST never came back);
+// the mark is cleared so the start form is not disabled forever.
+const START_REPORT_WINDOW_MS = 15_000;
 function subscribe(key: string, fn: () => void) {
   const set = listeners.get(key) ?? new Set();
   set.add(fn);
@@ -43,6 +47,17 @@ export function useRememberedSession(key: string) {
   }, [key, store]);
   // Another mount's start still in flight: no panel to show yet, but the button stays off until it reports.
   const waiting = startingElsewhere && starts === 0 && !startedHere && id === null;
+  // A start marked by a page that reloaded mid-flight has no panel left to report it; if it never does within a bounded
+  // window, clear the mark so the start form is not disabled forever (a second start is still guarded by the sessions list).
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setTimeout(() => {
+      store.setStarting(false);
+      setStartingElsewhere(false);
+      changed(key);
+    }, START_REPORT_WINDOW_MS);
+    return () => clearTimeout(t);
+  }, [waiting, key, store]);
   const shown = id !== null || starts > 0;
   const busy = waiting || (shown && !startFailed && (status === null || status === 'queued' || status === 'running'));
   const onStatus = useCallback(
