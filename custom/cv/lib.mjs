@@ -34,6 +34,23 @@ export function recentAchievements(cvText) {
   return out;
 }
 
+// The body of every cv.md `##` section whose title names projects ("Projects", "Personal Projects"): the only part of
+// cv.md a project may come from, never an employer, a role, another section's title or a skill category.
+function projectSections(cvText) {
+  const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
+  const out = [];
+  let inside = false;
+  for (const line of lines) {
+    const section = line.match(/^##(?!#)\s+(.*\S)\s*$/);
+    if (section) {
+      inside = titleKey(section[1]).includes('project');
+      continue;
+    }
+    if (inside) out.push(line);
+  }
+  return out.join('\n');
+}
+
 // Same work: equal normalized titles, or the same canonical link. A title that
 // is merely part of a paper's title is a different work.
 function sameWork(name, url, entry) {
@@ -53,13 +70,14 @@ function publisherHost(url) {
 }
 
 // Papers belong in awards[] (Recent Achievements), never in projects[]; every
-// project must come from the library (kind project) or cv.md, and its link must
+// project must come from the library (kind project) or cv.md's Projects section, and its link must
 // be that source's link (the library wins when both list the project).
 export function checkPayload(payload, { cvText = '', libraryText = null } = {}) {
   const errors = [];
   const warnings = [];
   const achievements = recentAchievements(cvText);
   const library = libraryText === null ? [] : parseLibrary(libraryText).entries;
+  const cvProjects = projectSections(cvText);
   for (const p of Array.isArray(payload?.projects) ? payload.projects : []) {
     const name = typeof p?.name === 'string' ? p.name.trim() : '';
     if (!name) continue;
@@ -71,7 +89,7 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
     if (entry && entry.kind !== 'project') {
       errors.push(`project "${name}" is a ${entry.kind} in article-digest.md (line ${entry.line}); only kind project can be listed under Projects`);
     }
-    const inCv = entry ? null : findCvBlock(cvText, name);
+    const inCv = entry ? null : findCvBlock(cvProjects, name);
     if (!entry && !inCv) {
       errors.push(`project "${name}" is in neither article-digest.md nor cv.md; take projects from node custom/projects/rank.mjs output`);
     }

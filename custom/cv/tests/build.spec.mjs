@@ -175,6 +175,30 @@ test('given a project in neither the library nor cv.md, when built, then it fail
   assert.equal(r.html, null);
 });
 
+test('given a project named after an employer, a role, a section or a skill category in cv.md, when checked, then it is an error: only the Projects section is a project source (R11-scripts-a-L3-02)', () => {
+  const cv = cvMarkdownFor(loadFixture());
+  for (const name of ['Software Engineer', 'Northwind Devices', 'Work Experience', 'Languages']) {
+    assert.ok(cv.includes(name), `the fixture cv.md lists ${name}`);
+    const r = checkPayload({ projects: [{ name, bullets: ['Built an internal tool'] }] }, { cvText: cv, libraryText: null });
+    assert.match(r.errors.join('\n'), new RegExp(`project "${name}" is in neither article-digest\\.md nor cv\\.md`), name);
+  }
+});
+
+test('given a project under a level-3 heading of a Personal Projects section, when checked, then its cv.md link is used (R11-scripts-a-L3-02)', () => {
+  const cv = '## Work Experience\n\n### Graph Co -- Austin\n\n- built github.com/me/work\n\n## Personal Projects\n\n### Graph Tool\n\n- see github.com/me/graph-tool\n\n## Skills\n';
+  assert.deepEqual(checkPayload({ projects: [{ name: 'Graph Tool', url: 'https://github.com/me/graph-tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, []);
+  assert.match(checkPayload({ projects: [{ name: 'Graph Co', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors.join('\n'), /"Graph Co" is in neither/);
+});
+
+test('given a project named after a job title in cv.md, when built, then it fails and no HTML is written (R11-scripts-a-L3-02)', () => {
+  const fixture = loadFixture();
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const r = build(root, { ...fixture, projects: [{ name: 'Software Engineer', bullets: ['Built an internal tool'] }] });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /project "Software Engineer" is in neither article-digest\.md nor cv\.md/);
+  assert.equal(r.html, null);
+});
+
 test('given no sections.awards, when built, then the awards section is titled "Recent Achievements" and uses the fork template', () => {
   const fixture = loadFixture();
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
