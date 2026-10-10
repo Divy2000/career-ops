@@ -86,9 +86,11 @@ type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: st
 export function ApplyBody(props: ApplyBodyProps) {
   // New draft remounts the form, so the URL, the answers and the panel start clean.
   const [draft, setDraft] = useState(0);
+  // Stable, so the form's status callback (which the panel's effect depends on) does not change on every render.
+  const onNewDraft = useCallback(() => setDraft((d) => d + 1), []);
   return (
     <UnsavedProvider>
-      <ApplyForm key={draft} {...props} onNewDraft={() => setDraft((d) => d + 1)} />
+      <ApplyForm key={draft} {...props} onNewDraft={onNewDraft} />
     </UnsavedProvider>
   );
 }
@@ -155,8 +157,10 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
       statusSeq.current += 1;
       setStatus(s);
       rememberStatus(s);
+      // Deleted elsewhere (or a stale id): its answers cannot be filled any more, so the form starts over like New draft.
+      if (s === 'gone') onNewDraft();
     },
-    [rememberStatus],
+    [rememberStatus, onNewDraft],
   );
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
   // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.

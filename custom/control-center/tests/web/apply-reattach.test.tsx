@@ -150,6 +150,20 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(applyPanel()!.sessionId ?? null).toBeNull();
   });
 
+  it('a draft started here and deleted elsewhere drops its answers and Fill, and offers Draft answers again', async () => {
+    await openApply();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    expect(fillButton()).toBeDefined();
+    // Deleted on the Sessions page in another tab: the panel's stream (or a reply's 404) reports it gone.
+    await act(async () => applyPanel()!.onStatus!('gone', null));
+    await until(() => draftButton(), 'the Draft answers button');
+    expect(fillButton()).toBeUndefined();
+    expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
+    expect(applyPanel()!.sessionId ?? null).toBeNull();
+    expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
+  });
+
   it('on /apply with no row, the re-attached session brings back the posting URL it was drafted for', async () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
     sessionStorage.setItem('cc.apply.url', 's-apply-url');
