@@ -295,6 +295,25 @@ test('given a duplicate title, when appended, then it throws', () => {
   assert.throws(() => appendEntry(LIBRARY, { title: 'ticket triage BOT', bullets: ['x'] }), /already/);
 });
 
+for (const title of ['Chatbot [WIP]', 'Chatbot ]', 'Path \\ [x]']) {
+  test(`given a title with brackets (${title}), a link and a tagline, when appended, then it reads back with that title and link (R15-scripts-a-L2-01)`, () => {
+    const out = appendEntry(LIBRARY, { title, url: 'https://github.com/me/bot', tagline: 'RAG demo', bullets: ['Did it.'] });
+    const added = parseLibrary(out).entries.at(-1);
+    assert.deepEqual([added.title, added.url, added.tagline], [title, 'https://github.com/me/bot', 'RAG demo']);
+    assert.equal(validateLibrary(out).ok, true, validateLibrary(out).errors.join('; '));
+  });
+}
+
+test('given a bracketed title, when edited with a link and a tagline, then the edit is written and reads back as entered (R15-scripts-a-L2-01)', () => {
+  const out = replaceEntry('## Alpha\n- One.\n', 'alpha', { title: 'Alpha [v2]', url: 'https://example.com/a', tagline: 'Two', bullets: ['One.'] });
+  const [e] = parseLibrary(out).entries;
+  assert.deepEqual([e.title, e.url, e.tagline], ['Alpha [v2]', 'https://example.com/a', 'Two']);
+});
+
+test('given an entry that would not read back as entered, when appended, then it throws instead of writing a different entry (R15-scripts-a-L2-01)', () => {
+  assert.throws(() => appendEntry(LIBRARY, { title: '[New](https://example.com/x)', bullets: ['One.'] }), /would not read back as entered/);
+});
+
 test('given a projects.json entry, when converted, then it becomes a "## Name -- url" block with Tags and bullets = description then highlights', () => {
   const data = JSON.parse(fs.readFileSync(path.join(FIX, 'projects.json'), 'utf8'));
   const { entries, warnings } = convertJsonProjects(data);

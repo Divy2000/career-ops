@@ -2,7 +2,7 @@
 // projects library, payload normalization for the fork template, and the
 // fit-to-page loop and PDF page count used by render-pdf.mjs.
 
-import { parseLibrary, findCvBlock, titleKey } from '../projects/lib.mjs';
+import { parseLibrary, findCvBlock, projectSections, titleKey } from '../projects/lib.mjs';
 
 export const AWARDS_TITLE = 'Recent Achievements';
 const PUBLISHER_HOSTS = ['doi.org', 'sciencedirect.com', 'wiley.com', 'arxiv.org'];
@@ -32,29 +32,6 @@ export function recentAchievements(cvText) {
     out.push({ line: i + 1, title, urls: linksIn(text) });
   }
   return out;
-}
-
-// The body of every cv.md `##` section whose title ends in "Project" or "Projects" ("Projects", "Personal Projects"): the only part of
-// cv.md a project may come from, never an employer, a role, another section's title or a skill category.
-function projectSections(cvText) {
-  const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
-  const out = [];
-  let inside = false;
-  for (const line of lines) {
-    // A `#` heading ends a section as a `##` one does, and starts no projects section.
-    const section = line.match(/^#{1,2}(?!#)\s+(.*\S)\s*$/);
-    if (section) {
-      if (!line.startsWith('##')) {
-        inside = false;
-        continue;
-      }
-      // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
-      inside = /\bprojects?$/i.test(section[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[^A-Za-z]+$/, ''));
-      continue;
-    }
-    if (inside) out.push(line);
-  }
-  return out.join('\n');
 }
 
 // Same work: equal normalized titles, or the same canonical link. A title that

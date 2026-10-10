@@ -831,6 +831,24 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   assert.match(r.out, /claude .*Read custom\/install\/ONBOARDING\.md and follow it/);
 });
 
+test('--onboard headless moves an earlier run\'s drafts aside, so only this run\'s drafts are listed and resumed (R15-scripts-b-L1-03)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const draft = path.join(data, 'data', 'install', 'onboarding-draft');
+  fs.mkdirSync(draft, { recursive: true });
+  fs.writeFileSync(path.join(draft, 'article-digest.md'), '# from an earlier run\n');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_DRAFTS: '1' } });
+  assert.ok(w.claudeArgv(), r.out);
+  assert.equal(fs.existsSync(path.join(draft, 'article-digest.md')), false, 'the stale draft is still where Resume from drafts reads');
+  assert.ok(r.out.includes(path.join(draft, 'questions.md')), r.out);
+  assert.doesNotMatch(r.out.slice(r.out.indexOf('Drafts written:')), /article-digest\.md/);
+  const kept = fs.readdirSync(path.dirname(draft)).filter((n) => n.startsWith('onboarding-draft.prev-'));
+  assert.equal(kept.length, 1, fs.readdirSync(path.dirname(draft)).join(', '));
+  assert.equal(fs.readFileSync(path.join(path.dirname(draft), kept[0], 'article-digest.md'), 'utf8'), '# from an earlier run\n');
+  assert.ok(r.out.includes(path.join(path.dirname(draft), kept[0])), 'the user is told where the earlier drafts went');
+});
+
 test('--onboard headless with a Claude Code too old to scrub hook and tool children never hands it the token (R11-scripts-b-L3-01)', () => {
   for (const version of ['2.1.287', 'garbled']) {
     const { w, D } = fresh({ keychain: true });

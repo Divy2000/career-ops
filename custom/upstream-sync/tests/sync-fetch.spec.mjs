@@ -284,7 +284,7 @@ test('sync.sh uses the shared helpers: no bare "git fetch upstream main", no unc
   assert.match(sync, /\^\[0-9\]\+\$/, 'BEHIND is checked to be numeric');
 });
 
-test('Given the shell exports a data root (as the launchd plist does), sync.sh under test still logs to the test checkout and never into that root', () => {
+test('Given the shell exports a data root (as the launchd plist does), the runSync harness keeps sync.sh under test logging to the test checkout and never into that root', () => {
   const w = makeWorld({ upstreamAhead: false });
   const home = path.join(w.base, 'home');
   const decoy = path.join(w.base, 'real-data-root');
@@ -318,24 +318,57 @@ test('a sync started while another holds the run lock is refused before it touch
   const wt = path.join(home, '.career-ops-sync');
   mkdirSync(wt, { recursive: true });
   writeFileSync(path.join(wt, 'mid-suite.txt'), 'the scheduled run is still testing here\n');
-  // Past the Keychain the run would go on to replace the worktree; npm then fails, so nothing reaches a registry.
-  stub(path.join(w.base, 'bin'), 'npm', 'exit 1');
+  // The Keychain lookup is the last step before the run replaces the worktree. A run that got past the lock records
+  // it there and stops, so a regressed lock never reaches the worktree removal or npm (sync.sh puts Homebrew's
+  // folders ahead of any stub on its PATH, so a stubbed npm would not be the one that runs).
+  const passedLock = path.join(w.base, 'passed-lock');
   const ready = path.join(w.base, 'holder-ready');
-  // The scheduled run, still going: it holds the lock while the manual run starts.
-  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/bin/sh', '-c', `touch "${ready}"; sleep 60`], { stdio: 'ignore' });
+  // The scheduled run, still going: it holds the lock while the manual run starts. Its own process group, so the
+  // cleanup kills the shell and its sleep along with lockf.
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/bin/sh', '-c', `touch "${ready}"; sleep 60`], { stdio: 'ignore', detached: true });
   try {
     const deadline = Date.now() + 10_000;
     while (!existsSync(ready) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
     assert.ok(existsSync(ready), 'the holder never took the lock');
-    const res = runSync(w, { home, security: 'echo tok-123' });
+    const res = runSync(w, { home, security: `touch "${passedLock}"\nexit 44` });
+    assert.equal(existsSync(passedLock), false, 'the run went past the held lock');
     assert.equal(res.status, 75, res.log + res.stderr);
     assert.match(res.stderr, /another upstream sync is running \(it holds .*\.career-ops-sync\.lockf\); not started/);
     assert.match(res.log, /another upstream sync is running .*; not started/);
     assert.equal(readFileSync(path.join(wt, 'mid-suite.txt'), 'utf8'), 'the scheduled run is still testing here\n');
   } finally {
-    holder.kill('SIGKILL');
+    try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ }
     rmSync(w.base, { recursive: true, force: true });
   }
+});
+
+test('the lock marker the re-exec sets stays out of every child of the locked run, so a test run inside the weekly sync still exercises the lock (R15-scripts-b-L1-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'security-env.txt');
+  mkdirSync(home);
+  try {
+    // The Keychain lookup runs inside the locked run; it records what it inherits and stops the run.
+    const res = runSync(w, { home, security: `env | grep '^CC_SYNC_LOCKED=' > "${seen}"\nexit 44` });
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
+    assert.equal(readFileSync(seen, 'utf8'), '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a sync whose claude is too old to keep the token out of hooks and tools stops before it touches the worktree (R15-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const wt = path.join(home, '.career-ops-sync');
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(path.join(wt, 'kept.txt'), 'an earlier run\n');
+  const old = path.join(w.base, 'old-claude');
+  stub(old, 'claude', 'echo "2.1.200 (Claude Code)"');
+  try {
+    const res = runSync(w, { home, security: 'echo tok-123', inherited: { CC_CLAUDE_BIN: path.join(old, 'claude') } });
+    assert.equal(res.status, 1, res.log + res.stderr);
+    assert.match(res.log, /^!!! Claude Code 2\.1\.200 at .*old-claude\/claude is older than 2\.1\.288/m);
+    assert.equal(readFileSync(path.join(wt, 'kept.txt'), 'utf8'), 'an earlier run\n');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
 test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
@@ -516,7 +549,7 @@ test('resolving a conflict is allowed, but an upstream file slipped into the mer
 test('sync.sh records the merge result in memory after the README step and before Claude runs, and fails the run when it cannot', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const snap = sync.indexOf('MERGE_SNAPSHOT="$(merge_snapshot)" || fail ');
-  assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('claude -p'), `merge_snapshot at ${snap}`);
+  assert.ok(snap > sync.indexOf('keep-fork-readme.sh" "$STATE_DIR"') && snap < sync.indexOf('"$CLAUDE_BIN" -p'), `merge_snapshot at ${snap}`);
   assert.equal(/merge-snapshot|merge_snapshot >/.test(sync), false, 'the snapshot is never written to a file');
 });
 
@@ -554,7 +587,7 @@ test('sync.sh keeps the baseline dependency tree in memory before Claude, then c
   const sync = readFileSync(SYNC, 'utf8');
   const install = sync.indexOf('install_root_deps ignore-scripts >/dev/null 2>&1 || fail "installing root dependencies failed on origin/main"');
   const tree = sync.indexOf('BASE_DEPS_TREE="$(root_deps_tree)" || fail ');
-  const claude = sync.indexOf('claude -p');
+  const claude = sync.indexOf('"$CLAUDE_BIN" -p');
   const gate = sync.indexOf('GATE="$(verify_merge "$BRANCH")"');
   const clean = sync.indexOf('clean_sync_worktree "$WT" || fail ');
   const refresh = sync.indexOf('refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail ');
@@ -868,27 +901,57 @@ test('update_live_checkout moves the live checkout to the verified sync merge, n
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+/**
+ * A shell prefix that starts a daily job holding run-daily's lock in the background and returns once it holds it, so
+ * the update after it always meets a held lock. `body` is what the job does while it holds the lock.
+ */
+function holdDailyLock(w, body) {
+  const ready = path.join(w.base, 'holder-ready');
+  return `mkdir -p "$(dirname "$LOCK")"
+/usr/bin/lockf -k -t 0 "$LOCK" /bin/sh -c 'touch "$1"; ${body}' holder "${ready}" >/dev/null 2>&1 &
+for _ in $(seq 400); do [ -e "${ready}" ] && break; sleep 0.05; done
+[ -e "${ready}" ] || { echo "the daily job never took its lock"; exit 99; }
+`;
+}
+
 test('a daily job holding its lock for longer than the wait leaves the live checkout alone, reinstalls nothing, and says why (R11-scripts-b-L1-03)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true });
   try {
     const before = w.head();
-    // The daily job, mid-run: it holds run-daily.sh's lock while the sync reaches the live update.
-    const res = w.update({ wait: 1, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 4 >/dev/null 2>&1 &\nsleep 0.5\n` });
+    // The daily job, mid-run: it holds run-daily.sh's lock until the update has returned.
+    const res = w.update({ wait: 1, prefix: holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`) });
     assert.equal(res.status, 10, res.stdout + res.stderr);
     assert.equal(res.stdout, 'the daily job is still running');
     assert.equal(w.head(), before);
     assert.equal(w.npm(), '');
-  } finally { rmSync(w.base, { recursive: true, force: true }); }
+  } finally {
+    writeFileSync(path.join(w.base, 'release'), '');
+    rmSync(w.base, { recursive: true, force: true });
+  }
 });
 
 test('a daily job that finishes within the wait is waited for, then the live checkout is updated (R11-scripts-b-L1-03)', () => {
   const w = liveWorld({ depsChange: true });
   try {
-    const res = w.update({ wait: 20, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 1 >/dev/null 2>&1 &\nsleep 0.3\n` });
+    const res = w.update({ wait: 20, prefix: holdDailyLock(w, 'sleep 1') });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(res.stdout, /^live checkout now at [0-9a-f]+$/);
     assert.equal(w.head(), w.target);
     assert.match(w.npm(), /^install --no-package-lock --silent$/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('the live update names its pid beside the daily job\'s lock while it holds it, and removes it after (R15-scripts-b-L1-02)', () => {
+  const w = liveWorld({ depsChange: true });
+  const marker = path.join(path.dirname(w.dailyLock), '.live-update.pid');
+  const seen = path.join(w.base, 'marker-seen');
+  // npm runs inside the locked update: it records whether the marker names a live process at that point.
+  stub(path.join(w.base, 'bin'), 'npm', `pid="$(cat "${marker}" 2>/dev/null)"; [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo alive >> "${seen}"; exit 0`);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(existsSync(seen) ? readFileSync(seen, 'utf8') : '', 'alive\n');
+    assert.equal(existsSync(marker), false, 'the marker outlived the update');
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
@@ -1088,12 +1151,14 @@ test('a contract.json the gate cannot parse after the merge holds the PR (SW5-sc
 });
 
 test('sync.sh under test runs on the node running these specs, pinned the way the plist pins one (SW4-tests-26)', () => {
-  const w = makeWorld({ upstreamAhead: false });
+  const w = makeWorld();
   const home = path.join(w.base, 'home');
   mkdirSync(home);
   try {
-    const res = runSync(w, { home });
-    assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.env.CC_NODE_BIN, process.execPath, 'pinned-node.sh puts this node ahead of Homebrew on the job PATH');
+    const seen = path.join(w.base, 'security-node.txt');
+    // The Keychain lookup runs after sync.sh has set its PATH; it records which node that PATH finds and stops the run.
+    const res = runSync(w, { home, security: `command -v node > "${seen}"\nexit 44` });
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
+    assert.equal(readFileSync(seen, 'utf8').trim(), process.execPath, 'pinned-node.sh puts this node ahead of Homebrew on the job PATH');
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });

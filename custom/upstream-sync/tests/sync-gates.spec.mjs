@@ -31,7 +31,7 @@ test('the headless sync Claude gets the OAuth token but runs with subprocess env
   const bin = path.join(dir, 'bin');
   const seen = path.join(dir, 'env.txt');
   stub(bin, 'claude', `env > "${seen}"`);
-  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log" CLAUDE_BIN=claude\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const env = readFileSync(seen, 'utf8');
@@ -53,7 +53,7 @@ test('a report left by an earlier run the same day never reaches this run\'s PR 
   const bodyFrom = lines.findIndex((l) => l.startsWith('BODY='));
   const bodyTo = lines.findIndex((l, i) => i > bodyFrom && l.startsWith('} > "$BODY"'));
   assert.ok(from > -1 && to > from && bodyFrom > to && bodyTo > bodyFrom, 'no Claude or PR body block in sync.sh');
-  const vars = `LIVE="${path.resolve(HERE, '../../..')}" STATE_DIR="${dir}" TODAY=${today} BEHIND=2 CONFLICTS= BASELINE_FAILURES= TOKEN=t MODEL=m LOG="${dir}/log" CUSTOM_OK=1 CC_OK=1 KEPT_README=0`;
+  const vars = `LIVE="${path.resolve(HERE, '../../..')}" STATE_DIR="${dir}" TODAY=${today} BEHIND=2 CONFLICTS= BASELINE_FAILURES= TOKEN=t MODEL=m CLAUDE_BIN=claude LOG="${dir}/log" CUSTOM_OK=1 CC_OK=1 KEPT_README=0`;
   const script = `${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
@@ -67,11 +67,83 @@ test('the headless sync Claude runs at an explicit medium effort, not whatever t
   const bin = path.join(dir, 'bin');
   const seen = path.join(dir, 'argv.txt');
   stub(bin, 'claude', `printf '%s\\n' "$@" > "${seen}"`);
-  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log" CLAUDE_BIN=claude\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const argv = readFileSync(seen, 'utf8').split('\n');
   assert.equal(argv[argv.indexOf('--effort') + 1], 'medium', argv.join(' '));
+});
+
+test('the headless sync Claude starts none of the user\'s or the project\'s MCP servers, which would inherit the token (R15-scripts-b-L3-01)', () => {
+  const dir = tempDir('sync-claude-mcp-');
+  const bin = path.join(dir, 'bin');
+  const seen = path.join(dir, 'argv.txt');
+  stub(bin, 'claude', `printf '%s\\n' "$@" > "${seen}"`);
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log" CLAUDE_BIN="${bin}/claude"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(readFileSync(seen, 'utf8').split('\n').includes('--strict-mcp-config'), readFileSync(seen, 'utf8'));
+});
+
+// ---- which claude gets the token (R15-scripts-b-L3-01) ----
+
+/** sync_claude_bin 2.1.288 with `claude` stubs printing the given versions, one folder each on PATH in order. */
+function claudeBin({ onPath = [], pinned, pinnedVersion } = {}) {
+  const dir = tempDir('sync-claude-bin-');
+  const dirs = onPath.map((version, i) => {
+    const d = path.join(dir, `bin${i}`);
+    stub(d, 'claude', version === null ? 'exit 1' : `echo "${version} (Claude Code)"`);
+    return d;
+  });
+  const env = { PATH: [...dirs, '/usr/bin', '/bin'].join(':') };
+  if (pinned !== undefined) {
+    env.CC_CLAUDE_BIN = pinned === 'pin' ? path.join(dir, 'pin', 'claude') : pinned;
+    if (pinned === 'pin') stub(path.join(dir, 'pin'), 'claude', `echo "${pinnedVersion} (Claude Code)"`);
+  }
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { env, encoding: 'utf8' });
+  // sync.sh reads it through $(...), which drops the trailing newline.
+  return { ...r, stdout: r.stdout.replace(/\n$/, ''), dir, dirs };
+}
+
+test('sync_claude_bin picks the first claude on PATH when it keeps the token out of hooks and tools', () => {
+  const r = claudeBin({ onPath: ['2.1.289', '2.1.100'] });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.stdout, path.join(r.dirs[0], 'claude'));
+  assert.equal(claudeBin({ onPath: ['2.1.288'] }).status, 0, 'the minimum itself is enough');
+  assert.equal(claudeBin({ onPath: ['2.2.0'] }).status, 0);
+  assert.equal(claudeBin({ onPath: ['3.0.1'] }).status, 0);
+});
+
+test('sync_claude_bin refuses an older claude first on PATH, which would hand the token to hooks and Bash children', () => {
+  const r = claudeBin({ onPath: ['2.1.287', '2.1.300'] });
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, `Claude Code 2.1.287 at ${path.join(r.dirs[0], 'claude')} is older than 2.1.288, which keeps the token out of hooks and tools; update it or pin a newer one with CC_CLAUDE_BIN`);
+  assert.equal(claudeBin({ onPath: ['2.0.999'] }).status, 1);
+  assert.equal(claudeBin({ onPath: ['1.9.300'] }).status, 1);
+});
+
+test('sync_claude_bin takes CC_CLAUDE_BIN over PATH, and refuses a relative one', () => {
+  const r = claudeBin({ onPath: ['2.1.100'], pinned: 'pin', pinnedVersion: '2.1.290' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(r.stdout, path.join(r.dir, 'pin', 'claude'));
+  const old = claudeBin({ onPath: ['2.1.300'], pinned: 'pin', pinnedVersion: '2.1.100' });
+  assert.equal(old.status, 1);
+  assert.match(old.stdout, /^Claude Code 2\.1\.100 at .*\/pin\/claude is older than 2\.1\.288/);
+  const rel = claudeBin({ onPath: ['2.1.300'], pinned: 'claude' });
+  assert.equal(rel.status, 1);
+  assert.equal(rel.stdout, 'CC_CLAUDE_BIN must be an absolute path (got claude)');
+});
+
+test('sync_claude_bin refuses when no claude is found or its version cannot be read', () => {
+  const none = claudeBin();
+  assert.equal(none.status, 1);
+  assert.equal(none.stdout, 'no claude found on PATH; install Claude Code or pin one with CC_CLAUDE_BIN');
+  const broken = claudeBin({ onPath: [null] });
+  assert.equal(broken.status, 1);
+  assert.equal(broken.stdout, `cannot read the Claude Code version of ${path.join(broken.dirs[0], 'claude')}`);
+  const gone = claudeBin({ pinned: '/nonexistent/claude' });
+  assert.equal(gone.status, 1);
+  assert.equal(gone.stdout, 'claude /nonexistent/claude is not an executable');
 });
 
 // npm stub: logs each call's arguments; `npm ... test` prints what vitest prints, or fails when told to.
@@ -197,7 +269,7 @@ test('unexpected_upstream lists the upstream files that differ but did not confl
 
 test('sync.sh blocks on upstream edits this run made after the merge, outside the conflicts it handed Claude', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  const claude = sync.indexOf('claude -p');
+  const claude = sync.indexOf('"$CLAUDE_BIN" -p');
   const changed = sync.indexOf('CHANGED_SINCE_MERGE="$(changed_since_snapshot "$MERGE_SNAPSHOT")" || fail ');
   const unexpected = sync.indexOf('UNEXPECTED_UPSTREAM="$(unexpected_upstream "$CHANGED_SINCE_MERGE" "$CONFLICTS")"');
   assert.ok(changed > claude && unexpected > changed, `changed_since_snapshot at ${changed}, its own statement before ${unexpected}`);
@@ -400,7 +472,7 @@ test('new_failures fails, never prints nothing, when the after-merge failures ca
 test('sync.sh reads the baseline once, before Claude runs, and compares against that copy in memory', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const read = sync.indexOf('BASELINE_FAILURES="$(cat "$STATE_DIR/$TODAY.baseline-failures.txt")" || fail ');
-  const claude = sync.indexOf('claude -p');
+  const claude = sync.indexOf('"$CLAUDE_BIN" -p');
   assert.ok(read > sync.indexOf('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"') && read < claude, `baseline read at ${read}`);
   assert.equal(sync.indexOf('baseline-failures.txt', claude), -1, 'nothing after Claude reads the baseline file');
   assert.match(sync, /^suite_failures "\$STATE_DIR\/\$TODAY\.after-failures\.txt" \|\| fail "upstream suite run was interrupted"$/m);
@@ -428,6 +500,26 @@ function baselineGate({ before, after, between }) {
   const second = shell(`${slice('suite_failures "$STATE_DIR/$TODAY.after-failures.txt"', 'NEW_FAILURES=')}\nprintf '%s' "$NEW_FAILURES"`, after, { BASELINE_FAILURES: first.stdout });
   return second;
 }
+
+test('a baseline run that crashed stops the sync before the merge instead of becoming the list of existing failures (R15-tests-custom-L3-18)', () => {
+  const w = suiteWorld({ output: '' });
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"'));
+  const to = lines.findIndex((l, i) => i >= from && l.includes("grep -q '^SUITE CRASHED'"));
+  assert.ok(from > -1 && to > from, 'the baseline lines and the crash guard are not found in sync.sh');
+  const bin = path.join(w.dir, 'bin');
+  const run = (output) => {
+    stub(bin, 'node', `printf '%s\\n' "${output}"\nexit 1`);
+    return spawnSync('bash', ['-c', `source "${LIB}"\nSTATE_DIR="${w.dir}" TODAY=t\nfail() { echo "!!! $1" >&2; exit 1; }\n${lines.slice(from, to + 1).join('\n')}\necho past the guard`], { cwd: w.dir, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  };
+  const crashed = run('Error: Cannot find module ./lib/x.mjs');
+  assert.equal(crashed.status, 1, crashed.stdout + crashed.stderr);
+  assert.match(crashed.stderr, /^!!! upstream suite crashed on origin\/main before the merge; cannot compare$/m);
+  assert.doesNotMatch(crashed.stdout, /past the guard/);
+  const red = run('  ❌ alpha broke\n📊 Results: 9 passed, 1 failed, 0 warnings');
+  assert.equal(red.status, 0, red.stderr);
+  assert.match(red.stdout, /past the guard/);
+});
 
 test('a baseline file deleted or edited after it was read cannot hide a new upstream-suite failure', () => {
   const before = '  ❌ alpha broke\n📊 Results: 9 passed, 1 failed, 0 warnings';
@@ -464,7 +556,7 @@ function claudeVerdict(out, exit = 0) {
   stub(bin, 'claude', `printf '%s\\n' "${out.replace(/"/g, '\\"')}"\nexit ${exit}`);
   // sync.sh runs under `set -uo pipefail`, which makes the claude | tee pipeline report claude's exit.
   assert.match(readFileSync(SYNC, 'utf8'), /^set -uo pipefail$/m);
-  const script = `set -uo pipefail\nsource "${LIB}"\nTOKEN=t MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log"\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /^CLAUDE_HOLD=/)}\nprintf '%s' "$CLAUDE_HOLD"`;
+  const script = `set -uo pipefail\nsource "${LIB}"\nTOKEN=t MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log" CLAUDE_BIN=claude\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /^CLAUDE_HOLD=/)}\nprintf '%s' "$CLAUDE_HOLD"`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return { hold: r.stdout, log: readFileSync(path.join(dir, 'log'), 'utf8') };
@@ -493,7 +585,7 @@ test('no verdict, an unknown one, or a failed claude run holds the PR', () => {
 test('sync.sh reads the verdict before it pushes or decides', () => {
   const sync = readFileSync(SYNC, 'utf8');
   const hold = sync.indexOf('CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"');
-  assert.ok(hold > sync.indexOf('claude -p') && hold < sync.indexOf('git push') && hold < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `verdict at ${hold}`);
+  assert.ok(hold > sync.indexOf('"$CLAUDE_BIN" -p') && hold < sync.indexOf('git push') && hold < sync.indexOf('BLOCKERS="$(merge_blockers)"'), `verdict at ${hold}`);
 });
 
 // ---- which custom/ paths the sync Claude may change without a human (SW4-scripts-02) ----

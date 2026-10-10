@@ -86,6 +86,38 @@ test('an existing checkout is reused: no second clone', () => {
   assert.ok(w.log().includes('install-sh '));
 });
 
+test('an existing checkout of another repository is refused before the confirm, and its files never run (R15-scripts-b-L3-03)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'career-ops');
+  w.makeCheckout(dest, { origin: 'https://github.com/career-ops-hq/career-ops.git' });
+  const r = w.run([], { script: BOOTSTRAP_SH, tty: 'y\n' });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, new RegExp(`origin of ${dest.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is https://github\\.com/career-ops-hq/career-ops\\.git, not the fork`));
+  assert.doesNotMatch(r.out, /Continue\? \[y\/N\]/);
+  assert.ok(!w.log().some((l) => l.startsWith('install-sh') || l.startsWith('git clone')), w.log().join('\n'));
+});
+
+test('an existing fork checkout without the installer is refused before the confirm instead of ending in exit 127 (R15-scripts-b-L3-03)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'career-ops');
+  w.makeCheckout(dest, { origin: 'git@github.com:Divy2000/career-ops.git' });
+  fs.rmSync(path.join(dest, 'custom', 'install', 'install.sh'));
+  const r = w.run([], { script: BOOTSTRAP_SH, tty: 'y\n' });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /has no custom\/install\/install\.sh/);
+  assert.doesNotMatch(r.out, /Continue\? \[y\/N\]/);
+});
+
+test('the banner says an existing fork checkout\'s own installer runs, not the pinned tag (R15-scripts-b-L3-03)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'career-ops');
+  w.makeCheckout(dest, { origin: 'git@github.com:Divy2000/career-ops.git' });
+  const r = w.run([], { script: BOOTSTRAP_SH, tty: 'n\n' });
+  assert.equal(r.status, 1, r.out);
+  assert.ok(r.out.split('\n').includes(`  use:        the existing checkout at ${dest} and its own installer (checked out: main), not the pinned tag`), r.out);
+  assert.doesNotMatch(r.out, /clone into:/);
+});
+
 test('a failing clone is reported and install.sh never runs', () => {
   const w = world();
   fs.rmSync(path.join(w.bin, 'git')); // a symlink to the shared stub: replace the link, never write through it

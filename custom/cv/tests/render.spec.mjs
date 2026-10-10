@@ -247,9 +247,10 @@ const PRELOAD_ARGS = "const args = process.argv.slice(2);\nconst html = args.fin
 
 // A render started in the background, for the specs that stop it with a signal partway through.
 // Its own TMPDIR, so a spec can check that a stopped render leaves nothing there either (Chromium keeps its profile in it).
-const startRender = (root, html, args) => {
+// With group, it leads its own process group, so a spec can signal the whole group the way Ctrl-C or a cancel does.
+const startRender = (root, html, args, { group = false } = {}) => {
   const tmp = fs.realpathSync(tempDir('render-tmp-'));
-  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], { cwd: REPO, env: { ...envFor(root), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], { cwd: REPO, env: { ...envFor(root), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'], detached: group });
   let out = '';
   child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
   child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
@@ -278,6 +279,55 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     assert.equal(fs.readFileSync(html, 'utf8'), before);
   });
 }
+
+const renderTemps = (root) => fs.readdirSync(path.join(root, 'output')).filter((f) => f.startsWith('.career-ops-render-'));
+
+// generate-pdf.mjs writes .career-ops-render-<uuid>.html, a full copy of the CV, beside the HTML it renders once
+// Chromium is up, and removes it only in a finally that a stop can skip: a second SIGINT (the terminal's and render-pdf's
+// own) makes Playwright exit at once.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  test(`given a render whose process group gets ${signal} once generate-pdf has written its temp HTML for a density draft, then that full CV copy is removed too (R15-scripts-a-L1-01)`, { timeout: 240000 }, async () => {
+    const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+    const html = buildInto(root, fixture);
+    const before = fs.readFileSync(html, 'utf8');
+    const { child, exited, tmp } = startRender(root, html, ['--max-pages=1'], { group: true });
+    await waitFor(() => renderTemps(root).length > 0, 'the temp HTML of a density render');
+    process.kill(-child.pid, signal);
+    const end = await exited;
+    assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no draft or temp HTML is left beside the input');
+    assert.deepEqual(scratchIn(root), []);
+    assert.deepEqual(fs.readdirSync(tmp), [], 'nothing is left in TMPDIR');
+    assert.equal(fs.readFileSync(html, 'utf8'), before);
+  });
+}
+
+test('given another render\'s temp HTML in the same folder, when a render is stopped, then that file is left alone (R15-scripts-a-L1-01)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const other = path.join(root, 'output', '.career-ops-render-00000000-0000-0000-0000-000000000000.html');
+  fs.writeFileSync(other, '<html><body>another render in progress</body></html>');
+  const { child, exited } = startRender(root, html, ['--max-pages=1'], { group: true });
+  await waitFor(() => renderTemps(root).length > 1, 'the temp HTML of a density render');
+  process.kill(-child.pid, 'SIGINT');
+  await exited;
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), [path.basename(other), 'cv-test.html'].sort());
+});
+
+test('given another render starts while this one runs, when this one finishes, the other render\'s temp HTML is left alone (R15-scripts-a-L1-01 review)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const { child, exited } = startRender(root, html, ['--max-pages=1']);
+  await waitFor(() => renderTemps(root).length > 0, 'this render\'s temp HTML');
+  // A second render, started after this one sampled the folder, writes its own temp HTML beside the input.
+  const other = path.join(root, 'output', '.career-ops-render-11111111-1111-1111-1111-111111111111.html');
+  fs.writeFileSync(other, '<html><body>another render in progress</body></html>');
+  const end = await exited;
+  assert.equal(end.status, 0, JSON.stringify(end));
+  assert.ok(fs.existsSync(other), 'this render deleted another render\'s live temp HTML');
+  const temps = fs.readdirSync(path.join(root, 'output')).filter((f) => f.startsWith('.career-ops-render-'));
+  assert.deepEqual(temps, [path.basename(other)], 'only the other render\'s temp HTML is left');
+});
 
 test('given a render stopped with SIGTERM while it publishes the chosen layout, then that render finishes, so the input HTML and the PDF agree (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });

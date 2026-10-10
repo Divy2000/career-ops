@@ -251,7 +251,7 @@ test('sync.sh runs keep-fork-readme.sh right after the merge and before headless
   const sync = readFileSync(SYNC, 'utf8');
   const merged = sync.indexOf('git merge --no-ff');
   const hook = sync.indexOf('keep-fork-readme.sh');
-  const claude = sync.indexOf('claude -p');
+  const claude = sync.indexOf('"$CLAUDE_BIN" -p');
   assert.ok(merged > -1 && hook > merged && claude > hook, `order was merge=${merged} hook=${hook} claude=${claude}`);
 });
 

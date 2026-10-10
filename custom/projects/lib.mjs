@@ -40,18 +40,22 @@ const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 // `[text](url)` at the start of `s`, with balanced parentheses inside the URL
 // (https://example.com/a_(b)). `rest` is whatever follows the closing paren.
+// The text may hold backslash-escaped characters (`\]`), as markdown allows and mdLinkText writes.
 function readMdLink(s) {
-  const m = s.match(/^\[([^\]]*)\]\(/);
+  const m = s.match(/^\[((?:\\.|[^\]\\])*)\]\(/);
   if (!m) return null;
+  const text = m[1].replace(/\\([\\[\]])/g, '$1');
   let depth = 1;
   let i = m[0].length;
   for (; i < s.length; i++) {
     if (s[i] === '(') depth++;
     else if (s[i] === ')' && --depth === 0) break;
   }
-  if (depth !== 0) return { text: m[1], url: null, rest: '', unbalanced: true };
-  return { text: m[1], url: s.slice(m[0].length, i).trim(), rest: s.slice(i + 1) };
+  if (depth !== 0) return { text, url: null, rest: '', unbalanced: true };
+  return { text, url: s.slice(m[0].length, i).trim(), rest: s.slice(i + 1) };
 }
+
+const mdLinkText = (title) => title.replace(/[\\[\]]/g, '\\$&');
 
 function parseLink(text) {
   const md = readMdLink(text);
@@ -273,7 +277,7 @@ function entryLines(entry) {
   if (url && !HTTP_URL.test(url)) throw new Error(`link for "${title}" must be http(s), got "${url}"`);
   const tagline = oneLine(entry.tagline) || null;
   let heading;
-  if (url && tagline) heading = `## [${title}](${url}) -- ${tagline}`;
+  if (url && tagline) heading = `## [${mdLinkText(title)}](${url}) -- ${tagline}`;
   else if (url) heading = `## ${title} -- ${url}`;
   else if (tagline) heading = `## ${title} -- ${tagline}`;
   else heading = `## ${title}`;
@@ -383,8 +387,16 @@ export function appendBlock(text, block) {
 
 export function appendEntry(text, entry) {
   const block = serializeEntry(entry);
-  assertNewTitle(parseLibrary(text).entries, entry.title, null);
-  return appendBlock(text, block);
+  const { entries } = parseLibrary(text);
+  assertNewTitle(entries, entry.title, null);
+  const out = appendBlock(text, block);
+  const want = parseLibrary(block).entries[0];
+  const got = parseLibrary(out).entries;
+  if (got.length !== entries.length + 1 || EDITED_FIELDS.some((f) => JSON.stringify(got.at(-1)[f]) !== JSON.stringify(want[f]))
+    || titleKey(want.title) !== titleKey(entry.title)) {
+    throw new Error(`"${oneLine(entry.title)}" cannot be added: it would not read back as entered; edit article-digest.md directly`);
+  }
+  return out;
 }
 
 const stringList = (value, field, where) => {
@@ -435,6 +447,29 @@ export function convertJsonProjects(data) {
     };
   });
   return { entries, warnings };
+}
+
+// The body of every cv.md `##` section whose title ends in "Project" or "Projects" ("Projects", "Personal Projects"): the only part of
+// cv.md a project may come from, never an employer, a role, another section's title or a skill category.
+export function projectSections(cvText) {
+  const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
+  const out = [];
+  let inside = false;
+  for (const line of lines) {
+    // A `#` heading ends a section as a `##` one does, and starts no projects section.
+    const section = line.match(/^#{1,2}(?!#)\s+(.*\S)\s*$/);
+    if (section) {
+      if (!line.startsWith('##')) {
+        inside = false;
+        continue;
+      }
+      // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
+      inside = /\bprojects?$/i.test(section[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[^A-Za-z]+$/, ''));
+      continue;
+    }
+    if (inside) out.push(line);
+  }
+  return out.join('\n');
 }
 
 // The entry named `title` in cv.md: a `##`-`######` heading whose name (text
@@ -532,6 +567,8 @@ const round2 = (n) => Math.round(n * 100) / 100;
 export function rankProjects(entries, { jdText, cvText = '' }) {
   const jdSkills = extractSkills(jdText);
   const cvSkills = extractSkills(cvText);
+  // A project is in cv.md only when its Projects section lists it, not when a role or a skill category shares its name.
+  const cvProjects = projectSections(cvText);
   const candidates = [];
   const excluded = [];
   const skillsOf = new Map();
@@ -584,7 +621,7 @@ export function rankProjects(entries, { jdText, cvText = '' }) {
       title: e.title,
       url: e.url ?? null,
       kind: e.kind,
-      inCv: findCvEntry(cvText, e.title) !== null,
+      inCv: findCvEntry(cvProjects, e.title) !== null,
       score: round2([...matched.values()].reduce((a, b) => a + b, 0)),
       matchedSkills: [...matched.keys()].sort(byCodepoint),
       bullets: [...e.bullets],

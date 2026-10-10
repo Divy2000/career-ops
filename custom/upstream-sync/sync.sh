@@ -47,6 +47,9 @@ if [ -z "${CC_SYNC_LOCKED:-}" ]; then
   fi
   exit "$rc"
 fi
+# The marker is exported by the re-exec: dropped here so no child inherits it. A test run of sync.sh inside this sync
+# (the custom suite runs the lock spec) would otherwise skip the lock it is meant to exercise.
+unset CC_SYNC_LOCKED
 # The log and reports go to STATE_DIR, resolved above. Everything after this runs code from the sync worktree
 # (installs, both upstream suite runs, the custom and control-center checks, Claude), which must never see the
 # user's data root: test-all's live archive test, for one, writes into getCareerOpsRoot()/jds.
@@ -90,6 +93,9 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 if ! TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
   fail "Keychain item career-ops-claude-token not found"
 fi
+# The binary that gets the token, checked before anything is replaced; the same floor install.sh's headless onboarding
+# uses (CLAUDE_SCRUB_MIN).
+CLAUDE_BIN="$(sync_claude_bin 2.1.288)" || fail "$CLAUDE_BIN"
 
 git worktree remove --force "$WT" >/dev/null 2>&1
 rm -rf "$WT"
@@ -140,10 +146,12 @@ process.stdout.write(t);
 ' "$LIVE/custom/upstream-sync/sync-prompt.md")"
 # Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
 # Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
-CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" claude -p "$PROMPT" \
+# --strict-mcp-config starts none of the user's or the project's MCP servers, which would inherit the token.
+CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" "$CLAUDE_BIN" -p "$PROMPT" \
   --model "$MODEL" \
   --effort medium \
   --permission-mode dontAsk \
+  --strict-mcp-config \
   --add-dir "$STATE_DIR" \
   --allowedTools "Read" "Glob" "Grep" "Edit" "Write" \
     "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" \
