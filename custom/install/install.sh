@@ -278,24 +278,41 @@ trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[
 
 # Whether the Control Center is already running on this data root, read from its
 # supervisor.lock (the file the supervisor keeps via acquireInstanceLock). Running
-# means the lock names a PID that is alive; a missing, unreadable or stale lock
-# (its holder gone) is not running. npm ci deletes node_modules, so a re-run must
-# not reinstall under a running instance (its blue/green reload would race the
-# deletion), and the finish must not start a second instance that would refuse
-# the lock.
+# means the lock names a PID that is alive and that started when the lock says it
+# did: a live PID that started at another time is a reused PID, not the Control
+# Center. A missing, unreadable or stale lock is not running. npm ci deletes
+# node_modules, so a re-run must not reinstall under a running instance (its
+# blue/green reload would race the deletion), and the finish must not start a
+# second instance that would refuse the lock.
 cc_running() {
   local lock="$DATA/data/control-center/supervisor.lock"
   [ -f "$lock" ] || return 1
   node -e '
 const fs = require("fs");
-let pid = 0;
+const { execFileSync } = require("child_process");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+let pid = 0, start = null;
 try {
   const l = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   pid = Number.isInteger(l.pid) && l.pid > 0 ? l.pid : 0;
+  start = typeof l.start === "number" && Number.isFinite(l.start) ? l.start : null;
 } catch { /* a damaged lock is not a running instance */ }
 if (!pid) process.exit(1);
-try { process.kill(pid, 0); process.exit(0); }
+try { process.kill(pid, 0); }
 catch (e) { process.exit(e.code === "EPERM" ? 0 : 1); }
+// No start time recorded: the PID being alive is all we can check (as acquireInstanceLock does).
+if (start === null) process.exit(0);
+// A live PID whose process started at another time is a reused PID, not the Control Center.
+let out = "";
+try {
+  out = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, env: { LC_ALL: "C", TZ: "UTC" } }).trim();
+} catch { process.exit(0); }
+const m = LSTART.exec(out);
+const month = m ? MONTHS.indexOf(m[1]) : -1;
+if (!m || month === -1) process.exit(0);
+const live = Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
+process.exit(live === start ? 0 : 1);
 ' "$lock"
 }
 

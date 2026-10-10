@@ -1008,13 +1008,29 @@ test('a re-run with the Control Center already running skips its npm ci and does
   const child = spawn('sleep', ['30'], { stdio: 'ignore' });
   const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true });
-  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: Math.floor(Date.now() / 1000), port: 4317, nonce: 'test' }));
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
   try {
     const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
     assert.equal(r.status, 0, r.out);
     assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run under a running Control Center');
     assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
     assert.match(r.out, /already running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a stale Control Center lock whose PID was reused is reinstalled, not skipped (R17-scripts-b-L1-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: Math.floor(Date.now() / 1000) - 100000, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 0, r.out);
+    assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock is stale (reused PID)');
   } finally {
     child.kill('SIGKILL');
   }
