@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { SessionPanel } from './SessionPanel';
-import { lastSession, rememberedLaunches, type Launch } from '../lib/lastSession';
+import { rememberedLaunches, type Launch } from '../lib/lastSession';
 import type { Target } from '../lib/sessions';
 
 export interface ModeChoice {
@@ -15,12 +15,20 @@ interface Launched {
   sessionId: string | null;
 }
 
-// A start sent by a launcher's panel is marked (per key) until it reports its session or its failure, so a launcher
+// Starts sent by a launcher's panels are counted (per key) until each reports its session or its failure, so a launcher
 // mounted meanwhile (the page was left and reopened before POST /api/sessions answered) waits instead of offering a
-// second paid start. Every launcher mounted under the key hears the mark change.
+// second paid start. Kept in memory: a reload drops the requests, and the count with them. Every launcher mounted
+// under the key hears the count change.
+const inFlight = new Map<string, number>();
 const startListeners = new Map<string, Set<() => void>>();
 function startChanged(key: string) {
   for (const fn of startListeners.get(key) ?? []) fn();
+}
+function countStart(key: string, delta: 1 | -1) {
+  const n = Math.max(0, (inFlight.get(key) ?? 0) + delta);
+  if (n) inFlight.set(key, n);
+  else inFlight.delete(key);
+  startChanged(key);
 }
 function onStartChange(key: string, fn: () => void) {
   const set = startListeners.get(key) ?? new Set();
@@ -43,7 +51,6 @@ const defaultKey = (heading: string, target?: Target) => `cc.launcher:${heading}
 export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: ModeChoice[]; target?: Target; heading: string; rememberAs?: string }) {
   const storeKey = rememberAs ?? defaultKey(heading, target);
   const store = useMemo(() => rememberedLaunches(storeKey), [storeKey]);
-  const marks = useMemo(() => lastSession(storeKey), [storeKey]);
   // Only launches of a mode this launcher offers: a stale or edited entry must not attach another mode's session here.
   const fromStore = (ls: Launch[]): Launched[] =>
     ls.flatMap((l) => {
@@ -52,14 +59,16 @@ export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: Mo
     });
   const [mode, setMode] = useState(modes[0]?.id ?? '');
   const [launched, setLaunched] = useState<Launched[]>(() => fromStore(store.read()));
-  const [startingElsewhere, setStartingElsewhere] = useState(marks.starting);
-  // Starts sent by this mount's own panels: the mark is theirs, so this launcher does not wait on itself.
+  const [pending, setPending] = useState(() => inFlight.get(storeKey) ?? 0);
+  // Starts sent by this mount's own panels: their count is theirs, so this launcher does not wait on itself.
   const [ownStarts, setOwnStarts] = useState(0);
+  // The session each launch's start reported, so a start that then fails (a 202 already errored) is not kept.
+  const reported = useRef(new Map<string, string>());
   // A start reported after its launcher unmounted lands in the store; show it here if this launcher does not have it
   // yet. Read once on subscribing too, for a report that landed between the first render and this effect.
   useEffect(() => {
     const sync = () => {
-      setStartingElsewhere(marks.starting());
+      setPending(inFlight.get(storeKey) ?? 0);
       setLaunched((prev) => {
         const late = fromStore(store.read().filter((l) => !prev.some((x) => x.sessionId === l.id)));
         return late.length ? [...late, ...prev] : prev;
@@ -73,12 +82,8 @@ export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: Mo
       offStart();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fromStore reads only `modes`, fixed per host page
-  }, [store, marks, storeKey]);
-  const setMark = (on: boolean) => {
-    marks.setStarting(on);
-    startChanged(storeKey);
-  };
-  const waiting = startingElsewhere && ownStarts === 0;
+  }, [store, storeKey]);
+  const waiting = pending > ownStarts;
   const chosen = modes.find((m) => m.id === mode) ?? modes[0];
   return (
     <div className="stack">
@@ -115,23 +120,31 @@ export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: Mo
           sessionId={l.sessionId}
           onStarting={() => {
             setOwnStarts((n) => n + 1);
-            setMark(true);
+            countStart(storeKey, 1);
           }}
           onStartFailed={() => {
+            // A 202 whose session already failed reported its id first (and was counted as settled then): nothing to come
+            // back to, so it is not kept.
+            const failed = reported.current.get(l.key);
+            if (failed) {
+              store.write(store.read().filter((x) => x.id !== failed));
+              return;
+            }
             setOwnStarts((n) => Math.max(0, n - 1));
-            setMark(false);
+            countStart(storeKey, -1);
           }}
           onSessionId={(id) => {
             // A start reports once; a fork reports again with the new session, which replaces the one it forked from.
-            if (l.sessionId === null) {
-              setOwnStarts((n) => Math.max(0, n - 1));
-              marks.setStarting(false);
-            }
+            const isStart = l.sessionId === null && !reported.current.has(l.key);
+            reported.current.set(l.key, id);
             setLaunched((prev) => prev.map((x) => (x.key === l.key ? { ...x, sessionId: id } : x)));
             // Recorded in the store directly: the setState above is lost when the launcher unmounted before the start answered.
             if (l.sessionId) store.write(store.read().filter((x) => x.id !== l.sessionId));
             store.add({ mode: l.mode.id, id });
-            startChanged(storeKey);
+            if (isStart) {
+              setOwnStarts((n) => Math.max(0, n - 1));
+              countStart(storeKey, -1);
+            }
           }}
           // Deleted on the Sessions page (or a stale id): let it go rather than show it again.
           onStatus={(s) => {

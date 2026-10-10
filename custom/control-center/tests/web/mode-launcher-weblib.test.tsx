@@ -43,10 +43,18 @@ const shown = () => {
   return [...seen.values()];
 };
 const last = () => panels.at(-1)!;
+// Opens a prompt and returns its panel: the newest launch renders first.
+const openNew = async () => {
+  const before = panels.length;
+  await act(async () => openPrompt().click());
+  return panels[before]!;
+};
 
 beforeEach(() => {
   panels = [];
   sessionStorage.clear();
+  // Starts in flight are counted in module memory (one page load): each test starts with a fresh page load.
+  vi.resetModules();
   host = document.createElement('div');
   document.body.append(host);
 });
@@ -123,6 +131,45 @@ describe('a start still in flight when the launcher was left', () => {
     await act(async () => last().onStarting!());
     expect(openPrompt().disabled).toBe(false);
     expect(host.textContent).not.toMatch(/starting a session/i);
+  });
+
+  it('holds off a second start until every start in flight has reported', async () => {
+    await mount({ rememberAs: 'cc.test.launch' });
+    const first = await openNew();
+    await act(async () => first.onStarting!());
+    const second = await openNew();
+    await act(async () => second.onStarting!());
+    await unmount();
+    await mount({ rememberAs: 'cc.test.launch' });
+    await act(async () => first.onSessionId!('first-1'));
+    expect(openPrompt().disabled).toBe(true);
+    await act(async () => second.onSessionId!('second-1'));
+    expect(openPrompt().disabled).toBe(false);
+  });
+
+  it('does not keep a session that failed to start, so coming back shows no dead panel', async () => {
+    const { rememberedLaunches } = await import('@web/lib/lastSession');
+    await mount({ rememberAs: 'cc.test.launch' });
+    await act(async () => openPrompt().click());
+    const starter = last();
+    // SessionPanel on a 202 whose session is already errored: the id, then the failure.
+    await act(async () => {
+      starter.onStarting!();
+      starter.onSessionId!('failed-1');
+      starter.onStartFailed!();
+    });
+    expect(rememberedLaunches('cc.test.launch').read()).toEqual([]);
+    // Settled once, not twice: another start still in flight keeps the launcher waiting.
+    const other = await openNew();
+    await act(async () => other.onStarting!());
+    await unmount();
+    await mount({ rememberAs: 'cc.test.launch' });
+    expect(openPrompt().disabled).toBe(true);
+    await act(async () => other.onStartFailed!());
+    expect(openPrompt().disabled).toBe(false);
+    await unmount();
+    await mount({ rememberAs: 'cc.test.launch' });
+    expect(panels.some((p) => p.sessionId === 'failed-1')).toBe(false);
   });
 
   it('keeps a session reported between the remount\'s first render and its effects', async () => {
