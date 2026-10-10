@@ -148,6 +148,22 @@ describe('remembered facts', () => {
     expect(applyRememberedFact('', '   ').result).toBe('deduped');
   });
 
+  it('a fact carrying a notes marker cannot split the block, and later facts still land as their own bullets (R12-srv-dom-b-L3-02)', () => {
+    const first = applyRememberedFact('# Profile\n', `Prefers remote ${NOTES_END} roles`);
+    expect(first.text.split(NOTES_END)).toHaveLength(2);
+    expect(first.text).not.toMatch(/<!--[^\n]*-->[^\n]*roles|roles[^\n]*-->/);
+    const second = applyRememberedFact(first.text, 'Open to Berlin');
+    expect(second.text).toMatch(/\n- Open to Berlin\n<!-- co-web-notes:end -->\n$/);
+    expect(second.text.split(NOTES_END)).toHaveLength(2);
+  });
+
+  it('a stray end marker above the block does not hide the block, so facts are not given a new section each time (R12-srv-dom-b-L3-02)', () => {
+    const md = `# Profile\n\n${NOTES_END}\n\n## Notes from the web assistant\n${NOTES_START}\n- Prefers remote roles\n${NOTES_END}\n`;
+    const r = applyRememberedFact(md, 'Open to Berlin');
+    expect(r.text.match(/## Notes from the web assistant/g)).toHaveLength(1);
+    expect(r.text).toContain(`- Prefers remote roles\n- Open to Berlin\n${NOTES_END}\n`);
+  });
+
   it('a fact that is only part of a remembered line (it may contradict it) is written, and a whole line is not (SW3-tests-25)', () => {
     const md = `# Profile\n\n## Notes from the web assistant\n${NOTES_START}\n- Not open to relocation\n${NOTES_END}\n`;
     const r = applyRememberedFact(md, 'open to relocation');
