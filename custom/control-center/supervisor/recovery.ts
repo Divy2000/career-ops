@@ -349,9 +349,12 @@ export function recoveryRequestAllowed(headers: Record<string, string | string[]
   return (origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`) && headers['x-cc'] === '1';
 }
 
+/** As the runner waits for a wrapper it began starting to record itself (runner.ts STARTING_GRACE_MS). */
+const STARTING_GRACE_MS = 5000;
+
 /**
  * Whether a turn's run has ended, from its run record under the data root as the server's runner keeps it: an exit
- * record, a finished status, a run that never left the queue, or processes that are gone (a PID that now belongs to a
+ * record, a finished status, a queued run no server will start (no start request), or processes that are gone (a PID that now belongs to a
  * process started at another time is gone too). What cannot be shown to have ended (no record, a live PID with no
  * recorded start, a start ps cannot read) counts as running.
  */
@@ -366,7 +369,24 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
     return false;
   }
   if (!run) return false;
-  if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost' || run.status === 'queued') return true;
+  if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost') return true;
+  // A queued run is not over: the next server queues it again from its start request and runs it. Only one with no
+  // request.json never starts (that server marks it lost). One a dead server had begun starting (its `starting` file)
+  // may have a wrapper running already, so its processes decide below.
+  if (run.status === 'queued' && !fs.existsSync(path.join(dir, 'starting'))) return !fs.existsSync(path.join(dir, 'request.json'));
+  // Begun starting, and no wrapper recorded itself within the runner's grace (STARTING_GRACE_MS in runner.ts): the next
+  // server marks it lost and never starts it again. As the runner does, it first leaves the cancel file, which a wrapper
+  // that is only slow reads before it spawns the command (and right after, before it could record itself).
+  if (run.status === 'queued' && !fs.existsSync(path.join(dir, 'wrapper.json'))) {
+    const begun = fs.statSync(path.join(dir, 'starting'), { throwIfNoEntry: false })?.mtimeMs;
+    if (begun === undefined || Date.now() - begun <= STARTING_GRACE_MS) return false;
+    try {
+      fs.writeFileSync(path.join(dir, 'cancel'), new Date().toISOString());
+    } catch {
+      return false;
+    }
+    return !fs.existsSync(path.join(dir, 'wrapper.json'));
+  }
   // The wrapper writes its own and the child's PIDs to wrapper.json first; the server copies them into the meta later.
   let wrapper: { wrapperPid?: number | null; childPid?: number | null } | null;
   try {
