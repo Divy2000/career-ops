@@ -56,6 +56,15 @@ test('the sponsorship house rule names the company-alerts.tsv columns and status
   assert.match(text, /never\s+`resumption`/, 'the template must warn that the status is resumed, never resumption');
 });
 
+// readAlerts in custom/immigration/lib.mjs keeps the last row of a slug among rows with the same date, so a
+// newest-first file would let an older same-day row win.
+test('the sponsorship house rule appends company-alerts.tsv rows oldest first, newest last, as the parser reads them (R18-scripts-b-review-03)', () => {
+  const rule = read(path.join(TEMPLATES, '_custom-sponsorship.md')).split('\n').find((l) => l.includes('company-alerts.tsv') && l.includes('append'));
+  assert.ok(rule, 'the template names where to append a company alert');
+  assert.doesNotMatch(rule, /newest first/, rule);
+  assert.match(rule, /at the end of the file \(oldest first, newest last\)/, rule);
+});
+
 test('the house rule updates the way the README does: the README installs a detached tag checkout, so it switches to main before pulling', () => {
   const readme = read(path.join(ROOT, '.github', 'README.md'));
   const updating = readme.slice(readme.indexOf('## Updating'));
