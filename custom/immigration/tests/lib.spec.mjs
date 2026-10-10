@@ -201,6 +201,11 @@ test('parsePolicyChanges rejects a row with an empty required field; only announ
   ]) assert.throws(() => parsePolicyChanges(row), new RegExp(`line 1: ${field} is empty`), field);
 });
 
+test('parsePolicyChanges reads a blank announced_date holding only spaces as empty, like an empty one (R11-scripts-a-X-02 review)', () => {
+  const [row] = parsePolicyChanges('2026-10-03\t   \tFR\tH-1B fee rule\thttps://x\tcosts up');
+  assert.equal(row.announced, '2026-10-03');
+});
+
 test('parseCompanyAlerts rejects a row with more or fewer than six fields or an empty field, naming the line (R11-scripts-a-X-02)', () => {
   assert.throws(() => parseCompanyAlerts('2026-10-03\tAcme\tacme\tpaused\tAcme pauses\tH-1B\thttps://x/1'), /line 1.*6 tab-separated fields, got 7/);
   assert.throws(() => parseCompanyAlerts('2026-10-03\tAcme\tacme\tpaused\tAcme pauses H-1B'), /line 1.*6 tab-separated fields, got 5/);

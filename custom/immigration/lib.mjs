@@ -135,6 +135,7 @@ export function parsePolicyChanges(tsv) {
     try {
       const fields = splitRow(line, POLICY_FIELDS);
       [detected, announced, source, title, url, impact] = fields;
+      announced = announced.trim();
       assertIsoDate(detected, 'detected_date');
       assertFilled(fields, POLICY_FIELDS, ['announced_date']);
       if (announced) assertIsoDate(announced, 'announced_date');
