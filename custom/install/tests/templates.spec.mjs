@@ -44,6 +44,18 @@ test('the shipped house-rule templates use no em or en dash', () => {
   for (const f of fs.readdirSync(TEMPLATES)) assert.ok(!/[\u2013\u2014]/.test(read(path.join(TEMPLATES, f))), f);
 });
 
+test('the sponsorship house rule names the company-alerts.tsv columns and status vocabulary, never resumption (R17-scripts-b-L2-01)', () => {
+  const text = read(path.join(TEMPLATES, '_custom-sponsorship.md'));
+  for (const col of ['date', 'company', 'slug', 'status', 'headline', 'url']) {
+    assert.ok(text.includes(col), `the template does not name the \`${col}\` column`);
+  }
+  for (const status of ['paused', 'stopped', 'restricted', 'resumed', 'expanded']) {
+    assert.ok(text.includes(status), `the template does not name the \`${status}\` status`);
+  }
+  assert.ok(text.includes('resumed'), 'the template must spell the status resumed');
+  assert.match(text, /never\s+`resumption`/, 'the template must warn that the status is resumed, never resumption');
+});
+
 test('the house rule updates the way the README does: the README installs a detached tag checkout, so it switches to main before pulling', () => {
   const readme = read(path.join(ROOT, '.github', 'README.md'));
   const updating = readme.slice(readme.indexOf('## Updating'));
