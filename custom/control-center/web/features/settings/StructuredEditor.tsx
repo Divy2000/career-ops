@@ -28,7 +28,18 @@ function parseScalar(text: string, like: unknown): unknown {
 /** A table cell takes the type of its column's other values; with none to copy, true and false are switches, as in Add key. */
 function parseCell(text: string, like: unknown): unknown {
   const flag = like === undefined && (text === 'true' || text === 'false');
-  return typeof like === 'boolean' || flag ? text === 'true' : parseScalar(text, like ?? '');
+  return typeof like === 'boolean' || flag ? parseBoolean(text) ?? false : parseScalar(text, like ?? '');
+}
+
+// YAML's own truthy and falsy spellings (js-yaml reads yes/no/on/off as booleans), so a user typing "yes", "True" or "1"
+// in an enabled column gets a boolean, never the silent false that `text === 'true'` would produce.
+const TRUE_WORDS = new Set(['true', 'yes', 'y', '1', 'on']);
+const FALSE_WORDS = new Set(['false', 'no', 'n', '0', 'off']);
+function parseBoolean(text: string): boolean | null {
+  const t = text.trim().toLowerCase();
+  if (TRUE_WORDS.has(t)) return true;
+  if (FALSE_WORDS.has(t)) return false;
+  return null;
 }
 
 export function ScalarInput({ path, value, onOp, rules, ariaLabel, parse }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; ariaLabel?: string; parse?: (text: string) => unknown }) {
