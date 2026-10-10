@@ -1,5 +1,5 @@
 import { useConfirm } from '../../components/ConfirmDialog';
-import { useCallback, useEffect, useState } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
@@ -71,7 +71,18 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
     if (sessionId && !live) void qc.invalidateQueries({ queryKey: ['dev', 'changes', sessionId] });
   }, [live, sessionId, qc]);
   const confirm = useConfirm();
-  const revert = async (turn: number, abs?: string) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+  const asking = useRef(false);
+  const revert = async (...args: Parameters<typeof revertAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await revertAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const revertAsked = async (turn: number, abs?: string) => {
     if (!sessionId) return;
     if (!(await confirm({ title: abs ? 'Revert this file?' : `Revert turn ${turn}?`, body: abs ? `${abs} goes back to its bytes before turn ${turn}.` : `Every file turn ${turn} changed goes back to its earlier bytes.`, confirmLabel: 'Revert', danger: true }))) return;
     try {

@@ -90,7 +90,29 @@ export function ProjectsLibrary() {
   }
   const refresh = () => qc.invalidateQueries({ queryKey: QUERY_KEY });
 
-  const remove = async (entry: ProjectView) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+
+  const asking = useRef(false);
+
+  const remove = async (...args: Parameters<typeof removeAsked>) => {
+
+    if (asking.current) return;
+
+    asking.current = true;
+
+    try {
+
+      await removeAsked(...args);
+
+    } finally {
+
+      asking.current = false;
+
+    }
+
+  };
+
+  const removeAsked = async (entry: ProjectView) => {
     const ok = await confirm({ title: `Delete ${entry.title}?`, body: 'Removes the entry from article-digest.md. cv.md is not changed.', confirmLabel: 'Delete', danger: true });
     if (!ok) return;
     try {

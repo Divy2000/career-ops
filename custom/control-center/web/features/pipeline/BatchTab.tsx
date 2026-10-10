@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { Message } from '../../components/ActionBar';
 import { Pill } from '../../components/ui';
@@ -43,7 +43,18 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const list = [...new Set(urls.split(/\s+/).filter(Boolean))];
   const tooMany = list.length > BATCH_MAX_URLS;
   const refused = list.filter((u) => !postingLike(u));
-  const start = async () => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+  const asking = useRef(false);
+  const start = async (...args: Parameters<typeof startAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await startAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const startAsked = async () => {
     if (list.length === 0 || tooMany || refused.length > 0) return;
     const n = list.length;
     if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;

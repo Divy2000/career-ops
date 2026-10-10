@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFollowups } from '../../lib/queries';
@@ -85,7 +85,18 @@ export function CadenceTab() {
   const [message, setMessage] = useState<string | null>(null);
   const confirm = useConfirm();
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['followups'] }), qc.invalidateQueries({ queryKey: ['tracker'] })]);
-  const pin = async (appNum: number, date: string | null) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+  const asking = useRef(false);
+  const pin = async (...args: Parameters<typeof pinAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await pinAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const pinAsked = async (appNum: number, date: string | null) => {
     // Clearing removes a date the user chose: it asks first, as a delete does.
     if (!date && !(await confirm({ title: 'Clear the pinned follow-up date?', body: 'The next follow-up goes back to the cadence date. data/follow-ups.md is rewritten.', confirmLabel: 'Clear pin', danger: true }))) return;
     try {
@@ -97,7 +108,16 @@ export function CadenceTab() {
       setMessage(`Could not update pin: ${describeError(err)}`);
     }
   };
-  const remove = async (num: number) => {
+  const remove = async (...args: Parameters<typeof removeAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await removeAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const removeAsked = async (num: number) => {
     if (!(await confirm({ title: `Delete follow-up #${num}?`, body: 'The entry is removed from data/follow-ups.md.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await apiSend('DELETE', '/api/followups/log', { num });

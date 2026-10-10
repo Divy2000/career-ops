@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useRef, useMemo, useState } from 'react';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useShortlist } from '../../lib/queries';
@@ -121,7 +121,18 @@ function Inbox() {
     }
   };
   // A checked Pending row may have been evaluated in place, so putting it back queues it for a second evaluation.
-  const restore = async (url: string, name: string) => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+  const asking = useRef(false);
+  const restore = async (...args: Parameters<typeof restoreAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await restoreAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const restoreAsked = async (url: string, name: string) => {
     if (!(await confirm({ title: `Put ${name} back in the queue?`, body: 'If it was evaluated, not just skipped, Evaluate visible and Batch will see it as new and it will be evaluated again.', confirmLabel: 'Back to queue', danger: true }))) return;
     await skip(url, false);
   };

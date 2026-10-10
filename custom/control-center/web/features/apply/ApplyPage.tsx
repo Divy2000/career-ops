@@ -113,7 +113,18 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   useUnsaved('the edited answers', edited);
   const confirm = useConfirm();
   // The draft stays on the Sessions page; this page lets go of it and offers the start form again.
-  const newDraft = async () => {
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
+  const asking = useRef(false);
+  const newDraft = async (...args: Parameters<typeof newDraftAsked>) => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await newDraftAsked(...args);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const newDraftAsked = async () => {
     if (edited && !(await confirm({ title: 'Discard the edited answers?', body: 'A new draft starts from an empty form. The current draft stays on the Sessions page with the answers as it drafted them.', confirmLabel: 'Discard changes', danger: true }))) return;
     lastSession(applyKey(n)).write(null);
     onNewDraft();
