@@ -10,6 +10,12 @@ function isRow(line) {
   return /^\|\s*\d+\s*\|/.test(line);
 }
 
+const rowNum = (line) => parseInt(line.split('|')[1], 10);
+
+function isSeparator(line) {
+  return line !== undefined && /^\s*\|\s*:?-{3,}/.test(line);
+}
+
 function pinRe(appNum) {
   return new RegExp(`^-\\s+next\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}`, 'i');
 }
@@ -34,27 +40,28 @@ export function applyFollowupEdit(text, edit) {
     case 'log.add': {
       if (!DATE_RE.test(String(edit.date))) return { ok: false, error: 'invalid-date' };
       if (!Number.isInteger(edit.appNum) || edit.appNum <= 0) return { ok: false, error: 'invalid-app' };
-      let headerAt = lines.findIndex((l) => l.replace(/\s+/g, ' ').trim() === HEADER.replace(/\s+/g, ' '));
+      // The upstream readers take the table by position, whatever its header labels say, so the first header row
+      // (a `|` line over a `|---` separator) is the table; nums are unique across every row in the file.
+      let headerAt = lines.findIndex((l, i) => l.trimStart().startsWith('|') && isSeparator(lines[i + 1]));
+      const maxNum = lines.reduce((max, l) => (isRow(l) ? Math.max(max, rowNum(l) || 0) : max), 0);
       if (headerAt === -1) {
         if (lines.length === 0) lines.push('# Follow-up History', '');
         lines.push(HEADER, SEPARATOR);
         headerAt = lines.length - 2;
       }
       let lastRow = headerAt + 1;
-      let maxNum = 0;
-      for (let i = headerAt + 1; i < lines.length; i++) {
-        if (!isRow(lines[i])) continue;
-        lastRow = i;
-        maxNum = Math.max(maxNum, parseInt(lines[i].split('|')[1], 10) || 0);
-      }
+      for (let i = headerAt + 1; i < lines.length; i++) if (isRow(lines[i])) lastRow = i;
       const num = maxNum + 1;
       const row = `| ${num} | ${edit.appNum} | ${edit.date} | ${cell(edit.company)} | ${cell(edit.role)} | ${cell(edit.channel)} | ${cell(edit.contact)} | ${cell(edit.notes)} |`;
       lines.splice(lastRow + 1, 0, row);
       return { ok: true, text: join(lines), num };
     }
     case 'log.delete': {
-      const idx = lines.findIndex((l) => isRow(l) && parseInt(l.split('|')[1], 10) === edit.num);
-      if (idx === -1) return { ok: false, error: 'not-found' };
+      const matches = lines.flatMap((l, i) => (isRow(l) && rowNum(l) === edit.num ? [i] : []));
+      if (matches.length === 0) return { ok: false, error: 'not-found' };
+      // A num written twice (a hand edit, or an older second table) cannot say which application's row is meant.
+      if (matches.length > 1) return { ok: false, error: 'ambiguous' };
+      const idx = matches[0];
       lines.splice(idx, 1);
       return { ok: true, text: join(lines) };
     }

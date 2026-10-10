@@ -123,6 +123,21 @@ describe('follow-ups edits', () => {
     expect(set.text).toContain('- cleared #6 2026-10-05');
     expect(set.text).toContain('- next #1 2026-10-20 (set 2026-10-06)');
   });
+  it('logs into an existing table with other header labels, numbering after every row in the file (R13-feat-a-L2-01)', () => {
+    const text = '# Follow-ups\n\n| # | App | Date | Company | Role | Channel | Contact | Notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n';
+    const r = applyFollowupEdit(text, { op: 'log.add', appNum: 5, date: '2026-10-03', company: 'Globex', role: 'SRE', channel: 'Email', contact: '', notes: '' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.num).toBe(2);
+    expect(r.text.match(/^\|---/gm)).toHaveLength(1);
+    expect(r.text.split('\n')[5]).toBe('| 2 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |');
+  });
+  it('refuses to delete a follow-up whose num appears more than once, rather than deleting another application\'s row (R13-feat-a-L2-01)', () => {
+    const text = `${FOLLOWUPS}\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n`;
+    expect(applyFollowupEdit(text, { op: 'log.delete', num: 1 })).toEqual({ ok: false, error: 'ambiguous' });
+    const add = applyFollowupEdit(text, { op: 'log.add', appNum: 6, date: '2026-10-04', company: 'V', role: 'R', channel: 'Email', contact: '', notes: '' });
+    expect(add.ok && add.num).toBe(3);
+  });
   it('rejects dates that are not YYYY-MM-DD', () => {
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: 'tomorrow', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });
   });
