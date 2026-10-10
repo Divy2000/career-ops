@@ -262,6 +262,36 @@ describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25
   });
 });
 
+describe('Ask drawer: research a company runs deep, not the Portfolio research virtual mode (R17-shared-comp-L2-03)', () => {
+  let body: Record<string, unknown> | null;
+  beforeEach(() => {
+    body = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && url === '/api/sessions') {
+          body = JSON.parse(String(init.body));
+          return Promise.resolve(new Response(JSON.stringify({ id: 's-deep', mode: 'deep', status: 'queued' }), { status: 202, headers: { 'content-type': 'application/json' } }));
+        }
+        return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('starts a deep session (which WebSearch covers) with the topic as its text target', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'research', params: { topic: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(body?.mode).toBe('deep');
+    expect(body?.target).toEqual({ type: 'text', value: 'Acme' });
+    expect(item.dataset.proposalState).toBe('done');
+  });
+});
+
 describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () => {
   let starts: number;
   beforeEach(() => {
