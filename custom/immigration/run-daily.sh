@@ -30,10 +30,23 @@ if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
   CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 0 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
   rc=$?
   # The weekly upstream sync borrows this lock to update the live checkout, and names its pid in .live-update.pid
-  # while it does. launchd fires a calendar job once and never retries, so a scheduled start waits for that update
-  # (bounded) rather than losing the day; a start the user asked for says what holds the lock instead.
-  update_pid="$(cat "$IMM/.live-update.pid" 2>/dev/null)"
-  if [ "$rc" = 75 ] && [[ "$update_pid" =~ ^[0-9]+$ ]] && kill -0 "$update_pid" 2>/dev/null; then
+  # while it does. It writes that pid just after it takes the lock, so a scheduled start can lose that race by a few
+  # milliseconds and would skip the day: poll briefly for the marker before calling it a plain conflict. launchd fires
+  # a calendar job once and never retries, so a scheduled start waits for that update (bounded) rather than losing the
+  # day; a start the user asked for says what holds the lock instead.
+  update_pid=""
+  if [ "$rc" = 75 ]; then
+    update_wait=0
+    while [ "$update_wait" -lt 24 ]; do
+      if [ -n "$update_pid" ] && kill -0 "$update_pid" 2>/dev/null; then break; fi
+      update_pid=""
+      sleep 0.05
+      update_pid="$(cat "$IMM/.live-update.pid" 2>/dev/null)"
+      [[ "$update_pid" =~ ^[0-9]+$ ]] || update_pid=""
+      update_wait=$((update_wait + 1))
+    done
+  fi
+  if [ "$rc" = 75 ] && [ -n "$update_pid" ] && kill -0 "$update_pid" 2>/dev/null; then
     if [ -z "${CC_RUN_DAILY_SKIP_EXIT:-}" ]; then
       CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 1800 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
       rc=$?

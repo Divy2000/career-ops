@@ -480,6 +480,23 @@ jobTest('a scheduled run that finds the weekly sync updating the live checkout w
   }
 });
 
+jobTest('a scheduled run that finds the update holding the lock an instant before it names its pid waits instead of skipping the day (R15-scripts-b-L1-02 review)', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  const marker = path.join(imm, '.live-update.pid');
+  // The update names its pid near the end of the polling window: the run must still see it (a check after the last sleep).
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(imm, '.run-daily.lockf'), '/bin/sh', '-c', `sleep 0.9; echo $$ > "$1"; sleep 3; rm -f "$1"`, 'holder', marker], { stdio: 'ignore', detached: true });
+  try {
+    const r = w.run();
+    assert.equal(r.status, 0, r.log + r.stderr);
+    assert.match(r.steps, /scan\.mjs/);
+    assert.equal(fs.existsSync(path.join(imm, 'logs', 'skipped.log')), false);
+  } finally {
+    try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
 jobTest('a run the Control Center started while the weekly sync updates the live checkout says so instead of claiming the daily job runs (R15-scripts-b-L1-02)', async () => {
   const w = dailyWorld();
   const imm = path.join(w.data, 'data', 'immigration');
