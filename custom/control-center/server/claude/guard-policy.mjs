@@ -183,7 +183,13 @@ export function checkSearch(policy, tool, input, cwd) {
   const value = input?.[key];
   if (value === undefined || value === null || value === '') return tool === 'Glob' ? `${tool}: no pattern` : null;
   if (typeof value !== 'string') return `${tool}: ${key} must be a string`;
-  return checkSearchPattern(policy, value, `${tool} ${key}`);
+  const syntax = checkSearchPattern(policy, value, `${tool} ${key}`);
+  if (syntax) return syntax;
+  // A search pattern that itself names a secret file (`.env`, `**/.env`, `*.pem`, `id_rsa*`, `.git/config`, ...) is
+  // refused: the pattern is what Glob/Grep match, so an explicit secret-targeting glob would list or read its contents.
+  const hit = (policy.readDeny ?? []).find((g) => matches(value, [g]));
+  if (hit) return `${tool} ${key}: ${value} can match ${hit}, a protected secret file (.env, keys, credentials); sessions never read them`;
+  return null;
 }
 
 // ---- URLs: WebFetch, and URL arguments of scripts ----

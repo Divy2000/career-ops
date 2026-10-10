@@ -952,6 +952,23 @@ describe('guard hook: read confinement', () => {
     expect(pre('Grep', { pattern: 'x', glob: '{/etc,a}/*' }).status).toBe(2);
   });
 
+  it('Glob and Grep whose pattern or glob names a secret file exit 2, even from the repo root', () => {
+    const denied = [
+      ['Glob', { pattern: '.env', path: code }],
+      ['Glob', { pattern: '**/.env', path: code }],
+      ['Glob', { pattern: '**/*.pem', path: code }],
+      ['Grep', { pattern: 'SECRET', path: code, glob: '**/.env' }],
+      ['Grep', { pattern: 'SECRET', path: code, glob: '.env' }],
+      ['Grep', { pattern: 'SECRET', path: code, glob: '**/credentials*.json' }],
+    ] as Array<[string, Record<string, unknown>]>;
+    for (const [tool, input] of denied) {
+      const r = pre(tool, input);
+      expect(r.status, `${tool} ${JSON.stringify(input)}`).toBe(2);
+      expect(r.stderr).toMatch(/protected secret file/);
+    }
+    expect(pre('Grep', { pattern: 'SECRET', path: code, glob: '**/*.md' }).status).toBe(0);
+  });
+
   it('WebFetch of file:, of a loopback address, or of a name that does not resolve exits 2; a public literal address exits 0', () => {
     for (const url of ['file:///etc/passwd', 'http://127.0.0.1:1/', 'http://localhost/', 'http://[::1]/', 'https://nothing.invalid/']) {
       const r = pre('WebFetch', { url, prompt: 'x' });
@@ -1604,6 +1621,18 @@ describe('read confinement: guard policy', () => {
     for (const pattern of ['../outside/*', '**/../../x', 'a\\..\\b', '~/.ssh/*', '{/etc,src}/*', 'src/{a,/etc}/*', '{~,x}/*', 'a,~/x', `${outside}/*`, '/etc/*', '/*'])
       expect(search('Glob', { pattern }), pattern).toEqual(expect.any(String));
     for (const glob of ['../outside/*', '~/x', '{/etc,a}', `${outside}/*`]) expect(search('Grep', { pattern: 'x', glob }), glob).toEqual(expect.any(String));
+  });
+
+  it('a Glob pattern or Grep glob that names a secret file is refused, wherever the search starts', () => {
+    const search = (tool: string, input: Record<string, unknown>, cwd: string = code) => checkSearch(policy, tool, input, cwd);
+    for (const pattern of ['.env', '**/.env', '.env.*', '**/.env.*', '*.pem', '**/*.pem', 'id_rsa', 'id_rsa*', '**/id_rsa*', '.git/config', '**/.git/config', 'credentials*.json', '**/credentials*.json', 'client_secret*.json', '**/*.token']) {
+      expect(search('Glob', { pattern }), `Glob ${pattern}`).toMatch(/protected secret file/);
+      expect(search('Grep', { pattern: 'x', glob: pattern }), `Grep ${pattern}`).toMatch(/protected secret file/);
+    }
+    for (const pattern of ['**/*.md', '*.ts', 'src/**/*.md']) {
+      expect(search('Glob', { pattern }), `Glob ${pattern}`).toBeNull();
+      expect(search('Grep', { pattern: 'x', glob: pattern }), `Grep ${pattern}`).toBeNull();
+    }
   });
 
   it('Glob and Grep are refused when the policy does not grant search', () => {
