@@ -258,6 +258,11 @@ export class SessionManager {
         if (!live) continue;
         const reason = 'run record missing after a restart';
         this.store.setStatus(meta.id, 'error', reason);
+        // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
+        if (meta.reportNum !== null) {
+          this.store.setReportNum(meta.id, null);
+          void this.releaseReportNum(meta.reportNum, false);
+        }
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
       }

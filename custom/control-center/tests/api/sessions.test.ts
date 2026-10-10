@@ -1517,3 +1517,28 @@ describe('Reply watch session (SW7-web-a-02)', () => {
     expect(fs.existsSync(candidates())).toBe(false);
   });
 });
+
+describe('report reservations and session trackers survive failures (r16-claude)', () => {
+  async function freshApp(deps: Parameters<typeof makeTestApp>[1] = {}) {
+    return makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, deps);
+  }
+  const reserve = (app: TestApp, num: number) => {
+    const sentinel = path.join(app.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
+    return sentinel;
+  };
+  const QUESTION = { events: [INIT, delta('Which office do you prefer?'), result('Which office do you prefer?', 0.01)] };
+
+  it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const sentinel = reserve(app, 66);
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://jobs.example.com/synthetic/66' }, model: null, reportNum: 66 });
+      app.sessions.reconcile();
+      expect(app.sessions.read(meta.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart', reportNum: null });
+      await until(() => !fs.existsSync(sentinel));
+    } finally {
+      await app.close();
+    }
+  });
+});
