@@ -109,7 +109,8 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   if (!opts.recompute) {
     try {
       const cached = JSON.parse(fs.readFileSync(file, 'utf8')) as InsightRead;
-      if (cached.inputsKey === key) return { ...cached, fromCache: true };
+      // Only a clean run is served from the cache, also when an older build cached a failure.
+      if (cached.inputsKey === key && cached.kind === 'ok') return { ...cached, fromCache: true };
     } catch {
       /* no usable cache */
     }

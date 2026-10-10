@@ -126,6 +126,11 @@ describe('the insights cache across days (R8-09)', () => {
     expect(retry).toMatchObject({ kind: 'ok', fromCache: false });
     expect(runs).toBe(2);
     expect((await readInsight(cfg, exec, 'funnelVelocity')).fromCache).toBe(true);
+    // A failure an older build cached under today's key is not served either.
+    const file = path.join(cfg.dataRoot, 'data', 'control-center', 'insights', 'funnelVelocity.json');
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), kind: 'failed', exit: 1 }));
+    expect(await readInsight(cfg, exec, 'funnelVelocity')).toMatchObject({ kind: 'ok', fromCache: false });
+    expect(runs).toBe(3);
   });
 });
 
