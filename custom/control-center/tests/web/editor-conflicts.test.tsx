@@ -186,7 +186,7 @@ describe('follow-up cadence form (Settings > Profile)', () => {
     await changeOnDisk('/api/followups/cadence', { etag: 'c2', cadence: { applied_first_days: 5 } });
     await until(() => /changed on disk since you started editing/.test(alerts()), 'the changed-on-disk note');
     await click(button('Save cadence')!);
-    await until(() => /changed on disk/.test(alerts()) && writes().length === 1, 'the conflict');
+    await until(() => /nothing was written/.test(alerts()) && writes().length === 1, 'the conflict');
     expect(writes()).toEqual([expect.objectContaining({ method: 'PUT', url: '/api/followups/cadence', headers: expect.objectContaining({ 'If-Match': 'c1' }) })]);
     expect(files['/api/followups/cadence']).toMatchObject({ etag: 'c2', cadence: { applied_first_days: 5 } });
     // The user's value stays in the form; saving again applies it over the version now on disk.
@@ -203,7 +203,7 @@ describe('follow-up cadence form (Settings > Profile)', () => {
     await type(field, '9');
     await changeOnDisk('/api/followups/cadence', { etag: 'c2', cadence: { applied_first_days: 5 } });
     await click(button('Save cadence')!);
-    await until(() => writes().length === 1 && /changed on disk/.test(alerts()), 'the first conflict');
+    await until(() => writes().length === 1 && /nothing was written/.test(alerts()), 'the first conflict');
     // Another writer changes it again after the user was told about c2, and the page has refetched it.
     const reads = () => calls.filter((c) => c.method === 'GET' && c.url === '/api/followups/cadence').length;
     const before = reads();
