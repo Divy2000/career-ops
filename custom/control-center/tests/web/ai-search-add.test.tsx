@@ -12,13 +12,19 @@ import { PIPELINE_OFFER_LIMITS } from '@shared/pipeline-add';
 let emitEnvelope: ((kind: string, payload: unknown, turn: number) => void) | null = null;
 type PanelProps = { sessionId?: string | null; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void };
 let panel: PanelProps | null = null;
-vi.mock('@web/components/SessionPanel', () => ({
-  SessionPanel: (props: PanelProps) => {
-    emitEnvelope = props.onEnvelope ?? null;
-    panel = props;
-    return null;
-  },
-}));
+// Each panel mount, so a test can tell a remount (a fresh start form) from a re-render.
+const mounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@web/components/SessionPanel', async () => {
+  const { useEffect } = await import('react');
+  return {
+    SessionPanel: (props: PanelProps) => {
+      emitEnvelope = props.onEnvelope ?? null;
+      panel = props;
+      useEffect(() => void (mounts.count += 1), []);
+      return null;
+    },
+  };
+});
 
 type Offer = { url: string; company: string; title: string; location?: string; portal?: string; postedAt?: string };
 let posted: Array<{ offers: Offer[] }>;
@@ -200,5 +206,14 @@ describe('Discover > AI search: add', () => {
     expect(panel!.sessionId ?? null).toBeNull();
     expect(host.textContent).not.toContain('Old Co');
     expect(sessionStorage.getItem('cc.discover.ai')).toBeNull();
+  });
+
+  it('a search deleted while the tab is open gives the start form back (review)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    const before = mounts.count;
+    await act(async () => panel!.onStatus!('gone', null));
+    // A fresh panel with no session (its own started id dropped): the start form again.
+    expect(mounts.count).toBe(before + 1);
+    expect(panel!.sessionId ?? null).toBeNull();
   });
 });
