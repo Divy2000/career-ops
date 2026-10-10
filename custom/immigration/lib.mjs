@@ -69,17 +69,20 @@ function decodeXmlText(raw) {
   const cdata = raw.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
   const text = cdata ? cdata[1] : raw;
   return text
+    // Named entities first: a numeric reference (`&#38;` -> `&`) must not then be re-decoded as a named
+    // entity, so `&amp;` is decoded before the numeric pass, never after.
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    // Numeric character references, decimal (`&#8217;`, `&#039;`) and hex (`&#x2019;`): a raw
-    // entity left in a title garbles it and can split a relevance keyword in two. `&amp;` stays
-    // last so a decoded entity (`&#38;` -> &) is never re-decoded.
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    // Numeric character references, decimal (`&#8217;`, `&#039;`) and hex (`&#x2019;`): a raw entity left
+    // in a title garbles it and can split a relevance keyword in two. Out-of-range values and surrogate
+    // code points (0xD800-0xDFFF) are left as-is: String.fromCodePoint throws on a surrogate.
     .replace(/&#(?:x([0-9a-fA-F]+)|(\d+));/g, (match, hex, dec) => {
       const cp = parseInt(hex ?? dec, hex ? 16 : 10);
-      return cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : match;
+      return cp >= 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) ? String.fromCodePoint(cp) : match;
     })
-    .replace(/&amp;/g, '&')
     .trim();
 }
 

@@ -84,6 +84,16 @@ test('parseRssItems decodes numeric character entities in titles (R17-scripts-a-
   assert.equal(items[2].title, 'H-1B and the \u2019 cap');
 });
 
+test('parseRssItems leaves a surrogate reference as-is and never over-decodes a numeric ampersand', () => {
+  const xml = `<rss><channel>
+    <item><title>Bad ref &#xD800; left alone</title><link>https://www.uscis.gov/a</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+    <item><title>Literal &#38;amp; stays literal</title><link>https://www.uscis.gov/b</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+  </channel></rss>`;
+  const items = parseRssItems(xml);
+  assert.equal(items[0].title, 'Bad ref &#xD800; left alone');
+  assert.equal(items[1].title, 'Literal &amp; stays literal');
+});
+
 test('isRelevantPolicyItem keeps work-visa topics and drops unrelated news', () => {
   assert.equal(isRelevantPolicyItem('DHS proposes $103,265 H-1B fee'), true);
   assert.equal(isRelevantPolicyItem('Changes to the H1B weighted selection'), true);
