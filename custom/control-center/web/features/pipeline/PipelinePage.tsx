@@ -260,9 +260,12 @@ function Inbox() {
                       {!r.done ? (
                         <div className="row gap">
                           {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} running={evaluating.has(r.url)} checking={sessionsLoading} />}
-                          <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
-                            Skip
-                          </button>
+                          {/* The skip endpoint leaves Processed sections alone, so an unchecked row there has no Skip. */}
+                          {r.section !== 'done' && (
+                            <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
+                              Skip
+                            </button>
+                          )}
                         </div>
                       ) : r.section !== 'done' ? (
                         <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>

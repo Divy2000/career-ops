@@ -220,3 +220,12 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
   });
 });
 
+describe('Skip on a Processed row (FOLLOWUP-pipeline-skip)', () => {
+  it('given an unchecked row under Processed, it offers no Skip, which the server would refuse', async () => {
+    read = { kind: 'ok', path: 'data/pipeline.md', etag: 'e', rows: [row('https://jobs.example.com/free', 'Free Co', 4), row('https://jobs.example.com/old', 'Old Co', 9, { section: 'done' })] };
+    await mount();
+    await until(() => button('Process inbox') && host.textContent?.includes('Old Co'), 'the rows');
+    expect(host.querySelector('button[aria-label="Skip Free Co"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Skip Old Co"]')).toBeNull();
+  });
+});
