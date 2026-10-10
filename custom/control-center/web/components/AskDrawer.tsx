@@ -22,6 +22,12 @@ export interface Proposal {
   note: string | null;
 }
 
+/** The tracker row a proposal names (row, or the older n), or a plain note that it names none. */
+const rowOf = (p: Record<string, unknown>): string => {
+  const n = String(p.row ?? p.n ?? '').trim();
+  return n ? `row #${n}` : '(no row given)';
+};
+
 const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   navigate: (p) => `Open ${String(p.to ?? '(no path)')}`,
   filterPipeline: (p) => `Filter the pipeline by "${String(p.q ?? p.query ?? '')}"`,
@@ -29,9 +35,9 @@ const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   evaluateCompany: (p) => `Evaluate every pending Inbox posting at ${String(p.company ?? '')} (uses tokens)`,
   explore: () => 'Open Discover (network scan)',
   research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
-  generatePdf: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`,
-  setStatus: (p) => `Set row #${String(p.row ?? p.n ?? '')} to ${String(p.state ?? '')}`,
-  apply: (p) => `Open Apply for row #${String(p.row ?? p.n ?? '')}`,
+  generatePdf: (p) => `Generate the tailored CV PDF for ${rowOf(p)} (uses tokens)`,
+  setStatus: (p) => `Set ${rowOf(p)} to ${String(p.state ?? '')}`,
+  apply: (p) => `Open Apply for ${rowOf(p)}`,
   setApplyField: (p) => `Set the apply field ${String(p.id ?? '')}`,
   remember: (p) => `Remember: ${String(p.fact ?? '')}`,
   setProfile: () => 'Change profile.yml',

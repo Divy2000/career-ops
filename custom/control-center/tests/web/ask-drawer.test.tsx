@@ -183,6 +183,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
   });
 
+  it('a proposal missing its row says so in its label instead of an empty "row #" (R13-shared-comp-03)', async () => {
+    for (const action of ['generatePdf', 'setStatus', 'apply']) await act(async () => emitEnvelope!('act', { action, params: { state: 'Applied' } }, 1));
+    const labels = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].map((li) => li.textContent ?? '');
+    expect(labels).toHaveLength(3);
+    for (const label of labels) {
+      expect(label).not.toMatch(/row #(?!\d)/);
+      expect(label).toContain('(no row given)');
+    }
+  });
+
   it('a row that is not a tracker row number fails before asking, and runs nothing (review fix 4)', async () => {
     const cases: Array<[string, Record<string, unknown>]> = [
       ['setStatus', { row: 'abc', state: 'Applied' }],
