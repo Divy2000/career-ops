@@ -527,12 +527,15 @@ for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]
     for (let i = 0; i < 600 && !fs.existsSync(pids); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.ok(fs.existsSync(pids), 'the rank call never started');
     assert.equal(fs.readdirSync(w.tmp).filter((f) => f.startsWith('career-ops-rank-shim.')).length, 1, 'the token folder exists while the rank runs');
+    // The lock holder, the bash that runs the steps and the cleanup; the started bash only waits on lockf.
+    const imm = path.join(w.data, 'data', 'immigration');
+    const holder = Number(readFileSync(path.join(imm, '.run-daily.pid'), 'utf8'));
     // The runner's cancel: the signal goes to the whole process group.
     process.kill(-child.pid, signal);
     const end = await exited;
     assert.notEqual(end.status, 0, `the cancelled run must not read as a success (${JSON.stringify(end)})`);
-    const imm = path.join(w.data, 'data', 'immigration');
-    for (let i = 0; i < 40 && fs.existsSync(path.join(imm, '.run-daily.pid')); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    for (let i = 0; i < 600 && alive(holder); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(alive(holder), false, 'the lock holder exits on the signal');
     assert.deepEqual(fs.readdirSync(w.tmp), [], `the token outlived the cancelled rank step (expected exit ${code})`);
     assert.equal(fs.existsSync(path.join(imm, '.run-daily.pid')), false, 'the pidfile goes too');
   });

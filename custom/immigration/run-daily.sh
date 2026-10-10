@@ -50,9 +50,10 @@ echo "$$" > "$PIDFILE"
 SETTINGS_DIR=""
 SHIM_DIR=""
 cleanup() {
-  rm -f "$PIDFILE"
   [ -z "$SETTINGS_DIR" ] || rm -rf "$SETTINGS_DIR"
   [ -z "$SHIM_DIR" ] || rm -rf "$SHIM_DIR"
+  # Last: while the pid file is there the run counts as alive.
+  rm -f "$PIDFILE"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
