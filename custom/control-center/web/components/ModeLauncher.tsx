@@ -22,9 +22,14 @@ interface Launched {
  */
 export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: ModeChoice[]; target?: Target; heading: string; rememberAs?: string }) {
   const store = useMemo(() => (rememberAs ? rememberedLaunches(rememberAs) : null), [rememberAs]);
-  const fromStore = (l: Launch): Launched => ({ key: `s-${l.id}`, mode: modes.find((m) => m.id === l.mode) ?? { id: l.mode, label: l.mode }, sessionId: l.id });
+  // Only launches of a mode this launcher offers: a stale or edited entry must not attach another mode's session here.
+  const fromStore = (ls: Launch[]): Launched[] =>
+    ls.flatMap((l) => {
+      const m = modes.find((x) => x.id === l.mode);
+      return m ? [{ key: `s-${l.id}`, mode: m, sessionId: l.id }] : [];
+    });
   const [mode, setMode] = useState(modes[0]?.id ?? '');
-  const [launched, setLaunched] = useState<Launched[]>(() => (store?.read() ?? []).map(fromStore));
+  const [launched, setLaunched] = useState<Launched[]>(() => fromStore(store?.read() ?? []));
   useEffect(() => {
     store?.write(launched.flatMap((l) => (l.sessionId ? [{ mode: l.mode.id, id: l.sessionId }] : [])));
   }, [launched, store]);
@@ -33,8 +38,8 @@ export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: Mo
     () =>
       store?.subscribe(() =>
         setLaunched((prev) => {
-          const late = store.read().filter((l) => !prev.some((x) => x.sessionId === l.id));
-          return late.length ? [...late.map(fromStore), ...prev] : prev;
+          const late = fromStore(store.read().filter((l) => !prev.some((x) => x.sessionId === l.id)));
+          return late.length ? [...late, ...prev] : prev;
         }),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fromStore reads only `modes`, fixed per host page

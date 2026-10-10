@@ -117,6 +117,13 @@ describe('Insights AI analyses keep their session', () => {
     expect(lastPanel('patterns')).toMatchObject({ sessionId: 'pat-late' });
   });
 
+  it('a remembered launch of a mode this launcher does not offer is not shown (review fix)', async () => {
+    sessionStorage.setItem('cc.insights.ai', JSON.stringify([{ mode: 'devchat', id: 'dev-1' }, { mode: 'calibrate', id: 'cal-1' }]));
+    await openPage();
+    await until(() => lastPanel('calibrate'), 'the re-attached calibrate panel');
+    expect(panels.some((p) => p.mode === 'devchat')).toBe(false);
+  });
+
   it('a session deleted on the Sessions page is let go instead of re-attached', async () => {
     await openPage();
     await startCalibrate();
