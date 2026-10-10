@@ -34,7 +34,7 @@ export function recentAchievements(cvText) {
   return out;
 }
 
-// The body of every cv.md `##` section whose title ends in "Projects" ("Projects", "Personal Projects"): the only part of
+// The body of every cv.md `##` section whose title ends in "Project" or "Projects" ("Projects", "Personal Projects"): the only part of
 // cv.md a project may come from, never an employer, a role, another section's title or a skill category.
 function projectSections(cvText) {
   const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));

@@ -196,7 +196,8 @@ test('given an entry under a section that is about something else but names proj
     const r = checkPayload({ projects: [{ name: 'Secret Tool', url: 'https://github.com/me/tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
     assert.match(r.errors.join('\n'), /"Secret Tool" is in neither/, title);
   }
-  for (const title of ['Projects', 'Selected Projects', 'Side-Projects']) {
+  // A CV with a single project may title its section in the singular.
+  for (const title of ['Projects', 'Selected Projects', 'Side-Projects', 'Project']) {
     const cv = `## ${title}\n\n### Secret Tool\n- https://github.com/me/tool\n\n## Skills\n`;
     assert.deepEqual(checkPayload({ projects: [{ name: 'Secret Tool', url: 'https://github.com/me/tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, [], title);
   }
