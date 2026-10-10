@@ -257,6 +257,10 @@ const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   titles: ['portals.yml'],
   // modes/apply.md Step 8 and 9.3: application-answers.mjs upserts the matched report's ## Application Answers section.
   apply: ['reports/*.md'],
+  // modes/patterns.md saves its analysis as reports/pattern-analysis-{date}.md.
+  patterns: ['reports/pattern-analysis-*.md'],
+  // modes/tracker.md: a confirmed salary figure is appended to the observations log, and a reveal updates the row's report.
+  tracker: ['data/salary-observations.tsv', 'reports/*.md'],
 };
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */

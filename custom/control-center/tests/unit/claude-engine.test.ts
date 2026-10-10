@@ -421,6 +421,20 @@ describe('guard hook', () => {
     }
   });
 
+  it('patterns may save its report and tracker may log a salary figure and update a revealed report; neither may touch the tracker file (R14-claude-L2-03)', () => {
+    expect(writesFor(['patterns'], ['reports/pattern-analysis-2026-10-10.md', 'reports/012-acme.md', 'data/salary-observations.tsv'])).toEqual({
+      'patterns reports/pattern-analysis-2026-10-10.md': 0,
+      'patterns reports/012-acme.md': 2,
+      'patterns data/salary-observations.tsv': 2,
+    });
+    expect(writesFor(['tracker'], ['data/salary-observations.tsv', 'reports/012-acme.md', 'data/applications.md', 'reports/nested/x.md'])).toEqual({
+      'tracker data/salary-observations.tsv': 0,
+      'tracker reports/012-acme.md': 0,
+      'tracker data/applications.md': 2,
+      'tracker reports/nested/x.md': 2,
+    });
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));
