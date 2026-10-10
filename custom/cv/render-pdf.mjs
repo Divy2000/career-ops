@@ -23,7 +23,7 @@
 // the drafts are removed; a publishing render is let finish, and the input keeps
 // the chosen layout only when that render published it.
 
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -89,6 +89,21 @@ async function main() {
   let running = null;
   let stopping = false;
   let restoreInput = false;
+  // The output as it was before the final render. generate-pdf.mjs writes the PDF and then its index row in one
+  // synchronous run, so a changed PDF means the chosen layout was published, even when that render then exited non-zero
+  // (stopped while it closed its browser): the input must keep the layout the PDF shows.
+  const outputBytes = () => {
+    try {
+      return statSync(output).isFile() ? readFileSync(output) : null;
+    } catch {
+      return null;
+    }
+  };
+  let outputBefore = null;
+  const publishedOutput = () => {
+    const now = outputBytes();
+    return now !== null && (outputBefore === null || !now.equals(outputBefore));
+  };
   const removeDrafts = () => {
     rmSync(draftHtml, { force: true });
     rmSync(scratch, { recursive: true, force: true });
@@ -100,7 +115,7 @@ async function main() {
       const closed = new Promise((resolve) => running.once('close', resolve));
       if (!restoreInput) running.kill(signal);
       const status = await closed;
-      if (restoreInput && status === 0) restoreInput = false;
+      if (restoreInput && (status === 0 || publishedOutput())) restoreInput = false;
     }
     removeDrafts();
     if (restoreInput) writeFileSync(input, html);
@@ -147,13 +162,14 @@ async function main() {
   let published = null;
   if (result.fits || !strict) {
     // Publish the chosen layout: the input keeps its density and this render indexes the PDF.
+    outputBefore = outputBytes();
     restoreInput = true;
     writeFileSync(input, result.html);
     try {
       published = await generate(input, output, result.fits ? ['--strict-pages'] : []);
     } finally {
       // Nothing was published, so the input keeps the layout it had.
-      if (published?.status !== 0) writeFileSync(input, html);
+      if (published?.status !== 0 && !publishedOutput()) writeFileSync(input, html);
       restoreInput = false;
     }
     if (published.status !== 0) {

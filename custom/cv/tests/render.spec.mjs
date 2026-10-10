@@ -304,6 +304,27 @@ test('given a render and its final generate-pdf stopped together while publishin
   assert.deepEqual(scratchIn(root), []);
 });
 
+test('given a final render that publishes the PDF and then exits non-zero, when run, then the input keeps the layout of the published PDF (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  // Loaded into every node of the run: only the final generate-pdf.mjs (its input is the real HTML, not a draft) is made
+  // to exit 1 after it finished, as a cancel that lands after the PDF and its index row were written does.
+  const preload = path.join(root, 'fail-after-publish.mjs');
+  fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs') && !process.argv[2]?.includes('.render-pdf-')) process.on('exit', () => { process.exitCode = 1; });\n`);
+  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1', '--report=12'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  assert.equal(countPdfPages(fs.readFileSync(pdf)), 1, 'the PDF was published');
+  assert.match(fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8'), /^12\toutput\/cv-test\.pdf\t/m, 'and indexed');
+  const kept = fs.readFileSync(html, 'utf8');
+  assert.notEqual(kept, before, 'the input keeps the layout the published PDF shows');
+  assert.match(kept, /<html[^>]*data-density="\d"/);
+  assert.deepEqual(scratchIn(root), []);
+});
+
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
