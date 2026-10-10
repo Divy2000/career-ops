@@ -10,7 +10,7 @@ import { PIPELINE_OFFER_LIMITS } from '@shared/pipeline-add';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let emitEnvelope: ((kind: string, payload: unknown, turn: number) => void) | null = null;
-type PanelProps = { sessionId?: string | null; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void };
+type PanelProps = { sessionId?: string | null; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void; onStarting?: () => void; onStartFailed?: () => void };
 let panel: PanelProps | null = null;
 // Each panel mount, so a test can tell a remount (a fresh start form) from a re-render.
 const mounts = vi.hoisted(() => ({ count: 0 }));
@@ -223,5 +223,34 @@ describe('Discover > AI search: add', () => {
     expect(host.textContent).toContain('Gone Co');
     await act(async () => panel!.onStatus!('gone', null));
     expect(host.textContent).not.toContain('Gone Co');
+  });
+
+  it('returning mid-start shows the starting note, not a live start form, and attaches the search once it is created (R17-feat-a-L1-01)', async () => {
+    const starting = panel!;
+    await act(async () => starting.onStarting!());
+    await act(async () => root.unmount());
+    panel = null;
+    await mount();
+    // No start form while the other mount's start is still on its way: a second paid search would orphan the first.
+    expect(panel).toBeNull();
+    expect(host.textContent).toContain('Starting the AI search');
+
+    // The start reports its id afterwards; the panel attaches it.
+    await act(async () => starting.onSessionId!('s-ai-1'));
+    await until(() => panel !== null, 'the search panel to attach');
+    expect(panel!.sessionId).toBe('s-ai-1');
+  });
+
+  it('a start that fails after leaving offers the start form again (R17-feat-a-L1-01)', async () => {
+    const starting = panel!;
+    await act(async () => starting.onStarting!());
+    await act(async () => root.unmount());
+    panel = null;
+    await mount();
+    expect(panel).toBeNull();
+
+    await act(async () => starting.onStartFailed!());
+    await until(() => panel !== null, 'the start form to come back');
+    expect(panel!.sessionId ?? null).toBeNull();
   });
 });

@@ -57,6 +57,20 @@ async function typeAndBlur(label: string, ...texts: string[]) {
 const acme = { name: 'Acme', careers_url: 'https://job-boards.greenhouse.io/acme', enabled: true };
 const beta = { name: 'Beta', careers_url: 'https://job-boards.greenhouse.io/beta' };
 
+async function addRow(cells: Record<string, string>) {
+  for (const [col, text] of Object.entries(cells)) {
+    const input = host!.querySelector<HTMLInputElement>(`input[aria-label="New tracked_companies ${col}"]`)!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setter.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  await act(async () => {
+    [...host!.querySelectorAll('button')].find((b) => b.textContent === 'Add row')!.click();
+  });
+}
+
 describe('a blank cell in a structured Portals table', () => {
   it('the scanners pause a company only on the boolean false', () => {
     // scan.mjs and validate-portals.mjs both test `enabled === false`, so the text "false" leaves the company scanned.
@@ -104,5 +118,34 @@ describe('a blank cell in a structured Portals table', () => {
     const ops = await mount([{ ...beta, enabled: null }, acme]);
     await typeAndBlur('enabled of Beta', 'false');
     expect(ops).toEqual([{ op: 'set', path: ['tracked_companies', 0, 'enabled'], value: false }]);
+  });
+});
+
+describe('Add row in a boolean column', () => {
+  it.each(['yes', 'True', '1', 'on'])('typing %j in an enabled column adds the row with true, not the silent false (R17-feat-c-L3-04)', async (word) => {
+    const ops = await mount([acme]);
+    await addRow({ name: 'Globex', enabled: word });
+    expect(ops).toEqual([{ op: 'insert', path: ['tracked_companies'], value: { name: 'Globex', enabled: true } }]);
+  });
+
+  it.each(['no', 'False', '0', 'off'])('typing %j in an enabled column still adds false', async (word) => {
+    const ops = await mount([acme]);
+    await addRow({ name: 'Globex', enabled: word });
+    expect(ops).toEqual([{ op: 'insert', path: ['tracked_companies'], value: { name: 'Globex', enabled: false } }]);
+  });
+});
+
+describe('Add row in a column with no typed value yet', () => {
+  it.each([
+    ['no', false],
+    ['False', false],
+    ['off', false],
+    ['Yes', true],
+    ['TRUE', true],
+    ['on', true],
+  ])('typing %j as the first enabled value adds the boolean %s, which the scanners test (review)', async (word, value) => {
+    const ops = await mount([beta]);
+    await addRow({ name: 'Globex', enabled: word });
+    expect(ops).toEqual([{ op: 'insert', path: ['tracked_companies'], value: { name: 'Globex', enabled: value } }]);
   });
 });

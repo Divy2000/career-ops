@@ -312,6 +312,17 @@ describe('GET /api/followups on an empty tracker', () => {
     await t2.close();
   });
 
+  it('says why the Insights dashboard cannot read a malformed tracker, as the tracker route does', async () => {
+    const t2 = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(t2.cfg.dataRoot, 'data', 'applications.md'), `${HEADER_ONLY}| x | y |\n`);
+      const dash = (await t2.app.inject({ method: 'GET', url: '/api/insights/dashboard', headers: t2.authed })).json();
+      expect(dash).toMatchObject({ kind: 'malformed', error: 'table has a header but no parseable rows' });
+    } finally {
+      await t2.close();
+    }
+  });
+
   it('returns 502 when the script claims no applications but the tracker has rows', async () => {
     const t2 = await makeTestApp({}, { exec: async () => ({ code: 1, stdout: JSON.stringify({ error: 'No applications found in tracker.' }), stderr: '' }) });
     const res = await t2.app.inject({ method: 'GET', url: '/api/followups', headers: t2.authed });

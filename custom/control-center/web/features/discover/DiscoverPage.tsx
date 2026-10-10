@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWhatsNew } from '../../lib/queries';
@@ -205,7 +205,8 @@ function scanDegradations(summary: ScanSummary): { notes: string[]; noData: bool
   if (stale.length) notes.push(`Degraded: the scan used an expired cached company list for ${stale.join(', ')}, since the download failed.`);
   const unreachable = summary.unreachableBoards ?? 0;
   if (unreachable > 0) notes.push(`${unreachable} ${unreachable === 1 ? 'board' : 'boards'} could not be reached.`);
-  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 };
+  // A scan stopped before it finished (a DNS outage) found no reliable "no matches", so the empty state is withheld.
+  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 || summary.stoppedEarly === true };
 }
 
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
@@ -239,7 +240,13 @@ export function NetworkScan() {
     void run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
       if (out && 'runId' in out) setRunId(out.runId);
     });
+  // One add at a time: a second click before the first answers would send the same postings and relabel them.
+  const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
   const add = async (postings: ScanPosting[]) => {
+    if (addingRef.current) return;
+    addingRef.current = true;
+    setAdding(true);
     let added = 0;
     let skipped = 0;
     try {
@@ -253,7 +260,12 @@ export function NetworkScan() {
     } catch (err) {
       setMessage({ tone: 'danger', text: `${added ? `Added ${added}, then could not add the rest` : 'Could not add'}: ${describeError(err)}` });
     }
-    await qc.invalidateQueries({ queryKey: ['pipeline'] });
+    try {
+      await qc.invalidateQueries({ queryKey: ['pipeline'] });
+    } finally {
+      addingRef.current = false;
+      setAdding(false);
+    }
   };
   const degraded = summary ? scanDegradations(summary) : { notes: [], noData: false };
   const visible = (summary?.postings ?? []).filter((p) => !filter || `${p.company} ${p.title} ${p.location ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
@@ -337,7 +349,7 @@ export function NetworkScan() {
             <>
               <div className="toolbar">
                 <input type="search" aria-label="Filter results" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                <button type="button" onClick={() => void add(visible)}>
+                <button type="button" disabled={adding} onClick={() => void add(visible)}>
                   Add all ({visible.length})
                 </button>
               </div>
@@ -370,7 +382,7 @@ export function NetworkScan() {
                           <Pill>{p.source ?? ''}</Pill>
                         </td>
                         <td>
-                          <button type="button" aria-label={`Add ${p.company} ${p.title}`} onClick={() => void add([p])}>
+                          <button type="button" aria-label={`Add ${p.company} ${p.title}`} disabled={adding} onClick={() => void add([p])}>
                             Add
                           </button>
                         </td>

@@ -62,13 +62,24 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   };
   const confirmAndWrite = async () => {
     const from = edit.base ?? q.data;
-    const added = current.length - (from?.rows.length ?? 0);
+    // Added and removed are counted against the rows on disk, not as a net of the two lengths: a swap (remove one,
+    // add another) leaves the length unchanged but is still one added and one removed.
+    // Rows are counted as a multiset (a legacy file can hold the same row twice), with the extra columns' cells.
+    const fromRows = from?.rows ?? [];
+    const key = (r: BlacklistRow) => [r.company, r.since, r.scope, r.reason, ...(r.extra ?? [])].join('\u0000');
+    const counts = (rows: BlacklistRow[]) => rows.reduce((m, r) => m.set(key(r), (m.get(key(r)) ?? 0) + 1), new Map<string, number>());
+    const surplus = (a: Map<string, number>, b: Map<string, number>) => [...a].reduce((n, [k, c]) => n + Math.max(0, c - (b.get(k) ?? 0)), 0);
+    const fromCounts = counts(fromRows);
+    const currentCounts = counts(current);
+    const addedCount = surplus(currentCounts, fromCounts);
+    const removedCount = surplus(fromCounts, currentCounts);
+    const diff = [addedCount > 0 ? `${addedCount} added` : null, removedCount > 0 ? `${removedCount} removed` : null].filter((s): s is string => s !== null);
     const ok = await confirm({
       title: 'Write data/blacklist.md?',
       body: (
         <>
           <p>
-            {current.length} row{current.length === 1 ? '' : 's'} will be written ({added >= 0 ? `${added} added` : `${-added} removed`}). The scanner skips every listed company and domain on its next run.
+            {current.length} row{current.length === 1 ? '' : 's'} will be written{diff.length > 0 ? ` (${diff.join(', ')})` : ''}. The scanner skips every listed company and domain on its next run.
           </p>
           {columnWarning && <p>{columnWarning}</p>}
           <p>This is the only way the app writes the blacklist; AI sessions are denied this file.</p>

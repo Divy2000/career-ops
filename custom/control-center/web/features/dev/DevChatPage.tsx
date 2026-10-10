@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
 import type { SessionMeta } from '@shared/api';
 import { readLastDevSession, writeLastDevSession } from '../../lib/devchatSession';
+import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from '../../lib/lastSession';
 import { isTerminal } from '../../lib/sessions';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -211,6 +212,11 @@ export function validateDevSearch(s: Record<string, unknown>): DevSearch {
 
 const is404 = (e: unknown) => e instanceof ApiError && e.status === 404;
 
+// The store behind readLastDevSession (lib/devchatSession.ts), for its in-flight start mark: a page mounted while a start
+// it did not send is still in flight waits for it instead of offering a second file-editing session.
+const DEV_SESSION_KEY = 'cc.devchat.session';
+const devStore = lastSession(DEV_SESSION_KEY);
+
 /** The session check's retry backoff (doubling from baseMs, capped at maxMs); tests shorten it. */
 export const SESSION_CHECK_RETRY = { baseMs: 1000, maxMs: 3000 };
 
@@ -219,7 +225,35 @@ export function DevChatPage() {
   // always show the same one; /dev without it reopens this tab's last session.
   const { session } = useSearch({ strict: false }) as DevSearch;
   const navigate = useNavigate();
+  // A start's answer can arrive after the page unmounted (the user left mid-start): it is stored, but only a mounted
+  // page moves the URL, so the user is not pulled back to /dev.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const [startingElsewhere, setStartingElsewhere] = useState(devStore.starting);
+  const [startedHere, setStartedHere] = useState(false);
+  // Re-renders when another mount's start stores its session (or the Sessions page forgets it), so it is re-read.
+  const [, setStoreTick] = useState(0);
+  useEffect(() => {
+    const sync = () => {
+      setStartingElsewhere(devStore.starting());
+      setStoreTick((t) => t + 1);
+    };
+    sync();
+    return subscribeSession(DEV_SESSION_KEY, sync);
+  }, []);
   const sessionId = session ?? readLastDevSession();
+  const waiting = startingElsewhere && !startedHere && sessionId === null;
+  // A start whose page reloaded mid-flight never reports: the mark is cleared after the window, so the form comes back.
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setTimeout(() => devStore.setStarting(false), START_REPORT_WINDOW_MS);
+    return () => clearTimeout(t);
+  }, [waiting]);
   const [gone, setGone] = useState<string | null>(null);
   // The session must be a Dev Chat session that exists: a deleted, mistyped or other-root id, another mode's session or a
   // route under /api/sessions/ (engine) is dropped with a note instead of hanging the page.
@@ -247,12 +281,21 @@ export function DevChatPage() {
   if (sessionId !== panel.seen) setPanel((p) => ({ key: sessionId === p.own ? p.key : p.key + 1, own: sessionId === p.own ? p.own : null, seen: sessionId }));
   const setSessionId = useCallback(
     (id: string) => {
-      setPanel((p) => ({ ...p, own: id }));
-      setGone(null);
-      void navigate({ to: '/dev', search: { session: id }, replace: true });
+      if (mounted.current) {
+        setPanel((p) => ({ ...p, own: id }));
+        setGone(null);
+      }
+      writeLastDevSession(id);
+      devStore.setStarting(false);
+      if (mounted.current) void navigate({ to: '/dev', search: { session: id }, replace: true });
     },
     [navigate],
   );
+  const onStarting = useCallback(() => {
+    devStore.setStarting(true);
+    setStartedHere(true);
+  }, []);
+  const onStartFailed = useCallback(() => devStore.setStarting(false), []);
   const newConversation = () => {
     writeLastDevSession(null);
     setPanel((p) => ({ key: p.key + 1, own: null, seen: null }));
@@ -267,7 +310,7 @@ export function DevChatPage() {
   // The unlock covers the one turn it was sent with; the next turn needs the box ticked again.
   const onSent = useCallback(() => setBlacklist(false), []);
   // The Changes panel polls only a Dev Chat session the server confirmed, while its stream does not report it finished.
-  const live = sessionId !== null && meta.isSuccess && !missing && !isTerminal(status);
+  const live = sessionId !== null && meta.isSuccess && !missing && status !== 'gone' && !isTerminal(status);
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
@@ -293,7 +336,17 @@ export function DevChatPage() {
               Could not check this conversation: {checkFailed}. Retrying.
             </p>
           )}
-          <SessionPanel key={`devchat-${panel.key}`} mode="devchat" title="Dev Chat" sessionId={sessionId} placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
+          {waiting ? (
+            // Left mid-start: the conversation is still being created, and a second Send would start a second session editing the same files.
+            <div className="card session" role="status">
+              <h2 style={{ margin: 0 }}>Dev Chat</h2>
+              <p className="muted" style={{ margin: 'var(--space-2) 0 0' }}>
+                Starting the conversation. It shows here once it is created.
+              </p>
+            </div>
+          ) : (
+            <SessionPanel key={`devchat-${panel.key}`} mode="devchat" title="Dev Chat" sessionId={sessionId} placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} onStarting={onStarting} onStartFailed={onStartFailed} blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
+          )}
           {sessionId && (
             <div className="row gap">
               <button type="button" onClick={newConversation}>

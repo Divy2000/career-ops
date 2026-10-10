@@ -26,6 +26,8 @@ let host: HTMLElement;
 // GET /api/sessions/s-pdf-12, the tailored CV session; its status is what a test sets.
 let pdfStatus: string;
 let docs: ApplyDocuments;
+/** While set, POST /api/sessions waits for it, so a test can leave the page while the start is in flight. */
+let startGate: Promise<void> | null;
 let root: Root;
 let router: AnyRouter;
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -68,13 +70,17 @@ beforeEach(() => {
   panels = [];
   docs = DOCS;
   pdfStatus = 'running';
+  startGate = null;
   sessionStorage.clear();
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/sessions/engine') return json({ playwrightAvailable: true, modes: ['apply'] });
       if (url === '/api/apply/documents?n=12' || url === '/api/apply/documents') return json(docs);
-      if (url === '/api/sessions' && init?.method === 'POST') return json({ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'queued', target: { type: 'app', value: '12' } });
+      if (url === '/api/sessions' && init?.method === 'POST') {
+        if (startGate) await startGate;
+        return json({ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'queued', target: { type: 'app', value: '12' } });
+      }
       if (url === '/api/sessions/s-pdf-12') return json({ meta: { ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: pdfStatus, target: { type: 'app', value: '12' } }, events: [{ seq: 1, event: { type: 'status', status: pdfStatus, reason: null } }] });
       if (url === '/api/sessions/s-apply-url') return json({ meta: URL_SESSION, events: [] });
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404, headers: { 'content-type': 'application/json' } });
@@ -148,6 +154,37 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     await act(async () => applyPanel()!.onStatus!('gone', null));
     expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
     expect(applyPanel()!.sessionId ?? null).toBeNull();
+  });
+
+  it('a draft started here and deleted elsewhere drops its answers and Fill, and offers Draft answers again', async () => {
+    await openApply();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    expect(fillButton()).toBeDefined();
+    // Deleted on the Sessions page in another tab: the panel's stream (or a reply's 404) reports it gone.
+    await act(async () => applyPanel()!.onStatus!('gone', null));
+    await until(() => draftButton(), 'the Draft answers button');
+    expect(fillButton()).toBeUndefined();
+    expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
+    expect(applyPanel()!.sessionId ?? null).toBeNull();
+    expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
+  });
+
+  it('on a tracker row, a typed apply link comes back with the re-attached draft, so prefill uses it', async () => {
+    await openApply();
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'https://careers.acme.example/apply/1');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-12' });
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://careers.acme.example/apply/1');
   });
 
   it('on /apply with no row, the re-attached session brings back the posting URL it was drafted for', async () => {
@@ -251,6 +288,21 @@ describe('Apply starts over and follows the sessions it started', () => {
     await openApply();
     await until(() => host.querySelector('a[href="/sessions/s-pdf-12"]'), 'the link to the running session');
     expect(generate()!.disabled).toBe(true);
+  });
+
+  it('Generate CV PDF clicked just before leaving does not pull the user onto the session page', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    await openApply();
+    await act(async () => (await until(generate, 'the Generate CV PDF button')).click());
+    await act(async () => void router.navigate({ to: '/elsewhere' }));
+    await until(() => host.textContent?.includes('Elsewhere page'), 'the other page');
+    await act(async () => release());
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(router.state.location.pathname).toBe('/elsewhere');
+    // The start is still remembered, so the row's Apply page links it.
+    expect(sessionStorage.getItem('cc.pdf.12')).toBe('s-pdf-12');
   });
 
   it('Generate CV PDF stays off while the tailored CV session waits for the user\'s reply', async () => {

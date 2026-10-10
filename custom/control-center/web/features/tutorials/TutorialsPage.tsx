@@ -45,6 +45,11 @@ function targetKind(el: EventTarget | null): KeyTarget {
   return 'body';
 }
 
+/** A focused button or link owns its keys (the theme menu, a chapter button, a link): the player must not eat them. */
+export function playerSkipsKey(target: KeyTarget): boolean {
+  return target === 'button' || target === 'link';
+}
+
 function EmptyState({ directory }: { directory: string }) {
   const example = `{
   "id": "my-tutorial",
@@ -255,7 +260,9 @@ function Player({ tutorial, part, startAt, autoplay, onStartApplied, progress, o
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const v = video.current;
-      const action = keyAction({ key: e.key, target: targetKind(e.target), ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey });
+      const target = targetKind(e.target);
+      if (playerSkipsKey(target)) return;
+      const action = keyAction({ key: e.key, target, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey });
       if (!v || !action) return;
       // Capture phase plus stopPropagation: a focused <video> would otherwise also act on the key natively and undo it.
       e.preventDefault();

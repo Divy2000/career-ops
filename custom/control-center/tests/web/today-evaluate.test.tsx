@@ -16,12 +16,15 @@ import { until } from '../helpers/until';
 let host: HTMLElement;
 let root: Root;
 let router: AnyRouter;
+let qc: QueryClient;
 let sessions: Array<{ id: string; mode: string; status: string; target: { type: string; value: string | null } }>;
 let posts: Array<{ mode: string; target: { type: string; value: string } }>;
 /** While set, POST /api/sessions waits for release before answering. */
 let held: Array<() => void> | null;
 /** While set, GET /api/sessions waits, as on a slow first load. */
 let slowList: Array<() => void> | null;
+/** While true, GET /api/sessions fails, so a running evaluation cannot be told apart. */
+let sessionsError: boolean;
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const row = (rank: number, company: string, url: string | null): ShortlistRow => ({ rank, score: 4, relevance: null, sponsor: 'strong', sponsorTier: 'strong', sponsorNote: null, company, role: `${company} engineer`, url, location: null, posted: null, why: null }) as ShortlistRow;
@@ -32,6 +35,7 @@ beforeEach(() => {
   posts = [];
   held = null;
   slowList = null;
+  sessionsError = false;
   shortlist = { kind: 'ok', path: 'data/shortlist.md', date: '2026-10-10', summary: null, etag: 's1', excluded: [], rows: [row(1, 'Acme', 'local:jds/acme.md'), row(2, 'Globex', 'https://jobs.example.com/globex/1')] };
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
   vi.stubGlobal(
@@ -46,6 +50,7 @@ beforeEach(() => {
         return json(202, meta);
       }
       if (url === '/api/sessions') {
+        if (sessionsError) return json(500, { error: 'sessions unavailable' });
         // The list as it was when asked, even if it answers after a start.
         const snapshot = [...sessions];
         if (slowList) await new Promise<void>((r) => slowList!.push(r));
@@ -70,7 +75,7 @@ async function today() {
   const index = createRoute({ getParentRoute: () => rootRoute, path: '/', component: TodayPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
   router = createRouter({ routeTree: rootRoute.addChildren([index, session]), history: createMemoryHistory({ initialEntries: ['/'] }) });
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(RouterProvider, { router }))));
   await until(() => rowOf('Globex'), 'the shortlist rows');
 }
@@ -153,9 +158,12 @@ describe('a posting whose evaluation is still active', () => {
     expect(posts).toHaveLength(1);
   });
 
-  it('an evaluation started before the sessions list first loads still shows as running on coming back', async () => {
-    slowList = [];
+  it('a list fetch in flight before a start does not take the new session away (R17-feat-c-L3-01)', async () => {
     await today();
+    // A background refetch is in flight with a stale snapshot when the start happens.
+    slowList = [];
+    qc.invalidateQueries({ queryKey: ['sessions'] });
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
     await click(evaluateIn('Globex')!);
     await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');
     await act(async () => router.history.back());
@@ -167,5 +175,26 @@ describe('a posting whose evaluation is still active', () => {
     await act(async () => waiting.forEach((r) => r()));
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(evaluateIn('Globex')).toBeUndefined();
+  });
+});
+
+describe('Evaluate waits for the sessions list (R17-feat-c-L3-01)', () => {
+  it('disables Evaluate while the sessions list is still loading, so a running evaluation cannot be started twice', async () => {
+    slowList = [];
+    await today();
+    expect(evaluateIn('Globex')!.disabled).toBe(true);
+    // Once the list answers (with no running evaluation), Evaluate is offered.
+    const waiting = slowList!;
+    slowList = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(evaluateIn('Globex')!.disabled).toBe(false);
+  });
+
+  it('disables Evaluate when the sessions list cannot be read', async () => {
+    sessionsError = true;
+    await today();
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(evaluateIn('Globex')!.disabled).toBe(true);
   });
 });

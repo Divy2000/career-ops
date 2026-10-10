@@ -25,10 +25,24 @@ function parseScalar(text: string, like: unknown): unknown {
   return text;
 }
 
-/** A table cell takes the type of its column's other values; with none to copy, true and false are switches, as in Add key. */
+// With no typed value to copy, only whole words read as a switch: 1/0 and y/n could be a number or an initial.
+const SWITCH_WORDS = new Set(['true', 'false', 'yes', 'no', 'on', 'off']);
+
+/** A table cell takes the type of its column's other values; with none to copy, a switch word is a switch, as in Add key. */
 function parseCell(text: string, like: unknown): unknown {
-  const flag = like === undefined && (text === 'true' || text === 'false');
-  return typeof like === 'boolean' || flag ? text === 'true' : parseScalar(text, like ?? '');
+  const flag = like === undefined && SWITCH_WORDS.has(text.trim().toLowerCase());
+  return typeof like === 'boolean' || flag ? parseBoolean(text) ?? false : parseScalar(text, like ?? '');
+}
+
+// YAML's own truthy and falsy spellings (js-yaml reads yes/no/on/off as booleans), so a user typing "yes", "True" or "1"
+// in an enabled column gets a boolean, never the silent false that `text === 'true'` would produce.
+const TRUE_WORDS = new Set(['true', 'yes', 'y', '1', 'on']);
+const FALSE_WORDS = new Set(['false', 'no', 'n', '0', 'off']);
+function parseBoolean(text: string): boolean | null {
+  const t = text.trim().toLowerCase();
+  if (TRUE_WORDS.has(t)) return true;
+  if (FALSE_WORDS.has(t)) return false;
+  return null;
 }
 
 export function ScalarInput({ path, value, onOp, rules, ariaLabel, parse }: { path: JsonPath; value: unknown; onOp: OpSink; rules?: FieldRules; ariaLabel?: string; parse?: (text: string) => unknown }) {

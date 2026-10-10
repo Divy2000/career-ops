@@ -94,6 +94,15 @@ describe('Network scan run stream', () => {
     expect(host.textContent).toContain('No postings matched these filters.');
   });
 
+  it('a scan stopped by a DNS outage says it is degraded, not "No postings matched" (R17-feat-a-L2-01)', async () => {
+    const stream = await runScan();
+    await act(async () => stream.emit('line', summaryLine({ companiesAvailable: 900, companiesScanned: 100, capHit: false, stoppedByOutage: true, datasetStatus: { greenhouse: 'ok', lever: 'ok' }, unreachableBoards: 0, offers: [] })));
+    await act(async () => stream.emit('run.done', { status: 'done' }));
+    await until(() => host.textContent?.includes('scan done'), 'the end of the scan');
+    expect(host.textContent).toContain('the scan stopped before finishing');
+    expect(host.textContent).not.toContain('No postings matched these filters.');
+  });
+
   it('leaving the tab while a scan runs and coming back follows the same run again (R13-feat-a-L1-06)', async () => {
     const first = await runScan();
     await act(async () => root.unmount());
@@ -102,5 +111,37 @@ describe('Network scan run stream', () => {
     const again = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && s !== first), 'the run stream after coming back');
     await act(async () => again.emit('line', summaryLine({ companiesAvailable: 1, companiesScanned: 1, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'ok' }, offers: [{ company: 'Back Co', title: 'SRE', url: 'https://boards.example.com/back/1', source: 'greenhouse' }] })));
     await until(() => host.textContent?.includes('Back Co'), 'the results');
+  });
+
+  it('a double click on Add all sends one add, so the second is not relabelled "already there" (R17-feat-a-L3-02)', async () => {
+    const stream = await runScan();
+    const offers = [
+      { company: 'One Co', title: 'SRE', url: 'https://boards.example.com/one/1', source: 'greenhouse' },
+      { company: 'Two Co', title: 'SRE', url: 'https://boards.example.com/two/2', source: 'lever' },
+    ];
+    await act(async () => stream.emit('line', summaryLine({ companiesAvailable: 2, companiesScanned: 2, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'ok' }, unreachableBoards: 0, offers })));
+    await until(() => host.textContent?.includes('One Co'), 'the results');
+
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let posts = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input) === '/api/pipeline/add' && init?.method === 'POST') {
+        posts += 1;
+        await gate;
+        return new Response(JSON.stringify({ added: offers.length, skipped: 0 }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return inner(input, init);
+    });
+
+    const addAll = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Add all'))!;
+    await act(async () => {
+      addAll().click();
+      addAll().click();
+    });
+    expect(posts).toBe(1);
+    release();
+    await until(() => host.textContent?.includes('Added 2'), 'the add result');
   });
 });

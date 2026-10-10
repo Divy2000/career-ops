@@ -11,7 +11,7 @@ import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type PanelProps = { mode: string; sessionId?: string | null; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void };
+type PanelProps = { mode: string; sessionId?: string | null; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void; onStarting?: () => void; onStartFailed?: () => void };
 let panels: PanelProps[];
 vi.mock('@web/components/SessionPanel', () => ({
   SessionPanel: (props: PanelProps) => {
@@ -150,6 +150,87 @@ describe('Process inbox', () => {
     await mount();
     await until(() => pipelinePanel(), 'the Process inbox panel');
     expect(pipelinePanel()).toMatchObject({ sessionId: 's-pipe' });
+  });
+});
+
+describe('Process inbox and the evaluations do not run over the same rows', () => {
+  const pipelineSession = (id: string, status: string): SessionMeta => ({ ...session(id, status, { type: 'none', value: null }), mode: 'pipeline' });
+
+  it('given a Process inbox session running, Evaluate visible is off and says why (R17-feat-b-L1-01)', async () => {
+    sessions = [pipelineSession('s-pipe', 'running')];
+    await mount();
+    await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the note');
+    expect(button('Evaluate visible')!.disabled).toBe(true);
+  });
+
+  it('given an evaluation running on a pending row, Process inbox offers no start form and says why (R17-feat-b-L1-01)', async () => {
+    sessions = [session('s-busy', 'running', { type: 'url', value: 'https://jobs.example.com/busy' })];
+    await mount();
+    await until(() => button('Evaluate visible (1)'), 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => host.textContent?.includes('1 pending row is being evaluated'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
+  });
+
+  it('given a Process inbox session another tab started, opening Process inbox shows that session instead of a start form (R17-feat-b-L1-02)', async () => {
+    sessions = [pipelineSession('s-pipe-other', 'running')];
+    await mount();
+    await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => pipelinePanel(), 'the Process inbox panel');
+    expect(pipelinePanel()).toMatchObject({ sessionId: 's-pipe-other' });
+    expect(panels.filter((p) => p.mode === 'pipeline').every((p) => p.sessionId === 's-pipe-other')).toBe(true);
+  });
+
+  it('given a sessions list that cannot be read, Process inbox offers no start form, since it cannot tell no run is live (R17-feat-b-L1-02)', async () => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (input === '/api/sessions' && !init?.method ? new Response('down', { status: 503 }) : inner(input as string, init)));
+    await mount();
+    await act(async () => (await until(() => button('Process inbox'), 'Process inbox')).click());
+    await until(() => host.textContent?.includes('Could not check for a running Process inbox'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
+  });
+});
+
+describe('Process inbox guard after review', () => {
+  it('given its run waiting for the user, Process inbox offers no New run, since the reply carries that run on (review)', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-wait');
+    sessions = [{ ...session('s-wait', 'awaiting_user', { type: 'none', value: null }), mode: 'pipeline' }];
+    await mount();
+    await until(() => pipelinePanel(), 'the re-attached panel');
+    await act(async () => pipelinePanel()!.onStatus!('awaiting_user', null));
+    expect(button('New run')).toBeUndefined();
+  });
+
+  it('given a Process inbox start in flight, Evaluate visible is off until the start fails (review)', async () => {
+    await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => pipelinePanel(), 'the Process inbox panel');
+    await act(async () => pipelinePanel()!.onStarting!());
+    expect(button('Evaluate visible (2)')!.disabled).toBe(true);
+    await act(async () => pipelinePanel()!.onStartFailed!());
+    expect(button('Evaluate visible (2)')!.disabled).toBe(false);
+  });
+
+  it('given a sessions list whose refresh failed, Process inbox offers no start form on the stale list (review)', async () => {
+    let down = false;
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (down && input === '/api/sessions' && !init?.method ? new Response('down', { status: 503 }) : inner(input as string, init)));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { PipelinePage } = await import('@web/features/pipeline/PipelinePage');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    root = createRoot(host);
+    const rootRoute = createRootRoute();
+    const pipeline = createRoute({ getParentRoute: () => rootRoute, path: '/pipeline', component: PipelinePage, validateSearch: () => ({ tab: 'inbox' as const }) });
+    const router = createRouter({ routeTree: rootRoute.addChildren([pipeline]), history: createMemoryHistory({ initialEntries: ['/pipeline'] }) });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(RouterProvider, { router })))));
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'the sessions list');
+    down = true;
+    await act(async () => qc.refetchQueries({ queryKey: ['sessions'] }));
+    await act(async () => button('Process inbox')!.click());
+    await until(() => host.textContent?.includes('Could not check for a running Process inbox'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
   });
 });
 

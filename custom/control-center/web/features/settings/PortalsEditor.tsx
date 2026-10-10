@@ -45,6 +45,9 @@ const filled = (v: unknown) => typeof v === 'string' && v.trim() !== '';
 export function trackedCompanyProblem(row: Record<string, unknown>): string | null {
   if (row.enabled === false) return null;
   if (filled(row.careers_url) || filled(row.api) || filled(row.provider)) return null;
+  // A personio slug (personio.mjs PERSONIO_SLUG_RE) pins that tenant without a careers_url. A getro_collection id does
+  // not: getro.mjs still needs careers_url for the referer its search API requires.
+  if (typeof row.personio === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/i.test(row.personio.trim())) return null;
   if (isPlainObject(row.parser) && filled(row.parser.command)) return null;
   if (row.scan_method === 'websearch' && (filled(row.scan_query) || filled(row.search_query))) return null;
   const name = filled(row.name) ? String(row.name) : 'A company';

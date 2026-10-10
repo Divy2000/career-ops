@@ -23,7 +23,8 @@ function JobCard({ job }: { job: ScheduleState }) {
   const actions = useActions();
   const { run, message } = useRunAction();
   // The fields show the plist's time until the user types: a time saved elsewhere (another tab, install.sh) shows up.
-  const onDisk = { hour: String(job.hour ?? (job.kind === 'daily' ? 8 : 3)), minute: String(job.minute ?? 0), weekday: String(job.weekday ?? 0) };
+  // launchd's StartCalendarInterval reads Weekday 7 as Sunday too, but the server accepts 0-6 only, so 7 is shown and sent as 0.
+  const onDisk = { hour: String(job.hour ?? (job.kind === 'daily' ? 8 : 3)), minute: String(job.minute ?? 0), weekday: String(job.weekday === 7 ? 0 : job.weekday ?? 0) };
   const [edits, setEdits] = useState<{ hour?: string; minute?: string; weekday?: string }>({});
   const hour = edits.hour ?? onDisk.hour;
   const minute = edits.minute ?? onDisk.minute;

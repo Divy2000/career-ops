@@ -7,6 +7,7 @@ import { QuickEvaluate } from './QuickEvaluate';
 import { localDate } from '@shared/local-date';
 import type { ShortlistRow, TrackerRow } from '@shared/api';
 import { postingHref, useActiveEvaluation, useStartEvaluation } from './evaluate';
+import { useSessions } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
 import { DiscardReasonPicker, StatusMessage, useSetStatus } from '../tracker/StatusControl';
 
@@ -64,6 +65,10 @@ function DigestChip() {
 function EvaluateButton({ row }: { row: ShortlistRow }) {
   const navigate = useNavigate();
   const activeFor = useActiveEvaluation();
+  const sessions = useSessions();
+  // Until the sessions list loads (and when it cannot), a running evaluation of this posting cannot be told apart from
+  // one that has none, so Evaluate stays off rather than starting a second paid oferta (Pipeline guards this too).
+  const checking = sessions.isPending || sessions.isError;
   const startEvaluation = useStartEvaluation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +95,7 @@ function EvaluateButton({ row }: { row: ShortlistRow }) {
     );
   return (
     <div className="stack-tight">
-      <button type="button" disabled={busy || !url} title={url ? 'Starts an evaluation session for this posting (uses tokens)' : 'This row has no posting link to evaluate'} onClick={() => void go()}>
+      <button type="button" disabled={busy || checking || !url} title={checking ? 'Waiting for the sessions list to check for a running evaluation' : url ? 'Starts an evaluation session for this posting (uses tokens)' : 'This row has no posting link to evaluate'} onClick={() => void go()}>
         Evaluate
       </button>
       {error && (

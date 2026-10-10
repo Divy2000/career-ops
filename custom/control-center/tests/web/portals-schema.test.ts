@@ -84,7 +84,13 @@ process.stdout.write(JSON.stringify(['Backend Engineer', 'Backend Intern', 'Sale
       { name: 'Acme', provider: 'remoteok' },
       { name: 'Acme', parser: { command: 'node', args: ['parsers/acme.mjs'] } },
       { name: 'Acme', scan_method: 'websearch', scan_query: 'site:acme.com careers backend' },
+      { name: 'Acme', personio: 'acme' },
+      { name: 'Acme', careers_url: 'https://jobs.b2venture.vc/jobs', getro_collection: 4283 },
     ]) expect(trackedCompanyProblem(ok), JSON.stringify(ok)).toBeNull();
+    // getro.mjs fetch() needs careers_url for its referer even with a collection id, and personio.mjs ignores a value
+    // that is not a slug, so neither reaches a board on its own.
+    expect(trackedCompanyProblem({ name: 'Acme', getro_collection: 4283 })).toMatch(/^Acme: needs a careers_url/);
+    expect(trackedCompanyProblem({ name: 'Acme', personio: 'https://bad' })).toMatch(/^Acme: needs a careers_url/);
     expect(portalsProblems({ tracked_companies: [{ name: 'Acme' }, { name: 'Globex', careers_url: 'https://job-boards.greenhouse.io/globex' }, { name: 'Initech', enabled: false }] })).toEqual([trackedCompanyProblem({ name: 'Acme' })]);
   });
 
