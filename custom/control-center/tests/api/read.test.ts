@@ -439,6 +439,10 @@ describe('events', () => {
     expect(domainFor('output/acme/cover.html')).toBe('documents');
     expect(domainFor('data/pdf-index.tsv')).toBe('documents');
   });
+  it('maps voice-dna.md to the config domain and data/contacts.tsv to the followups domain (R17-weblib-L2-02)', () => {
+    expect(domainFor('voice-dna.md')).toBe('config');
+    expect(domainFor('data/contacts.tsv')).toBe('followups');
+  });
   it('the watcher reports a PDF a re-render writes under output/ (SW4-web-a-07)', async () => {
     const root = tempDir('cc-watch-');
     fs.mkdirSync(path.join(root, 'output'), { recursive: true });
@@ -474,6 +478,30 @@ describe('events', () => {
       await watcher.close();
     }
   });
+  it('the watcher reports a voice-dna.md edit and a data/contacts.tsv edit (R17-weblib-L2-02)', async () => {
+    const root = tempDir('cc-watch-');
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+    const published: Array<{ type: string; payload: { domain: string; paths: string[] } }> = [];
+    const watcher = startWatcher(root, { publish: (type: string, payload: { domain: string; paths: string[] }) => void published.push({ type, payload }) } as unknown as EventBus, 20);
+    try {
+      await new Promise<void>((resolve) => watcher.on('ready', () => resolve()));
+      const deadline = Date.now() + 10_000;
+      for (let i = 0; published.length < 2 && Date.now() < deadline; i++) {
+        if (i % 10 === 0) {
+          fs.writeFileSync(path.join(root, 'voice-dna.md'), `# Voice ${i}\n`);
+          fs.writeFileSync(path.join(root, 'data', 'contacts.tsv'), `# name\tcompany\nPat${i}\tAcme\n`);
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(published.map((p) => p.payload)).toEqual(expect.arrayContaining([
+        { domain: 'config', paths: ['voice-dna.md'] },
+        { domain: 'followups', paths: [path.join('data', 'contacts.tsv')] },
+      ]));
+    } finally {
+      await watcher.close();
+    }
+  });
+
   it('the watcher reports a tracker edit for a data root inside a folder named control-center, and still ignores data/control-center/ (SW2-server-05)', async () => {
     const root = path.join(tempDir('cc-watch-'), 'control-center', 'career-data');
     fs.mkdirSync(path.join(root, 'data', 'control-center', 'runs'), { recursive: true });
