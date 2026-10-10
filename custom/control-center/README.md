@@ -131,6 +131,26 @@ npm --prefix custom/control-center run probe:claude   # two real haiku calls; re
 - `tests/unit/no-native-dialogs.test.ts` fails if `window.confirm`, `alert` or `prompt` appears under `web/`; confirms use the Radix dialog, feedback uses sonner toasts.
 - `server/core/contract.json` records the core CLI flags, pure exports and the Claude CLI probe results; `tests/unit/contract.test.ts` re-verifies them against the installed checkout and CLI on every run.
 
+### Mutation testing
+
+[Stryker](https://stryker-mutator.io/) changes the code one small edit (a mutant) at a time and reruns the tests; a mutant the tests still pass on ("survived") points at a test that cannot fail. Runs are incremental: results are kept in `reports/` (gitignored), so a later run only retests mutants in changed code or covered by changed tests (`--force` retests everything). Each run uses half the CPU cores and takes minutes to hours, so run it under `nice` and one subtree at a time.
+
+```bash
+cd custom/control-center
+nice -n 10 npm run mutate                                     # server/, supervisor/, shared/ (*.ts)
+nice -n 10 npm run mutate -- --mutate 'server/claude/**/*.ts' # one subtree
+cd ../..
+nice -n 10 node custom/test-support/mutate.mjs immigration    # a custom/<package> node:test suite
+node custom/test-support/survivors.mjs custom/control-center/reports/mutation/mutation.json \
+  custom/test-support/reports/immigration/mutation.json       # file:line | mutator | original -> mutated
+```
+
+- Stryker mutates the files in place (the code imports `../../../immigration` and the repo root, which a copied sandbox lacks) and restores them when it ends. Do not edit files under the mutated paths during a run, and run one mutation run at a time: the server imports `custom/immigration`, and two runs would share mutant ids. Both commands first run `custom/test-support/stryker-leftovers.mjs`, which refuses to start while files still carry instrumentation from a run that is going or was killed; restore those with `git checkout -- <file>`.
+- During a run, `claude` on PATH is a stub that always fails (`custom/test-support/no-claude.mjs`): a mutant that drops a test's fake Claude path would otherwise run the real CLI.
+- A test that reads a source file as text breaks when Stryker instruments that line. Keep the line out with a `// Stryker disable next-line all: <reason>` comment (see `custom/immigration/lib.mjs`).
+- The Control Center uses the vitest runner with per-test coverage, so each mutant only reruns the tests that reach it. A mutant reached only through a spawned child process (`tsx`, the fake Claude) shows as "no coverage", not survived.
+- Stryker has no node:test runner, so `mutate.mjs` uses its command runner: `node --test` on all of the package's specs per mutant, which also activates the mutant in processes the specs spawn. Reports land in `custom/test-support/reports/<package>/`.
+
 ## 9. How the upstream weekly merge is protected
 
 Only `server/core/adapter.ts` knows core script names and export names, and it is driven by `contract.json`. When upstream renames a flag or an export, the contract test fails loudly and the adapter is the one place to update. Everything under `custom/control-center` is self-contained; `config/local-paths.txt` lists `custom/` so upstream tooling leaves it alone.

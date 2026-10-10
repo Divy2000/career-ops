@@ -5,7 +5,7 @@ import globals from 'globals';
 
 export default tseslint.config(
   {
-    ignores: ['node_modules/**', 'dist/**', 'test-results/**', 'playwright-report/**', 'tests/fixtures/**', '.tmp/**'],
+    ignores: ['node_modules/**', 'dist/**', 'test-results/**', 'playwright-report/**', 'tests/fixtures/**', '.tmp/**', 'reports/**', '.stryker-tmp/**', 'stryker-setup-*.js'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

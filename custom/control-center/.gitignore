@@ -5,3 +5,6 @@ playwright-report/
 .tmp/
 # Upstream .gitignore ignores every package-lock.json; this package needs its lock for `npm ci`.
 !package-lock.json
+reports/
+.stryker-tmp/
+stryker-setup-*.js

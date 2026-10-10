@@ -15,6 +15,9 @@ interface Launched {
   sessionId: string | null;
 }
 
+// React keys for new launches: a clock reading repeats when two prompts open within one millisecond.
+let launchSeq = 0;
+
 // Starts sent by a launcher's panels are counted (per key) until each reports its session or its failure, so a launcher
 // mounted meanwhile (the page was left and reopened before POST /api/sessions answered) waits instead of offering a
 // second paid start. Kept in memory: a reload drops the requests, and the count with them. Every launcher mounted
@@ -100,7 +103,7 @@ export function ModeLauncher({ modes, target, heading, rememberAs }: { modes: Mo
               ))}
             </select>
           </label>
-          <button type="button" disabled={!chosen || waiting} onClick={() => chosen && setLaunched((prev) => [{ key: `n-${Date.now()}`, mode: chosen, sessionId: null }, ...prev])}>
+          <button type="button" disabled={!chosen || waiting} onClick={() => chosen && setLaunched((prev) => [{ key: `n-${++launchSeq}`, mode: chosen, sessionId: null }, ...prev])}>
             Open prompt
           </button>
         </div>
