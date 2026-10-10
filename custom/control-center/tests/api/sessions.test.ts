@@ -1835,6 +1835,26 @@ describe('r18 manager fixes', () => {
     }
   });
 
+  it('cancel that finds the run already exited when it stops it leaves the completed turn for finalize (R18-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      const run = app.runner.store.create({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT }, params: { sessionId: meta.id, turn: 1 } });
+      app.runner.store.write({ ...run, status: 'running', endedAt: null });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      // Another process records the run's clean exit between cancel's read of the run and its stop request.
+      vi.spyOn(app.runner, 'cancel').mockImplementation((id: string) => {
+        const ended = { ...app.runner.store.read(id)!, status: 'done' as const, exitCode: 0, endedAt: new Date().toISOString() };
+        app.runner.store.write(ended);
+        return ended;
+      });
+      expect(app.sessions.cancel(meta.id).status).toBe('running');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('runEnded waits for a recorded exit, not a non-running status (R18-claude-L1-03)', async () => {
     const app = await freshApp();
     const runEnded = (app.sessions as unknown as { runEnded: (id: string) => Promise<boolean> }).runEnded.bind(app.sessions);

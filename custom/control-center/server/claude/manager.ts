@@ -320,7 +320,10 @@ export class SessionManager {
       // the claim go mid-finalize. The run's exit (its endedAt) proves the turn is over, so the cancel is a no-op.
       const run = this.runner.store.read(turn.runId);
       if (run && run.endedAt !== null) return meta;
-      this.runner.cancel(turn.runId);
+      // Its exit can land (from another process) between that read and the stop: a run cancel finds done or failed ended
+      // on its own, and the same no-op applies.
+      const stopped = this.runner.cancel(turn.runId);
+      if (stopped && (stopped.status === 'done' || stopped.status === 'failed')) return this.store.read(id)!;
       this.store.setStatus(id, 'cancelled');
       this.emit(id, { type: 'status', status: 'cancelled', turn: turn.n, reason: 'cancel requested' });
       this.bus.publish('session.status', { sessionId: id, status: 'cancelled', mode: meta.mode });
