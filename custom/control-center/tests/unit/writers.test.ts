@@ -114,6 +114,15 @@ describe('follow-ups edits', () => {
     expect(cleared.text).not.toMatch(/^- next #1 /m);
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.clear', appNum: 4 })).toEqual({ ok: false, error: 'not-found' });
   });
+  it('setting a pin revives a retired application by dropping its cleared #N line, which would otherwise outrank the pin (R12-srv-dom-a-L2-03)', () => {
+    const text = `${FOLLOWUPS}- cleared #1 2026-10-05 - no contact on file\n- cleared #6 2026-10-05\n`;
+    const set = applyFollowupEdit(text, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-10-06' });
+    expect(set.ok).toBe(true);
+    if (!set.ok) return;
+    expect(set.text).not.toMatch(/^- cleared #1 /m);
+    expect(set.text).toContain('- cleared #6 2026-10-05');
+    expect(set.text).toContain('- next #1 2026-10-20 (set 2026-10-06)');
+  });
   it('rejects dates that are not YYYY-MM-DD', () => {
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: 'tomorrow', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });
   });

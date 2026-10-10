@@ -317,6 +317,26 @@ process.stdout.write(JSON.stringify(${JSON.stringify(cases)}.map((last) => m.res
   });
 });
 
+describe('follow-up pins under a retirement (followup-cadence.mjs isRetired, R12-srv-dom-a-L2-03, R12-srv-dom-a-L3-02)', () => {
+  it('the Timeline drops a pin the cadence ignores because a cleared #N retirement outranks it, and keeps it once a later follow-up revives the application', () => {
+    const D = String.fromCharCode(0x2014);
+    const base = ['# Follow-ups', '', '- next #42 2026-10-15 (set 2026-10-01)', `- cleared #42 2026-10-05 ${D} no contact on file`, '- next #7 2026-10-20 (set 2026-10-05)', '- cleared #7 2026-02-31'];
+    const cases: Array<string | null> = [null, '2026-10-03', '2026-10-05', '2026-10-06'];
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'followup-cadence.mjs')).href)});
+const text = ${JSON.stringify(base.join('\n'))};
+const pins = m.parseNextOverrides(text), cleared = m.parseClearedDirectives(text);
+process.stdout.write(JSON.stringify([42, 7].map((n) => ${JSON.stringify(cases)}.map((last) => (m.isRetired(cleared.get(n), last) ? null : m.resolveNextOverride(pins.get(n), last))))));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: DEFAULT_CODE_ROOT, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const cadence = JSON.parse(r.stdout) as Array<Array<string | null>>;
+    const pins = parseNextOverrides(base.join('\n'));
+    const ours = [42, 7].map((n) => cases.map((last) => activePin(pins.get(n) ?? null, last === null ? [] : [{ date: last }])?.date ?? null));
+    expect(ours).toEqual(cadence);
+    expect(cadence[0]).toEqual([null, null, null, null]);
+    expect(cadence[1]).toEqual(['2026-10-20', '2026-10-20', '2026-10-20', null]);
+  });
+});
+
 describe('follow-ups.md log lines (followup-cadence.mjs parseFollowups)', () => {
   it('the app reads the same follow-ups as the cadence, table rows and legacy bullets alike', () => {
     const D = String.fromCharCode(0x2014);

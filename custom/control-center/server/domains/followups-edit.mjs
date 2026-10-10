@@ -14,6 +14,11 @@ function pinRe(appNum) {
   return new RegExp(`^-\\s+next\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}`, 'i');
 }
 
+// followup-cadence.mjs: a `- cleared #N` retirement outranks any pin, so pinning a retired application revives it.
+function clearedRe(appNum) {
+  return new RegExp(`^-\\s+cleared\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}`, 'i');
+}
+
 /**
  * @param {string} text current file contents ('' when missing)
  * @param {object} edit one of log.add, log.delete, pin.set, pin.clear
@@ -56,7 +61,8 @@ export function applyFollowupEdit(text, edit) {
     case 'pin.set': {
       if (!DATE_RE.test(String(edit.date)) || !DATE_RE.test(String(edit.setOn))) return { ok: false, error: 'invalid-date' };
       const re = pinRe(edit.appNum);
-      const kept = lines.filter((l) => !re.test(l));
+      const cleared = clearedRe(edit.appNum);
+      const kept = lines.filter((l) => !re.test(l) && !cleared.test(l));
       kept.push(`- next #${edit.appNum} ${edit.date} (set ${edit.setOn})`);
       return { ok: true, text: join(kept) };
     }

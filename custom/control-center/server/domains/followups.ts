@@ -41,14 +41,23 @@ export interface NextOverride {
   appNum: number;
   date: string;
   setOn: string;
+  /** The day of the application's last `- cleared #N` retirement, when the file has one. */
+  clearedOn?: string;
 }
 
-/** The pin the cadence still honors (followup-cadence.mjs resolveNextOverride): a follow-up logged after the day it was set drops it. */
+/**
+ * The pin the cadence still honors (followup-cadence.mjs resolveNextOverride and isRetired): a follow-up logged after
+ * the day it was set drops it, and a retirement outranks it until a follow-up logged after the retirement day.
+ */
 export function activePin(pin: NextOverride | null, followups: Array<{ date: string }>): NextOverride | null {
   if (!pin) return null;
   const last = followups.reduce<string | null>((max, f) => (max === null || f.date > max ? f.date : max), null);
+  if (pin.clearedOn !== undefined && !(last !== null && last > pin.clearedOn)) return null;
   return last !== null && last > pin.setOn ? null : pin;
 }
+
+// followup-cadence.mjs CLEARED_RE: `- cleared #N YYYY-MM-DD`, with the same optional trailing reason.
+const CLEARED_RE = new RegExp(`^-\\s+cleared\\s+#(\\d+)\\s+(\\d{4}-\\d{2}-\\d{2})(?:\\s*[${String.fromCharCode(0x2014)}\u2013-].*)?\\s*$`, 'i');
 
 // followup-cadence.mjs OVERRIDE_RE: an optional trailing `<dash> reason` (em dash, en dash or hyphen) and nothing else.
 const OVERRIDE_RE = new RegExp(`^-\\s+next\\s+#(\\d+)\\s+(\\d{4}-\\d{2}-\\d{2})(?:\\s+\\(set\\s+(\\d{4}-\\d{2}-\\d{2})\\))?(?:\\s*[${String.fromCharCode(0x2014)}\u2013-].*)?\\s*$`, 'i');
@@ -59,14 +68,27 @@ function isCalendarDate(s: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-/** Pin directives (`- next #42 2026-07-10 (set 2026-07-02)`); the last one per application wins. */
+/**
+ * Pin directives (`- next #42 2026-07-10 (set 2026-07-02)`); the last one per application wins. A pinned application's
+ * last retirement directive (followup-cadence.mjs parseClearedDirectives) rides along as clearedOn.
+ */
 export function parseNextOverrides(text: string): Map<number, NextOverride> {
   const out = new Map<number, NextOverride>();
+  const cleared = new Map<number, string>();
   for (const line of text.split('\n')) {
+    const c = line.match(CLEARED_RE);
+    if (c) {
+      if (isCalendarDate(c[2]!)) cleared.set(parseInt(c[1]!, 10), c[2]!);
+      continue;
+    }
     const m = line.match(OVERRIDE_RE);
     if (!m || !isCalendarDate(m[2]!)) continue;
     const appNum = parseInt(m[1]!, 10);
     out.set(appNum, { appNum, date: m[2]!, setOn: m[3] || m[2]! });
+  }
+  for (const [appNum, pin] of out) {
+    const clearedOn = cleared.get(appNum);
+    if (clearedOn !== undefined) pin.clearedOn = clearedOn;
   }
   return out;
 }
