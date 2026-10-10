@@ -64,25 +64,52 @@ const put = (file, data, mode) => {
   return file;
 };
 
+// The personalization templates the fake checkout ships, as upstream does, keyed by the file each one seeds.
+const TEMPLATES = {
+  'modes/_profile.md': 'modes/_profile.template.md',
+  'modes/_custom.md': 'modes/_custom.template.md',
+  'modes/_brief.md': 'modes/_brief.template.md',
+  'voice-dna.md': 'voice-dna.template.md',
+};
+
 function buildFakeCheckout(dir) {
   put(path.join(dir, 'package.json'), '{"name":"fake-career-ops"}\n');
   fs.copyFileSync(path.join(REPO_ROOT, 'path-resolver.mjs'), path.join(dir, 'path-resolver.mjs'));
+  for (const [rel, template] of Object.entries(TEMPLATES)) put(path.join(dir, template), `TEMPLATE ${rel}\nName: {Your Name}\n`);
   put(path.join(dir, 'doctor.mjs'), `import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.STUB_LOG, 'doctor ' + args.join(' ') + '\\n');
 const root = getCareerOpsRoot();
+const here = path.dirname(fileURLToPath(import.meta.url));
+const TEMPLATES = ${JSON.stringify(TEMPLATES)};
+// Like the real doctor: a template in the data root wins over the checkout's.
+const templateOf = (rel) => [path.join(root, TEMPLATES[rel]), path.join(here, TEMPLATES[rel])].find((f) => fs.existsSync(f));
 // Like the real doctor: copies every personalization template that is absent, and never overwrites one.
 if (args.includes('--init-templates')) {
-  for (const rel of ['modes/_profile.md', 'modes/_custom.md', 'modes/_brief.md', 'voice-dna.md']) {
+  for (const rel of Object.keys(TEMPLATES)) {
     const f = path.join(root, rel);
-    if (!fs.existsSync(f)) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'TEMPLATE ' + rel + '\\n'); }
+    const t = templateOf(rel);
+    if (!fs.existsSync(f) && t) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.copyFileSync(t, f); }
   }
 }
 if (args.includes('--json')) {
   const missing = ['cv.md', 'config/profile.yml', 'modes/_profile.md', 'portals.yml'].filter((p) => !fs.existsSync(path.join(root, p)));
-  const unpersonalized = (process.env.FAKE_DOCTOR_UNPERSONALIZED || '').split(',').filter(Boolean).map((p) => ({ path: p, reason: 'x' }));
+  // Like the real doctor: _profile.md and _brief.md still identical to their template, or still carrying one of the
+  // template's own {placeholders}, are not personalized.
+  const placeholders = (text) => new Set(text.match(/\\{[^{}\\n]{2,60}\\}/g) || []);
+  const stale = ['modes/_profile.md', 'modes/_brief.md'].filter((rel) => {
+    const f = path.join(root, rel);
+    const t = templateOf(rel);
+    if (!fs.existsSync(f) || !t) return false;
+    const text = fs.readFileSync(f, 'utf8');
+    const tpl = fs.readFileSync(t, 'utf8');
+    return text === tpl || [...placeholders(tpl)].some((p) => text.includes(p));
+  });
+  const forced = (process.env.FAKE_DOCTOR_UNPERSONALIZED || '').split(',').filter(Boolean);
+  const unpersonalized = [...new Set([...stale, ...forced])].map((p) => ({ path: p, reason: 'x' }));
   console.log(JSON.stringify({ onboardingNeeded: missing.length > 0, missing, unpersonalized }));
 } else {
   console.log('doctor stub ok');
@@ -179,7 +206,10 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
     },
     /** Runs the script under a real pseudo-terminal, sending each answer once its prompt has appeared. */
     runInPty(args, { steps, env = {}, script = INSTALL_SH, timeout = 120_000 } = {}) {
-      const childEnv = { ...baseEnv, ...env };
+      // pty_run.py's own deadline ends first, so a hang reports "timed out" with the transcript; the spawnSync
+      // timeout, which leaves no output at all, is only the backstop.
+      const ptyTimeout = (timeout - Math.min(10_000, timeout / 4)) / 1000;
+      const childEnv = { ...baseEnv, PTY_RUN_TIMEOUT: String(ptyTimeout), ...env };
       delete childEnv.CAREER_OPS_INSTALL_TTY;
       const r = spawnSync('python3', [path.join(HERE, 'pty_run.py'), JSON.stringify(steps), '--', 'bash', script, ...args], {
         env: childEnv, cwd, encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'],

@@ -32,6 +32,21 @@ if [ -z "$DATA" ] || [ ! -d "$DATA" ]; then
   exit 1
 fi
 STATE_DIR="$DATA/data/upstream-sync"
+# One run at a time: a second run (a manual one during the scheduled one) would remove the first one's worktree
+# mid-suite and share its day files. The lock is keyed on the worktree, which every run uses whatever data root it
+# resolves. Re-exec under a kernel lock, released when the process exits, so a crash never leaves it stale; -k keeps
+# the file so every run locks the same inode, and lockf exits 75 while another run holds it. Taken before the
+# CAREER_OPS_* variables are dropped below, so the re-exec'd run resolves the same data root.
+if [ -z "${CC_SYNC_LOCKED:-}" ]; then
+  CC_SYNC_LOCKED=1 /usr/bin/lockf -k -t 0 "$WT.lockf" /bin/bash "$0" "$@"
+  rc=$?
+  if [ "$rc" = 75 ]; then
+    msg="another upstream sync is running (it holds $WT.lockf); not started"
+    echo "upstream-sync: $msg" >&2
+    mkdir -p "$STATE_DIR" && echo "=== $(date '+%Y-%m-%d %H:%M:%S') $msg" >> "$STATE_DIR/$(date +%Y-%m-%d).log"
+  fi
+  exit "$rc"
+fi
 # The log and reports go to STATE_DIR, resolved above. Everything after this runs code from the sync worktree
 # (installs, both upstream suite runs, the custom and control-center checks, Claude), which must never see the
 # user's data root: test-all's live archive test, for one, writes into getCareerOpsRoot()/jds.
@@ -113,7 +128,10 @@ fi
 MERGE_SNAPSHOT="$(merge_snapshot)" || fail "cannot record the merge result before Claude runs"
 
 echo "--- headless Claude ($MODEL)"
-PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$BASELINE_FAILURES" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$STATE_DIR/$TODAY.report.md" node -e '
+REPORT="$STATE_DIR/$TODAY.report.md"
+# A report from an earlier run of the same day describes another resolution: only this run's Claude may fill the PR body.
+rm -f "$REPORT" || fail "cannot remove an earlier report at $REPORT"
+PROMPT="$(CONFLICTS="$CONFLICTS" BASELINE="$BASELINE_FAILURES" TODAY="$TODAY" BEHIND="$BEHIND" REPORT="$REPORT" node -e '
 const fs = require("fs");
 let t = fs.readFileSync(process.argv[1], "utf8");
 // A replacer function: a string replacement would expand $& and the like inside test output.
@@ -181,7 +199,7 @@ BODY="$STATE_DIR/$TODAY.pr-body.md"
   fi
   echo
   echo "## Claude report"
-  cat "$STATE_DIR/$TODAY.report.md" 2>/dev/null || echo "(no report written)"
+  cat "$REPORT" 2>/dev/null || echo "(no report written)"
 } > "$BODY"
 PR_URL="$(gh pr list --repo "$FORK" --head "$BRANCH" --state open --json url -q '.[0].url')"
 if [ -z "$PR_URL" ]; then
@@ -192,12 +210,22 @@ else
 fi
 echo "PR: $PR_URL"
 
+# Every gate compared with BASE_REV, so the fork's main may only become the tested sync commit while it is still
+# BASE_REV. A main that moved since (another PR merged meanwhile) holds the PR. The merge itself is a compare-and-swap
+# push of that commit to main, which the server refuses when main moved in the moment after the check; GitHub then
+# marks the PR merged. (gh pr merge would merge onto whatever main is by then, a combination nothing tested.)
+MAIN_MOVED="$(main_moved "$BASE_REV")"
 BLOCKERS="$(merge_blockers)"
 if [ -z "$BLOCKERS" ]; then
-  gh pr merge "$PR_URL" --merge --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
+  MERGE_OID="$(git rev-parse HEAD)" || fail "cannot read the sync commit"
+  git push -q --force-with-lease="main:$BASE_REV" origin "$MERGE_OID:refs/heads/main" ||
+    fail "the fork main moved, or refused the push, before the sync commit could land on it; $PR_URL is left open"
   echo "merged $PR_URL"
+  git push -q origin --delete "$BRANCH" >/dev/null 2>&1 || echo "could not delete $BRANCH on origin; delete it by hand"
   cd "$LIVE" || fail "live checkout missing"
-  LIVE_UPDATE="$(update_live_checkout)"
+  # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
+  # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
+  LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
   case $? in
     0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
     3) echo "$LIVE_UPDATE"; notify "Merged upstream, but in the live checkout ${LIVE_UPDATE#*, but }" ;;

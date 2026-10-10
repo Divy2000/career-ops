@@ -448,11 +448,27 @@ sync_verdict() {
   esac
 }
 
+# main_moved <base-rev>: why the sync PR must not merge because the fork's main
+# is no longer <base-rev>, the commit every gate compared with, or nothing.
+# Fetches origin's main first: GitHub would merge the branch into whatever main
+# is now, a combination nothing tested. A failed fetch holds the PR too.
+main_moved() {
+  local now
+  if ! fetch_main origin; then
+    printf 'cannot confirm origin/main is still the commit the sync tested (the fetch failed)'
+    return 0
+  fi
+  now="$(git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}')"
+  [ -n "$1" ] && [ "$now" = "$1" ] && return 0
+  printf 'origin/main moved during the sync (tested %s, now %s); re-run the sync' "${1:0:12}" "${now:0:12}"
+}
+
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons
 # joined by "; ", or nothing when it may auto-merge. Reads CUSTOM_OK, CC_OK,
 # AUTO_MERGE and KEPT_README (an unset flag blocks), NEW_FAILURES and
-# UNEXPECTED_UPSTREAM and PROTECTED_EDITS (one entry per line), and CLAUDE_HOLD (sync_verdict's
-# reason; unset blocks, since the verdict was never read).
+# UNEXPECTED_UPSTREAM and PROTECTED_EDITS (one entry per line), CLAUDE_HOLD (sync_verdict's
+# reason; unset blocks, since the verdict was never read) and MAIN_MOVED (main_moved's
+# reason; unset blocks, since origin/main was never checked).
 merge_blockers() {
   local why=() out="" w
   [ "${CUSTOM_OK:-0}" = 1 ] || why+=("custom tests FAIL")
@@ -463,28 +479,52 @@ merge_blockers() {
   [ -z "${UNEXPECTED_UPSTREAM:-}" ] || why+=("upstream files edited outside conflict resolution: ${UNEXPECTED_UPSTREAM//$'\n'/, }")
   [ -z "${PROTECTED_EDITS:-}" ] || why+=("fork tests, gates or guard files edited by the sync (review by hand): ${PROTECTED_EDITS//$'\n'/, }")
   if [ -z "${CLAUDE_HOLD+set}" ]; then why+=("the sync Claude verdict was never read"); elif [ -n "$CLAUDE_HOLD" ]; then why+=("$CLAUDE_HOLD"); fi
+  if [ -z "${MAIN_MOVED+set}" ]; then why+=("whether origin/main moved during the sync was never checked"); elif [ -n "$MAIN_MOVED" ]; then why+=("$MAIN_MOVED"); fi
   for w in ${why[@]+"${why[@]}"}; do out="${out:+$out; }$w"; done
   printf '%s' "$out"
 }
 
-# update_live_checkout: after the sync PR merged, bring the live checkout (the
-# current directory) up to the new origin/main: fetch, then fast-forward only
-# when it is on main with no tracked local changes. Then reinstall what the
-# merge changed, as a user's own install would: the root dependencies
-# (lifecycle scripts included) when deps_fingerprint changed, and the Control
-# Center's (npm ci) when its tracked lockfile changed, since bin/cc only checks
-# that its node_modules exists. Prints one line saying what happened. Returns 0
-# when updated, 3 when updated but an install failed, 10 when left alone (not
-# on main, or local changes), 1 when the fetch, the fingerprint or the
-# fast-forward failed.
+# update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
+# merged, bring the live checkout (the current directory) up to <commit>, the
+# tested sync commit the fork's main was moved to: this never moves it past
+# <commit> to a later origin/main, which this run did not test (a checkout
+# someone already pulled further is theirs, and is left alone with exit 10).
+# Fetch, then fast-forward only when it is on main with no tracked local
+# changes. Then reinstall what the merge changed, as a user's own install would:
+# the root dependencies (lifecycle scripts included) when deps_fingerprint
+# changed, and the Control Center's (npm ci) when its tracked lockfile changed,
+# since bin/cc only checks that its node_modules exists. All of it runs holding
+# <daily-lock>, the lock run-daily.sh holds for its whole run, so scripts and
+# node_modules never change under a running daily job; it waits up to
+# <wait-seconds> for that run to end. Prints one line saying what happened. Returns 0
+# when updated, 3 when updated but an install failed, 10 when left alone (not on
+# main, local changes, already past <commit>, or the daily job still running), 1
+# when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed=""
+  local deps_before cc_before failed="" rc
+  if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
+    if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
+      echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
+      return 1
+    fi
+    mkdir -p "$(dirname "$1")" || { echo "cannot create the folder of the daily job's lock $1"; return 1; }
+    # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
+    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'source "$1" && update_live_checkout "" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3"
+    rc=$?
+    if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
+    return "$rc"
+  fi
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
+  # Pulled further by hand: neither moved back nor reinstalled here, since its dependencies are whatever that pull left.
+  if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify --quiet "$3^{commit}")" ] && git merge-base --is-ancestor "$3" HEAD 2>/dev/null; then
+    echo "the live checkout is already past the sync commit"
+    return 10
+  fi
   deps_before="$(deps_fingerprint HEAD)" || { echo "cannot read the live checkout's dependency files"; return 1; }
   cc_before="$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)"
-  git merge -q --ff-only origin/main || { echo "live checkout could not fast-forward"; return 1; }
+  git merge -q --ff-only "$3" || { echo "live checkout could not fast-forward"; return 1; }
   if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
     failed="npm install"
   fi

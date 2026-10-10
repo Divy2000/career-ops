@@ -40,6 +40,28 @@ test('the headless sync Claude gets the OAuth token but runs with subprocess env
   assert.match(env, /^ANTHROPIC_API_KEY=$/m);
 });
 
+test('a report left by an earlier run the same day never reaches this run\'s PR body when this Claude writes none (R11-scripts-b-L2-01)', () => {
+  const dir = tempDir('sync-report-');
+  const bin = path.join(dir, 'bin');
+  const today = '2026-10-11';
+  // The earlier run's Claude wrote a report, then that run failed after it (a failed push, say).
+  writeFileSync(path.join(dir, `${today}.report.md`), 'resolved scan.mjs by keeping ours (an earlier run)\n');
+  stub(bin, 'claude', 'echo "SYNC: ok"');
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('echo "--- headless Claude'));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith('CLAUDE_RC=$?'));
+  const bodyFrom = lines.findIndex((l) => l.startsWith('BODY='));
+  const bodyTo = lines.findIndex((l, i) => i > bodyFrom && l.startsWith('} > "$BODY"'));
+  assert.ok(from > -1 && to > from && bodyFrom > to && bodyTo > bodyFrom, 'no Claude or PR body block in sync.sh');
+  const vars = `LIVE="${path.resolve(HERE, '../../..')}" STATE_DIR="${dir}" TODAY=${today} BEHIND=2 CONFLICTS= BASELINE_FAILURES= TOKEN=t MODEL=m LOG="${dir}/log" CUSTOM_OK=1 CC_OK=1 KEPT_README=0`;
+  const script = `${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const body = readFileSync(path.join(dir, `${today}.pr-body.md`), 'utf8');
+  assert.match(body, /## Claude report\n\(no report written\)\n$/, body);
+  assert.doesNotMatch(body, /an earlier run/);
+});
+
 test('the headless sync Claude runs at an explicit medium effort, not whatever the user settings default to', () => {
   const dir = tempDir('sync-claude-effort-');
   const bin = path.join(dir, 'bin');
@@ -122,7 +144,7 @@ test('sync.sh runs the control-center checks after the custom tests and before p
   assert.ok(custom > -1 && cc > custom && push > cc, `order was custom=${custom} cc=${cc} push=${push}`);
 });
 
-const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
+const GREEN = { CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '', MAIN_MOVED: '' };
 // Each gate that must hold the PR for a human, alone, and the reason the PR comment gives for it.
 const BLOCKING = [
   [{ CUSTOM_OK: '0' }, 'custom tests FAIL'],
@@ -133,6 +155,7 @@ const BLOCKING = [
   [{ UNEXPECTED_UPSTREAM: 'scan.mjs\nmodes/oferta.md' }, 'upstream files edited outside conflict resolution: scan.mjs, modes/oferta.md'],
   [{ CLAUDE_HOLD: 'the sync Claude asked for a human: check X' }, 'the sync Claude asked for a human: check X'],
   [{ PROTECTED_EDITS: 'custom/a/tests/x.spec.mjs\ncustom/upstream-sync/lib.sh' }, 'fork tests, gates or guard files edited by the sync (review by hand): custom/a/tests/x.spec.mjs, custom/upstream-sync/lib.sh'],
+  [{ MAIN_MOVED: 'origin/main moved during the sync (tested 111111111111, now 222222222222); re-run the sync' }, 'origin/main moved during the sync (tested 111111111111, now 222222222222); re-run the sync'],
 ];
 
 function mergeBlockers(vars) {
@@ -151,7 +174,7 @@ test('merge_blockers names each gate that holds the PR, alone or together', () =
 });
 
 test('merge_blockers holds the PR when a gate was never decided', () => {
-  assert.equal(mergeBlockers({}).split('; ').length, 5, 'the four pass/fail flags and an unread Claude verdict block when unset; empty failure lists do not');
+  assert.equal(mergeBlockers({}).split('; ').length, 6, 'the four pass/fail flags, an unread Claude verdict and an unchecked origin/main block when unset; empty failure lists do not');
 });
 
 test('sync.sh auto-merges exactly when merge_blockers finds nothing', () => {

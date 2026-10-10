@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
@@ -310,6 +310,32 @@ test('Given the plist pins a data root (CAREER_OPS_*), sync.sh logs there but ev
     assert.match(res.log, /Keychain item career-ops-claude-token not found/, 'the log still goes to the pinned root');
     assert.equal(readFileSync(seen, 'utf8'), '');
   } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a sync started while another holds the run lock is refused before it touches that run\'s worktree (R11-scripts-b-L1-02)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const wt = path.join(home, '.career-ops-sync');
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(path.join(wt, 'mid-suite.txt'), 'the scheduled run is still testing here\n');
+  // Past the Keychain the run would go on to replace the worktree; npm then fails, so nothing reaches a registry.
+  stub(path.join(w.base, 'bin'), 'npm', 'exit 1');
+  const ready = path.join(w.base, 'holder-ready');
+  // The scheduled run, still going: it holds the lock while the manual run starts.
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/bin/sh', '-c', `touch "${ready}"; sleep 60`], { stdio: 'ignore' });
+  try {
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
+    assert.ok(existsSync(ready), 'the holder never took the lock');
+    const res = runSync(w, { home, security: 'echo tok-123' });
+    assert.equal(res.status, 75, res.log + res.stderr);
+    assert.match(res.stderr, /another upstream sync is running \(it holds .*\.career-ops-sync\.lockf\); not started/);
+    assert.match(res.log, /another upstream sync is running .*; not started/);
+    assert.equal(readFileSync(path.join(wt, 'mid-suite.txt'), 'utf8'), 'the scheduled run is still testing here\n');
+  } finally {
+    holder.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
 });
 
 test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
@@ -773,7 +799,7 @@ test('a fetch that moves origin/main while Claude runs does not change the base 
  * A live checkout cloned from a bare origin whose main then gets one more commit (`depsChange` edits the root
  * dependencies, else an unrelated file). npm is a stub that logs its calls, or fails with `npmExit`.
  */
-function liveWorld({ depsChange = false, ccChange = false, npmExit = 0 } = {}) {
+function liveWorld({ depsChange = false, ccChange = false, npmExit = 0, laterCommit = false } = {}) {
   const base = mkdtempSync(path.join(tmpdir(), 'sync-live-'));
   const seed = path.join(base, 'seed');
   const origin = path.join(base, 'origin.git');
@@ -793,8 +819,14 @@ function liveWorld({ depsChange = false, ccChange = false, npmExit = 0 } = {}) {
   commitFile(seed, 'scan.mjs', 'merged\n', 'merged sync PR');
   git(seed, 'push', '-q', origin, 'main');
   const target = git(seed, 'rev-parse', 'HEAD').trim();
-  const update = () => bashLib(live, 'out="$(update_live_checkout)"; rc=$?; printf "%s" "$out"; exit $rc', { PATH: `${bin}:${process.env.PATH}` });
-  return { base, live, log, target, update, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
+  if (laterCommit) {
+    commitFile(seed, 'later.txt', 'another PR\n', 'a PR merged right after the sync PR');
+    git(seed, 'push', '-q', origin, 'main');
+  }
+  // run-daily's lock, in a data root that does not exist yet: the daily job creates it.
+  const dailyLock = path.join(base, 'data', 'data', 'immigration', '.run-daily.lockf');
+  const update = ({ wait = 5, prefix = '' } = {}) => bashLib(live, `${prefix}out="$(update_live_checkout "$LOCK" ${wait} "$TARGET")"; rc=$?; printf "%s" "$out"; exit $rc`, { PATH: `${bin}:${process.env.PATH}`, LOCK: dailyLock, TARGET: target });
+  return { base, live, log, target, update, dailyLock, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
 }
 
 const LIVE_CASES = [
@@ -805,6 +837,7 @@ const LIVE_CASES = [
   { name: 'a failed Control Center reinstall is reported, not fatal (SW3-scripts-01)', opts: { ccChange: true, npmExit: 1 }, setup: () => {}, status: 3, moves: true, npm: /^--prefix custom\/control-center ci$/m, out: /npm --prefix custom\/control-center ci failed; run it by hand/ },
   { name: 'tracked local changes leave the checkout alone', setup: (w) => writeFileSync(path.join(w.live, 'package.json'), '{"edited":true}\n'), status: 10, moves: false, npm: '', out: /^the live checkout has local changes$/ },
   { name: 'a branch other than main leaves the checkout alone', setup: (w) => git(w.live, 'checkout', '-q', '-b', 'mine'), status: 10, moves: false, npm: '', out: /^the live checkout is not on main$/ },
+  { name: 'a checkout someone already pulled past the sync commit is left alone (R11-scripts-b-L1-01)', opts: { laterCommit: true }, setup: (w) => git(w.live, 'pull', '-q', '--ff-only'), status: 10, moves: false, npm: '', out: /^the live checkout is already past the sync commit$/ },
   { name: 'a main that cannot fast-forward fails', setup: (w) => commitFile(w.live, 'local.txt', 'mine\n', 'a local commit'), status: 1, moves: false, npm: '', out: /^live checkout could not fast-forward$/ },
 ];
 
@@ -825,9 +858,64 @@ for (const c of LIVE_CASES) {
   });
 }
 
+test('update_live_checkout moves the live checkout to the verified sync merge, not to a later commit on origin/main (R11-scripts-b-L1-01)', () => {
+  const w = liveWorld({ laterCommit: true });
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(res.stdout, `live checkout now at ${w.target.slice(0, 7)}`);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a daily job holding its lock for longer than the wait leaves the live checkout alone, reinstalls nothing, and says why (R11-scripts-b-L1-03)', () => {
+  const w = liveWorld({ depsChange: true, ccChange: true });
+  try {
+    const before = w.head();
+    // The daily job, mid-run: it holds run-daily.sh's lock while the sync reaches the live update.
+    const res = w.update({ wait: 1, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 4 >/dev/null 2>&1 &\nsleep 0.5\n` });
+    assert.equal(res.status, 10, res.stdout + res.stderr);
+    assert.equal(res.stdout, 'the daily job is still running');
+    assert.equal(w.head(), before);
+    assert.equal(w.npm(), '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a daily job that finishes within the wait is waited for, then the live checkout is updated (R11-scripts-b-L1-03)', () => {
+  const w = liveWorld({ depsChange: true });
+  try {
+    const res = w.update({ wait: 20, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 1 >/dev/null 2>&1 &\nsleep 0.3\n` });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(res.stdout, /^live checkout now at [0-9a-f]+$/);
+    assert.equal(w.head(), w.target);
+    assert.match(w.npm(), /^install --no-package-lock --silent$/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('update_live_checkout refuses to run without the daily job\'s lock, a wait and a target commit (R11-scripts-b-L1-03)', () => {
+  const w = liveWorld();
+  try {
+    const before = w.head();
+    for (const args of ['', `"${w.dailyLock}" 5`, `"${w.dailyLock}" x ${w.target}`]) {
+      const res = bashLib(w.live, `update_live_checkout ${args}`);
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.match(res.stdout, /needs the daily job's lock file, a wait in seconds and the commit to move to/, args);
+    }
+    assert.equal(w.head(), before);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('sync.sh updates the live checkout under the lock run-daily.sh takes, in the data root it resolved (R11-scripts-b-L1-03)', () => {
+  const sync = readFileSync(SYNC, 'utf8');
+  assert.match(sync, /^ {2}LIVE_UPDATE="\$\(update_live_checkout "\$DATA\/data\/immigration\/\.run-daily\.lockf" [0-9]+ "\$MERGE_OID"\)"$/m);
+  const daily = readFileSync(path.join(REPO_ROOT, 'custom/immigration/run-daily.sh'), 'utf8');
+  assert.match(daily, /^IMM="\$DATA\/data\/immigration"$/m);
+  assert.match(daily, /lockf -k -t 0 "\$IMM\/\.run-daily\.lockf"/);
+});
+
 test('sync.sh updates the live checkout through update_live_checkout and fails the run only on its failures (SW2-tests-14)', () => {
   const lines = readFileSync(SYNC, 'utf8').split('\n');
-  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout)"'));
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
   const to = lines.findIndex((l, i) => i > from && l === '  esac');
   assert.ok(from > -1 && to > from, 'no LIVE_UPDATE .. esac block in sync.sh');
   const block = lines.slice(from, to + 1).join('\n');
@@ -840,6 +928,80 @@ test('sync.sh updates the live checkout through update_live_checkout and fails t
   assert.equal(failed.status, 1);
   assert.match(failed.stdout, /^!!! live checkout could not fast-forward$/m);
   assert.doesNotMatch(failed.stdout, /continued/);
+});
+
+// ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----
+
+/**
+ * Runs sync.sh's own lines from the origin/main check through leaving for the live checkout, with every other gate
+ * green, on a sync commit made from origin/main as it was when the run started (BASE_REV). `moveMain` merges another
+ * PR into the fork meanwhile; `fetchFails` makes the re-fetch fail; `race` merges another PR in the moment between
+ * that check and the merge itself (a pre-push hook, which runs after the remote's refs were read). gh is a stub that
+ * records its argv.
+ */
+function mergeDecision({ moveMain = false, fetchFails = false, race = false } = {}) {
+  const w = makeWorld();
+  try {
+    git(w.live, 'fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main');
+    const baseRev = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
+    git(w.live, 'checkout', '-q', '-b', 'sync/x', baseRev);
+    commitFile(w.live, 'synced.txt', 'merged upstream\n', 'the sync merge');
+    const extra = path.join(w.base, 'extra');
+    git(w.base, 'clone', '-q', w.originBare, extra);
+    commitFile(extra, 'other-pr.txt', 'x\n', 'another PR merged into the fork while the sync ran');
+    const otherPr = git(extra, 'rev-parse', 'HEAD').trim();
+    if (moveMain) git(extra, 'push', '-q', 'origin', 'HEAD:main');
+    if (race) {
+      const hook = path.join(w.live, '.git', 'hooks', 'pre-push');
+      mkdirSync(path.dirname(hook), { recursive: true });
+      writeFileSync(hook, `#!/bin/bash\ngit -C "${extra}" push -q origin HEAD:main\n`);
+      chmodSync(hook, 0o755);
+    }
+    if (fetchFails) git(w.live, 'remote', 'set-url', 'origin', path.join(w.base, 'gone.git'));
+    const bin = path.join(w.base, 'bin');
+    const ghLog = path.join(w.base, 'gh.log');
+    stub(bin, 'gh', `printf '%s\\n' "$*" >> "${ghLog}"`);
+    const lines = readFileSync(SYNC, 'utf8').split('\n');
+    const from = lines.findIndex((l) => l.startsWith('MAIN_MOVED='));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('  cd "$LIVE"'));
+    assert.ok(from > -1 && to > from, 'no MAIN_MOVED .. cd "$LIVE" block in sync.sh');
+    const script = `source "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\nPR_URL=https://example.invalid/pr/1\nBRANCH=sync/x\nLIVE="${w.live}"\n${lines.slice(from, to + 1).join('\n')}\necho "deployed $MERGE_OID"\nelse\necho "hold: $BLOCKERS"\nfi`;
+    const env = { ...GIT_ENV, PATH: `${bin}:${process.env.PATH}`, BASE_REV: baseRev, CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
+    const res = spawnSync('bash', ['-c', script], { cwd: w.live, env, encoding: 'utf8' });
+    const now = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
+    const forkMain = git(w.originBare, 'rev-parse', 'refs/heads/main').trim();
+    return { ...res, baseRev, now, forkMain, otherPr, head: git(w.live, 'rev-parse', 'HEAD').trim(), gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8') : '' };
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+}
+
+test('a fork main unchanged since the run started gets exactly the tested sync commit, and the live checkout is sent to it (R11-scripts-b-L1-01)', () => {
+  const r = mergeDecision();
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.forkMain, r.head, 'the fork main is the sync commit the gates tested');
+  assert.match(r.stdout, new RegExp(`^deployed ${r.head}$`, 'm'), r.stdout);
+});
+
+test('a fork main that moved while the sync ran holds the PR, naming both commits, and nothing is merged (R11-scripts-b-L1-01)', () => {
+  const r = mergeDecision({ moveMain: true });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.notEqual(r.now, r.baseRev, 'the re-fetch saw the moved main');
+  assert.match(r.stdout, new RegExp(`^hold: origin/main moved during the sync \\(tested ${r.baseRev.slice(0, 12)}, now ${r.now.slice(0, 12)}\\); re-run the sync$`, 'm'), r.stdout);
+  assert.equal(r.forkMain, r.otherPr);
+});
+
+test('a re-fetch of the fork main that fails holds the PR rather than merging on a stale origin/main (R11-scripts-b-L1-01)', () => {
+  const r = mergeDecision({ fetchFails: true });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^hold: cannot confirm origin\/main is still the commit the sync tested \(the fetch failed\)$/m, r.stdout);
+  assert.equal(r.forkMain, r.baseRev);
+});
+
+test('a PR merged in the moment between the check and the merge leaves the fork main as that PR left it and fails the run before the live checkout (R11-scripts-b-L1-01)', () => {
+  const r = mergeDecision({ race: true });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(r.forkMain, r.otherPr, 'no untested combination reached the fork main');
+  assert.match(r.stdout, /^!!! the fork main moved, or refused the push, before the sync commit could land on it; https:\/\/example\.invalid\/pr\/1 is left open$/m, r.stdout);
+  assert.doesNotMatch(r.stdout, /^deployed/m);
 });
 
 // ---- Playwright's browser after an install without lifecycle scripts (SW3-scripts-04) ----

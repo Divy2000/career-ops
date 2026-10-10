@@ -24,6 +24,8 @@ const READY_FILES = {
   'cv.md': '# Me\n',
   'config/profile.yml': 'name: x\n',
   'modes/_profile.md': 'mine\n',
+  // Seeded from its template otherwise, which the doctor reports as not personalized.
+  'modes/_brief.md': 'my brief\n',
   'portals.yml': 'x: 1\n',
 };
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
@@ -126,11 +128,13 @@ test('Node 22.22.2, 24.15.0, 26.0.0 and 26.4.0 are accepted', () => {
   }
 });
 
-test('a missing npm is a failure (exit 1) that names npm', () => {
-  const { w, args } = fresh({ tools: ['git', 'node', 'security', 'uname', 'launchctl', 'plutil', 'claude'] });
+test('a missing npm is a failure (exit 1) that names npm, found by the prerequisite check before anything is cloned (R11-tests-custom-L3-07)', () => {
+  const { w, D, args } = fresh({ tools: ['git', 'node', 'security', 'uname', 'launchctl', 'plutil', 'claude'] });
   const r = w.run(args());
   assert.equal(r.status, 1);
-  assert.match(r.out, /npm/);
+  assert.match(r.out, /missing: npm/, r.out);
+  assert.equal(exists(D), false, 'no half-installed checkout is left behind');
+  assert.deepEqual(w.calls('git'), []);
 });
 
 test('Linux without --core-only exits 1 and lists what needs macOS', () => {
@@ -439,7 +443,7 @@ test('on a terminal a differing cv.md shows a summary and asks; n keeps it, y ba
     const resume = md(w, 'resume.md', '# New\n');
     const r = w.run(['--dir', D, ...QUIET, '--resume', resume], { tty: `y\n${answer}\n` });
     assert.match(r.out, /Replace cv\.md\? \[y\/N\]/);
-    assert.match(r.out, /1 line.* added|added.*1/i);
+    assert.ok(r.out.includes('Summary: 1 line(s) added, 1 line(s) removed if replaced.'), r.out);
     assert.equal(read(D, 'cv.md'), replaced ? '# New\n' : 'OLD line\n', r.out);
     assert.equal(fs.readdirSync(D).filter((n) => n.startsWith('cv.md.bak-')).length, replaced ? 1 : 0);
   }
@@ -457,6 +461,15 @@ test('under a real pseudo-terminal the same questions work through /dev/tty (pyt
     // Keeping the old cv.md leaves "replace it" as a pending action (exit 3); replacing it leaves nothing pending.
     assert.equal(r.status, replaced ? 0 : 3, r.out);
   }
+});
+
+test('an installer that hangs under the pty ends with pty_run\'s own timeout and the transcript, not a silent kill (R11-tests-custom-L1-06)', { skip: WORLD_PTY_SKIP }, () => {
+  const { w } = fresh();
+  const hang = w.write('hang.sh', 'echo "waiting for an answer that never comes"\nexec sleep 60\n');
+  const r = w.runInPty([], { steps: [], script: hang, timeout: 8_000 });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /waiting for an answer that never comes/);
+  assert.match(r.out, /pty_run: timed out after [0-9.]+ s; killed the command/);
 });
 
 test('docs go to documents/projects, a different file of the same name gets a -1 suffix, and article-digest.md is never written', () => {
@@ -524,10 +537,20 @@ test('--dry-run with --projects says what it would do and writes nothing', () =>
   assert.equal(exists(D, 'article-digest.md'), false);
 });
 
+/** A cpSync filter for a copy of `root` (custom/install) without its tests/ folder, wherever the checkout lives. */
+const withoutTests = (root) => (src) => path.relative(root, src).split(path.sep)[0] !== 'tests';
+
+test('the custom/install copies leave out only its tests/ folder, also from a checkout under a tests folder (R11-tests-custom-L1-04)', () => {
+  const root = path.join(path.sep, 'Users', 'me', 'tests', 'career-ops', 'custom', 'install');
+  const keep = withoutTests(root);
+  for (const rel of ['', 'install.sh', 'lib.mjs', path.join('templates', '_custom.md'), 'tests-notes.md']) assert.equal(keep(path.join(root, rel)), true, rel || '(the root)');
+  for (const rel of ['tests', path.join('tests', 'harness.mjs'), path.join('tests', 'stubs', 'git')]) assert.equal(keep(path.join(root, rel)), false, rel);
+});
+
 // A copy of custom/install outside any checkout (downloaded on its own): the projects parser is not next to it.
 function standalone(w, { parser = true } = {}) {
   const dl = path.join(w.T, 'dl', 'custom', 'install');
-  fs.cpSync(INSTALL_DIR, dl, { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
+  fs.cpSync(INSTALL_DIR, dl, { recursive: true, filter: withoutTests(INSTALL_DIR) });
   if (parser) {
     const repo = path.resolve(INSTALL_DIR, '..', '..');
     for (const rel of ['custom/projects/lib.mjs', 'tracker-parse.mjs', 'tracker-aliases.json', 'skill-extract.mjs']) {
@@ -769,7 +792,7 @@ test('--onboard interactive without a usable terminal prints the command and rec
   assert.equal(r.status, 3);
 });
 
-test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus one Edit rule for the draft dir, no Bash, token only in the child env', () => {
+test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus one Edit rule for the draft dir, no Bash, no MCP servers, token only in the child env and never in its hook or tool children (R11-scripts-b-L3-01)', () => {
   const { w, D } = fresh({ keychain: true });
   const data = path.join(w.T, 'mydata');
   const resume = md(w, 'resume.md', '# Me\n## Skills\n');
@@ -792,8 +815,12 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   for (let i = start; i < argv.length && !argv[i].startsWith('--'); i++) tools.push(argv[i]);
   assert.deepEqual(tools, ['Read', 'Glob', 'Grep', `Edit(/${draft}/**)`]);
   assert.ok(!argv.some((a) => /bash/i.test(a) && !a.includes('\n') && a.length < 40));
+  // As the Control Center confines its sessions: no user or project MCP server starts with the token in its env.
+  assert.ok(argv.includes('--strict-mcp-config'), argv.join(' '));
+  assert.ok(!argv.includes('--mcp-config'), 'no MCP config is handed in');
   const envLine = w.log().find((l) => l.startsWith('claude-env'));
-  assert.equal(envLine, 'claude-env TOKEN_SET=1 API_KEY_EMPTY=1');
+  // SUBPROCESS_ENV_SCRUB: hook and tool children run without the OAuth token.
+  assert.equal(envLine, 'claude-env TOKEN_SET=1 API_KEY_EMPTY=1 SUBPROCESS_ENV_SCRUB=1');
   assert.ok(!r.out.includes(SECRET));
   assert.ok(!w.log().some((l) => l.includes(SECRET)));
   for (const log of installLogs(data)) assert.ok(!fs.readFileSync(log, 'utf8').includes(SECRET));
@@ -802,6 +829,17 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   assert.equal(exists(data, 'article-digest.md'), false);
   assert.ok(r.out.includes(path.join(draft, 'questions.md')));
   assert.match(r.out, /claude .*Read custom\/install\/ONBOARDING\.md and follow it/);
+});
+
+test('--onboard headless with a Claude Code too old to scrub hook and tool children never hands it the token (R11-scripts-b-L3-01)', () => {
+  for (const version of ['2.1.287', 'garbled']) {
+    const { w, D } = fresh({ keychain: true });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: version } });
+    assert.equal(r.status, 3, r.out);
+    assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, `${version}: claude -p ran\n${r.out}`);
+    assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.288 or later/, version);
+    assert.match(r.out, /claude update/, version);
+  }
 });
 
 test('--onboard headless without the Keychain item is a pending action (exit 3) and claude is not called', () => {
@@ -827,6 +865,26 @@ test('launchd is skipped while doctor still reports an unpersonalized file', () 
   w.makeCheckout(D, { files: READY_FILES });
   w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_UNPERSONALIZED: 'modes/_profile.md' } });
   assert.equal(w.calls('launchd-install').length, 0);
+});
+
+test('launchd is skipped while modes/_brief.md is still the template the install seeded, as the real doctor reports it (R11-tests-custom-L1-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const { 'modes/_brief.md': _brief, ...rest } = READY_FILES;
+  w.makeCheckout(D, { files: rest });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(read(D, 'modes', '_brief.md'), read(D, 'modes', '_brief.template.md'), 'the install seeded _brief.md from its template');
+  assert.equal(w.calls('launchd-install').length, 0, r.out);
+  assert.match(r.out, /Onboarding is not finished \(still needed: modes\/_brief\.md\)/);
+  assert.equal(r.status, 3, r.out);
+});
+
+test('launchd is skipped while modes/_brief.md, edited, still carries one of its template\'s placeholders, as the real doctor reports it', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  fs.writeFileSync(path.join(D, 'modes', '_brief.md'), `${read(D, 'modes', '_brief.template.md')}My own note\n`);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(w.calls('launchd-install').length, 0, r.out);
+  assert.match(r.out, /Onboarding is not finished \(still needed: modes\/_brief\.md\)/);
 });
 
 test('a ready install gets the daily job only; --with-upstream-sync gets both', () => {
@@ -957,7 +1015,7 @@ test('a script that lives inside a checkout uses that checkout: no clone, and th
   const inside = path.join(w.T, 'inside');
   w.makeCheckout(inside);
   // Without tests/: the installer runs a checkout's custom specs, and these would run this test again.
-  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
+  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: withoutTests(INSTALL_DIR) });
   const r = w.run(['--non-interactive', ...QUIET], { script: path.join(inside, 'custom', 'install', 'install.sh') });
   assert.match(r.out, /no custom\/\*\/tests specs in this checkout; skipping the self-tests/);
   assert.equal(r.status, 0, r.out);
@@ -1135,8 +1193,11 @@ test('the pending text for a dirty checkout and for a failed doctor quotes the d
   assert.ok(r.out.includes(`run it in '${D}'`), r.out);
 });
 
-test('INSTALL_SH exists and is executable bash', () => {
+test('INSTALL_SH exists and is executable bash (R11-tests-custom-L1-05)', () => {
   assert.ok(fs.existsSync(INSTALL_SH));
+  // .github/README.md runs it directly, so a lost exec bit is "permission denied" for every user.
+  assert.doesNotThrow(() => fs.accessSync(INSTALL_SH, fs.constants.X_OK), 'install.sh is not executable');
+  assert.match(fs.readFileSync(INSTALL_SH, 'utf8').split('\n')[0], /^#!(\/usr\/bin\/env bash|\/bin\/bash)$/);
 });
 
 // ---- git failing: offline, or a pull that cannot fast-forward (SW2-tests-31) ----
