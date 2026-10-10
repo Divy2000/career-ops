@@ -145,6 +145,13 @@ describe('Dev Chat session in the URL', () => {
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'New conversation')).toBe(false);
   });
 
+  it('given a session waiting for a reply, New conversation is still not offered, since a reply can resume editing files', async () => {
+    streamStatus = 'awaiting_user';
+    await open('/dev?session=s-7');
+    await until(() => host.querySelector('[aria-label="Reply to the session"]'), 'the waiting session');
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'New conversation')).toBe(false);
+  });
+
   it('given a start in flight, when the user leaves for Runs before it answers, then they stay on Runs and /dev reopens the session later', async () => {
     let release!: () => void;
     startGate = new Promise((r) => (release = r));
