@@ -7,6 +7,8 @@ export { postingUrl };
 
 // `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
+/** A pipeline.md section heading, as parsePipeline reads it (an indented `##` is not one). */
+export const PIPELINE_HEADING = /^##\s+(.+?)\s*$/;
 // The Pending and Processed headings every shipped modes/*/pipeline.md writes, as pairs (modes/pipeline.md: they "may be
 // in EN, ES, or any other language a market mode set writes them in"); tests/unit/upstream-formats checks the list
 // against the mode files. Done and Hecho are older processed headings no mode writes any more.
@@ -101,9 +103,12 @@ function restoredMark(rest: string): '!' | ' ' {
 
 export type SkipResult = { ok: true; text: string; matched: number; changed: number } | { ok: false; error: 'invalid-url' | 'unmatched' };
 
-/** Flip `- [ ]` and `- [x]` on Pending rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays.
- * Every `## Pending` section counts: scan.mjs appends under a second one when pipeline.md's own heading is not English
- * or Spanish. A file with no Pending heading matches on every row. */
+/**
+ * Flip `- [ ]` and `- [x]` on rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays.
+ * The Inbox offers Skip and Back to queue on every row outside a Processed section, whatever its heading (scan.mjs may
+ * append under a second `## Pending` when pipeline.md's own heading is not English or Spanish), so the match spans
+ * every section but Processed, its headings read exactly as parsePipeline reads them.
+ */
 export function applyInboxSkip(text: string, url: string, done: boolean): SkipResult {
   // The app reads rows unescaped (parsePipeline); the file holds the escaped form, so both sides compare unescaped.
   const parsed = pipelineRef(typeof url === 'string' ? unescapeMarkdownUrl(url.trim()) : url);
@@ -112,21 +117,17 @@ export function applyInboxSkip(text: string, url: string, done: boolean): SkipRe
   const endedWithNl = /\r?\n$/.test(text);
   const lines = text.split(/\r?\n/);
   if (endedWithNl && lines[lines.length - 1] === '') lines.pop();
-  const heading = (line: string) => line.trim().match(/^##\s+(.+)$/)?.[1];
-  const hasPending = lines.some((l) => {
-    const title = heading(l);
-    return title !== undefined && pipelineSection(title) === 'pending';
-  });
   let section: 'pending' | 'done' | 'other' = 'other';
   let matched = 0;
   let changed = 0;
   for (let i = 0; i < lines.length; i++) {
-    const title = heading(lines[i]!);
-    if (title !== undefined) {
-      section = pipelineSection(title);
+    const h = lines[i]!.match(PIPELINE_HEADING);
+    if (h) {
+      section = pipelineSection(h[1]!);
       continue;
     }
-    if (hasPending && section !== 'pending') continue;
+    // A Processed row is finished: it is never skipped or restored from the Inbox.
+    if (section === 'done') continue;
     const m = lines[i]!.match(CHECKBOX_LINE);
     if (!m) continue;
     if (jobUrlFromRest(m[3]!) !== parsed) continue;

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { pipelineSection, pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
+import { PIPELINE_HEADING, pipelineSection, pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
 import { parseTsv, readText } from './files.js';
 import { localJdPath } from '../../shared/local-jd.js';
 
@@ -89,7 +89,7 @@ export function parsePipeline(md: string): PipelineRow[] {
   const rows: PipelineRow[] = [];
   let section: PipelineRow['section'] = 'other';
   md.split('\n').forEach((line, i) => {
-    const h = line.match(/^##\s+(.+?)\s*$/);
+    const h = line.match(PIPELINE_HEADING);
     if (h) {
       section = pipelineSection(h[1]!);
       return;

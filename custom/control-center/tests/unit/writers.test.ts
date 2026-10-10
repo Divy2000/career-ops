@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import YAML from 'yaml';
 import { applyInboxSkip, postingUrl } from '../../server/domains/inboxSkip.js';
 import { appendOffers } from '../../server/domains/writers.js';
+import { parsePipeline } from '../../server/domains/pipeline.js';
 import { tempDir } from '../helpers/tmp.js';
 import { applyFollowupEdit } from '../../server/domains/followups-edit.mjs';
 import { ACTIONS, findAction } from '../../server/actions/registry.js';
@@ -76,6 +77,18 @@ describe('inbox skip port', () => {
     if (!r.ok) return;
     expect(r.text).toContain('- [x] https://b.example/3 | C | Role');
     expect(r.text).toContain('- [ ] https://a.example/1 | A | Role');
+  });
+  it('matches rows outside any Pending section, but never a Processed row (R17-srv-dom-a-L3-01)', () => {
+    const text = '# Pipeline\n- [ ] https://a.example/1 | A | Role\n## Pending\n- [ ] https://d.example/4 | D | Role\n## Notes\n- [ ] https://b.example/2 | B | Role\n## Processed\n- [ ] https://c.example/3 | C | Role\n';
+    expect(applyInboxSkip(text, 'https://a.example/1', true)).toMatchObject({ ok: true, matched: 1, changed: 1 });
+    expect(applyInboxSkip(text, 'https://b.example/2', true)).toMatchObject({ ok: true, matched: 1, changed: 1 });
+    expect(applyInboxSkip(text, 'https://c.example/3', false)).toEqual({ ok: false, error: 'unmatched' });
+  });
+  it('reads section headings exactly as parsePipeline does, so every row the Inbox offers Skip on matches', () => {
+    // An indented `## Processed` is not a heading to parsePipeline: the row under it stays in Pending and offers Skip.
+    const text = '## Pending\n- [ ] https://a.example/1 | A | Role\n  ## Processed\n- [ ] https://b.example/2 | B | Role\n';
+    expect(parsePipeline(text).find((r) => r.url === 'https://b.example/2')).toMatchObject({ section: 'pending', done: false });
+    expect(applyInboxSkip(text, 'https://b.example/2', true)).toMatchObject({ ok: true, matched: 1, changed: 1 });
   });
 });
 
