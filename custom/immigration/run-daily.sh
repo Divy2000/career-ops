@@ -29,6 +29,19 @@ mkdir -p "$IMM/logs"
 if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
   CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 0 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
   rc=$?
+  # The weekly upstream sync borrows this lock to update the live checkout, and names its pid in .live-update.pid
+  # while it does. launchd fires a calendar job once and never retries, so a scheduled start waits for that update
+  # (bounded) rather than losing the day; a start the user asked for says what holds the lock instead.
+  update_pid="$(cat "$IMM/.live-update.pid" 2>/dev/null)"
+  if [ "$rc" = 75 ] && [[ "$update_pid" =~ ^[0-9]+$ ]] && kill -0 "$update_pid" 2>/dev/null; then
+    if [ -z "${CC_RUN_DAILY_SKIP_EXIT:-}" ]; then
+      CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 1800 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
+      rc=$?
+    else
+      echo "run-daily: skipped, because the weekly upstream sync is updating the live checkout (it holds the daily job's lock); try again in a few minutes" >&2
+      case "$CC_RUN_DAILY_SKIP_EXIT" in *[!0-9]*) exit 0 ;; *) exit "$CC_RUN_DAILY_SKIP_EXIT" ;; esac
+    fi
+  fi
   if [ "$rc" = 75 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"
     # A start the user asked for (the Control Center sets CC_RUN_DAILY_SKIP_EXIT) must not read as a finished run:

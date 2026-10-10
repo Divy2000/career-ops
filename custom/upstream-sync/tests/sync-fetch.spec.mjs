@@ -941,6 +941,20 @@ test('a daily job that finishes within the wait is waited for, then the live che
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('the live update names its pid beside the daily job\'s lock while it holds it, and removes it after (R15-scripts-b-L1-02)', () => {
+  const w = liveWorld({ depsChange: true });
+  const marker = path.join(path.dirname(w.dailyLock), '.live-update.pid');
+  const seen = path.join(w.base, 'marker-seen');
+  // npm runs inside the locked update: it records whether the marker names a live process at that point.
+  stub(path.join(w.base, 'bin'), 'npm', `pid="$(cat "${marker}" 2>/dev/null)"; [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo alive >> "${seen}"; exit 0`);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(existsSync(seen) ? readFileSync(seen, 'utf8') : '', 'alive\n');
+    assert.equal(existsSync(marker), false, 'the marker outlived the update');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('update_live_checkout refuses to run without the daily job\'s lock, a wait and a target commit (R11-scripts-b-L1-03)', () => {
   const w = liveWorld();
   try {

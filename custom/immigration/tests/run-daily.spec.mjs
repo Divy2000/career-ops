@@ -456,6 +456,66 @@ jobTest('a run the Control Center started (CC_RUN_DAILY_SKIP_EXIT) that finds th
   }
 });
 
+/** Holds run-daily's lock the way the weekly sync's live-checkout update does: it names its pid in .live-update.pid. */
+async function liveUpdateHolder(imm, seconds) {
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  const marker = path.join(imm, '.live-update.pid');
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(imm, '.run-daily.lockf'), '/bin/sh', '-c', `echo $$ > "$1"; sleep ${seconds}; rm -f "$1"`, 'holder', marker], { stdio: 'ignore', detached: true });
+  for (let i = 0; i < 200 && !fs.existsSync(marker); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(fs.existsSync(marker), 'the live update never took the lock');
+  return { marker, stop: () => { try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ } } };
+}
+
+jobTest('a scheduled run that finds the weekly sync updating the live checkout waits for the update, then runs (R15-scripts-b-L1-02)', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  const update = await liveUpdateHolder(imm, 1.5);
+  try {
+    const r = w.run();
+    assert.equal(r.status, 0, r.log + r.stderr);
+    assert.match(r.steps, /scan\.mjs/);
+    assert.equal(fs.existsSync(path.join(imm, 'logs', 'skipped.log')), false);
+  } finally {
+    update.stop();
+  }
+});
+
+jobTest('a run the Control Center started while the weekly sync updates the live checkout says so instead of claiming the daily job runs (R15-scripts-b-L1-02)', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  const update = await liveUpdateHolder(imm, 60);
+  try {
+    const r = w.run({ CC_RUN_DAILY_SKIP_EXIT: '75' });
+    assert.equal(r.status, 75, r.stderr);
+    assert.match(r.stderr, /^run-daily: skipped, because the weekly upstream sync is updating the live checkout \(it holds the daily job's lock\); try again in a few minutes$/m);
+    assert.equal(r.steps, '');
+  } finally {
+    update.stop();
+  }
+});
+
+jobTest('a .live-update.pid left by an update that is gone does not make a run wait on another daily run', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  // A pid no process has: the update that wrote it was killed before it could remove it.
+  fs.writeFileSync(path.join(imm, '.live-update.pid'), '999999\n');
+  const lock = path.join(imm, '.run-daily.lockf');
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore' });
+  try {
+    for (let i = 0; i < 200 && !fs.existsSync(lock); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(fs.existsSync(lock), 'the holder never took the lock');
+    const started = Date.now();
+    const r = w.run();
+    assert.equal(r.status, 0, r.log);
+    assert.ok(Date.now() - started < 20_000, 'the run waited on the lock');
+    assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /another run-daily holds the lock; skipped$/m);
+    assert.equal(r.steps, '');
+  } finally {
+    holder.kill();
+  }
+});
+
 jobTest('with no working node, the job stops with a clear reason instead of running against an empty data root (SW2-tests-12)', () => {
   const w = dailyWorld();
   // The pinned node goes first on the job's PATH (pinned-node.sh): one that answers nothing stands in for no node at all.

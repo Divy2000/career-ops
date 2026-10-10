@@ -548,7 +548,9 @@ update_live_checkout() {
     fi
     mkdir -p "$(dirname "$1")" || { echo "cannot create the folder of the daily job's lock $1"; return 1; }
     # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
-    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'source "$1" && update_live_checkout "" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3"
+    # While it holds the lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
+    # lock held by the update waits for it instead of skipping the day (run-daily.sh).
+    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid"
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
