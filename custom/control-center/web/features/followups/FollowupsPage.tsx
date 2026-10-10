@@ -69,7 +69,7 @@ export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone
         <button type="button" disabled={busy} onClick={() => void submit()}>
           Save follow-up
         </button>
-        <button type="button" onClick={() => onDone('')}>
+        <button type="button" disabled={busy} onClick={() => onDone('')}>
           Cancel
         </button>
       </div>
