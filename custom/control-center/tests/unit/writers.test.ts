@@ -156,6 +156,15 @@ describe('follow-ups edits', () => {
     expect(r.text.match(/^\|---/gm)).toHaveLength(1);
     expect(r.text.split('\n')[5]).toBe('| 2 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |');
   });
+  it('logs into the follow-up table, not another table in the file, and counts only follow-up rows (R13-feat-a-L2-01 review)', () => {
+    const metrics = '## Stats\n\n| Year | Count |\n|---|---|\n| 2026 | 12 |\n';
+    const before = `${metrics}\n# Follow-ups\n\n| # | App | Date | Company | Role | Channel | Contact | Notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n\n## Later\n\n| Year | Count |\n|---|---|\n| 2027 | 1 |\n`;
+    const r = applyFollowupEdit(before, { op: 'log.add', appNum: 5, date: '2026-10-03', company: 'Globex', role: 'SRE', channel: 'Email', contact: '', notes: '' });
+    expect(r.ok && r.num).toBe(2);
+    if (!r.ok) return;
+    expect(r.text).toContain('| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n| 2 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n\n## Later');
+    expect(applyFollowupEdit(before, { op: 'log.delete', num: 2026 })).toEqual({ ok: false, error: 'not-found' });
+  });
   it('refuses to delete a follow-up whose num appears more than once, rather than deleting another application\'s row (R13-feat-a-L2-01)', () => {
     const text = `${FOLLOWUPS}\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n`;
     expect(applyFollowupEdit(text, { op: 'log.delete', num: 1 })).toEqual({ ok: false, error: 'ambiguous' });

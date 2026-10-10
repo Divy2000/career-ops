@@ -6,11 +6,17 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const cell = (v) => String(v ?? '').replace(/\|/g, '/').replace(/[\r\n]+/g, ' ').trim();
 
+// A follow-up row as followup-cadence.mjs parseFollowups reads one: eight cells, a numeric num and appNum.
 function isRow(line) {
-  return /^\|\s*\d+\s*\|/.test(line);
+  if (!line.startsWith('|')) return false;
+  const parts = line.split('|').map((s) => s.trim());
+  return parts.length >= 8 && /^\d+$/.test(parts[1]) && /^\d+$/.test(parts[2]);
 }
 
 const rowNum = (line) => parseInt(line.split('|')[1], 10);
+
+/** A table header row of at least the eight follow-up columns. */
+const isHeader = (line) => line.trimStart().startsWith('|') && line.split('|').map((s) => s.trim()).filter(Boolean).length >= 8;
 
 function isSeparator(line) {
   return line !== undefined && /^\s*\|\s*:?-{3,}/.test(line);
@@ -45,17 +51,18 @@ export function applyFollowupEdit(text, edit) {
     case 'log.add': {
       if (!DATE_RE.test(String(edit.date))) return { ok: false, error: 'invalid-date' };
       if (!Number.isInteger(edit.appNum) || edit.appNum <= 0) return { ok: false, error: 'invalid-app' };
-      // The upstream readers take the table by position, whatever its header labels say, so the first header row
-      // (a `|` line over a `|---` separator) is the table; nums are unique across every row in the file.
-      let headerAt = lines.findIndex((l, i) => l.trimStart().startsWith('|') && isSeparator(lines[i + 1]));
+      // The upstream readers take follow-up rows by position, whatever the header labels say, so the table is the first
+      // header of eight or more columns over a `|---` separator; nums are unique across every follow-up row in the file.
+      let headerAt = lines.findIndex((l, i) => isHeader(l) && isSeparator(lines[i + 1]));
       const maxNum = lines.reduce((max, l) => (isRow(l) ? Math.max(max, rowNum(l) || 0) : max), 0);
       if (headerAt === -1) {
         if (lines.length === 0) lines.push('# Follow-up History', '');
         lines.push(HEADER, SEPARATOR);
         headerAt = lines.length - 2;
       }
+      // The new row goes after the table's last row: the table ends at its first line that is not a table line.
       let lastRow = headerAt + 1;
-      for (let i = headerAt + 1; i < lines.length; i++) if (isRow(lines[i])) lastRow = i;
+      for (let i = headerAt + 2; i < lines.length && lines[i].trimStart().startsWith('|'); i++) if (isRow(lines[i])) lastRow = i;
       const num = maxNum + 1;
       const row = `| ${num} | ${edit.appNum} | ${edit.date} | ${cell(edit.company)} | ${cell(edit.role)} | ${cell(edit.channel)} | ${cell(edit.contact)} | ${cell(edit.notes)} |`;
       lines.splice(lastRow + 1, 0, row);
