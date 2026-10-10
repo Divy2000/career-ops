@@ -113,6 +113,12 @@ test('given a project title that is in cv.md, when ranked, then inCv is true', (
   assert.equal(inCv['weather-dashboard'], false);
 });
 
+test('given a project named like a Work Experience role or a Skills entry, when ranked, then inCv is false: only the Projects section lists projects (R15-scripts-a-X-01, SEED-libs-01)', () => {
+  const cv = '# CV\n\n## Work Experience\n\n### Ticket Triage Bot\n- Built services.\n\n## Skills\n\n- **Graph Search Library:** Java\n\n## Selected Projects\n\n- **Weather Dashboard** -- A dashboard.\n';
+  const inCv = Object.fromEntries(rank(JD, cv).candidates.map((c) => [c.id, c.inCv]));
+  assert.deepEqual([inCv['ticket-triage-bot'], inCv['graph-search-library'], inCv['weather-dashboard']], [false, false, true]);
+});
+
 test('given the same input twice, when ranked by the CLI, then the output is identical', () => {
   const root = dataRoot();
   const a = run(root, ['jds/role.md', '--json']);

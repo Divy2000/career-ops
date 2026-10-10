@@ -449,6 +449,29 @@ export function convertJsonProjects(data) {
   return { entries, warnings };
 }
 
+// The body of every cv.md `##` section whose title ends in "Project" or "Projects" ("Projects", "Personal Projects"): the only part of
+// cv.md a project may come from, never an employer, a role, another section's title or a skill category.
+export function projectSections(cvText) {
+  const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
+  const out = [];
+  let inside = false;
+  for (const line of lines) {
+    // A `#` heading ends a section as a `##` one does, and starts no projects section.
+    const section = line.match(/^#{1,2}(?!#)\s+(.*\S)\s*$/);
+    if (section) {
+      if (!line.startsWith('##')) {
+        inside = false;
+        continue;
+      }
+      // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
+      inside = /\bprojects?$/i.test(section[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[^A-Za-z]+$/, ''));
+      continue;
+    }
+    if (inside) out.push(line);
+  }
+  return out.join('\n');
+}
+
 // The entry named `title` in cv.md: a `##`-`######` heading whose name (text
 // before the separator) matches, with its body up to the next heading, or a
 // `**Title**` list item with its indented continuation lines. Returns the raw
@@ -544,6 +567,8 @@ const round2 = (n) => Math.round(n * 100) / 100;
 export function rankProjects(entries, { jdText, cvText = '' }) {
   const jdSkills = extractSkills(jdText);
   const cvSkills = extractSkills(cvText);
+  // A project is in cv.md only when its Projects section lists it, not when a role or a skill category shares its name.
+  const cvProjects = projectSections(cvText);
   const candidates = [];
   const excluded = [];
   const skillsOf = new Map();
@@ -596,7 +621,7 @@ export function rankProjects(entries, { jdText, cvText = '' }) {
       title: e.title,
       url: e.url ?? null,
       kind: e.kind,
-      inCv: findCvEntry(cvText, e.title) !== null,
+      inCv: findCvEntry(cvProjects, e.title) !== null,
       score: round2([...matched.values()].reduce((a, b) => a + b, 0)),
       matchedSkills: [...matched.keys()].sort(byCodepoint),
       bullets: [...e.bullets],
