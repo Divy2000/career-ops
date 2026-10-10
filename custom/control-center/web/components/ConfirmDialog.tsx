@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 
 export interface ConfirmOptions {
   title: string;
@@ -18,11 +18,16 @@ const ConfirmContext = createContext<Ask | null>(null);
 
 /** Promise-based Radix Dialog confirm: the only confirmation primitive in web/ (no window.confirm). */
 export function ConfirmProvider({ children }: { children: ReactNode }) {
-  const [pending, setPending] = useState<{ opts: ConfirmOptions; resolve: (v: boolean) => void } | null>(null);
-  const ask = useCallback<Ask>((opts) => new Promise<boolean>((resolve) => setPending({ opts, resolve })), []);
+  // Asks wait in turn (first in, first shown): a confirm asked while one is open must not swap the text the user is
+  // reading, nor drop the open one's caller unanswered.
+  const [queue, setQueue] = useState<{ id: number; opts: ConfirmOptions; resolve: (v: boolean) => void }[]>([]);
+  const nextId = useRef(0);
+  const ask = useCallback<Ask>((opts) => new Promise<boolean>((resolve) => setQueue((q) => [...q, { id: ++nextId.current, opts, resolve }])), []);
+  const pending = queue[0] ?? null;
   const settle = (value: boolean) => {
-    pending?.resolve(value);
-    setPending(null);
+    if (!pending) return;
+    pending.resolve(value);
+    setQueue((q) => q.filter((p) => p !== pending));
   };
   const opts = pending?.opts;
   return (
@@ -31,7 +36,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       <Dialog.Root open={pending !== null} onOpenChange={(open) => !open && settle(false)}>
         <Dialog.Portal>
           <Dialog.Overlay className="dialog__overlay" />
-          <Dialog.Content className="dialog" aria-describedby={opts?.body ? 'confirm-body' : undefined}>
+          <Dialog.Content key={pending?.id} className="dialog" aria-describedby={opts?.body ? 'confirm-body' : undefined}>
             <Dialog.Title className="dialog__title">{opts?.title}</Dialog.Title>
             {opts?.body && (
               <Dialog.Description asChild>
