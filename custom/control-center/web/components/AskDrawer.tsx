@@ -77,14 +77,18 @@ const PARAM_ALIASES: Record<string, string> = { row: 'n', topic: 'company', q: '
 
 /**
  * Why a proposal's params cannot run, or null: every param the advisor's contract marks required must be there, not
- * blank. A navigate stays in the app (`//host` or `/\\host` would leave it) and an evaluate takes a posting URL.
+ * blank, and a row is a tracker row number. A navigate stays in the app (`//host` or `/\\host` would leave it) and an
+ * evaluate takes a posting URL.
  */
 function invalidParams(p: { action: string; params: Record<string, unknown> }): string | null {
   const spec = (ASK_ACTION_SPECS as readonly AskActionSpec[]).find((a) => a.name === p.action);
   for (const param of spec?.params ?? []) {
     const alias = PARAM_ALIASES[param.name];
     const value = p.params[param.name] ?? (alias ? p.params[alias] : undefined);
-    if (param.required && (value === undefined || value === null || String(value).trim() === '')) return `${p.action} needs "${param.name}", ${param.about}`;
+    const missing = value === undefined || value === null || String(value).trim() === '';
+    if (param.required && missing) return `${p.action} needs "${param.name}", ${param.about}`;
+    // A row the tracker cannot have (abc, 1.5, 0) would only fail after the user confirmed it.
+    if (param.name === 'row' && !missing && !/^[1-9]\d*$/.test(String(value).trim())) return `${p.action} needs "row", ${param.about}`;
   }
   if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
   if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';

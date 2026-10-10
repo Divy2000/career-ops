@@ -183,6 +183,25 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
   });
 
+  it('a row that is not a tracker row number fails before asking, and runs nothing (review fix 4)', async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['setStatus', { row: 'abc', state: 'Applied' }],
+      ['generatePdf', { row: '1.5' }],
+      ['generatePdf', { n: 0 }],
+      ['apply', { row: -2 }],
+    ];
+    for (const [action, params] of cases) {
+      await act(async () => emitEnvelope!('act', { action, params }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog__title'), action).toBeNull();
+      expect(item.dataset.proposalState, action).toBe('failed');
+      expect(item.textContent, action).toContain(`${action} needs "row", the tracker row number`);
+    }
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([]);
+  });
+
   it('confirming runs the write with the proposed params', async () => {
     const item = await propose();
     await act(async () => bodyButton('Do it')!.click());
