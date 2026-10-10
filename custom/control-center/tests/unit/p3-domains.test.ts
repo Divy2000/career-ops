@@ -5,7 +5,7 @@ import { applyYamlOps, parseYamlDoc, YamlOpsError } from '../../server/domains/y
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
 import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, pinnedNodeBin, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
-import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings } from '../../server/domains/settings.js';
+import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings, readSettings, SETTINGS_REL, writeSettings } from '../../server/domains/settings.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const PORTALS = `# Synthetic portals config for tests
@@ -453,5 +453,20 @@ describe('app settings', () => {
     expect(mergeSettings(DEFAULT_SETTINGS, { claudeConcurrency: 3, logos: true })).toMatchObject({ claudeConcurrency: 3, logos: true, retention: 500 });
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, claudeConcurrency: 9 }).success).toBe(false);
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, retention: 10 }).success).toBe(false);
+  });
+  it('a one-field PUT over a file with one bad value keeps the other valid settings (R17-srv-dom-b-L1-01)', () => {
+    const root = tempDir('cc-settings-');
+    fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+    fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ logos: true, retention: 'not-a-number', claudeConcurrency: 3, modelDefault: 'claude-sonnet' }));
+    expect(readSettings(root).problem).toMatch(/retention/);
+    const next = writeSettings(root, { modelDefault: 'claude-opus' });
+    expect(next).toMatchObject({ logos: true, claudeConcurrency: 3, modelDefault: 'claude-opus', retention: 500 });
+    expect(readSettings(root).problem).toBeNull();
+  });
+  it('one bad usage budget keeps its valid sibling budget (R17-srv-dom-b-L1-01)', () => {
+    const root = tempDir('cc-settings-');
+    fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+    fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ usageBudgets: { fiveHourTokens: -1, sevenDayTokens: 900000 } }));
+    expect(readSettings(root)).toMatchObject({ settings: { usageBudgets: { fiveHourTokens: null, sevenDayTokens: 900000 } }, problem: expect.stringMatching(/usageBudgets\.fiveHourTokens/) });
   });
 });

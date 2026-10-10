@@ -8,6 +8,7 @@ import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedToo
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
+import { trackerDenyGlobs, writeGuardPolicy } from '../../server/claude/confinement.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { ASK_ACTION_SPECS } from '../../shared/ask-actions.js';
@@ -713,6 +714,34 @@ describe('guard hook', () => {
     expect(write(path.join(root, 'custom', 'control-center', 'Supervisor', 'index.ts')).status).toBe(2);
     expect(write(path.join(root, 'custom', 'control-center', 'SUPERVISOR', 'new-file.ts')).status).toBe(2);
     expect(write(path.join(root, 'custom', 'notes', 'Fine.md')).status).toBe(0);
+  });
+
+  it('CAREER_OPS_TRACKER pointing elsewhere is still write-denied, so Dev Chat data/** cannot hand-edit the real tracker (R17-claude-L2-01)', () => {
+    const root = fs.realpathSync(tempDir('cc-hook-tracker-'));
+    fs.mkdirSync(path.join(root, 'data', 'notes'), { recursive: true });
+    const tracker = path.join(root, 'data', 'notes', 'tracker.md');
+    const saved = process.env.CAREER_OPS_TRACKER;
+    process.env.CAREER_OPS_TRACKER = tracker;
+    try {
+      const dir = path.join(root, 'guard');
+      const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+      const policy = JSON.parse(fs.readFileSync(pf.file, 'utf8')) as Parameters<typeof checkWrite>[0];
+      expect(policy.deny).toContain('data/notes/tracker.md');
+      expect(checkWrite(policy, 'Write', tracker)).toMatch(/is always protected/);
+      // A sibling data file stays inside the data/** write scope.
+      expect(checkWrite(policy, 'Write', path.join(root, 'data', 'notes', 'notes.md'))).toBeNull();
+      // The daily job's policy pass writes its policy straight through writeGuardPolicy (run-daily.sh): the same deny.
+      const daily = writeGuardPolicy(path.join(root, 'daily'), { codeRoot: root, dataRoot: root, allow: ['data/**'], deny: [...ALWAYS_DENIED_WRITES] });
+      const dailyPolicy = JSON.parse(fs.readFileSync(daily.file, 'utf8')) as Parameters<typeof checkWrite>[0];
+      expect(checkWrite(dailyPolicy, 'Write', tracker)).toMatch(/is always protected/);
+      // A tracker named through a symlinked spelling (macOS /var is /private/var) is still found under the real root.
+      const link = path.join(tempDir('cc-hook-tracker-link-'), 'root');
+      fs.symlinkSync(root, link);
+      expect(trackerDenyGlobs(root, root, { CAREER_OPS_TRACKER: path.join(link, 'data', 'notes', 'tracker.md') })).toEqual(['data/notes/tracker.md']);
+    } finally {
+      if (saved === undefined) delete process.env.CAREER_OPS_TRACKER;
+      else process.env.CAREER_OPS_TRACKER = saved;
+    }
   });
 
   it('quotes the hook command so a checkout path with spaces still runs the guard, and fails closed on any hook failure', () => {

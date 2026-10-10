@@ -7,6 +7,8 @@ export { postingUrl };
 
 // `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
+/** A pipeline.md section heading, as parsePipeline reads it (an indented `##` is not one). */
+export const PIPELINE_HEADING = /^##\s+(.+?)\s*$/;
 // The Pending and Processed headings every shipped modes/*/pipeline.md writes, as pairs (modes/pipeline.md: they "may be
 // in EN, ES, or any other language a market mode set writes them in"); tests/unit/upstream-formats checks the list
 // against the mode files. Done and Hecho are older processed headings no mode writes any more.
@@ -89,20 +91,6 @@ function jobUrlFromRest(rest: string): string | null {
   return pipelineRef(unescapeMarkdownUrl(rest.split('|')[0]?.trim().split(/\s+/)[0] ?? ''));
 }
 
-function pendingRange(lines: string[]): { start: number; end: number } | null {
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i]!.trim();
-    const h = t.match(/^##\s+(.+)$/);
-    if (h && pipelineSection(h[1]!) === 'pending') {
-      start = i + 1;
-      continue;
-    }
-    if (start !== -1 && t.startsWith('## ')) return { start, end: i };
-  }
-  return start === -1 ? null : { start, end: lines.length };
-}
-
 // Every modes/*/pipeline.md writes a URL it could not fetch as `- [!] URL <em dash or --> <note>` (Error: login
 // required, Fehler: ..., or a bare reason in the ua mode): that note in the first cell, which a scanned row never has.
 // A hand note after a plain hyphen (`URL - asked to wait`) is not one.
@@ -115,7 +103,12 @@ function restoredMark(rest: string): '!' | ' ' {
 
 export type SkipResult = { ok: true; text: string; matched: number; changed: number } | { ok: false; error: 'invalid-url' | 'unmatched' };
 
-/** Flip `- [ ]` and `- [x]` on Pending rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays. */
+/**
+ * Flip `- [ ]` and `- [x]` on rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays.
+ * The Inbox offers Skip and Back to queue on every row outside a Processed section, whatever its heading (scan.mjs may
+ * append under a second `## Pending` when pipeline.md's own heading is not English or Spanish), so the match spans
+ * every section but Processed, its headings read exactly as parsePipeline reads them.
+ */
 export function applyInboxSkip(text: string, url: string, done: boolean): SkipResult {
   // The app reads rows unescaped (parsePipeline); the file holds the escaped form, so both sides compare unescaped.
   const parsed = pipelineRef(typeof url === 'string' ? unescapeMarkdownUrl(url.trim()) : url);
@@ -124,11 +117,17 @@ export function applyInboxSkip(text: string, url: string, done: boolean): SkipRe
   const endedWithNl = /\r?\n$/.test(text);
   const lines = text.split(/\r?\n/);
   if (endedWithNl && lines[lines.length - 1] === '') lines.pop();
-  const range = pendingRange(lines);
+  let section: 'pending' | 'done' | 'other' = 'other';
   let matched = 0;
   let changed = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (range && (i < range.start || i >= range.end)) continue;
+    const h = lines[i]!.match(PIPELINE_HEADING);
+    if (h) {
+      section = pipelineSection(h[1]!);
+      continue;
+    }
+    // A Processed row is finished: it is never skipped or restored from the Inbox.
+    if (section === 'done') continue;
     const m = lines[i]!.match(CHECKBOX_LINE);
     if (!m) continue;
     if (jobUrlFromRest(m[3]!) !== parsed) continue;

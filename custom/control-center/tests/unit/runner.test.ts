@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { RunStore, runsDir } from '../../server/runner/store.js';
+import { RunStore, runsDir, type RunMeta } from '../../server/runner/store.js';
 import { Runner, WRAPPER_PATH, pidAlive, processStartTime } from '../../server/runner/runner.js';
 import { childEnv } from '../../server/system/child-env.js';
 import { execNoShell } from '../../server/routes/system.js';
@@ -624,8 +624,8 @@ describe('Runner', () => {
       CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', PATH: '/bin', HOME: '/h',
     };
     const env = childEnv({}, base);
-    // The two scan paths are always set, empty, so a scan writes the data root's files (R12-srv-core-L2-03).
-    expect(Object.keys(env).sort()).toEqual(['CAREER_OPS_PIPELINE', 'CAREER_OPS_SCAN_HISTORY', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // The four scan paths are always set, empty, so a scan writes the data root's files (R12-srv-core-L2-03, R17-srv-core-X-01).
+    expect(Object.keys(env).sort()).toEqual(['CAREER_OPS_PIPELINE', 'CAREER_OPS_PORTALS', 'CAREER_OPS_PROFILE', 'CAREER_OPS_SCAN_HISTORY', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
     // A session's own credentials, passed explicitly, still reach it.
     expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
   });
@@ -653,6 +653,14 @@ describe('Runner', () => {
         else process.env[k] = v;
       }
     }
+  });
+
+  it('pins CAREER_OPS_PORTALS and CAREER_OPS_PROFILE to the data root too, so an app scan reads the Portals editor and profile, not a lane\'s (R17-srv-core-X-01)', () => {
+    const lane = { CAREER_OPS_PORTALS: '/lane/portals.yml', CAREER_OPS_PROFILE: '/lane/profile.yml', CAREER_OPS_PIPELINE: '/lane/pipeline.md', CAREER_OPS_SCAN_HISTORY: '/lane/history.tsv', PATH: '/bin' };
+    const env = childEnv({}, lane);
+    expect(env).toMatchObject({ CAREER_OPS_PORTALS: '', CAREER_OPS_PROFILE: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '' });
+    // A caller passing one explicitly still wins (the network scan writes its own ephemeral portals file).
+    expect(childEnv({ CAREER_OPS_PORTALS: '/tmp/ephemeral.yml' }, lane).CAREER_OPS_PORTALS).toBe('/tmp/ephemeral.yml');
   });
 
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
@@ -696,6 +704,38 @@ describe('Runner', () => {
     expect(second.store.read(dead.id)?.status).toBe('done');
     expect(second.store.read(ghost.id)?.status).toBe('lost');
     await until(() => second.store.read(live.id)?.status === 'done', 15_000);
+  });
+
+  it('pending(actionId) sees a queued run another process left on disk, so a second daily start is refused during a blue/green handover (R17-srv-core-L3-01)', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const daily = { actionId: 'daily.runNow', label: 'Run the daily job now', cost: 'tokens' as const, resources: ['pipeline'], claude: true, cmd: { bin: process.execPath, args: ['-e', ''], cwd: root }, params: {} };
+    // The old child queued the daily job and drained: the run is on disk, not in this process's queue or active yet.
+    const queued = store.create(daily, { env: {}, secrets: [] });
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    // Not reconciled: only the disk knows it. The single-run guard must still see it and refuse a second start.
+    expect(runner.pending('daily.runNow').map((r) => r.id)).toEqual([queued.id]);
+    const started = runner.startUnlessPending(daily);
+    expect('pending' in started).toBe(true);
+    expect((started as { pending: RunMeta }).pending.id).toBe(queued.id);
+    // A run of another action on disk is not this action's pending run.
+    expect(runner.pending('other.action')).toEqual([]);
+  });
+
+  it('pending(actionId) settles a run another process left running whose wrapper is gone, so it never blocks a new start (R17-srv-core-L3-01 review)', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const daily = { actionId: 'daily.runNow', label: 'Run the daily job now', cost: 'tokens' as const, resources: ['pipeline'], claude: true, cmd: { bin: process.execPath, args: ['-e', ''], cwd: root }, params: {} };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    // Another server wrote it running, then crashed with no exit record, after this one had already reconciled.
+    const ghost = store.create(daily);
+    store.write({ ...ghost, status: 'running', wrapperPid: 2147483646 });
+    expect(runner.pending('daily.runNow')).toEqual([]);
+    expect(store.read(ghost.id)?.status).toBe('lost');
+    const started = runner.startUnlessPending(daily);
+    expect('pending' in started).toBe(false);
   });
 });
 

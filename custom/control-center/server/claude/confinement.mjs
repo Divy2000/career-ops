@@ -56,6 +56,44 @@ export const CODE_ROOT_WRITE_GLOBS = Object.freeze(['custom/**', 'templates/cv-*
 export const ALWAYS_DENIED_WRITES = ['data/blacklist.md', 'data/applications.md', 'applications.md', 'data/control-center/**'];
 
 /**
+ * Extra write-deny globs for the tracker file when CAREER_OPS_TRACKER points it somewhere other than the hardcoded
+ * defaults, so a session whose write scope covers that path (Dev Chat's data/** included) still cannot hand-edit the
+ * tracker: it changes only through set-status.mjs (its lock, validation and status-log). Returns the tracker's path
+ * relative to each root that contains it (relative overrides resolve against the code root, the repo); empty without
+ * an override, since the default data/applications.md and applications.md are already denied above.
+ */
+export function trackerDenyGlobs(dataRoot, codeRoot = dataRoot, env = process.env) {
+  const override = String(env?.CAREER_OPS_TRACKER ?? '').trim();
+  if (!override) return [];
+  const abs = path.isAbsolute(override) ? path.resolve(override) : path.resolve(codeRoot, override);
+  // Both the given spelling and the real one (a symlinked folder, macOS /var for /private/var), as the hook compares
+  // real paths: the real path of the deepest folder on disk, with the rest of the name appended.
+  let realAbs = abs;
+  for (let dir = abs, rest = ''; ; rest = path.join(path.basename(dir), rest), dir = path.dirname(dir)) {
+    try {
+      realAbs = path.join(fs.realpathSync.native(dir), rest);
+      break;
+    } catch {
+      if (dir === path.dirname(dir)) break;
+    }
+  }
+  const out = [];
+  for (const root of [...new Set([dataRoot, codeRoot])]) {
+    let real = root;
+    try {
+      real = fs.realpathSync.native(root);
+    } catch {
+      /* a root not on disk: the given spelling only */
+    }
+    for (const target of new Set([abs, realAbs])) {
+      const rel = path.relative(real, target);
+      if (rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) out.push(rel.split(path.sep).join('/'));
+    }
+  }
+  return [...new Set(out)];
+}
+
+/**
  * Secret files no session may read, relative to each root and matched case-insensitively (an over-deny on
  * case-sensitive volumes, by design). Enforced as Read deny rules in the per-turn settings file (under each
  * root's given and real path) and by the guard hook. File-name based: a secret under another name is readable.
@@ -175,7 +213,10 @@ export function guardHooks(command = guardHookCommand()) {
 export function writeGuardPolicy(dir, policy) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'policy.json');
-  const bytes = JSON.stringify(policy, null, 2);
+  // Every writer of a policy (a session turn, the daily job's policy pass) gets the tracker's own deny.
+  const tracker = policy.codeRoot ? trackerDenyGlobs(policy.dataRoot ?? policy.codeRoot, policy.codeRoot) : [];
+  const deny = [...new Set([...(policy.deny ?? []), ...tracker])];
+  const bytes = JSON.stringify(tracker.length ? { ...policy, deny } : policy, null, 2);
   fs.writeFileSync(file, bytes);
   return { file, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }

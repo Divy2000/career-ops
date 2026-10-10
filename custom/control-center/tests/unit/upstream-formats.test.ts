@@ -309,6 +309,19 @@ describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
     fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), 'https://jobs.example.com/old\t2026-09-01\tlever\tEngineer\tOldCo\tadded\tBerlin\n');
     expect(readScanHistory(root)).toEqual([{ url: 'https://jobs.example.com/old', firstSeen: '2026-09-01', portal: 'lever', title: 'Engineer', company: 'OldCo', status: 'added', location: 'Berlin', postedAt: '' }]);
   });
+
+  it('strips scan.mjs\'s leading-quote formula guard from a title, company or location starting with = + - @ (R17-srv-dom-b-L3-01)', () => {
+    const root = tempDir('cc-scan-history-formula-');
+    fs.mkdirSync(path.join(root, 'data'));
+    fs.writeFileSync(
+      path.join(root, 'data', 'scan-history.tsv'),
+      "url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://jobs.example.com/1\t2026-10-01\tgreenhouse-api\t'@Pay\t'=Weird Co\tadded\t'-Remote\nhttps://jobs.example.com/2\t2026-10-01\tlever\t'+Backend\t-Acme\tadded\tRemote\n",
+    );
+    expect(readScanHistory(root)).toEqual([
+      { url: 'https://jobs.example.com/1', firstSeen: '2026-10-01', portal: 'greenhouse-api', title: '@Pay', company: '=Weird Co', status: 'added', location: '-Remote', postedAt: '' },
+      { url: 'https://jobs.example.com/2', firstSeen: '2026-10-01', portal: 'lever', title: '+Backend', company: '-Acme', status: 'added', location: 'Remote', postedAt: '' },
+    ]);
+  });
 });
 
 describe('localized pipeline.md headings (every modes/*/pipeline.md, R13-feat-b-L3-01)', () => {

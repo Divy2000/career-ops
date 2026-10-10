@@ -14,15 +14,21 @@ export interface SystemStatus {
   careerOps: { version: string | null };
 }
 
-export type Exec = (cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv }) => Promise<{ code: number; stdout: string; stderr: string }>;
+/** `timedOut`: the command ran past `timeoutMs` and was killed; its code is then TIMEOUT_EXIT_CODE. */
+export type Exec = (cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv }) => Promise<{ code: number; stdout: string; stderr: string; timedOut?: boolean }>;
+
+/** timeout(1)'s exit code: no script exits with it, so an exit map or explainFailure never reads a timeout as its own failure. */
+export const TIMEOUT_EXIT_CODE = 124;
 
 /** spawn() with shell:false, resolving with the exit code instead of throwing. */
 export const execNoShell: Exec = (cmd, args, { cwd, timeoutMs, env }) =>
   new Promise((resolve) => {
     execFile(cmd, args, { cwd, timeout: timeoutMs, shell: false, env: childEnv(env), maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const code = err && typeof (err as NodeJS.ErrnoException).code === 'number' ? ((err as NodeJS.ErrnoException).code as unknown as number) : err ? 1 : 0;
-      const stderrText = String(stderr ?? '') + (err && (err as NodeJS.ErrnoException).code === 'ENOENT' ? `\n${cmd}: not found` : '');
-      resolve({ code, stdout: String(stdout ?? ''), stderr: stderrText });
+      // execFile kills a command that runs past its timeout (killed, no exit code): that is a timeout, not exit 1.
+      const timedOut = Boolean(err?.killed) && typeof err?.code !== 'number';
+      const code = timedOut ? TIMEOUT_EXIT_CODE : err && typeof err.code === 'number' ? err.code : err ? 1 : 0;
+      const note = timedOut ? `\n${cmd} timed out after ${timeoutMs / 1000} s` : err?.code === 'ENOENT' ? `\n${cmd}: not found` : '';
+      resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') + note, timedOut });
     });
   });
 
