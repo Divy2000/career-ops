@@ -4,6 +4,13 @@ const HEADER = '| num | appNum | date | company | role | channel | contact | not
 const SEPARATOR = '|---|---|---|---|---|---|---|---|';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A real calendar date in YYYY-MM-DD form (2026-02-31 fails, as it has no such day). */
+const isRealDate = (s) => {
+  if (!DATE_RE.test(s)) return false;
+  const d = new Date(s);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
+
 const cell = (v) => String(v ?? '').replace(/\|/g, '/').replace(/[\r\n]+/g, ' ').trim();
 
 // A follow-up row as followup-cadence.mjs parseFollowups reads one: eight cells, a numeric num and appNum.
@@ -49,7 +56,7 @@ export function applyFollowupEdit(text, edit) {
 
   switch (edit.op) {
     case 'log.add': {
-      if (!DATE_RE.test(String(edit.date))) return { ok: false, error: 'invalid-date' };
+      if (!isRealDate(String(edit.date))) return { ok: false, error: 'invalid-date' };
       if (!Number.isInteger(edit.appNum) || edit.appNum <= 0) return { ok: false, error: 'invalid-app' };
       // The upstream readers take follow-up rows by position, whatever the header labels say, so the table is the first
       // header of eight or more columns over a `|---` separator; nums are unique across every follow-up row in the file.
@@ -78,7 +85,7 @@ export function applyFollowupEdit(text, edit) {
       return { ok: true, text: join(lines) };
     }
     case 'pin.set': {
-      if (!DATE_RE.test(String(edit.date)) || !DATE_RE.test(String(edit.setOn))) return { ok: false, error: 'invalid-date' };
+      if (!isRealDate(String(edit.date)) || !isRealDate(String(edit.setOn))) return { ok: false, error: 'invalid-date' };
       const re = pinRe(edit.appNum);
       const kept = lines.filter((l) => !re.test(l) && !isCleared(l, edit.appNum));
       kept.push(`- next #${edit.appNum} ${edit.date} (set ${edit.setOn})`);

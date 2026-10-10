@@ -174,6 +174,11 @@ describe('follow-ups edits', () => {
   it('rejects dates that are not YYYY-MM-DD', () => {
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: 'tomorrow', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });
   });
+  it('rejects an impossible calendar date in a pin or a log row, so the valid pin and retirement survive (R17-srv-dom-a-X-03)', () => {
+    expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: '2026-02-31', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });
+    expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-02-31' })).toEqual({ ok: false, error: 'invalid-date' });
+    expect(applyFollowupEdit(FOLLOWUPS, { op: 'log.add', appNum: 6, date: '2026-02-31', company: 'V', role: 'R', channel: 'Email', contact: '', notes: '' })).toEqual({ ok: false, error: 'invalid-date' });
+  });
 });
 
 /** Every action id the spec's section 3.3 table lists. */
