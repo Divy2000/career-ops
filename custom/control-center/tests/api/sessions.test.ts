@@ -1630,6 +1630,23 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('a session output that cannot be recorded (its turn folder turned read-only) errors the session instead of crashing the server (R14-claude-L1-01)', async () => {
+    const app = await freshApp();
+    const turnDir = () => path.join(app.sessions.store.guardDirOf(id), 'turns', '1');
+    let id = '';
+    try {
+      id = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id as string);
+      await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      fs.chmodSync(turnDir(), 0o500);
+      const { meta } = await settleOn(app, id);
+      expect(meta).toMatchObject({ status: 'error', error: expect.stringMatching(/could not record the session output/) });
+      expect((await call(app, 'GET', '/api/sessions')).statusCode).toBe(200);
+    } finally {
+      if (id) fs.chmodSync(turnDir(), 0o700);
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {
