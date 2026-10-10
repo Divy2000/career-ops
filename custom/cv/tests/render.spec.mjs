@@ -241,6 +241,10 @@ test('given an output path that is an existing folder, when the final render fai
   assert.deepEqual(fs.readdirSync(pdf), []);
 });
 
+// The start of a NODE_OPTIONS --import preload that singles out the render-pdf children: isGenerate in every
+// generate-pdf.mjs, isFinal in the one that publishes (its input is the real HTML, not a density draft).
+const PRELOAD_ARGS = "const args = process.argv.slice(2);\nconst html = args.findIndex((a) => a.endsWith('.html'));\nconst isGenerate = process.argv.some((a) => a.endsWith('generate-pdf.mjs'));\nconst isFinal = isGenerate && html !== -1 && !args[html].includes('.render-pdf-');\n";
+
 // A render started in the background, for the specs that stop it with a signal partway through.
 // Its own TMPDIR, so a spec can check that a stopped render leaves nothing there either (Chromium keeps its profile in it).
 const startRender = (root, html, args) => {
@@ -317,7 +321,7 @@ test('given a final render that publishes the PDF and then exits non-zero, when 
   // Loaded into every node of the run: only the final generate-pdf.mjs (its input is the real HTML, not a draft) is made
   // to exit 1 after it finished, as a cancel that lands after the PDF and its index row were written does.
   const preload = path.join(root, 'fail-after-publish.mjs');
-  fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs') && !process.argv[2]?.includes('.render-pdf-')) process.on('exit', () => { process.exitCode = 1; });\n`);
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isFinal) process.on('exit', () => { process.exitCode = 1; });\n`);
   const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1', '--report=12'], {
     cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
   });
@@ -337,7 +341,7 @@ test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the 
   const before = fs.readFileSync(html, 'utf8');
   const tmp = fs.realpathSync(tempDir('render-tmp-'));
   const preload = path.join(root, 'flood.mjs');
-  fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs')) process.stdout.write('x'.repeat(17 * 1024 * 1024));\n`);
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isGenerate) process.stdout.write('x'.repeat(17 * 1024 * 1024));\n`);
   const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
     cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp }, encoding: 'utf8', timeout: 240000, maxBuffer: 64 * 1024 * 1024,
   });
@@ -360,7 +364,7 @@ test('given a final render that overflows the budget under --strict-pages, when 
   fs.copyFileSync(buildInto(root, longPayload()), long);
   fs.writeFileSync(html, before);
   const preload = path.join(root, 'overflow-final.mjs');
-  fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs') && !process.argv[2]?.includes('.render-pdf-')) process.argv[2] = ${JSON.stringify(long)};\n`);
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isFinal) process.argv[process.argv.indexOf(args[html])] = ${JSON.stringify(long)};\n`);
   const pdf = path.join(root, 'output', 'cv-test.pdf');
   const goodPdf = pdfWith(1);
   fs.writeFileSync(pdf, goodPdf);
@@ -388,7 +392,7 @@ test('given a final render stopped while it writes the PDF, leaving a truncated 
   fs.writeFileSync(pdf, goodPdf);
   // Only the final generate-pdf.mjs: its PDF is cut short and it exits 1, as a stop in the middle of the write leaves it.
   const preload = path.join(root, 'truncate-final.mjs');
-  fs.writeFileSync(preload, `import fs from 'node:fs';\nif (process.argv[1]?.endsWith('generate-pdf.mjs') && !process.argv[2]?.includes('.render-pdf-')) process.on('exit', () => { fs.writeFileSync(process.argv[3], fs.readFileSync(process.argv[3]).subarray(0, 200)); process.exitCode = 1; });\n`);
+  fs.writeFileSync(preload, `import fs from 'node:fs';\n${PRELOAD_ARGS}const pdf = args.find((a) => a.endsWith('.pdf'));\nif (isFinal) process.on('exit', () => { fs.writeFileSync(pdf, fs.readFileSync(pdf).subarray(0, 200)); process.exitCode = 1; });\n`);
   const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], {
     cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
   });
