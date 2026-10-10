@@ -320,12 +320,15 @@ export class SessionManager {
     }
   }
 
-  /** A turn that cannot start: the session says why, and its report reservation goes back to the pool. */
+  /**
+   * A turn that cannot start: the session says why. A first turn's report reservation goes back to the pool; a later
+   * turn's stays with the session (as after an awaiting_user outcome), so the retried reply is told the number again.
+   */
   private async failBeforeSpawn(meta: SessionMeta, message: string): Promise<SessionMeta> {
     this.store.setStatus(meta.id, 'error', message);
     this.emit(meta.id, { type: 'error', message });
     const num = this.store.read(meta.id)?.reportNum ?? null;
-    if (num !== null) {
+    if (num !== null && meta.turns.length === 0) {
       this.store.setReportNum(meta.id, null);
       await this.releaseReportNum(num, false);
     }

@@ -1529,6 +1529,45 @@ describe('report reservations and session trackers survive failures (r16-claude)
   };
   const QUESTION = { events: [INIT, delta('Which office do you prefer?'), result('Which office do you prefer?', 0.01)] };
 
+  it('a reply that fails before Claude starts keeps the session reserved report number, and the retried reply is told it again (R14-claude-L3-01)', async () => {
+    let reads = 0;
+    const app = await freshApp({
+      readToken: async () => {
+        reads += 1;
+        if (reads === 2) throw new Error('Keychain item career-ops-claude-token not found');
+        return FAKE_TOKEN;
+      },
+    });
+    try {
+      const sentinel = reserve(app, 64);
+      await withScenario(scenarioFile(QUESTION), async () => {
+        const { id } = await app.sessions.start({ mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/synthetic/64' }, prompt: 'Evaluate', reportNum: 64 });
+        expect((await settleOn(app, id)).meta.status).toBe('awaiting_user');
+        const failed = await app.sessions.send(id, 'Remote');
+        expect(failed).toMatchObject({ status: 'error', reportNum: 64 });
+        expect(fs.existsSync(sentinel)).toBe(true);
+        await app.sessions.send(id, 'Remote');
+        const retried = await settleOn(app, id);
+        const run = (await call(app, 'GET', `/api/runs/${retried.meta.turns.at(-1)!.runId}`)).json();
+        expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 64 is reserved/);
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a first turn that cannot start still sends its reservation back to the pool (R14-claude-L3-01)', async () => {
+    const app = await freshApp({ readToken: async () => { throw new Error('Keychain item career-ops-claude-token not found'); } });
+    try {
+      const sentinel = reserve(app, 65);
+      const meta = await app.sessions.start({ mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/synthetic/65' }, prompt: 'Evaluate', reportNum: 65 });
+      expect(meta).toMatchObject({ status: 'error', reportNum: null });
+      expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {
