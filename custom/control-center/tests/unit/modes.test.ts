@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { deriveModes } from '../../scripts/derive-mode-policies.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { ALWAYS_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
 import { AGENT_SPAWNING_SCRIPTS, matches } from '../../server/claude/guard-policy.mjs';
 import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
 
@@ -165,12 +165,17 @@ describe('mode registry', () => {
     for (const script of AGENT_SPAWNING_SCRIPTS) expect(importGraph(script).some((f) => AGENT.test(fs.readFileSync(f, 'utf8'))), script).toBe(true);
   });
 
-  it('no class ever grants the always-denied files', () => {
+  it('no class ever grants the always-denied files, not even through a wider glob', () => {
+    // A file each denied entry covers: the entry itself, or one inside a denied folder glob.
+    const deniedFiles = ALWAYS_DENIED_WRITES.map((denied) => denied.replace('**', 'state/probe.json'));
     for (const [name, def] of Object.entries(POLICY_CLASSES)) {
-      for (const denied of ALWAYS_DENIED_WRITES) {
-        expect(def.writeGlobs, `${name} grants ${denied}`).not.toContain(denied);
-      }
+      // Dev Chat grants data/** on purpose and keeps these files out through its own deny list.
+      if (name === 'devchat') continue;
+      for (const file of deniedFiles) expect(matches(file, def.writeGlobs), `${name} grants ${file}`).toBe(false);
+      // And no grant reaches inside a denied folder.
+      for (const glob of def.writeGlobs) expect(matches(glob.replace(/\*+/g, 'probe'), ALWAYS_DENIED_WRITES), `${name} grants ${glob}`).toBe(false);
     }
+    expect(DEVCHAT_DENIED_WRITES).toEqual(expect.arrayContaining(ALWAYS_DENIED_WRITES));
   });
 });
 
