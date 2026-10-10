@@ -64,12 +64,15 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     const from = edit.base ?? q.data;
     // Added and removed are counted against the rows on disk, not as a net of the two lengths: a swap (remove one,
     // add another) leaves the length unchanged but is still one added and one removed.
+    // Rows are counted as a multiset (a legacy file can hold the same row twice), with the extra columns' cells.
     const fromRows = from?.rows ?? [];
-    const key = (r: BlacklistRow) => [r.company, r.since, r.scope, r.reason].join('\u0000');
-    const fromSet = new Set(fromRows.map(key));
-    const currentSet = new Set(current.map(key));
-    const addedCount = current.filter((r) => !fromSet.has(key(r))).length;
-    const removedCount = fromRows.filter((r) => !currentSet.has(key(r))).length;
+    const key = (r: BlacklistRow) => [r.company, r.since, r.scope, r.reason, ...(r.extra ?? [])].join('\u0000');
+    const counts = (rows: BlacklistRow[]) => rows.reduce((m, r) => m.set(key(r), (m.get(key(r)) ?? 0) + 1), new Map<string, number>());
+    const surplus = (a: Map<string, number>, b: Map<string, number>) => [...a].reduce((n, [k, c]) => n + Math.max(0, c - (b.get(k) ?? 0)), 0);
+    const fromCounts = counts(fromRows);
+    const currentCounts = counts(current);
+    const addedCount = surplus(currentCounts, fromCounts);
+    const removedCount = surplus(fromCounts, currentCounts);
     const diff = [addedCount > 0 ? `${addedCount} added` : null, removedCount > 0 ? `${removedCount} removed` : null].filter((s): s is string => s !== null);
     const ok = await confirm({
       title: 'Write data/blacklist.md?',

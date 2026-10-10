@@ -18,8 +18,15 @@ function json(status: number, body: unknown) {
 
 const row = (company: string) => ({ company, since: '2026-01-01', scope: 'company' as const, reason: '' });
 
+/** The rows data/blacklist.md holds; a test can set its own before mounting. */
+let diskRows: Array<ReturnType<typeof row>>;
+
 beforeEach(() => {
-  const read = { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', rows: [row('Initech'), row('Globex')], preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] };
+  diskRows = [row('Initech'), row('Globex')];
+});
+
+beforeEach(() => {
+  const read = { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', get rows() { return diskRows; }, preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] };
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url: string, init?: RequestInit) => {
@@ -76,5 +83,18 @@ describe('the blacklist write confirm', () => {
     await until(() => dialog(), 'the confirm dialog');
 
     expect(dialog()!.textContent).toContain('0 rows will be written (2 removed)');
+  });
+  it('counts a removed duplicate row, which a set of distinct rows would miss (review)', async () => {
+    diskRows = [row('Initech'), row('Initech'), row('Globex')];
+    const { BlacklistEditor } = await import('@web/features/settings/BlacklistEditor');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(BlacklistEditor, {})))));
+    await until(() => document.body.textContent?.includes('Initech'), 'the rows');
+
+    await act(async () => button('Remove Initech from the blacklist draft')!.click());
+    await act(async () => button('Save blacklist')!.click());
+    await until(() => dialog(), 'the confirm dialog');
+
+    expect(dialog()!.textContent).toContain('2 rows will be written (1 removed)');
   });
 });
