@@ -314,6 +314,21 @@ test('given another render\'s temp HTML in the same folder, when a render is sto
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), [path.basename(other), 'cv-test.html'].sort());
 });
 
+test('given another render starts while this one runs, when this one finishes, the other render\'s temp HTML is left alone (R15-scripts-a-L1-01 review)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const { child, exited } = startRender(root, html, ['--max-pages=1']);
+  await waitFor(() => renderTemps(root).length > 0, 'this render\'s temp HTML');
+  // A second render, started after this one sampled the folder, writes its own temp HTML beside the input.
+  const other = path.join(root, 'output', '.career-ops-render-11111111-1111-1111-1111-111111111111.html');
+  fs.writeFileSync(other, '<html><body>another render in progress</body></html>');
+  const end = await exited;
+  assert.equal(end.status, 0, JSON.stringify(end));
+  assert.ok(fs.existsSync(other), 'this render deleted another render\'s live temp HTML');
+  const temps = fs.readdirSync(path.join(root, 'output')).filter((f) => f.startsWith('.career-ops-render-'));
+  assert.deepEqual(temps, [path.basename(other)], 'only the other render\'s temp HTML is left');
+});
+
 test('given a render stopped with SIGTERM while it publishes the chosen layout, then that render finishes, so the input HTML and the PDF agree (R11-scripts-a-L1-02)', { timeout: 240000 }, async () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);

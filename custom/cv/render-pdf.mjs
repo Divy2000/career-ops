@@ -187,7 +187,11 @@ async function main() {
     child.on('error', (err) => { if (!stopping) reject(err); });
     child.on('close', (status, signal) => {
       if (running === child) running = null;
-      for (const f of renderTemps(tempDir)) if (!tempsBefore.has(f)) rmSync(path.join(tempDir, f), { force: true });
+      // generate-pdf.mjs removes its own temp HTML in a finally on a clean exit or an ordinary non-zero exit, so a
+      // leftover only happens when the render is stopped (the kill skips that finally). Delete the temp files that
+      // appeared while this render ran only then: doing it on every close would also delete a concurrent render's
+      // live temp, breaking its page.goto().
+      if (stopping || signal) for (const f of renderTemps(tempDir)) if (!tempsBefore.has(f)) rmSync(path.join(tempDir, f), { force: true });
       child.result = { status, signal, stdout, stderr };
       if (stopping) return;
       if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));
