@@ -831,6 +831,17 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   assert.match(r.out, /claude .*Read custom\/install\/ONBOARDING\.md and follow it/);
 });
 
+test('--onboard headless with a Claude Code too old to scrub hook and tool children never hands it the token (R11-scripts-b-L3-01)', () => {
+  for (const version of ['2.1.287', 'garbled']) {
+    const { w, D } = fresh({ keychain: true });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: version } });
+    assert.equal(r.status, 3, r.out);
+    assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, `${version}: claude -p ran\n${r.out}`);
+    assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.288 or later/, version);
+    assert.match(r.out, /claude update/, version);
+  }
+});
+
 test('--onboard headless without the Keychain item is a pending action (exit 3) and claude is not called', () => {
   const { w, D } = fresh({ keychain: false });
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless']);

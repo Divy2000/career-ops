@@ -14,6 +14,8 @@ UPSTREAM_URL="https://github.com/career-ops-hq/career-ops.git"
 NODE_RANGE="^22.22.2 || ^24.15.0 || >=26.0.0"
 NODE_SUPPORTED="22.22.2+, 24.15+ or 26+"
 KEYCHAIN_SERVICE="career-ops-claude-token"
+# The first Claude Code that honors CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (the Control Center's contract.json records it).
+CLAUDE_SCRUB_MIN="2.1.288"
 # The terminal the installer talks to. Overridable so tests can feed answers from a file.
 TTY_DEV="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"
 
@@ -803,6 +805,10 @@ else
       elif [ "$KEYCHAIN_OK" = 0 ]; then
         say "  Headless onboarding needs the Keychain item $KEYCHAIN_SERVICE."
         pending "Store the Keychain token, then re-run with --onboard headless. Without it, run: cd $QDIR && claude $(shell_quote "$prompt")"
+      elif ! claude_version="$("$CLAUDE_BIN" --version 2>/dev/null)" || ! lib version-ge "${claude_version%% *}" "$CLAUDE_SCRUB_MIN"; then
+        # Older builds ignore CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, so hook and tool children would inherit the token.
+        say "  Headless onboarding needs Claude Code $CLAUDE_SCRUB_MIN or later, which keeps the token out of hooks and tools (found: ${claude_version:-unknown})."
+        pending "Update Claude Code (claude update), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
         mkdir -p "$draft"
         inputs=()
