@@ -442,6 +442,43 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(gone.revert(false).status).toBe(200);
   });
 
+  it('a queued run the next server will start again blocks the revert; one it cannot start (no start request) ends lost there, so it does not (R14-supervisor-L2-01)', () => {
+    const request = JSON.stringify({ env: {}, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
+    const restartable = stalled((dir) => {
+      runMeta(dir, { status: 'queued' });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+    });
+    expect(restartable.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    expect(fs.readFileSync(restartable.file, 'utf8')).toBe('broken by the turn\n');
+    // A server that died while starting it: the wrapper runs (still queued on disk), so its processes decide.
+    const starting = stalled((dir) => {
+      runMeta(dir, { status: 'queued' });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+      fs.writeFileSync(path.join(dir, 'starting'), '');
+      fs.writeFileSync(path.join(dir, 'wrapper.json'), JSON.stringify({ wrapperPid: process.pid, childPid: process.pid }));
+    });
+    expect(starting.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    // Begun starting, but no wrapper recorded itself within the runner's grace: the next server marks it lost, never starts it.
+    const startingRecent = stalled((dir) => {
+      runMeta(dir, { status: 'queued' });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+      fs.writeFileSync(path.join(dir, 'starting'), '');
+    });
+    expect(startingRecent.revert(false).status).toBe(409);
+    const startingStale = stalled((dir) => {
+      runMeta(dir, { status: 'queued' });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+      fs.writeFileSync(path.join(dir, 'starting'), '');
+      const past = new Date(Date.now() - 60_000);
+      fs.utimesSync(path.join(dir, 'starting'), past, past);
+    });
+    expect(startingStale.revert(false).status).toBe(200);
+    // A wrapper that is only slow is told to stop, as the runner would tell it: it reads the cancel file before it spawns.
+    expect(fs.existsSync(path.join(startingStale.runsDir, 'r20261006000000-abcdef', 'cancel'))).toBe(true);
+    const neverStarts = stalled((dir) => runMeta(dir, { status: 'queued' }));
+    expect(neverStarts.revert(false).status).toBe(200);
+  });
+
   it('a run still going is never reverted under it, nor one that cannot be shown to have ended, nor any while a server runs', () => {
     const alive = stalled((dir) => runMeta(dir, { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid) }));
     expect(alive.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });

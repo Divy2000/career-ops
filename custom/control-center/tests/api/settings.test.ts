@@ -403,6 +403,8 @@ describe('launchd schedule through the injectable executor (never the real launc
     expect(fake.calls.map((c) => [c.cmd, ...c.args].join(' '))).toEqual([
       // First a read: is launchd running the job right now (SW3-server-01)?
       `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
+      // Then the disabled flag, which a failed save would put back (R12-srv-core-01).
+      `launchctl print-disabled gui/${uid}`,
       expect.stringMatching(new RegExp(`^plutil -lint ${plist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-\\d+$`)),
       `launchctl enable gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootout gui/${uid}/com.career-ops.upstream-sync`,
@@ -437,8 +439,8 @@ describe('launchd schedule through the injectable executor (never the real launc
     }
     expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
     expect(fs.readdirSync(t.cfg.launchAgentsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
-    // Only the read-only running check reached launchctl: nothing was enabled, disabled, booted out or in.
-    expect(fake.calls.filter((c) => c.cmd === 'launchctl' && c.args[0] !== 'print')).toEqual([]);
+    // Only the read-only checks (running, disabled) reached launchctl: nothing was enabled, disabled, booted out or in.
+    expect(fake.calls.filter((c) => c.cmd === 'launchctl' && c.args[0] !== 'print' && c.args[0] !== 'print-disabled')).toEqual([]);
   });
   for (const [step, status, error] of [
     ['launchctl enable', 502, /launchctl enable failed/],
@@ -463,6 +465,74 @@ describe('launchd schedule through the injectable executor (never the real launc
       expect(res.json().error).toMatch(/launchctl disable failed .*would load again at the next login/);
     } finally {
       fake.fail.clear();
+    }
+  });
+  it('two saves at once both succeed, run one after the other, and the plist holds the later one (R12-srv-core-L3-01, R12-srv-core-02)', async () => {
+    const base = fakeLaunchdExec();
+    // The first lint is slow, so without serialization the second save writes and lints while the first one waits.
+    let lints = 0;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'plutil' && args[0] === '-lint' && lints++ === 0) await new Promise((r) => setTimeout(r, 50));
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      const [a, b] = await Promise.all([put({ hour: 4, minute: 30, weekday: 0, enabled: true }), put({ hour: 6, minute: 15, weekday: 0, enabled: false })]);
+      expect(a.statusCode, a.body).toBe(200);
+      expect(b.statusCode, b.body).toBe(200);
+      const xml = fs.readFileSync(path.join(app.cfg.launchAgentsDir, `${label}.plist`), 'utf8');
+      expect(xml).toContain('<key>Hour</key><integer>6</integer><key>Minute</key><integer>15</integer>');
+      expect(b.json()).toMatchObject({ loaded: false, disabled: true, hour: 6, minute: 15 });
+      expect(fs.readdirSync(app.cfg.launchAgentsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a failing launchctl step puts the previous plist and job state back, so a failed save leaves the old schedule running (R12-srv-core-01)', async () => {
+    const base = fakeLaunchdExec();
+    let failBootstraps = 0;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'bootstrap' && failBootstraps > 0) {
+        failBootstraps--;
+        base.calls.push({ cmd, args: [...args] });
+        return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      const plist = path.join(app.cfg.launchAgentsDir, `${label}.plist`);
+      // First install fails: nothing was installed before, so nothing stays installed.
+      failBootstraps = 1;
+      const first = await put({ hour: 4, minute: 30, weekday: 0, enabled: true });
+      expect(first.statusCode).toBe(502);
+      expect(first.json().error).toMatch(/launchctl bootstrap failed .*previous schedule was restored/);
+      expect(fs.existsSync(plist)).toBe(false);
+      expect(base.loaded.has(label)).toBe(false);
+      // A working install, then a save whose bootstrap fails: the old plist and the loaded job come back.
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      const installed = fs.readFileSync(plist, 'utf8');
+      failBootstraps = 1;
+      const res = await put({ hour: 6, minute: 0, weekday: 0, enabled: true });
+      expect(res.statusCode).toBe(502);
+      expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+      expect(base.loaded.has(label)).toBe(true);
+      expect(base.disabled.has(label)).toBe(false);
+      // A failing disable on a loaded job leaves it loaded and enabled with its plist.
+      base.fail.add('launchctl disable');
+      try {
+        expect((await put({ hour: 9, minute: 0, weekday: 0, enabled: false })).statusCode).toBe(502);
+      } finally {
+        base.fail.clear();
+      }
+      expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+      expect(base.loaded.has(label)).toBe(true);
+    } finally {
+      await app.close();
     }
   });
   it('refuses to save or disable a schedule while launchd is running that job, since bootout would kill the run mid-step (SW3-server-01)', async () => {

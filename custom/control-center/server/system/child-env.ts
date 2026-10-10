@@ -15,8 +15,16 @@
 const SECRET_SEGMENT = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
 export const isCredential = (name: string): boolean => name.startsWith('ANTHROPIC_') || (name.startsWith('CLAUDE_CODE_') && SECRET_SEGMENT.test(name.slice('CLAUDE_CODE_'.length)));
 
+/**
+ * scan.mjs and its siblings put these ahead of the data root (a second search lane, #2271), from the shell or from the
+ * data root's .env. The app reads and edits only the data root's data/pipeline.md and data/scan-history.tsv, so a scan
+ * it starts must write those: an empty value keeps each script's default (they read it with ||), and dotenv never
+ * overwrites a variable that is already set. A caller may still pass one explicitly.
+ */
+const PINNED_TO_DATA_ROOT = { CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '' };
+
 export function childEnv(extra: NodeJS.ProcessEnv = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(base)) if (!k.startsWith('CC_') && !isCredential(k)) out[k] = v;
-  return { ...out, ...extra };
+  return { ...out, ...PINNED_TO_DATA_ROOT, ...extra };
 }

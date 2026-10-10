@@ -123,12 +123,15 @@ function isExecutable(file: string): boolean {
  * Absolute path of the claude binary: a name with a slash is taken as given, a bare name is looked up on PATH,
  * then in the usual install locations. A bare name that is found nowhere is returned unchanged so the probe reports ENOENT.
  */
-/** Every distinct executable (by real file) `bin` resolves to, in pick order: PATH, the native installer's ~/.local/bin, then Homebrew and /usr/local. */
+/** Every distinct executable (by real file) `bin` resolves to, in pick order: PATH, the native installer's ~/.local/bin, then (for `claude` only) Homebrew and /usr/local. */
 export function claudeCandidates(bin: string, opts: { env?: NodeJS.ProcessEnv; home?: string; candidates?: string[] } = {}): string[] {
   const env = opts.env ?? process.env;
   const home = opts.home ?? os.homedir();
   const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  const all = [...dirs.map((d) => path.join(d, bin)), path.join(home, '.local', 'bin', bin), ...(opts.candidates ?? CLAUDE_FALLBACKS)];
+  // The Homebrew and /usr/local fallbacks are paths to `claude`: they stand in for that name only, never for another one
+  // the user chose (CC_CLAUDE_BIN=work-claude), which must not silently become an unrelated install.
+  const fallbacks = bin === 'claude' ? (opts.candidates ?? CLAUDE_FALLBACKS) : [];
+  const all = [...dirs.map((d) => path.join(d, bin)), path.join(home, '.local', 'bin', bin), ...fallbacks];
   // Two paths to the same file (a symlink into ~/.local/bin is common) are one install; the first path listed stands for it.
   const seen = new Set<string>();
   return all.filter((c) => {

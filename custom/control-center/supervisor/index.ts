@@ -5,6 +5,7 @@
 // change sets can be reverted even when the server child is broken.
 import http from 'node:http';
 import net from 'node:net';
+import { pipeline } from 'node:stream';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -15,7 +16,7 @@ import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates, testHos
 import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
-import { SERVER_TREES, serverLoads, watchCoreGraph } from './core-graph.js';
+import { SERVER_TREES, serverEntries, serverLoads, watchCoreGraph } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
@@ -27,11 +28,15 @@ import { RECOVERY_SCRIPT } from './recovery-script.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_ROOT = process.env.CC_CODE_ROOT ?? path.resolve(PACKAGE_ROOT, '..', '..');
-const PORT = Number(process.env.CC_PORT ?? 4317);
+const PORT_TEXT = process.env.CC_PORT ?? '4317';
+// Digits only: Number() also takes "", "0x10" and "1e3", and listen(0) asks the OS for any port, which the URLs and the
+// host and origin checks (all pinned to PORT) would never match.
+const PORT = /^\d+$/.test(PORT_TEXT) ? Number(PORT_TEXT) : NaN;
 const BUILT = process.argv.includes('--built') || process.env.CC_SERVE_BUILT === '1';
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
 const SESSION_COOKIE = 'cc_session';
-const CORE_ENTRIES = CONTRACT.exports.map((e) => e.module);
+// Read anew on every use: Dev Chat may add a server module that imports one more file outside the package.
+const CORE_ENTRIES = () => serverEntries(CODE_ROOT, PACKAGE_ROOT, CONTRACT.exports.map((e) => e.module));
 
 async function resolveDataRoot(): Promise<string> {
   if (process.env.CC_DATA_ROOT) return path.resolve(process.env.CC_DATA_ROOT);
@@ -120,7 +125,7 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
-const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
+const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'`;
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
 export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState): string {
@@ -138,7 +143,9 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: R
               `</li>`,
           )
           .join('');
-        return `<section><h3>Turn ${t.n}</h3>${files ? `<ul>${files}</ul>` : '<p class="s">No files changed.</p>'}<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><button>Revert whole turn</button></form></section>`;
+        // As in the app, a turn none of whose files can be reverted offers no whole-turn revert.
+        const whole = t.files.some((f) => f.canRevert) ? `<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><button>Revert whole turn</button></form>` : '';
+        return `<section><h3>Turn ${t.n}</h3>${files ? `<ul>${files}</ul>` : '<p class="s">No files changed.</p>'}${whole}</section>`;
       })
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;
@@ -160,6 +167,10 @@ ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 }
 
 async function main(): Promise<void> {
+  if (!(Number.isInteger(PORT) && PORT >= 1 && PORT <= 65535)) {
+    console.error(`CC_PORT must be a port number from 1 to 65535, got "${PORT_TEXT}". Set it to a free port, or unset it for 4317.`);
+    process.exit(1);
+  }
   const dataRoot = await resolveDataRoot();
   // Before anything starts: a second instance on this data root would reconcile the first one's runs and sessions.
   const lock = acquireInstanceLock(dataRoot, { pid: process.pid, port: PORT });
@@ -273,7 +284,9 @@ async function main(): Promise<void> {
       res.writeHead(401, { 'content-type': 'text/plain' }).end('open the token URL printed at startup first');
       return true;
     }
-    const headers = { 'content-security-policy': RECOVERY_CSP, 'x-content-type-options': 'nosniff' };
+    // Never framed: any other 127.0.0.1 port counts as same-site, so a page there would render this one signed in and could
+    // steer clicks on Revert or Restart past the Origin and X-CC check.
+    const headers = { 'content-security-policy': RECOVERY_CSP, 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' };
     if (url.pathname === '/__supervisor/status') {
       res.writeHead(200, { ...headers, 'content-type': 'application/json' }).end(JSON.stringify({ ...bg.status, activePid: bg.active?.pid ?? null, activePort: bg.active?.port ?? null }));
       return true;
@@ -331,12 +344,15 @@ async function main(): Promise<void> {
         // The startup URL (/auth?t=) lands here once the server child is gone, and only that child's /auth would set the
         // session cookie: set it here, so the page's link to /__recovery opens.
         const signIn = hostOk(req) && tokenOk(url) ? { 'set-cookie': sessionCookie } : {};
-        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5', ...signIn }).end(html);
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'content-security-policy': "frame-ancestors 'none'", 'x-frame-options': 'DENY', 'retry-after': '5', ...signIn }).end(html);
         return;
       }
       const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {
         res.writeHead(ures.statusCode ?? 502, ures.headers);
-        ures.pipe(res);
+        // pipeline, not pipe: a child that dies mid-response (killed, crashed, or SIGKILLed after a drain) aborts `ures`
+        // without an 'end', and pipe would leave the browser's response open forever (an event stream never errors,
+        // so it never reconnects). pipeline destroys `res` then, and the client sees the connection end.
+        pipeline(ures, res, () => undefined);
       });
       upstream.on('error', (err) => {
         if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });

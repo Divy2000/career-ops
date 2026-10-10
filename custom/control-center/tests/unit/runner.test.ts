@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { RunStore, runsDir } from '../../server/runner/store.js';
 import { Runner, WRAPPER_PATH, pidAlive, processStartTime } from '../../server/runner/runner.js';
@@ -618,9 +619,35 @@ describe('Runner', () => {
       CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', PATH: '/bin', HOME: '/h',
     };
     const env = childEnv({}, base);
-    expect(Object.keys(env).sort()).toEqual(['CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // The two scan paths are always set, empty, so a scan writes the data root's files (R12-srv-core-L2-03).
+    expect(Object.keys(env).sort()).toEqual(['CAREER_OPS_PIPELINE', 'CAREER_OPS_SCAN_HISTORY', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
     // A session's own credentials, passed explicitly, still reach it.
     expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
+  });
+
+  it('a scan the app starts writes the data root\'s pipeline and scan history, whatever CAREER_OPS_PIPELINE or _SCAN_HISTORY the shell or the data root .env names (R12-srv-core-L2-03)', async () => {
+    const root = tempDir('cc-lane-env-');
+    fs.writeFileSync(path.join(root, '.env'), 'CAREER_OPS_PIPELINE=data/lane-b-pipeline.md\nCAREER_OPS_SCAN_HISTORY=data/lane-b-history.tsv\n');
+    const saved = { pipeline: process.env.CAREER_OPS_PIPELINE, history: process.env.CAREER_OPS_SCAN_HISTORY };
+    try {
+      const paths = "const m = await import(process.argv[1]); process.stdout.write(JSON.stringify([m.PIPELINE_PATH, m.SCAN_HISTORY_PATH]))";
+      const scan = pathToFileURL(path.join(PACKAGE_ROOT, '..', '..', 'scan.mjs')).href;
+      const run = async () => {
+        const r = await execNoShell(process.execPath, ['--input-type=module', '-e', paths, scan], { cwd: root, timeoutMs: 30_000, env: { CAREER_OPS_ROOT: root } });
+        expect(r.code, r.stderr).toBe(0);
+        return JSON.parse(r.stdout);
+      };
+      const expected = [path.join(root, 'data', 'pipeline.md'), path.join(root, 'data', 'scan-history.tsv')];
+      expect(await run()).toEqual(expected);
+      process.env.CAREER_OPS_PIPELINE = '/elsewhere/pipeline.md';
+      process.env.CAREER_OPS_SCAN_HISTORY = '/elsewhere/scan-history.tsv';
+      expect(await run()).toEqual(expected);
+    } finally {
+      for (const [k, v] of [['CAREER_OPS_PIPELINE', saved.pipeline], ['CAREER_OPS_SCAN_HISTORY', saved.history]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {

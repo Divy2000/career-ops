@@ -896,6 +896,28 @@ describe('read confinement (BUG-06)', () => {
       expect(fs.existsSync(uploaded)).toBe(false);
     });
 
+    it('a server start a day later keeps an upload a session still names and sweeps one no session names (R12-srv-core-L1-01)', async () => {
+      const named = await upload(t, '%PDF-1.4 still read');
+      // Another name: two uploads of one name in the same millisecond share a file name.
+      const orphan = (await t.app.inject({ method: 'POST', url: '/api/cv/upload?name=old-cv', headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: Buffer.from('%PDF-1.4 left behind') })).json().path as string;
+      expect(orphan).not.toBe(named);
+      const id = await startOn(named, [INIT, parsed]);
+      expect((await settle(id)).meta.status).toBe('done');
+      const past = new Date(Date.now() - 25 * 3_600_000);
+      for (const f of [named, orphan]) fs.utimesSync(f, past, past);
+      // A reload child (or a restart) runs the startup sweep against the same data root.
+      const restarted = await makeTestApp(t.cfg);
+      try {
+        expect(fs.existsSync(named)).toBe(true);
+        expect(fs.existsSync(orphan)).toBe(false);
+        expect(await replyReads(id, named)).toMatchObject({ ok: true, summary: expect.stringContaining('%PDF-1.4 still read') });
+      } finally {
+        await restarted.close();
+      }
+      expect((await remove(id)).statusCode).toBe(200);
+      expect(fs.existsSync(named)).toBe(false);
+    });
+
     it('a turn that ends waiting for the user keeps the upload, so the reply turn can still read it', async () => {
       const uploaded = await upload(t, '%PDF-1.4 asked a question');
       const id = await startOn(uploaded, [INIT, result('Which of the two CVs in this PDF is yours?', 0.01)]);

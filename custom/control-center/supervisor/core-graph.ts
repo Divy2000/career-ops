@@ -12,6 +12,13 @@ import chokidar from 'chokidar';
 // adds a path to watch (at worst, creating that file restarts the child once), so over-matching is harmless.
 const IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)(['"])(\.\.?\/[^'"\n]+)\1/g;
 
+/** A TypeScript module names a sibling by its .js output (`./app.js` for app.ts): the source is the file loaded. */
+function sourceOf(file: string): string {
+  if (!file.endsWith('.js') || fs.existsSync(file)) return file;
+  const ts = `${file.slice(0, -3)}.ts`;
+  return fs.existsSync(ts) ? ts : file;
+}
+
 /**
  * The graph as code-root-relative paths (posix separators), sorted: the files that exist, and the relative imports
  * that name a file that does not exist yet (`missing`). A module may import a file before it is written, Dev Chat
@@ -34,7 +41,7 @@ export function coreImportGraphWithMissing(codeRoot: string, entries: readonly s
       continue;
     }
     seen.add(rel);
-    for (const m of text.matchAll(IMPORT)) queue.push(path.resolve(path.dirname(file), m[2]!));
+    for (const m of text.matchAll(IMPORT)) queue.push(sourceOf(path.resolve(path.dirname(file), m[2]!)));
   }
   const posix = (set: Set<string>) => [...set].map((r) => r.split(path.sep).join('/')).sort();
   return { files: posix(seen), missing: posix(missing) };
@@ -48,13 +55,39 @@ export function coreImportGraph(codeRoot: string, entries: readonly string[]): s
 /** The package trees a server child runs from; the supervisor reloads it when a file in them changes. */
 export const SERVER_TREES = ['server', 'shared'] as const;
 
+/** Entries as given, or read anew on every use (the server trees gain and lose files). */
+export type GraphEntries = readonly string[] | (() => readonly string[]);
+const entriesOf = (entries: GraphEntries): readonly string[] => (typeof entries === 'function' ? entries() : entries);
+
+/**
+ * Where a server child's imports start: the contracted core modules (`core`), and every module of the package's server/
+ * and shared/ trees, whose relative imports reach modules outside the package the server loads itself
+ * (server/domains/policyPass.ts imports custom/immigration/policy-claim.mjs). Code-root-relative paths.
+ */
+export function serverEntries(codeRoot: string, packageRoot: string, core: readonly string[]): string[] {
+  const root = path.resolve(codeRoot);
+  const out = [...core];
+  for (const tree of SERVER_TREES) {
+    const dir = path.join(packageRoot, tree);
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir, { recursive: true, encoding: 'utf8' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    for (const name of names) if (/\.(ts|mjs|js)$/.test(name) && !name.split(path.sep).includes('node_modules')) out.push(path.relative(root, path.join(dir, name)));
+  }
+  return out;
+}
+
 /**
  * Whether a server child loads a code-root-relative path: a file in the package's server/ or shared/ tree, or in the
- * core import graph as it is now.
+ * import graph of `entries` (serverEntries) as it is now.
  */
-export function serverLoads(codeRoot: string, packageRoot: string, entries: readonly string[]): (rel: string) => boolean {
+export function serverLoads(codeRoot: string, packageRoot: string, entries: GraphEntries): (rel: string) => boolean {
   const pkg = path.relative(fs.realpathSync(codeRoot), fs.realpathSync(packageRoot)).split(path.sep).join('/');
-  const core = new Set(coreImportGraph(codeRoot, entries));
+  const core = new Set(coreImportGraph(codeRoot, entriesOf(entries)));
   return (rel) => core.has(rel) || SERVER_TREES.some((tree) => rel.startsWith(`${pkg}/${tree}/`));
 }
 
@@ -70,9 +103,9 @@ export interface CoreGraphWatcher {
  * whether or not the reload it causes comes up; and a file such an import names that is already on disk by then (the
  * import and the file written back to back) is signalled as well, since watching an existing file reports nothing.
  */
-export async function watchCoreGraph(codeRoot: string, entries: readonly string[], onChange: (file: string) => void): Promise<CoreGraphWatcher> {
+export async function watchCoreGraph(codeRoot: string, entries: GraphEntries, onChange: (file: string) => void): Promise<CoreGraphWatcher> {
   const files = () => {
-    const graph = coreImportGraphWithMissing(codeRoot, entries);
+    const graph = coreImportGraphWithMissing(codeRoot, entriesOf(entries));
     return [...graph.files, ...graph.missing].map((rel) => path.join(codeRoot, rel));
   };
   let watched = new Set(files());

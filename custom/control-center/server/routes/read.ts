@@ -131,7 +131,17 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const company = overview.companies.find((c) => c.slug === req.params.slug);
     if (!company) return reply.code(404).send({ error: 'no company file' });
     const text = readText(company.path);
-    const fresh = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, 'freshness'), company.name], { cwd: cfg.codeRoot, timeoutMs: 20_000, env: coreEnv });
+    // freshness.mjs finds the file by companySlug of the name it is given. The heading may carry a legal name whose slug
+    // names another file ("Meta Platforms, Inc." in meta.md), so it gets the heading only when that names this file,
+    // and otherwise the file's own slug (a slug is its own companySlug).
+    const { companySlug } = await importCore<{ companySlug: (name: string) => string }>(cfg.codeRoot, 'custom/immigration/lib.mjs');
+    let nameForFile = company.slug;
+    try {
+      if (companySlug(company.name) === company.slug) nameForFile = company.name;
+    } catch {
+      // A heading that is only a legal suffix has no slug: the file's slug stands.
+    }
+    const fresh = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, 'freshness'), nameForFile], { cwd: cfg.codeRoot, timeoutMs: 20_000, env: coreEnv });
     let freshness: unknown;
     try {
       freshness = fresh.code === 0 ? JSON.parse(fresh.stdout) : { error: fresh.stderr.trim() || `exit ${fresh.code}` };

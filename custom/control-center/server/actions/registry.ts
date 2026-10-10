@@ -102,6 +102,11 @@ function define<S extends z.ZodType>(def: ActionDef<S>): ActionDef<S> {
 
 const flag = (on: boolean | undefined, name: string): string[] => (on ? [name] : []);
 const opt = (value: string | number | undefined, name: string): string[] => (value === undefined || value === '' ? [] : [name, String(value)]);
+// Free text whose first characters are "--" reads as a missing value to the upstream flag parsers ("--> phone screen").
+// set-status has no --note=VALUE form but trims the note it writes, so a leading space carries the text through as is;
+// hired-share reads --story=VALUE.
+const noteArg = (note: string | undefined): string[] => opt(note?.startsWith('--') ? ` ${note}` : note, '--note');
+const storyArg = (story: string | undefined): string[] => (story?.startsWith('--') ? [`--story=${story}`] : opt(story, '--story'));
 const none = z.object({});
 const dryRun = z.object({ dryRun: z.boolean().default(false) });
 const positive = z.number().int().positive();
@@ -164,7 +169,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: true,
     params: z.object({ row: positive, state: z.enum(TRACKER_STATES), note: z.string().max(500).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
-    build: (p, ctx) => node(ctx, 'setStatus', ['--row', String(p.row), p.state, '--source', 'web', '--json', ...opt(p.note, '--note'), ...opt(p.on, '--on')]),
+    build: (p, ctx) => node(ctx, 'setStatus', ['--row', String(p.row), p.state, '--source', 'web', '--json', ...noteArg(p.note), ...opt(p.on, '--on')]),
     exitMap: { 1: 400, 2: 404, 3: 409, 4: 503 },
   }),
   define({
@@ -216,7 +221,7 @@ export const ACTIONS: ActionDef[] = [
     claude: false,
     sync: true,
     params: z.object({ report: reportLabel, anonymity: z.enum(['handle', 'role', 'count']), story: z.string().max(2000).optional() }),
-    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--anonymity', p.anonymity, ...opt(p.story, '--story')]),
+    build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--anonymity', p.anonymity, ...storyArg(p.story)]),
   }),
   define({
     id: 'tracker.hiredMark',
