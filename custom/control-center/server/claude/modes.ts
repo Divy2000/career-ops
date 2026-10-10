@@ -446,6 +446,7 @@ export function getModePolicy(id: string): ModePolicy | null {
  */
 const REFUSED_MODES: Readonly<Record<string, string>> = {
   batch: 'Batch mode runs batch/batch-runner.sh, whose workers are claude -p --dangerously-skip-permissions processes outside the session guard, so it never runs as a session. Use Pipeline > Batch instead: it evaluates each URL in its own confined session.',
+  update: 'Update mode runs update-system.mjs apply and rollback, which fetch, execute and commit upstream code outside the session guard, so it never runs as a session on this fork. Check for updates and dismiss them with the Check for updates / Dismiss update actions; install updates through the weekly upstream-sync PR.',
 };
 
 /** Why `id` may not run as a session, or null when it may. */

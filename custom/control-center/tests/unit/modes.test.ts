@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { deriveModes } from '../../scripts/derive-mode-policies.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listLaunchableModeIds, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
 import { AGENT_SPAWNING_SCRIPTS, matches } from '../../server/claude/guard-policy.mjs';
 import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
 
@@ -147,7 +147,13 @@ describe('mode registry', () => {
   it('batch mode is refused as a session with a reason that points at Pipeline > Batch; every other mode is not', () => {
     expect(sessionRefusal('batch')).toMatch(/batch-runner\.sh/);
     expect(sessionRefusal('batch')).toMatch(/Pipeline > Batch/);
-    for (const id of listModeIds().filter((m) => m !== 'batch')) expect(sessionRefusal(id), id).toBeNull();
+    for (const id of listModeIds().filter((m) => m !== 'batch' && m !== 'update')) expect(sessionRefusal(id), id).toBeNull();
+  });
+
+  it('update mode is refused as a session because apply/rollback commit upstream code outside the guard (R18-claude-L3-01)', () => {
+    expect(sessionRefusal('update')).toMatch(/update-system\.mjs apply/);
+    expect(sessionRefusal('update')).toMatch(/upstream-sync PR/);
+    expect(listLaunchableModeIds()).toEqual(expect.not.arrayContaining(['update']));
   });
 
   it('every script a session may run was audited: none that starts an agent CLI is granted unless reviewed', () => {
