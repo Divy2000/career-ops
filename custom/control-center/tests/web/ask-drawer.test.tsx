@@ -183,6 +183,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
   });
 
+  it('a proposal missing its row says so in its label instead of an empty "row #" (R13-shared-comp-03)', async () => {
+    for (const action of ['generatePdf', 'setStatus', 'apply']) await act(async () => emitEnvelope!('act', { action, params: { state: 'Applied' } }, 1));
+    const labels = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].map((li) => li.textContent ?? '');
+    expect(labels).toHaveLength(3);
+    for (const label of labels) {
+      expect(label).not.toMatch(/row #(?!\d)/);
+      expect(label).toContain('(no row given)');
+    }
+  });
+
   it('a row that is not a tracker row number fails before asking, and runs nothing (review fix 4)', async () => {
     const cases: Array<[string, Record<string, unknown>]> = [
       ['setStatus', { row: 'abc', state: 'Applied' }],
@@ -334,6 +344,13 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
     expect(item.dataset.proposalState).toBe('done');
     expect(navigations).toEqual([{ to: '/sessions' }]);
+  });
+
+  it('leaves saved-JD rows and needs-JD rows out, as Evaluate visible does (R13-shared-comp-L2-01)', async () => {
+    rows.push(row('local:jds/2026-10-06_acme_pm.pdf', 'Acme'), { ...row('https://www.linkedin.com/jobs/view/4100000001', 'Acme'), needsJd: true } as ReturnType<typeof row>);
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
   });
 
   it('a fan-out whose sessions fail to start is reported, names the postings left pending, and stays on the page (review fix)', async () => {

@@ -4,6 +4,7 @@ import { Link } from '@tanstack/react-router';
 import { SafeMarkdown } from './Md';
 import { Empty, Pill } from './ui';
 import { describeError } from '../lib/actions';
+import { ApiError } from '../lib/api';
 import { cancelSession, forkSession, sendTurn, startSession, useSessionStream, type Target, type Transcript } from '../lib/sessions';
 
 export function statusTone(status: string): 'ok' | 'warn' | 'danger' | 'info' | 'neutral' {
@@ -140,7 +141,11 @@ export function SessionPanel(props: SessionPanelProps) {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { transcript, meta, gone } = useSessionStream(sessionId);
+  const stream = useSessionStream(sessionId);
+  const { transcript, meta } = stream;
+  // A reply or fork answered 404: the session was deleted (the delete sends no event), so it is gone as the stream would say.
+  const [lostId, setLostId] = useState<string | null>(null);
+  const gone = stream.gone || (sessionId !== null && lostId === sessionId);
   const seen = useRef(0);
   const { onEnvelope, onStatus } = props;
   useEffect(() => {
@@ -200,11 +205,21 @@ export function SessionPanel(props: SessionPanelProps) {
       }
       setReply('');
     } catch (err) {
-      setError(describeError(err));
+      if (err instanceof ApiError && err.status === 404) setLostId(sessionId);
+      else setError(describeError(err));
     } finally {
       setBusy(false);
     }
   };
+
+  // A session this panel started itself (no host tracks it) was deleted: back to the start form for a new one.
+  const startOver = () => {
+    seen.current = 0;
+    setLostId(null);
+    setError(null);
+    setSessionId(null);
+  };
+  const ownsSession = !props.sessionId && !props.onSessionId;
 
   const cancel = async () => {
     if (!sessionId) return;
@@ -233,9 +248,16 @@ export function SessionPanel(props: SessionPanelProps) {
         </div>
       </div>
       {gone ? (
-        <p className="muted" style={{ margin: 'var(--space-2) 0 0' }}>
-          This session no longer exists.
-        </p>
+        <div className="row gap" style={{ margin: 'var(--space-2) 0 0' }}>
+          <p className="muted" style={{ margin: 0 }}>
+            This session no longer exists.
+          </p>
+          {ownsSession && (
+            <button type="button" onClick={startOver}>
+              Start a new session
+            </button>
+          )}
+        </div>
       ) : !sessionId ? (
         <form
           className="stack"

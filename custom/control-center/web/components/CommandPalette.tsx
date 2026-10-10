@@ -68,7 +68,7 @@ export function parseParamValues(schema: JsonSchema, values: Record<string, stri
   return out;
 }
 
-function ActionParamsDialog({ action, onClose, onRun }: { action: ActionMeta; onClose: () => void; onRun: (params: Record<string, unknown>) => Promise<void> }) {
+function ActionParamsDialog({ action, error, onClose, onRun }: { action: ActionMeta; error?: string | null; onClose: () => void; onRun: (params: Record<string, unknown>) => Promise<void> }) {
   const schema = action.params as JsonSchema;
   const required = new Set(schema.required ?? []);
   const [values, setValues] = useState<Record<string, string | boolean>>({});
@@ -133,6 +133,11 @@ function ActionParamsDialog({ action, onClose, onRun }: { action: ActionMeta; on
               </label>
             );
           })}
+          {error && (
+            <p role="alert" className="danger-text">
+              {error}
+            </p>
+          )}
           <div className="row gap dialog__actions">
             <button type="button" onClick={onClose}>
               Cancel
@@ -186,7 +191,13 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
   const start = async () => {
     setBusy(true);
     try {
+      setError(null);
       const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
+      // A 202 can carry a session that failed before its turn ran (no approved CLI, no token): say why and stay for a retry.
+      if (meta.status === 'error') {
+        setError(meta.error ?? 'session failed to start');
+        return;
+      }
       toast.success(`Started ${mode} session`);
       onClose();
       await navigate({ to: '/sessions/$id', params: { id: meta.id } });
@@ -235,7 +246,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const actions = useActions();
   const modes = useQuery({ queryKey: ['modes'], queryFn: () => apiGet<ModePolicy[]>('/api/modes'), staleTime: 60_000, enabled: open });
   const confirm = useConfirm();
-  const { run, output } = useRunAction();
+  const { run, output, message, setMessage } = useRunAction();
   const [outputOf, setOutputOf] = useState<string | null>(null);
   const { setMode } = useTheme();
   const [launch, setLaunch] = useState<string | null>(null);
@@ -244,16 +255,21 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     onOpenChange(false);
     void navigate({ to: to as '/' });
   };
-  const execute = async (a: ActionMeta, params: Record<string, unknown>) => {
+  const execute = async (a: ActionMeta, params: Record<string, unknown>, fromDialog = false) => {
     if (a.confirm && !(await confirm({ title: a.label, body: a.confirm, confirmLabel: 'Run', danger: true }))) return;
     const out = await run(a.id, params, undefined, { confirmed: Boolean(a.confirm) });
+    // Refused or failed: the params dialog stays with what was typed and says why (message), so one field can be fixed.
+    if (out === null && fromDialog) return;
     setWithParams(null);
     if (out && 'runId' in out) void navigate({ to: '/runs' });
     else setOutputOf(a.label);
   };
   const pick = (a: ActionMeta) => {
     onOpenChange(false);
-    if (needsParamsDialog(a)) setWithParams(a);
+    if (needsParamsDialog(a)) {
+      setMessage(null);
+      setWithParams(a);
+    }
     else void execute(a, {});
   };
   return (
@@ -312,7 +328,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       </Command.Dialog>
       {launch && <ModeLaunchDialog mode={launch} onClose={() => setLaunch(null)} />}
       {outputOf && output !== null && <ActionOutputDialog label={outputOf} text={output} onClose={() => setOutputOf(null)} />}
-      {withParams && <ActionParamsDialog action={withParams} onClose={() => setWithParams(null)} onRun={(p) => execute(withParams, p)} />}
+      {withParams && <ActionParamsDialog action={withParams} error={message?.tone === 'danger' ? message.text : null} onClose={() => setWithParams(null)} onRun={(p) => execute(withParams, p, true)} />}
     </>
   );
 }
