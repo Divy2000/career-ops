@@ -1672,7 +1672,8 @@ describe('report reservations and session trackers survive failures (r16-claude)
   it('a run record that cannot be read while its turn is tracked ends the turn in error, even when the cancel cannot read it either (R14-claude-L1-01 review)', async () => {
     const app = await freshApp();
     try {
-      const id = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id as string);
+      const sentinel = reserve(app, 69);
+      const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 69 }));
       await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
       const runId = app.sessions.read(id)!.turns[0]!.runId;
       const read = app.runner.store.read.bind(app.runner.store);
@@ -1685,7 +1686,9 @@ describe('report reservations and session trackers survive failures (r16-claude)
         return read(rid);
       });
       await until(() => app.sessions.read(id)!.turns[0]!.endedAt !== null);
-      expect(app.sessions.read(id)).toMatchObject({ status: 'error', error: expect.stringMatching(/could not record the session output: EIO/) });
+      // The run could not be stopped, so it may still write its report: the number stays reserved.
+      expect(app.sessions.read(id)).toMatchObject({ status: 'error', error: expect.stringMatching(/could not record the session output: EIO/), reportNum: 69 });
+      expect(fs.existsSync(sentinel)).toBe(true);
     } finally {
       await app.close();
     }
@@ -1724,7 +1727,7 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
-  it('a fan-out session that fails after its run started keeps its number, so no other evaluation is handed it (review fix)', async () => {
+  it('a fan-out session that fails after its run started stops the run, and only then gives its number back (review fix)', async () => {
     const app = await freshApp();
     try {
       const begin = app.sessions.store.beginTurn.bind(app.sessions.store);
@@ -1736,13 +1739,12 @@ describe('report reservations and session trackers survive failures (r16-claude)
       });
       const res = await withScenario(scenarioFile(SLOW), async () => call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/41'] }));
       expect(res.statusCode).toBe(202);
-      expect(res.json().sessions[0]).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: 8 });
-      // Recorded as failed, so a reply can retry it instead of meeting a session still queued (review fix).
-      expect(app.sessions.read(res.json().sessions[0].id)).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: 8 });
-      expect(fs.existsSync(path.join(app.cfg.dataRoot, 'reports', '008-RESERVED.md'))).toBe(true);
-      // Its run was stopped.
-      await until(() => app.runner.store.list().every((r) => !['queued', 'running'].includes(r.status)));
+      expect(res.json().sessions[0]).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: null });
+      // Recorded as failed, so a reply can retry it instead of meeting a session still queued.
+      expect(app.sessions.read(res.json().sessions[0].id)).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: null });
+      // The number went back only once its run had ended.
       expect(app.runner.store.list().map((r) => r.status)).toEqual(['cancelled']);
+      expect(fs.existsSync(path.join(app.cfg.dataRoot, 'reports', '008-RESERVED.md'))).toBe(false);
     } finally {
       await app.close();
     }

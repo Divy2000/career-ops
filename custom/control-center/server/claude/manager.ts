@@ -28,6 +28,8 @@ export type TokenReader = () => Promise<string>;
 /** A report-number release that fails (the tracker lock busy) is tried this many times, waiting longer each time. */
 const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_MS = 250;
+/** How long a turn that failed after its run started waits for that stopped run to end before giving its number back. */
+const RUN_END_WAIT_MS = 10_000;
 
 const KEYCHAIN_HELP = 'Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
 
@@ -230,8 +232,9 @@ export class SessionManager {
           const message = (err as Error).message;
           const recorded = created as SessionMeta | null;
           if (recorded && err instanceof TurnStartedError) {
+            // Settled by the turn itself: the number was released, or is still the session's while its run may write.
             handed.add(num);
-            sessions.push({ ...recorded, status: 'error', error: message, lastReason: message });
+            sessions.push(this.read(recorded.id) ?? { ...recorded, status: 'error', error: message, lastReason: message });
           } else if (recorded) {
             // The session holds the number now and releases it as a first turn that cannot start does.
             handed.add(num);
@@ -434,16 +437,27 @@ export class SessionManager {
       this.track(meta.id, n, run.id, policy, state, token);
       return began;
     } catch (err) {
-      // The run exists and may already be writing: it is stopped, and any report number stays with the session (released
-      // at the next reconcile, once the process is long gone) rather than going back to the pool while it could be used.
-      for (const settle of [() => this.runner.cancel(run.id), () => this.store.setStatus(meta.id, 'error', (err as Error).message)]) {
-        try {
-          settle();
-        } catch {
-          /* the records cannot be written either: the next reconcile settles the session */
-        }
+      // The run exists and may already be writing: it is stopped first. A first turn's report number goes back to the pool
+      // only once that run has ended; a later turn's stays with the session, as for any reply that could not start.
+      const message = (err as Error).message;
+      let stopped = false;
+      try {
+        this.runner.cancel(run.id);
+        stopped = await this.runEnded(run.id);
+      } catch {
+        /* the run record cannot be read: the number stays reserved */
       }
-      throw new TurnStartedError((err as Error).message);
+      try {
+        this.store.setStatus(meta.id, 'error', message);
+        const num = this.store.read(meta.id)?.reportNum ?? null;
+        if (stopped && num !== null && meta.turns.length === 0) {
+          this.store.setReportNum(meta.id, null);
+          await this.releaseReportNum(num, false);
+        }
+      } catch {
+        /* the session record cannot be written either: the next reconcile settles it */
+      }
+      throw new TurnStartedError(message);
     }
   }
 
@@ -461,9 +475,12 @@ export class SessionManager {
     let finalText = '';
     // A line that cannot be processed fails this session (its run is stopped), never the server that tracks it.
     let failure: string | null = null;
+    // Whether the run could be told to stop; when it could not, it may still write, so its report number is kept.
+    let runStopped = false;
     const stopRun = () => {
       try {
         this.runner.cancel(runId);
+        runStopped = true;
       } catch {
         /* the run record is unreadable too: the turn is settled without it */
       }
@@ -540,7 +557,7 @@ export class SessionManager {
         fail(err);
         clearInterval(timer);
         this.active.delete(id);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, err);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: !runStopped }, err);
         return;
       }
       if (!run || run.status === 'running' || run.status === 'queued') return;
@@ -560,7 +577,7 @@ export class SessionManager {
    * the usage the turn reported, a reserved report number (released, so its RESERVED file goes) and a cancel (the turn
    * stays cancelled); anything else ends in error saying why.
    */
-  private async finalizeFailed(id: string, n: number, run: RunMeta | null, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number; failure: string | null }, err: unknown): Promise<void> {
+  private async finalizeFailed(id: string, n: number, run: RunMeta | null, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number; failure: string | null; keepReservation?: boolean }, err: unknown): Promise<void> {
     // A run stopped because its output could not be processed failed; it was not cancelled by the user.
     const why = `${r.failure ? `${r.failure}; ` : ''}the turn could not be finalized: ${(err as Error).message}`;
     console.error(`[sessions] session ${id} turn ${n}: ${(err as Error).stack ?? why}`);
@@ -570,7 +587,7 @@ export class SessionManager {
       const cancelled = meta.status === 'cancelled' || (run?.status === 'cancelled' && !r.failure);
       let reason = cancelled ? `cancelled by the user; ${why}` : why;
       const num = meta.reportNum;
-      if (num !== null) {
+      if (num !== null && r.keepReservation !== true) {
         // Claimed before the await, as finalize does, so the number is released once.
         this.store.setReportNum(id, null);
         reason += `; ${await this.releaseReportNum(num, null)}`;
@@ -582,6 +599,17 @@ export class SessionManager {
       this.bus.publish('session.status', { sessionId: id, status, mode: meta.mode, turn: n });
     } catch (again) {
       console.error(`[sessions] session ${id} turn ${n} could not be settled either: ${(again as Error).message}`);
+    }
+  }
+
+  /** Waits (up to RUN_END_WAIT_MS) for a run to leave queued and running; false when it has not. */
+  private async runEnded(runId: string): Promise<boolean> {
+    const deadline = Date.now() + RUN_END_WAIT_MS;
+    for (;;) {
+      const status = this.runner.store.read(runId)?.status;
+      if (status !== 'queued' && status !== 'running') return true;
+      if (Date.now() > deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
