@@ -1,10 +1,12 @@
 // Input files the app writes for one action run (pasted job descriptions, recruiter emails, URL lists)
 // and CV uploads for the parser session. They hold personal data, so they live under the data root. An
 // input file is removed once its run is over; a CV upload once the last session that names it is deleted
-// (any of them may read it again). A sweep at startup removes either kind left behind for over a day.
+// (any of them may read it again). A sweep at startup removes input files left behind for over a day, and uploads
+// that old that no session names.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { SessionStore, sessionsDir } from '../claude/sessions.js';
 
 export const tmpInputDir = (dataRoot: string) => path.join(dataRoot, 'data', 'control-center', 'tmp');
 export const uploadsDir = (dataRoot: string) => path.join(dataRoot, 'data', 'control-center', 'uploads');
@@ -61,21 +63,59 @@ export function removeUpload(dataRoot: string, p: string): void {
   if (fs.lstatSync(target.path, { throwIfNoEntry: false })?.isFile()) fs.rmSync(target.path, { force: true });
 }
 
-/** Removes input files and uploads last modified more than `maxAgeMs` ago. */
-export function sweepStaleInputs(dataRoot: string, maxAgeMs: number): void {
+/** The canonical paths (as uploadTarget gives them) of the uploads the data root's sessions name in a text target. */
+export function uploadsNamedBySessions(dataRoot: string): Set<string> {
+  const out = new Set<string>();
+  // A session being created has its folder before its meta.json (renamed into place whole), and listing skips it: until
+  // that folder is a minute old, which session it names is unknown.
+  const dir = sessionsDir(dataRoot);
+  for (const entry of fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : []) {
+    if (!entry.isDirectory() || fs.existsSync(path.join(dir, entry.name, 'meta.json'))) continue;
+    const st = fs.statSync(path.join(dir, entry.name), { throwIfNoEntry: false });
+    if (st && Date.now() - st.mtimeMs < 60_000) throw new Error(`session ${entry.name} is still being created`);
+  }
+  // Listing reads only the data root; the guard root is for turn policies, which this never touches.
+  for (const meta of new SessionStore(dataRoot, '').list()) {
+    if (meta.target?.type !== 'text' || !meta.target.value) continue;
+    const target = uploadTarget(dataRoot, meta.target.value);
+    if (target.kind === 'upload') out.add(target.path);
+  }
+  return out;
+}
+
+/**
+ * Removes input files and uploads last modified more than `maxAgeMs` ago. An upload goes only when no session names it
+ * (any of them may read it again); when that cannot be told (a session folder that does not read), every upload stays.
+ */
+export function sweepStaleInputs(dataRoot: string, maxAgeMs: number, namedUploads: (dataRoot: string) => ReadonlySet<string> = uploadsNamedBySessions): void {
   const cutoff = Date.now() - maxAgeMs;
-  for (const dir of [tmpInputDir(dataRoot), uploadsDir(dataRoot)]) {
-    let names: string[];
-    try {
-      names = fs.readdirSync(dir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
+  sweepDir(tmpInputDir(dataRoot), cutoff, () => true);
+  let named: ReadonlySet<string> | null | undefined;
+  sweepDir(uploadsDir(dataRoot), cutoff, (file) => {
+    if (named === undefined) {
+      try {
+        named = namedUploads(dataRoot);
+      } catch {
+        named = null;
+      }
     }
-    for (const name of names) {
-      const file = path.join(dir, name);
-      const st = fs.lstatSync(file, { throwIfNoEntry: false });
-      if (st?.isFile() && st.mtimeMs < cutoff) fs.rmSync(file, { force: true });
-    }
+    if (named === null) return false;
+    const target = uploadTarget(dataRoot, file);
+    return target.kind === 'upload' && !named.has(target.path);
+  });
+}
+
+function sweepDir(dir: string, cutoff: number, removable: (file: string) => boolean): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  for (const name of names) {
+    const file = path.join(dir, name);
+    const st = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (st?.isFile() && st.mtimeMs < cutoff && removable(file)) fs.rmSync(file, { force: true });
   }
 }
