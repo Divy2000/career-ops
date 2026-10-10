@@ -1709,6 +1709,21 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('a session whose run cannot be created ends in error at once instead of staying queued until a restart (review fix)', async () => {
+    const app = await freshApp();
+    try {
+      vi.spyOn(app.runner, 'start').mockImplementationOnce(() => {
+        throw new Error('could not write the run record');
+      });
+      const res = await call(app, 'POST', '/api/sessions', { mode: 'advisor', prompt: 'What is overdue?' });
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toMatchObject({ status: 'error', error: 'could not write the run record', turns: [] });
+      expect(app.sessions.read(res.json().id)).toMatchObject({ status: 'error' });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {

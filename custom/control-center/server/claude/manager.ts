@@ -408,16 +408,22 @@ export class SessionManager {
     } catch (err) {
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
-    const run = this.runner.start({
-      actionId: `session.${meta.mode}`,
-      label: `${policy.title}: turn ${n}`,
-      cost: 'tokens',
-      resources: [],
-      claude: true,
-      params: { sessionId: meta.id, turn: n },
-      cmd: { bin: this.cfg.claudeBin, args: argv, cwd: this.cfg.codeRoot },
-      env,
-    });
+    let run: RunMeta;
+    try {
+      run = this.runner.start({
+        actionId: `session.${meta.mode}`,
+        label: `${policy.title}: turn ${n}`,
+        cost: 'tokens',
+        resources: [],
+        claude: true,
+        params: { sessionId: meta.id, turn: n },
+        cmd: { bin: this.cfg.claudeBin, args: argv, cwd: this.cfg.codeRoot },
+        env,
+      });
+    } catch (err) {
+      // Nothing was spawned (its run record could not be created): the turn fails like any other that cannot start.
+      return this.failBeforeSpawn(meta, (err as Error).message);
+    }
     const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
     this.emit(meta.id, { type: 'status', status: 'running', turn: n });
     this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
