@@ -134,6 +134,24 @@ describe('a session panel on a session that no longer exists', () => {
     expect(host.textContent).not.toContain('This session no longer exists');
   });
 
+  it('a panel whose host clears its id falls back to the start form, not a stale remembered id (R17-shared-comp-L1-03)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === '/api/sessions' && init?.method === 'POST') return json(202, OK);
+        if (url === `/api/sessions/${OK.id}`) return json(200, { meta: OK, events: [] });
+        return json(200, []);
+      }),
+    );
+    // The panel starts its own session (autoStart, no host): it holds that id in its own state.
+    await render({ autoStart: true });
+    await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the started session');
+    // The host clears the id to null: the panel must show the start form, not its dead local id.
+    await render({ sessionId: null, onSessionId: () => undefined });
+    expect(host.querySelector('textarea[aria-label="Prompt for advisor"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('This session no longer exists');
+  });
+
   it('tells its host a 404 on a reply means the session is gone', async () => {
     const statuses: string[] = [];
     vi.stubGlobal(

@@ -155,7 +155,8 @@ function writeDraft(key: string | undefined, text: string | null): void {
 export function SessionPanel(props: SessionPanelProps) {
   // A session id passed by the host wins; otherwise the panel tracks the one it started.
   const [localId, setSessionId] = useState<string | null>(null);
-  const sessionId = props.sessionId ?? localId;
+  // The host's id is authoritative even when it is null (cleared): the panel's own id is used only when no host names one.
+  const sessionId = props.sessionId !== undefined ? props.sessionId : localId;
   // The host's prompt follows its inputs (Apply builds it from the posting URL) until the user types their own.
   const [editedPrompt, setEditedPrompt] = useState<string | null>(() => readDraft(props.draftKey));
   const setPrompt = (text: string) => {
