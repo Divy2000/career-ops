@@ -439,6 +439,13 @@ export class SessionManager {
     let finalText = '';
     // A line that cannot be processed fails this session (its run is stopped), never the server that tracks it.
     let failure: string | null = null;
+    const stopRun = () => {
+      try {
+        this.runner.cancel(runId);
+      } catch {
+        /* the run record is unreadable too: the turn is settled without it */
+      }
+    };
     const handle = (l: RawLine, emit: boolean) => {
       seq = l.seq;
       if (failure) return;
@@ -446,7 +453,7 @@ export class SessionManager {
         handleLine(l, emit);
       } catch (err) {
         failure = `could not process the session output: ${(err as Error).message}`;
-        this.runner.cancel(runId);
+        stopRun();
       }
     };
     const handleLine = (l: RawLine, emit: boolean) => {
@@ -470,25 +477,29 @@ export class SessionManager {
         if (emit) this.emit(id, ev);
       }
     };
+    // A file the tracker cannot read or write (a full disk, a folder turned read-only) fails this session the same way:
+    // its run is stopped (when even that is possible), the next tick tries again, and the turn ends once the run does.
+    const fail = (err: unknown) => {
+      if (failure) return;
+      failure = `could not record the session output: ${(err as Error).message}`;
+      stopRun();
+    };
     // A previous server already turned part of this log into events: rebuild the counters silently and go on from there.
-    const saved = readProgress(progressFile);
-    if (saved) {
-      for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
-      seq = saved.rawSeq;
-      offset = saved.rawOffset;
+    try {
+      const saved = readProgress(progressFile);
+      if (saved) {
+        for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
+        seq = saved.rawSeq;
+        offset = saved.rawOffset;
+      }
+    } catch (err) {
+      fail(err);
     }
     const pull = () => {
       const { lines, offset: next } = this.runner.store.readRaw(runId, seq, offset);
       offset = next;
       for (const l of lines) handle(l, true);
       if (lines.length) writeProgress(progressFile, { rawSeq: seq, rawOffset: offset });
-    };
-    // A file the tracker cannot read or write (a full disk, a folder turned read-only) fails this session the same way;
-    // the next tick tries again, and the turn ends once its stopped run does.
-    const fail = (err: unknown) => {
-      if (failure) return;
-      failure = `could not record the session output: ${(err as Error).message}`;
-      this.runner.cancel(runId);
     };
     const safePull = () => {
       try {
@@ -497,22 +508,25 @@ export class SessionManager {
         fail(err);
       }
     };
-    const readRun = (): RunMeta | null => {
-      try {
-        return this.runner.store.read(runId);
-      } catch (err) {
-        fail(err);
-        return null;
-      }
-    };
     const timer = setInterval(() => {
       safePull();
-      const run = readRun();
+      let run: RunMeta | null;
+      try {
+        run = this.runner.store.read(runId);
+      } catch (err) {
+        // Without its run record the turn cannot be followed or finalized: it ends now, in error.
+        fail(err);
+        clearInterval(timer);
+        this.active.delete(id);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, err);
+        return;
+      }
       if (!run || run.status === 'running' || run.status === 'queued') return;
       clearInterval(timer);
       this.active.delete(id);
       safePull();
-      this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, run, { turnDone, denials, failure }, err));
+      const ended = run;
+      this.finalize(id, n, ended, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
@@ -524,14 +538,14 @@ export class SessionManager {
    * the usage the turn reported, a reserved report number (released, so its RESERVED file goes) and a cancel (the turn
    * stays cancelled); anything else ends in error saying why.
    */
-  private async finalizeFailed(id: string, n: number, run: RunMeta, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number; failure: string | null }, err: unknown): Promise<void> {
+  private async finalizeFailed(id: string, n: number, run: RunMeta | null, r: { turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; denials: number; failure: string | null }, err: unknown): Promise<void> {
     // A run stopped because its output could not be processed failed; it was not cancelled by the user.
     const why = `${r.failure ? `${r.failure}; ` : ''}the turn could not be finalized: ${(err as Error).message}`;
     console.error(`[sessions] session ${id} turn ${n}: ${(err as Error).stack ?? why}`);
     try {
       const meta = this.store.read(id);
       if (!meta || this.turnEnded(id, n)) return;
-      const cancelled = meta.status === 'cancelled' || (run.status === 'cancelled' && !r.failure);
+      const cancelled = meta.status === 'cancelled' || (run?.status === 'cancelled' && !r.failure);
       let reason = cancelled ? `cancelled by the user; ${why}` : why;
       const num = meta.reportNum;
       if (num !== null) {

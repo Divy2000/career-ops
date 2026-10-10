@@ -1669,6 +1669,46 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('a run record that cannot be read while its turn is tracked ends the turn in error, even when the cancel cannot read it either (R14-claude-L1-01 review)', async () => {
+    const app = await freshApp();
+    try {
+      const id = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', { mode: 'deep', prompt: 'Research' })).json().id as string);
+      await until(() => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
+      const runId = app.sessions.read(id)!.turns[0]!.runId;
+      const read = app.runner.store.read.bind(app.runner.store);
+      let failing = 2;
+      vi.spyOn(app.runner.store, 'read').mockImplementation((rid) => {
+        if (rid === runId && failing > 0) {
+          failing -= 1;
+          throw new Error('EIO: i/o error, read');
+        }
+        return read(rid);
+      });
+      await until(() => app.sessions.read(id)!.turns[0]!.endedAt !== null);
+      expect(app.sessions.read(id)).toMatchObject({ status: 'error', error: expect.stringMatching(/could not record the session output: EIO/) });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a progress file that cannot be read at a restart fails that session, not the reconcile (R14-claude-L1-01 review)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT } });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      const turnDir = path.join(app.sessions.store.guardDirOf(meta.id), 'turns', '1');
+      fs.mkdirSync(turnDir, { recursive: true });
+      fs.writeFileSync(path.join(turnDir, 'progress.json'), '{');
+      app.sessions.close();
+      expect(() => app.sessions.reconcile()).not.toThrow();
+      await until(() => app.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+      expect(app.sessions.read(meta.id)).toMatchObject({ status: 'error', error: expect.stringMatching(/could not record the session output/) });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {
