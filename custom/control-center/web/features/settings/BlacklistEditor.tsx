@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
@@ -30,8 +30,16 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   };
   const [draft, setDraft] = useState<BlacklistRow>({ company: prefillCompany ?? '', since: localDate(), scope: 'company', reason: '' });
   const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
+  // The draft is locked while the confirmed write is on its way: its answer replaces the draft, so a row added then
+  // would be dropped unsent.
+  const [saving, setSaving] = useState(false);
+  // Confirms queue, so a double click would ask twice; the second click is ignored while the first is asking or writing.
+  const inFlight = useRef(false);
   const current = rows ?? q.data?.rows ?? [];
   const dirty = rows !== null;
+  // The server refuses a save that would drop these cells (422), so Save stays off until they are moved by hand.
+  const unkept = q.data?.unkept ?? [];
+  const columnWarning = q.data?.columnWarning ?? null;
   useUnsaved('data/blacklist.md', dirty);
   const addRow = () => {
     if (!draft.company.trim()) return;
@@ -44,6 +52,15 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
     setDraft({ company: '', since: localDate(), scope: 'company', reason: '' });
   };
   const save = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      await confirmAndWrite();
+    } finally {
+      inFlight.current = false;
+    }
+  };
+  const confirmAndWrite = async () => {
     const from = edit.base ?? q.data;
     const added = current.length - (from?.rows.length ?? 0);
     const ok = await confirm({
@@ -53,6 +70,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
           <p>
             {current.length} row{current.length === 1 ? '' : 's'} will be written ({added >= 0 ? `${added} added` : `${-added} removed`}). The scanner skips every listed company and domain on its next run.
           </p>
+          {columnWarning && <p>{columnWarning}</p>}
           <p>This is the only way the app writes the blacklist; AI sessions are denied this file.</p>
         </>
       ),
@@ -60,6 +78,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
       danger: true,
     });
     if (!ok) return;
+    setSaving(true);
     try {
       await apiSend('PUT', '/api/blacklist', { confirm: true, rows: current }, { 'X-CC-Explicit': 'blacklist', ...(from?.etag ? { 'If-Match': from.etag } : {}) });
       setRows(null);
@@ -73,6 +92,8 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
         setRows(null);
       } else setNote({ tone: 'danger', text: `Could not write the blacklist: ${describeError(err)}` });
       toast.error('Blacklist not written');
+    } finally {
+      setSaving(false);
     }
   };
   return (
@@ -82,16 +103,26 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
           Blacklist {q.data?.kind === 'missing' && <Pill tone="warn">data/blacklist.md not created yet</Pill>}
         </h2>
         <div className="row gap">
-          <button type="button" className="button--ghost" disabled={!dirty} onClick={() => setRows(null)}>
+          <button type="button" className="button--ghost" disabled={!dirty || saving} onClick={() => setRows(null)}>
             Discard
           </button>
-          <button type="button" className="button--danger" disabled={!dirty} onClick={() => void save()}>
+          <button type="button" className="button--danger" disabled={!dirty || saving || unkept.length > 0} onClick={() => void save()}>
             Save blacklist
           </button>
         </div>
       </div>
       <p className="muted small">Format follows templates/blacklist.example.md: Company, Since, Scope (company or domain), Reason. Nothing is written until you confirm.</p>
       <DataState query={q} editable>
+        {columnWarning && (
+          <p role="status" className="card card--warn">
+            {columnWarning}
+          </p>
+        )}
+        {unkept.length > 0 && (
+          <p role="alert" className="danger-text">
+            data/blacklist.md has cells the editor has no column for, which a save would drop: {unkept.join('; ')}. Move them into the main table&apos;s columns by hand; saving is off until then.
+          </p>
+        )}
         {current.length === 0 ? (
           <Empty>No blacklisted companies. Add one below.</Empty>
         ) : (
@@ -118,7 +149,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
                     </td>
                     <td className="muted">{r.reason}</td>
                     <td>
-                      <button type="button" className="button--ghost" aria-label={`Remove ${r.company} from the blacklist draft`} onClick={() => setRows(current.filter((_, j) => j !== i))}>
+                      <button type="button" className="button--ghost" aria-label={`Remove ${r.company} from the blacklist draft`} disabled={saving} onClick={() => setRows(current.filter((_, j) => j !== i))}>
                         Remove
                       </button>
                     </td>
@@ -136,7 +167,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
             <option value="domain">domain</option>
           </select>
           <input aria-label="Blacklist reason" placeholder="Reason" value={draft.reason} onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
-          <button type="button" onClick={addRow} disabled={!draft.company.trim()}>
+          <button type="button" onClick={addRow} disabled={!draft.company.trim() || saving}>
             Add row
           </button>
         </div>

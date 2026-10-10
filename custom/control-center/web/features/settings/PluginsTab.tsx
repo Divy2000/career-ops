@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend } from '../../lib/api';
@@ -15,7 +15,14 @@ export function PluginsTab() {
   const { run, message } = useRunAction();
   const [skill, setSkill] = useState<{ id: string; markdown: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // One toggle at a time, until its refetch brings the new ETag: a second PUT meanwhile would carry the old one and
+  // get a 409 for a file only this tab changed.
+  const [toggling, setToggling] = useState(false);
+  const inFlight = useRef(false);
   const toggle = async (id: string, enabled: boolean) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setToggling(true);
     setError(null);
     try {
       await apiSend('PUT', `/api/config/plugins/${id}`, { enabled }, q.data?.config.etag ? { 'If-Match': q.data.config.etag } : {});
@@ -23,6 +30,9 @@ export function PluginsTab() {
       await qc.invalidateQueries({ queryKey: ['config', 'plugins'] });
     } catch (err) {
       setError(`Could not update ${id}: ${describeError(err)}`);
+    } finally {
+      inFlight.current = false;
+      setToggling(false);
     }
   };
   const showSkill = async (id: string) => {
@@ -72,7 +82,7 @@ export function PluginsTab() {
                     return (
                       <tr key={p.id}>
                         <td>
-                          <input type="checkbox" aria-label={`Enable ${p.id}`} checked={p.enabled} onChange={(e) => void toggle(p.id, e.target.checked)} />
+                          <input type="checkbox" aria-label={`Enable ${p.id}`} checked={p.enabled} disabled={toggling} onChange={(e) => void toggle(p.id, e.target.checked)} />
                         </td>
                         <td>
                           <strong>{p.name}</strong> <span className="faint mono small">{p.id} {p.version}</span>

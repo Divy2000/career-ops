@@ -76,7 +76,7 @@ function StructuredPortals() {
           )}
         </span>
         <span style={{ flex: 1 }} />
-        <button type="button" className="button--ghost" onClick={s.discard} disabled={s.pending.length === 0 && !s.conflict}>
+        <button type="button" className="button--ghost" onClick={s.discard} disabled={(s.pending.length === 0 && !s.conflict) || s.saving}>
           Discard changes
         </button>
         <button type="button" className="button--primary" onClick={() => void s.save()} disabled={s.pending.length === 0 || s.saving || problems.length > 0}>

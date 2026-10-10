@@ -13,6 +13,8 @@ import { formatLocalMinute } from '../../lib/time';
 import { reasonLabel } from '../../lib/format';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
+import { sponsorCheckCompany } from '../sponsorship/companyKey';
+import { postingHref } from '../today/evaluate';
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -105,7 +107,7 @@ export function ApplicationPage() {
                 {q.data.row.summary?.legitimacy && <Pill>{q.data.row.summary.legitimacy}</Pill>}
                 <SponsorPill tier={q.data.sponsorship.companyFile?.verdict ?? q.data.sponsorship.companyFile?.dolTier} />
                 {q.data.row.url && (
-                  <a className="button-link" href={q.data.row.url} target="_blank" rel="noreferrer noopener">
+                  <a className="button-link" href={postingHref(q.data.row.url)} target="_blank" rel="noreferrer noopener">
                     Open posting
                   </a>
                 )}
@@ -223,6 +225,7 @@ export function ApplicationPage() {
             {tab === 'outreach' && (
               <ModeLauncher
                 heading="Outreach and research"
+                rememberAs={`cc.application.${q.data.row.num}.outreach`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'cover', label: 'Cover letter', prompt: `Write the cover letter for tracker row #${q.data.row.num} (${q.data.row.company}).` },
@@ -236,6 +239,7 @@ export function ApplicationPage() {
             {tab === 'interview' && (
               <ModeLauncher
                 heading="Interview"
+                rememberAs={`cc.application.${q.data.row.num}.interview`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'interview-prep', label: 'Interview prep', prompt: `Prepare me for the interview at ${q.data.row.company} (row #${q.data.row.num}).` },
@@ -250,6 +254,7 @@ export function ApplicationPage() {
             {tab === 'offer' && (
               <ModeLauncher
                 heading="Offer and outcome"
+                rememberAs={`cc.application.${q.data.row.num}.offer`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'offer-prep', label: 'Offer prep', prompt: `Prepare the offer negotiation for row #${q.data.row.num} (${q.data.row.company}).` },
@@ -265,6 +270,7 @@ export function ApplicationPage() {
                 <DocumentsTab n={q.data.row.num} />
                 <ModeLauncher
                   heading="Generate with AI"
+                  rememberAs={`cc.application.${q.data.row.num}.documents`}
                   target={{ type: 'app', value: String(q.data.row.num) }}
                   modes={[
                     { id: 'pdf', label: 'Tailored CV PDF', prompt: `Generate the tailored CV PDF for tracker row #${q.data.row.num} (${q.data.row.company}).` },
@@ -337,7 +343,7 @@ function ReportTab({ report }: { report: NonNullable<ReturnType<typeof useApplic
  * tab switch, and while one runs (started here or there) the button stays off, so no second check writes the file.
  */
 function SponsorshipRefresh({ company }: { company: string }) {
-  const check = useRememberedSession(sponsorCheckKey(company));
+  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)));
   return (
     <div className="stack">
       <div className="row gap">

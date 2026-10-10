@@ -12,6 +12,7 @@ import { MAX_COMPANY_QUERY_LENGTH, parseCompanyQuery } from '@shared/companyQuer
 import type { H1bCheck, LookupResult, SearchResult } from '@shared/api';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
+import { sponsorCheckCompany } from './companyKey';
 
 const route = getRouteApi('/sponsorship');
 
@@ -79,7 +80,7 @@ function Totals({ check }: { check: H1bCheck }) {
 export function SponsorCheckLauncher({ company }: { company: string }) {
   // A paid session that writes the company file and alert rows: it survives leaving the tab, and the button stays off
   // while it runs, so a second check of the same company cannot run beside it.
-  const check = useRememberedSession(sponsorCheckKey(company));
+  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)));
   return (
     <div className="card stack">
       <div className="row gap" style={{ justifyContent: 'space-between' }}>
