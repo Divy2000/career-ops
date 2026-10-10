@@ -1854,4 +1854,26 @@ describe('r18 manager fixes', () => {
       await app.close();
     }
   });
+
+  it('reconcile finalizes a live session whose mode no longer resolves, instead of leaving it running (R18-claude-L3-02)', async () => {
+    const app = await freshApp();
+    try {
+      const sentinel = reserve(app, 72);
+      const meta = app.sessions.store.create({ mode: 'removed-mode', policyClass: 'read-only', target: { type: 'none', value: null }, model: null, reportNum: 72 });
+      const run = app.runner.start({ actionId: 'session.removed-mode', label: 'Removed: turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT } });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'Go' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      // The mode was removed or renamed upstream: it no longer resolves to a policy.
+      expect(app.sessions.effectivePolicy('removed-mode')).toBeNull();
+      app.sessions.reconcile();
+      await until(() => app.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+      const settled = app.sessions.read(meta.id)!;
+      expect(settled.status).not.toBe('running');
+      expect(settled.turns[0]!.endedAt).not.toBeNull();
+      // Its reserved report number went back to the pool.
+      expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
 });

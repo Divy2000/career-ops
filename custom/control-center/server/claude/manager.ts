@@ -15,7 +15,7 @@ import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { conversationStarted, sessionsDir, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
@@ -358,8 +358,7 @@ export class SessionManager {
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
       }
-      const policy = this.effectivePolicy(meta.mode);
-      if (!policy) continue;
+      const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
       const state = this.readTurnState(meta.id, turn.n);
       this.track(meta.id, turn.n, run.id, policy, state, '');
     }
@@ -829,6 +828,11 @@ function postingKey(target: SessionMeta['target']): string | null {
     if (jd !== null) return `jds\0${jd}`;
   }
   return null;
+}
+
+/** The minimal policy reconcile uses to finish a turn whose mode no longer resolves (removed or renamed upstream): finalize only reads its class. */
+function policyForClass(policyClass: PolicyClass): ModePolicy {
+  return { id: '', title: 'removed mode', policyClass, writeGlobs: [], network: [], scripts: [], bashRules: [], bashPrefixes: [], allowsTask: false };
 }
 
 function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
