@@ -72,7 +72,13 @@ function decodeXmlText(raw) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+    // Numeric character references, decimal (`&#8217;`, `&#039;`) and hex (`&#x2019;`): a raw
+    // entity left in a title garbles it and can split a relevance keyword in two. `&amp;` stays
+    // last so a decoded entity (`&#38;` -> &) is never re-decoded.
+    .replace(/&#(?:x([0-9a-fA-F]+)|(\d+));/g, (match, hex, dec) => {
+      const cp = parseInt(hex ?? dec, hex ? 16 : 10);
+      return cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : match;
+    })
     .replace(/&amp;/g, '&')
     .trim();
 }

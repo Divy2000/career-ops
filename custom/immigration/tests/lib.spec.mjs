@@ -58,6 +58,32 @@ test('parseRssItems returns [] for a feed with no items', () => {
   assert.deepEqual(parseRssItems('<rss><channel></channel></rss>'), []);
 });
 
+test('parseRssItems decodes numeric character references in titles, including hex forms', () => {
+  const xml = `<rss><channel>
+    <item><title>USCIS&#039;s Optional Practical Training guidance</title><link>https://www.uscis.gov/a</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+    <item><title>Employers&#8217; H-1B sponsorship pauses</title><link>https://www.uscis.gov/b</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+    <item><title>Visa Bulletin&#8211;October 2026</title><link>https://www.uscis.gov/c</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+    <item><title>Court&#x27;s ruling on PERM</title><link>https://www.uscis.gov/d</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+  </channel></rss>`;
+  const items = parseRssItems(xml);
+  assert.equal(items[0].title, "USCIS's Optional Practical Training guidance");
+  assert.equal(items[1].title, 'Employers\u2019 H-1B sponsorship pauses');
+  assert.equal(items[2].title, 'Visa Bulletin\u2013October 2026');
+  assert.equal(items[3].title, "Court's ruling on PERM");
+});
+
+test('parseRssItems decodes numeric character entities in titles (R17-scripts-a-L2-03)', () => {
+  const xml = `<rss><channel>
+    <item><title>USCIS&#8217;s H-1B &#8211; Prevailing Wage Update</title><link>https://www.uscis.gov/a</link><pubDate>Thu, 01 Oct 2026 12:00:00 -0400</pubDate></item>
+    <item><title>OPT &#039;stem&#039; extension &amp; the O-1 rule</title><link>https://www.uscis.gov/b</link><pubDate>Wed, 30 Sep 2026 09:00:00 -0400</pubDate></item>
+    <item><title>H&#x2d;1B and the &#x2019; cap</title><link>https://www.uscis.gov/c</link><pubDate>Tue, 29 Sep 2026 09:00:00 -0400</pubDate></item>
+  </channel></rss>`;
+  const items = parseRssItems(xml);
+  assert.equal(items[0].title, 'USCIS\u2019s H-1B \u2013 Prevailing Wage Update');
+  assert.equal(items[1].title, "OPT 'stem' extension & the O-1 rule");
+  assert.equal(items[2].title, 'H-1B and the \u2019 cap');
+});
+
 test('isRelevantPolicyItem keeps work-visa topics and drops unrelated news', () => {
   assert.equal(isRelevantPolicyItem('DHS proposes $103,265 H-1B fee'), true);
   assert.equal(isRelevantPolicyItem('Changes to the H1B weighted selection'), true);
