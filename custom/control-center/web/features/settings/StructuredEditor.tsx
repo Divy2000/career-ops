@@ -225,6 +225,10 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
   );
 }
 
+// Only plain decimal text is a number: Number() also accepts "+1415...", "0049..." and "0x1F", which are phone
+// numbers, ids and codes that would lose their sign, leading zeros or spelling.
+const PLAIN_DECIMAL = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+
 function AddKeyForm({ path, onOp }: { path: JsonPath; onOp: OpSink }) {
   const [key, setKey] = useState('');
   const [value, setValue] = useState('');
@@ -234,7 +238,7 @@ function AddKeyForm({ path, onOp }: { path: JsonPath; onOp: OpSink }) {
     const v = value.trim();
     let parsed: unknown = v;
     if (v === 'true' || v === 'false') parsed = v === 'true';
-    else if (v !== '' && !Number.isNaN(Number(v))) parsed = Number(v);
+    else if (PLAIN_DECIMAL.test(v)) parsed = Number(v);
     else if (/^[[{]/.test(v)) {
       try {
         parsed = JSON.parse(v);
