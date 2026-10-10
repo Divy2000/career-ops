@@ -72,6 +72,8 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     } catch {
       /* plain text output */
     }
+    // A timeout's exit code is the runner's, not the action's, so neither findings nor exitMap may read it.
+    if (r.timedOut) return reply.code(504).send({ error: `${action.label} timed out after ${SYNC_TIMEOUT_MS / 1000} s`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
     if (r.code !== 0) {
       const findings = action.findings?.(r);
       if (findings) return { result, stderr: r.stderr.slice(-4000), findings };
