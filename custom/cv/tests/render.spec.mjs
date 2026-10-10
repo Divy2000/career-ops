@@ -341,6 +341,35 @@ test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the 
   assert.deepEqual(scratchIn(root), []);
 });
 
+test('given a final render that overflows the budget under --strict-pages, when run, then the input, the indexed PDF and the index stay as they were (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(longPayload()) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  // An overflowing page for the final render only: the drafts fit, the publish does not, as when the final render's
+  // layout differs from its draft's. generate-pdf.mjs writes that PDF before it refuses the overflow.
+  const long = path.join(root, 'long.html');
+  fs.copyFileSync(buildInto(root, longPayload()), long);
+  fs.writeFileSync(html, before);
+  const preload = path.join(root, 'overflow-final.mjs');
+  fs.writeFileSync(preload, `if (process.argv[1]?.endsWith('generate-pdf.mjs') && !process.argv[2]?.includes('.render-pdf-')) process.argv[2] = ${JSON.stringify(long)};\n`);
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const goodPdf = pdfWith(1);
+  fs.writeFileSync(pdf, goodPdf);
+  const index = path.join(root, 'data', 'pdf-index.tsv');
+  fs.mkdirSync(path.dirname(index), { recursive: true });
+  const indexed = '# report\tpdf\thtml\tformat\tdate\tkind - written by generate-pdf.mjs, do not edit\n12\toutput/cv-test.pdf\toutput/cv-test.html\tletter\t2026-10-01\tcv\n';
+  fs.writeFileSync(index, indexed);
+  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1', '--strict-pages', '--report=12'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /--strict-pages requested/);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'the input keeps its layout');
+  assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the indexed PDF is put back');
+  assert.equal(fs.readFileSync(index, 'utf8'), indexed);
+  assert.deepEqual(scratchIn(root), []);
+});
+
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);

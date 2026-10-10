@@ -40,6 +40,9 @@ const VALUE_FLAGS = ['--max-pages', '--format', '--report', '--kind'];
 const PASS_THROUGH = ['--format', '--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check'];
 const USAGE = `Usage: node custom/cv/render-pdf.mjs <input.html> <output.pdf> [--max-pages=N] [--strict-pages] [${PASS_THROUGH.join('] [')}]`;
 
+// generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, then refused before the index is.
+const strictOverflow = (attempt) => attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
+
 class RenderFailed extends Error {
   constructor(attempt) {
     super(`generate-pdf.mjs exited ${attempt.status}`);
@@ -88,6 +91,7 @@ async function main() {
   // renders run asynchronously so the handler can run while one is in progress; once stopping, no render result is
   // acted on and no new render starts.
   let running = null;
+  let lastChild = null;
   let stopping = false;
   let restoreInput = false;
   // The output as it was before the final render. generate-pdf.mjs writes the PDF and then its index row in one
@@ -105,6 +109,18 @@ async function main() {
     const now = outputBytes();
     return now !== null && (outputBefore === null || !now.equals(outputBefore));
   };
+  // After the final render: the input keeps the chosen layout only when the PDF it shows was published. A strict
+  // overflow wrote its over-budget PDF and then refused it, before the index, so the old PDF is put back too.
+  const settlePublish = (result) => {
+    if (result?.status === 0) return;
+    if (result && strictOverflow(result)) {
+      writeFileSync(input, html);
+      if (outputBefore === null) rmSync(output, { force: true });
+      else writeFileSync(output, outputBefore);
+    } else if (!publishedOutput()) {
+      writeFileSync(input, html);
+    }
+  };
   const removeDrafts = () => {
     rmSync(draftHtml, { force: true });
     rmSync(scratch, { recursive: true, force: true });
@@ -115,11 +131,10 @@ async function main() {
     if (running && running.exitCode === null && running.signalCode === null) {
       const closed = new Promise((resolve) => running.once('close', resolve));
       if (!restoreInput) running.kill(signal);
-      const status = await closed;
-      if (restoreInput && (status === 0 || publishedOutput())) restoreInput = false;
+      await closed;
     }
     removeDrafts();
-    if (restoreInput) writeFileSync(input, html);
+    if (restoreInput) settlePublish(lastChild?.result ?? null);
     process.exit(128 + os.constants.signals[signal]);
   };
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, onSignal);
@@ -129,6 +144,7 @@ async function main() {
       cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'],
     });
     running = child;
+    lastChild = child;
     let stdout = '';
     let stderr = '';
     // Bounded like the spawnSync maxBuffer it replaced: a child printing without end is stopped, not buffered.
@@ -146,17 +162,16 @@ async function main() {
     child.on('error', (err) => { if (!stopping) reject(err); });
     child.on('close', (status, signal) => {
       if (running === child) running = null;
+      child.result = { status, signal, stdout, stderr };
       if (stopping) return;
       if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));
-      else resolve({ status, signal, stdout, stderr });
+      else resolve(child.result);
     });
   });
   const render = async (candidate) => {
     writeFileSync(draftHtml, candidate);
     const attempt = await generate(draftHtml, draftPdf, ['--strict-pages'], draftEnv);
-    // generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, nothing else is.
-    const overflowed = attempt.status !== 0 && attempt.stderr.includes('(--strict-pages requested)');
-    if (attempt.status !== 0 && !overflowed) throw new RenderFailed(attempt);
+    if (attempt.status !== 0 && !strictOverflow(attempt)) throw new RenderFailed(attempt);
     return { pages: countPdfPages(readFileSync(draftPdf)) };
   };
 
@@ -181,8 +196,8 @@ async function main() {
     try {
       published = await generate(input, output, result.fits ? ['--strict-pages'] : []);
     } finally {
-      // Nothing was published, so the input keeps the layout it had.
-      if (published?.status !== 0 && !publishedOutput()) writeFileSync(input, html);
+      // Unless the chosen layout was published, the input gets back the layout it had.
+      settlePublish(published);
       restoreInput = false;
     }
     if (published.status !== 0) {
