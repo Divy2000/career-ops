@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { coreImportGraph, serverLoads, watchCoreGraph } from '../../supervisor/core-graph.js';
+import { coreImportGraph, coreImportGraphWithMissing, serverEntries, serverLoads, watchCoreGraph } from '../../supervisor/core-graph.js';
 import { CONTRACT } from '../../server/core/adapter.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -52,6 +52,27 @@ describe('the import graph of the core modules the server loads', () => {
     const loads = serverLoads(root, path.dirname(serverDir), ['custom/projects/lib.mjs']);
     for (const rel of ['custom/control-center/server/app.ts', 'custom/control-center/server/claude/manager.ts', 'custom/control-center/shared/page-theme.ts', 'custom/projects/lib.mjs', 'tracker-parse.mjs', 'lib/text.mjs']) expect(loads(rel), rel).toBe(true);
     for (const rel of ['cv.md', 'data/notes/x.md', 'custom/control-center/web/src/main.tsx', 'custom/control-center/serverless/x.ts', 'custom/immigration/watch.mjs', 'unrelated.mjs']) expect(loads(rel), rel).toBe(false);
+  });
+
+  it('a module outside the package that the server imports itself (custom/immigration/policy-claim.mjs) is loaded and watched (R14-supervisor-L2-02)', async () => {
+    const root = scratchRoot();
+    const pkg = path.join(root, 'custom', 'control-center');
+    put(root, 'custom/control-center/server/policy.ts', "import { holder } from '../../immigration/policy-claim.mjs';\nimport { x } from './util.js';\nexport const h = () => holder(x);\n");
+    put(root, 'custom/control-center/server/util.ts', 'export const x = 1;\n');
+    const claim = put(root, 'custom/immigration/policy-claim.mjs', "import { trim } from '../../lib/text.mjs';\nexport const holder = (x) => trim(String(x));\n");
+    const entries = () => serverEntries(root, pkg, ['custom/projects/lib.mjs']);
+    const loads = serverLoads(root, pkg, entries());
+    expect(loads('custom/immigration/policy-claim.mjs')).toBe(true);
+    expect(loads('custom/immigration/watch.mjs')).toBe(false);
+    // A TypeScript module names its siblings by their .js output: that is util.ts, not a file still to come.
+    expect(coreImportGraphWithMissing(root, entries()).missing.filter((m) => m.startsWith('custom/control-center/'))).toEqual([]);
+    const changes: string[] = [];
+    const watcher = await watchCoreGraph(root, entries, (file) => changes.push(file));
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    put(root, 'custom/immigration/policy-claim.mjs', "import { trim } from '../../lib/text.mjs';\nexport const holder = (x) => trim(String(x)) + '!';\n");
+    for (let i = 0; i < 100 && !changes.length; i++) await wait(50);
+    expect(changes).toEqual([claim]);
   });
 });
 

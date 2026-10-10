@@ -16,7 +16,7 @@ import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates, testHos
 import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
-import { SERVER_TREES, serverLoads, watchCoreGraph } from './core-graph.js';
+import { SERVER_TREES, serverEntries, serverLoads, watchCoreGraph } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
@@ -32,7 +32,8 @@ const PORT = Number(process.env.CC_PORT ?? 4317);
 const BUILT = process.argv.includes('--built') || process.env.CC_SERVE_BUILT === '1';
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
 const SESSION_COOKIE = 'cc_session';
-const CORE_ENTRIES = CONTRACT.exports.map((e) => e.module);
+// Read anew on every use: Dev Chat may add a server module that imports one more file outside the package.
+const CORE_ENTRIES = () => serverEntries(CODE_ROOT, PACKAGE_ROOT, CONTRACT.exports.map((e) => e.module));
 
 async function resolveDataRoot(): Promise<string> {
   if (process.env.CC_DATA_ROOT) return path.resolve(process.env.CC_DATA_ROOT);
