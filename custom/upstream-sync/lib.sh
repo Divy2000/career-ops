@@ -463,6 +463,23 @@ main_moved() {
   printf 'origin/main moved during the sync (tested %s, now %s); re-run the sync' "${1:0:12}" "${now:0:12}"
 }
 
+# merged_onto <merge-commit> <base-rev>: after gh pr merge, why the merge must
+# not reach the live checkout, or nothing. GitHub merges onto whatever main is at
+# that moment, so a PR merged between main_moved and the merge leaves a merge
+# commit whose first parent is not <base-rev>: a combination nothing tested. A
+# merge commit that cannot be read or found on origin/main counts the same.
+merged_onto() {
+  local parent
+  if [ -z "$1" ]; then printf 'cannot read the merge commit of the sync PR'; return 0; fi
+  if ! fetch_main origin; then printf 'cannot fetch origin/main to check the merge'; return 0; fi
+  if ! git merge-base --is-ancestor "$1" refs/remotes/origin/main 2>/dev/null ||
+    ! parent="$(git rev-parse --verify --quiet "$1^1")"; then
+    printf 'the merge commit %s of the sync PR is not on origin/main' "${1:0:12}"
+    return 0
+  fi
+  [ "$parent" = "$2" ] || printf 'the sync PR was merged onto %s, not the tested %s' "${parent:0:12}" "${2:0:12}"
+}
+
 # merge_blockers: why the sync PR must wait for a human, as one line of reasons
 # joined by "; ", or nothing when it may auto-merge. Reads CUSTOM_OK, CC_OK,
 # AUTO_MERGE and KEPT_README (an unset flag blocks), NEW_FAILURES and

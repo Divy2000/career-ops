@@ -211,12 +211,15 @@ fi
 echo "PR: $PR_URL"
 
 # Every gate compared with BASE_REV: a main that moved since (another PR merged meanwhile) holds the PR, and the merge
-# itself is pinned to the head commit that was tested.
+# itself is pinned to the head commit that was tested. GitHub still merges onto whatever main is when it runs, so a
+# merge made onto another main (a PR merged in the moment between) never reaches the live checkout.
 MAIN_MOVED="$(main_moved "$BASE_REV")"
 BLOCKERS="$(merge_blockers)"
 if [ -z "$BLOCKERS" ]; then
   gh pr merge "$PR_URL" --merge --match-head-commit "$(git rev-parse HEAD)" --delete-branch >/dev/null || fail "gh pr merge failed for $PR_URL"
   echo "merged $PR_URL"
+  MERGED_ONTO="$(merged_onto "$(gh pr view "$PR_URL" --json mergeCommit -q .mergeCommit.oid)" "$BASE_REV")"
+  [ -z "$MERGED_ONTO" ] || fail "$MERGED_ONTO; the live checkout was not updated. Test origin/main before pulling it"
   cd "$LIVE" || fail "live checkout missing"
   # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600)"
