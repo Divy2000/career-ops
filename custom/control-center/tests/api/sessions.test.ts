@@ -1737,6 +1737,8 @@ describe('report reservations and session trackers survive failures (r16-claude)
       const res = await withScenario(scenarioFile(SLOW), async () => call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/41'] }));
       expect(res.statusCode).toBe(202);
       expect(res.json().sessions[0]).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: 8 });
+      // Recorded as failed, so a reply can retry it instead of meeting a session still queued (review fix).
+      expect(app.sessions.read(res.json().sessions[0].id)).toMatchObject({ status: 'error', error: 'could not write the session record', reportNum: 8 });
       expect(fs.existsSync(path.join(app.cfg.dataRoot, 'reports', '008-RESERVED.md'))).toBe(true);
       // Its run was stopped.
       await until(() => app.runner.store.list().every((r) => !['queued', 'running'].includes(r.status)));

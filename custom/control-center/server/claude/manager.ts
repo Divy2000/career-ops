@@ -436,10 +436,12 @@ export class SessionManager {
     } catch (err) {
       // The run exists and may already be writing: it is stopped, and any report number stays with the session (released
       // at the next reconcile, once the process is long gone) rather than going back to the pool while it could be used.
-      try {
-        this.runner.cancel(run.id);
-      } catch {
-        /* nothing more can be done for it here */
+      for (const settle of [() => this.runner.cancel(run.id), () => this.store.setStatus(meta.id, 'error', (err as Error).message)]) {
+        try {
+          settle();
+        } catch {
+          /* the records cannot be written either: the next reconcile settles the session */
+        }
       }
       throw new TurnStartedError((err as Error).message);
     }
