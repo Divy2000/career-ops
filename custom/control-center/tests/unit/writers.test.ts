@@ -69,6 +69,14 @@ describe('inbox skip port', () => {
     expect(applyInboxSkip(PIPELINE, 'https://a.example/nope', true)).toEqual({ ok: false, error: 'unmatched' });
     expect(applyInboxSkip(PIPELINE, 'ftp://a.example/1', true)).toEqual({ ok: false, error: 'invalid-url' });
   });
+  it('matches rows under a second ## Pending section, not just the first (R17-srv-dom-a-X-01)', () => {
+    const text = '## Pending\n- [ ] https://a.example/1 | A | Role\n## Processed\n- [ ] https://a.example/2 | B | Role\n## Pending\n- [ ] https://b.example/3 | C | Role\n';
+    const r = applyInboxSkip(text, 'https://b.example/3', true);
+    expect(r).toMatchObject({ ok: true, matched: 1, changed: 1 });
+    if (!r.ok) return;
+    expect(r.text).toContain('- [x] https://b.example/3 | C | Role');
+    expect(r.text).toContain('- [ ] https://a.example/1 | A | Role');
+  });
 });
 
 const FOLLOWUPS = `# Follow-up History\n\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 1 | 2026-09-28 | Acme | Eng | Email | hr@acme.example | asked |\n| 2 | 6 | 2026-10-02 | Vandelay | Eng | LinkedIn | HM | thanks |\n- next #1 2026-10-10 (set 2026-10-01) ${String.fromCharCode(0x2014)} waiting\n`;

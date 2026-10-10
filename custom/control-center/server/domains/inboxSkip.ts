@@ -89,20 +89,6 @@ function jobUrlFromRest(rest: string): string | null {
   return pipelineRef(unescapeMarkdownUrl(rest.split('|')[0]?.trim().split(/\s+/)[0] ?? ''));
 }
 
-function pendingRange(lines: string[]): { start: number; end: number } | null {
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i]!.trim();
-    const h = t.match(/^##\s+(.+)$/);
-    if (h && pipelineSection(h[1]!) === 'pending') {
-      start = i + 1;
-      continue;
-    }
-    if (start !== -1 && t.startsWith('## ')) return { start, end: i };
-  }
-  return start === -1 ? null : { start, end: lines.length };
-}
-
 // Every modes/*/pipeline.md writes a URL it could not fetch as `- [!] URL <em dash or --> <note>` (Error: login
 // required, Fehler: ..., or a bare reason in the ua mode): that note in the first cell, which a scanned row never has.
 // A hand note after a plain hyphen (`URL - asked to wait`) is not one.
@@ -115,7 +101,9 @@ function restoredMark(rest: string): '!' | ' ' {
 
 export type SkipResult = { ok: true; text: string; matched: number; changed: number } | { ok: false; error: 'invalid-url' | 'unmatched' };
 
-/** Flip `- [ ]` and `- [x]` on Pending rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays. */
+/** Flip `- [ ]` and `- [x]` on Pending rows whose job URL (or local:jds/ reference) equals `url`; every other byte stays.
+ * Every `## Pending` section counts: scan.mjs appends under a second one when pipeline.md's own heading is not English
+ * or Spanish. A file with no Pending heading matches on every row. */
 export function applyInboxSkip(text: string, url: string, done: boolean): SkipResult {
   // The app reads rows unescaped (parsePipeline); the file holds the escaped form, so both sides compare unescaped.
   const parsed = pipelineRef(typeof url === 'string' ? unescapeMarkdownUrl(url.trim()) : url);
@@ -124,11 +112,21 @@ export function applyInboxSkip(text: string, url: string, done: boolean): SkipRe
   const endedWithNl = /\r?\n$/.test(text);
   const lines = text.split(/\r?\n/);
   if (endedWithNl && lines[lines.length - 1] === '') lines.pop();
-  const range = pendingRange(lines);
+  const heading = (line: string) => line.trim().match(/^##\s+(.+)$/)?.[1];
+  const hasPending = lines.some((l) => {
+    const title = heading(l);
+    return title !== undefined && pipelineSection(title) === 'pending';
+  });
+  let section: 'pending' | 'done' | 'other' = 'other';
   let matched = 0;
   let changed = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (range && (i < range.start || i >= range.end)) continue;
+    const title = heading(lines[i]!);
+    if (title !== undefined) {
+      section = pipelineSection(title);
+      continue;
+    }
+    if (hasPending && section !== 'pending') continue;
     const m = lines[i]!.match(CHECKBOX_LINE);
     if (!m) continue;
     if (jobUrlFromRest(m[3]!) !== parsed) continue;
