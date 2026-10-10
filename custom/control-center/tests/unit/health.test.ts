@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { waitHealthy } from '../../supervisor/health.js';
@@ -18,14 +18,19 @@ async function serve(handler: http.RequestListener): Promise<number> {
 
 describe('the supervisor\'s health check of a new server child (SW4-claude-01)', () => {
   it('a child that accepts the request and never answers fails the check once its time is up, instead of hanging', async () => {
+    let closedByClient = 0;
     const port = await serve((req, res) => {
-      req.on('close', () => res.destroy());
+      req.on('close', () => {
+        closedByClient++;
+        res.destroy();
+      });
     });
     const started = Date.now();
     await expect(waitHealthy(port, 1500, 'h')).rejects.toThrow('healthz did not return 200 in time');
-    const took = Date.now() - started;
-    expect(took).toBeGreaterThanOrEqual(1400);
-    expect(took).toBeLessThan(4000);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
+    // The check gave up on the request it sent: without a per-request timeout it would wait on it for ever (and the
+    // test timeout below catches that). No upper bound on the time: a loaded machine fires timers late.
+    await vi.waitFor(() => expect(closedByClient).toBe(1));
   }, 10_000);
 
   it('passes on 200, after retrying failures, and sends the public host', async () => {
