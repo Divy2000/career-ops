@@ -56,6 +56,9 @@ function Probe() {
   // Profile > More files > interview-prep/story-bank.md, and an Insights script tab.
   useQuery({ queryKey: ['config', 'user-file', 'storyBank'], queryFn: () => ((fetches.storyBank = (fetches.storyBank ?? 0) + 1), { ok: true }) });
   useQuery({ queryKey: ['insights', 'upskill'], queryFn: () => ((fetches.insights = (fetches.insights ?? 0) + 1), { ok: true }) });
+  // The Follow-ups page and the What's New feed.
+  useQuery({ queryKey: ['followups'], queryFn: () => ((fetches.followups = (fetches.followups ?? 0) + 1), { ok: true }) });
+  useQuery({ queryKey: ['pipeline', 'whats-new', 7, 12], queryFn: () => ((fetches.whatsNew = (fetches.whatsNew ?? 0) + 1), { ok: true }) });
   return null;
 }
 
@@ -68,7 +71,7 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }) }, createElement(Probe))));
-  await until(() => fetches.storyBank === 1 && fetches.insights === 1, 'the first fetches');
+  await until(() => fetches.storyBank === 1 && fetches.insights === 1 && fetches.followups === 1 && fetches.whatsNew === 1, 'the first fetches');
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -86,6 +89,16 @@ describe('what each domain refetches', () => {
   it.each(['config', 'pipeline', 'followups'])('a %s change refetches the Insights scripts that read its files (R13-weblib-L2-02)', async (domain) => {
     await act(async () => latest().emit('data.changed', { domain, paths: [] }));
     await until(() => fetches.insights === 2, `the insights refetch after ${domain}`);
+  });
+
+  it('a tracker change refetches What\'s New, which reads applications.md (R17-weblib-L2-01)', async () => {
+    await act(async () => latest().emit('data.changed', { domain: 'tracker', paths: [] }));
+    await until(() => fetches.whatsNew === 2, 'the whats-new refetch after a tracker change');
+  });
+
+  it('a config change refetches Follow-ups, whose cadence lives in profile.yml (R17-weblib-L2-01)', async () => {
+    await act(async () => latest().emit('data.changed', { domain: 'config', paths: [] }));
+    await until(() => fetches.followups === 2, 'the followups refetch after a config change');
   });
 });
 

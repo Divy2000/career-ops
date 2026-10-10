@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 /** Server domains map to the query keys that go stale when they change. */
 export const DOMAIN_KEYS: Record<string, string[][]> = {
-  tracker: [['tracker'], ['insights'], ['followups']],
+  tracker: [['tracker'], ['insights'], ['followups'], ['pipeline', 'whats-new']],
   reports: [['tracker'], ['insights']],
   // The Insights scripts read cv.md, profile.yml, portals.yml, scan-history.tsv, pipeline.md and follow-ups.md.
   pipeline: [['pipeline'], ['insights']],
@@ -14,7 +14,7 @@ export const DOMAIN_KEYS: Record<string, string[][]> = {
   interviews: [['tracker', 'interviews'], ['insights'], ['config', 'user-file']],
   documents: [['tracker', 'documents'], ['apply', 'documents']],
   followups: [['followups'], ['tracker'], ['insights']],
-  config: [['config'], ['system'], ['insights']],
+  config: [['config'], ['system'], ['insights'], ['followups']],
   runs: [['runs']],
   sessions: [['sessions']],
 };
