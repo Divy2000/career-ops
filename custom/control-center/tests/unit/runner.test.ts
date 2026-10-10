@@ -768,6 +768,44 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(lineOnes(here, id)).toBe(1);
   });
 
+  it('cancelling a queued run whose wrapper a killed server had spawned and recorded stops that wrapper\'s command, rather than marking the run cancelled while it keeps running', async () => {
+    const root = tmpRoot();
+    const other = otherServer(root, req(['0', '30000'], { actionId: 'test.other' }));
+    strays.push(await other.holding());
+    const id = new RunStore(root).list().find((m) => m.actionId === 'test.other')!.id;
+    const wrapperJson = path.join(new RunStore(root).dirOf(id), 'wrapper.json');
+    await until(() => fs.existsSync(wrapperJson));
+    strays.push((JSON.parse(fs.readFileSync(wrapperJson, 'utf8')) as { childPid: number }).childPid);
+    await other.crash();
+    // No reconcile or pump here first: the cancel is what finds the claim the killed server left.
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    here.cancel(id);
+    await until(() => Boolean(here.store.readExit(id)) && here.store.read(id)?.status === 'cancelled', 10_000);
+    expect(here.store.readRaw(id).lines.map((l) => l.line)).not.toContain('line three');
+  });
+
+  it('a process that is counting what is free holds the schedule lock: a run started here meanwhile waits, so the two never both count one resource free and start a run on it each', async () => {
+    const root = tmpRoot();
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    const long = here.start(req(['0', '30000']));
+    await until(() => here.store.read(long.id)?.status === 'running');
+    // The other process holds at the first start time it reads of a process not its own: here's running run, while it
+    // counts what is free, before it claims or spawns anything.
+    const other = otherServer(root, req(['0', '1500'], { actionId: 'test.other', resources: ['tracker'] }));
+    expect(await other.holding()).toBe(here.store.read(long.id)!.wrapperPid);
+    const mine = here.start(req(['0'], { resources: ['tracker'] }));
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    other.go();
+    const theirs = () => here.store.list().find((m) => m.actionId === 'test.other')!;
+    await until(() => theirs().status === 'done', 15_000);
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(mine.id)!.startedAt! >= theirs().endedAt!).toBe(true);
+    here.cancel(long.id);
+    await until(() => here.store.read(long.id)?.status === 'cancelled' && Boolean(here.store.readExit(long.id)));
+  });
+
   it('a server killed after spawning a wrapper that recorded nothing yet: the run ends lost, its wrapper told to stop, and it is never started again', async () => {
     const root = tmpRoot();
     // A wrapper stand-in that never gets as far as recording anything.
