@@ -49,7 +49,7 @@ function projectSections(cvText) {
         continue;
       }
       // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
-      inside = /\bprojects?$/i.test(section[1].replace(/[^A-Za-z]+$/, ''));
+      inside = /\bprojects?$/i.test(section[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[^A-Za-z]+$/, ''));
       continue;
     }
     if (inside) out.push(line);
