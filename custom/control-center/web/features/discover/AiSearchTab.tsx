@@ -103,7 +103,19 @@ export function AiSearchTab() {
           </button>
         </div>
       )}
-      <SessionPanel key={`${remembered.panelKey}-${fresh}`} {...remembered.panel} onStatus={onStatus} mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
+      {remembered.waiting ? (
+        // Left mid-start: the search is still being created, and a second Search would start a second paid session.
+        <div className="card session" role="status">
+          <h2 style={{ margin: 0 }}>
+            AI search <Pill tone="warn">Uses tokens</Pill>
+          </h2>
+          <p className="muted" style={{ margin: 'var(--space-2) 0 0' }}>
+            Starting the AI search. It shows here once it is created.
+          </p>
+        </div>
+      ) : (
+        <SessionPanel key={`${remembered.panelKey}-${fresh}`} {...remembered.panel} onStatus={onStatus} mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
+      )}
       {offers.length > 0 && (
         <div className="card">
           <div className="row gap" style={{ justifyContent: 'space-between' }}>
