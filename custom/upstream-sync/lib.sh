@@ -501,10 +501,11 @@ merge_blockers() {
   printf '%s' "$out"
 }
 
-# update_live_checkout <daily-lock> <wait-seconds>: after the sync PR merged,
-# bring the live checkout (the current directory) up to the new origin/main:
-# fetch, then fast-forward only when it is on main with no tracked local
-# changes. Then reinstall what the merge changed, as a user's own install would:
+# update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
+# merged, bring the live checkout (the current directory) up to <commit>, the
+# sync PR's verified merge commit (never a later origin/main, which this run did
+# not test): fetch, then fast-forward only when it is on main with no tracked
+# local changes. Then reinstall what the merge changed, as a user's own install would:
 # the root dependencies (lifecycle scripts included) when deps_fingerprint
 # changed, and the Control Center's (npm ci) when its tracked lockfile changed,
 # since bin/cc only checks that its node_modules exists. All of it runs holding
@@ -517,13 +518,13 @@ merge_blockers() {
 update_live_checkout() {
   local deps_before cc_before failed="" rc
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
-    if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
-      echo "update_live_checkout: needs the daily job's lock file and a wait in seconds"
+    if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
+      echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
       return 1
     fi
     mkdir -p "$(dirname "$1")" || { echo "cannot create the folder of the daily job's lock $1"; return 1; }
     # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
-    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'source "$1" && update_live_checkout' update_live_checkout "${BASH_SOURCE[0]}"
+    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'source "$1" && update_live_checkout "" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3"
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
@@ -533,7 +534,7 @@ update_live_checkout() {
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
   deps_before="$(deps_fingerprint HEAD)" || { echo "cannot read the live checkout's dependency files"; return 1; }
   cc_before="$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)"
-  git merge -q --ff-only origin/main || { echo "live checkout could not fast-forward"; return 1; }
+  git merge -q --ff-only "$3" || { echo "live checkout could not fast-forward"; return 1; }
   if [ "$deps_before" != "$(deps_fingerprint HEAD)" ] && ! install_root_deps run-scripts >/dev/null 2>&1; then
     failed="npm install"
   fi

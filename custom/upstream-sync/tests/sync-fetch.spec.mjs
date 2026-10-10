@@ -799,7 +799,7 @@ test('a fetch that moves origin/main while Claude runs does not change the base 
  * A live checkout cloned from a bare origin whose main then gets one more commit (`depsChange` edits the root
  * dependencies, else an unrelated file). npm is a stub that logs its calls, or fails with `npmExit`.
  */
-function liveWorld({ depsChange = false, ccChange = false, npmExit = 0 } = {}) {
+function liveWorld({ depsChange = false, ccChange = false, npmExit = 0, laterCommit = false } = {}) {
   const base = mkdtempSync(path.join(tmpdir(), 'sync-live-'));
   const seed = path.join(base, 'seed');
   const origin = path.join(base, 'origin.git');
@@ -819,9 +819,13 @@ function liveWorld({ depsChange = false, ccChange = false, npmExit = 0 } = {}) {
   commitFile(seed, 'scan.mjs', 'merged\n', 'merged sync PR');
   git(seed, 'push', '-q', origin, 'main');
   const target = git(seed, 'rev-parse', 'HEAD').trim();
+  if (laterCommit) {
+    commitFile(seed, 'later.txt', 'another PR\n', 'a PR merged right after the sync PR');
+    git(seed, 'push', '-q', origin, 'main');
+  }
   // run-daily's lock, in a data root that does not exist yet: the daily job creates it.
   const dailyLock = path.join(base, 'data', 'data', 'immigration', '.run-daily.lockf');
-  const update = ({ wait = 5, prefix = '' } = {}) => bashLib(live, `${prefix}out="$(update_live_checkout "$LOCK" ${wait})"; rc=$?; printf "%s" "$out"; exit $rc`, { PATH: `${bin}:${process.env.PATH}`, LOCK: dailyLock });
+  const update = ({ wait = 5, prefix = '' } = {}) => bashLib(live, `${prefix}out="$(update_live_checkout "$LOCK" ${wait} "$TARGET")"; rc=$?; printf "%s" "$out"; exit $rc`, { PATH: `${bin}:${process.env.PATH}`, LOCK: dailyLock, TARGET: target });
   return { base, live, log, target, update, dailyLock, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
 }
 
@@ -853,6 +857,16 @@ for (const c of LIVE_CASES) {
   });
 }
 
+test('update_live_checkout moves the live checkout to the verified sync merge, not to a later commit on origin/main (R11-scripts-b-L1-01)', () => {
+  const w = liveWorld({ laterCommit: true });
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(res.stdout, `live checkout now at ${w.target.slice(0, 7)}`);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('a daily job holding its lock for longer than the wait leaves the live checkout alone, reinstalls nothing, and says why (R11-scripts-b-L1-03)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true });
   try {
@@ -877,20 +891,22 @@ test('a daily job that finishes within the wait is waited for, then the live che
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
-test('update_live_checkout refuses to run without the daily job\'s lock and a wait (R11-scripts-b-L1-03)', () => {
+test('update_live_checkout refuses to run without the daily job\'s lock, a wait and a target commit (R11-scripts-b-L1-03)', () => {
   const w = liveWorld();
   try {
     const before = w.head();
-    const res = bashLib(w.live, 'update_live_checkout');
-    assert.equal(res.status, 1, res.stdout + res.stderr);
-    assert.match(res.stdout, /needs the daily job's lock file and a wait in seconds/);
+    for (const args of ['', `"${w.dailyLock}" 5`, `"${w.dailyLock}" x ${w.target}`]) {
+      const res = bashLib(w.live, `update_live_checkout ${args}`);
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.match(res.stdout, /needs the daily job's lock file, a wait in seconds and the commit to move to/, args);
+    }
     assert.equal(w.head(), before);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
 test('sync.sh updates the live checkout under the lock run-daily.sh takes, in the data root it resolved (R11-scripts-b-L1-03)', () => {
   const sync = readFileSync(SYNC, 'utf8');
-  assert.match(sync, /^ {2}LIVE_UPDATE="\$\(update_live_checkout "\$DATA\/data\/immigration\/\.run-daily\.lockf" [0-9]+\)"$/m);
+  assert.match(sync, /^ {2}LIVE_UPDATE="\$\(update_live_checkout "\$DATA\/data\/immigration\/\.run-daily\.lockf" [0-9]+ "\$MERGE_OID"\)"$/m);
   const daily = readFileSync(path.join(REPO_ROOT, 'custom/immigration/run-daily.sh'), 'utf8');
   assert.match(daily, /^IMM="\$DATA\/data\/immigration"$/m);
   assert.match(daily, /lockf -k -t 0 "\$IMM\/\.run-daily\.lockf"/);
