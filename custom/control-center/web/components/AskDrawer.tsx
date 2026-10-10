@@ -121,9 +121,12 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
 
   const update = (id: number, patch: Partial<Proposal>) => setProposals((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
+  // The hidden button lags the click by a render, and confirms queue: a second click before it would ask twice.
+  const started = useRef(new Set<number>());
   const run = async (p: Proposal) => {
     const def = askAction(p.action);
-    if (!def) return;
+    if (!def || started.current.has(p.id)) return;
+    started.current.add(p.id);
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
     // Checked before the question: a proposal that cannot run is not offered to the user as a write to approve.

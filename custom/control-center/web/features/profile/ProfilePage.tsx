@@ -178,11 +178,16 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   };
   // One save at a time: a second PUT on the same ETag would come back 409 as "changed on disk".
   const [saving, setSaving] = useState(false);
+  // The disabled button lags the click by a render, and confirms queue: a second click before it would ask twice.
+  const savingNow = useRef(false);
   const save = async () => {
+    if (savingNow.current) return;
+    savingNow.current = true;
     setSaving(true);
     try {
       await saveCv();
     } finally {
+      savingNow.current = false;
       setSaving(false);
     }
   };
