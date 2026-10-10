@@ -166,9 +166,11 @@ export class SessionManager {
     return policy;
   }
 
-  async start(input: StartInput): Promise<SessionMeta> {
+  /** `onCreated` hears of the session as soon as it is recorded, so a caller can settle it if the start then throws. */
+  async start(input: StartInput, onCreated?: (meta: SessionMeta) => void): Promise<SessionMeta> {
     const policy = this.turnPolicy(input.mode);
     const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null, policyBatch: input.policyBatch ?? null });
+    onCreated?.(meta);
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
   }
 
@@ -219,16 +221,18 @@ export class SessionManager {
       for (const [i, url] of input.urls.entries()) {
         const num = reserved[i]!;
         const target = { type: 'url' as const, value: url };
+        let created: SessionMeta | null = null;
         try {
-          sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }));
+          sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }, (m) => (created = m)));
           handed.add(num);
         } catch (err) {
           // One URL that cannot start must not hide the ones that did: the caller keeps only the failed URLs for a retry.
           const message = (err as Error).message;
-          const created = this.store.list().find((m) => m.reportNum === num && m.target.value === url && m.turns.length === 0);
-          if (created) {
+          const recorded: SessionMeta | null = created;
+          if (recorded) {
+            // The session holds the number now and releases it as a first turn that cannot start does.
             handed.add(num);
-            sessions.push(await this.failBeforeSpawn(created, message));
+            sessions.push(await this.failBeforeSpawn(recorded, message));
           } else {
             sessions.push(unstartedMeta(input.mode, target, input.model ?? null, message));
           }

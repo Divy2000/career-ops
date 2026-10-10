@@ -1600,6 +1600,10 @@ describe('report reservations and session trackers survive failures (r16-claude)
         if (calls === 1) throw new Error('could not write the run record');
         return original(input);
       });
+      // A corrupt session elsewhere in the store must not stop the failed one from being found and settled (review fix).
+      const corrupt = path.join(app.cfg.dataRoot, 'data', 'control-center', 'sessions', 's20200101000000-c0ffee');
+      fs.mkdirSync(corrupt, { recursive: true });
+      fs.writeFileSync(path.join(corrupt, 'meta.json'), '{');
       const urls = ['https://jobs.example.com/synthetic/31', 'https://jobs.example.com/synthetic/32'];
       const res = await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls });
       expect(res.statusCode).toBe(202);
