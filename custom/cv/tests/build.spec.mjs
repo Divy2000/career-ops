@@ -190,6 +190,18 @@ test('given a project under a level-3 heading of a Personal Projects section, wh
   assert.match(checkPayload({ projects: [{ name: 'Graph Co', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors.join('\n'), /"Graph Co" is in neither/);
 });
 
+test('given an entry under a section that is about something else but names projects (Project Management), when checked, then it is not a project source (R11-scripts-a-L3-02 review)', () => {
+  for (const title of ['Project Management', 'Projects & Publications']) {
+    const cv = `## ${title}\n\n### Secret Tool\n- https://github.com/me/tool\n\n## Skills\n`;
+    const r = checkPayload({ projects: [{ name: 'Secret Tool', url: 'https://github.com/me/tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+    assert.match(r.errors.join('\n'), /"Secret Tool" is in neither/, title);
+  }
+  for (const title of ['Projects', 'Selected Projects', 'Side-Projects']) {
+    const cv = `## ${title}\n\n### Secret Tool\n- https://github.com/me/tool\n\n## Skills\n`;
+    assert.deepEqual(checkPayload({ projects: [{ name: 'Secret Tool', url: 'https://github.com/me/tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, [], title);
+  }
+});
+
 test('given a project named after a job title in cv.md, when built, then it fails and no HTML is written (R11-scripts-a-L3-02)', () => {
   const fixture = loadFixture();
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
