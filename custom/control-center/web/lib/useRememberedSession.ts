@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { lastSession } from './lastSession';
+import { lastSession, START_REPORT_WINDOW_MS } from './lastSession';
 
 // The panel that started a session may unmount before POST /api/sessions answers (a tab switch, a page change) and
 // reports the id afterwards. The start is marked in the store meanwhile, and every mount under the key hears when it
@@ -8,10 +8,6 @@ const listeners = new Map<string, Set<() => void>>();
 function changed(key: string) {
   for (const fn of listeners.get(key) ?? []) fn();
 }
-
-// A start still marked but not reported within this window was lost (its page reloaded and the POST never came back);
-// the mark is cleared so the start form is not disabled forever.
-const START_REPORT_WINDOW_MS = 15_000;
 function subscribe(key: string, fn: () => void) {
   const set = listeners.get(key) ?? new Set();
   set.add(fn);

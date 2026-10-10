@@ -2,6 +2,10 @@
 // Kept in sessionStorage: a storage that throws (a private window) only loses that re-attaching.
 const SESSION_ID = /^[\w-]{1,80}$/;
 
+// A start still marked but not reported within this window was lost (its page reloaded and the POST never came back);
+// the mark is cleared so the start form is not disabled forever.
+export const START_REPORT_WINDOW_MS = 15_000;
+
 export interface LastSession {
   read(): string | null;
   write(id: string | null): void;
@@ -30,16 +34,21 @@ export function lastSession(key: string): LastSession {
     }
   };
   const startKey = `${key}:starting`;
+  // The mark self-expires: a start that never reports (its page reloaded and the POST was lost) must not leave the
+  // start form disabled forever. `starting()` is true only while the mark is set AND still within the window.
   const starting = (): boolean => {
     try {
-      return sessionStorage.getItem(startKey) !== null;
+      const raw = sessionStorage.getItem(startKey);
+      if (raw === null) return false;
+      const at = Number(raw);
+      return Number.isFinite(at) && Date.now() - at <= START_REPORT_WINDOW_MS;
     } catch {
       return false;
     }
   };
   const setStarting = (on: boolean): void => {
     try {
-      if (on) sessionStorage.setItem(startKey, '1');
+      if (on) sessionStorage.setItem(startKey, String(Date.now()));
       else sessionStorage.removeItem(startKey);
     } catch {
       // storage refused: a page mounted mid-start only misses that the start is under way

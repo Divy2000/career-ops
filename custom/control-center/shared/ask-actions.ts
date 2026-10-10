@@ -27,7 +27,7 @@ export const ASK_ACTION_SPECS = [
   { name: 'evaluate', params: [param('url', 'the job posting URL')], confirm: true, writes: true, runs: true },
   { name: 'evaluateCompany', params: [param('company', 'the company name as the pipeline writes it')], confirm: true, writes: true, runs: true },
   { name: 'explore', params: [], confirm: false, writes: false, runs: true },
-  { name: 'research', params: [param('topic', 'a company or topic')], confirm: true, writes: false, runs: true },
+  { name: 'research', params: [param('topic', 'a company or topic')], confirm: true, writes: true, runs: true },
   { name: 'generatePdf', params: [param('row', 'the tracker row number')], confirm: true, writes: true, runs: true },
   { name: 'setStatus', params: [param('row', 'the tracker row number'), param('state', 'one of the exact statuses: Evaluated, Applied, Responded, Interview, Offer, Hired, Rejected, Discarded, SKIP'), param('note', 'a short note for the status log', false)], confirm: true, writes: true, runs: true },
   { name: 'apply', params: [param('row', 'the tracker row number')], confirm: false, writes: false, runs: true },
