@@ -143,6 +143,25 @@ describe('the palette params check', () => {
   });
 });
 
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const registeredRoutes = [...new Set([...serverSrc.matchAll(/'(\/api\/[^'\s]*)'/g)].map((m) => m[1]!))];
+/** A lookahead refusing the literal segments that registered routes sharing `prefix` put at position `i`. */
+function siblingGuard(prefix: string[], i: number): string {
+  const literals = new Set<string>();
+  for (const r of registeredRoutes) {
+    const segs = r.split('/');
+    if (segs.length > i && prefix.every((p, j) => p === segs[j] || p.startsWith(':') || segs[j]!.startsWith(':')) && !segs[i]!.startsWith(':')) literals.add(segs[i]!);
+  }
+  return literals.size ? `(?!(?:${[...literals].map(escapeRe).join('|')})(?![\\w-]))` : '';
+}
+
+describe('the route-exercised matcher', () => {
+  it('does not count a static sibling route as exercising a :param route', () => {
+    expect(registeredRoutes).toContain('/api/projects/upload');
+    expect(siblingGuard(['', 'api', 'projects'], 3)).toMatch(/upload/);
+  });
+});
+
 describe('spec section 1 inventory reaches its new location', () => {
   it('lists every capability exactly once', () => {
     const ids = INVENTORY.map(([id]) => id);
@@ -153,8 +172,10 @@ describe('spec section 1 inventory reaches its new location', () => {
   it.each(INVENTORY)('%s', (_id, reach) => {
     if (reach.api) {
       expect(serverSrc, `route ${reach.api} is registered`).toContain(`'${reach.api}'`);
-      // The whole route, each :param standing for any one path segment (a literal or a template expression).
-      const route = new RegExp(reach.api.split('/').map((seg) => (seg.startsWith(':') ? "[^/'\"`\\s?]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('/') + "(?![\\w-])");
+      // The whole route, each :param standing for any one path segment (a literal or a template expression) except the
+      // literal segments of registered sibling routes: /api/projects/upload does not exercise /api/projects/:id.
+      const segs = reach.api.split('/');
+      const route = new RegExp(segs.map((seg, i) => (seg.startsWith(':') ? `${siblingGuard(segs.slice(0, i), i)}[^/'"\`\\s?]+` : escapeRe(seg))).join('/') + '(?![\\w-])');
       expect(apiTestSrc + e2eSrc, `route ${reach.api} is exercised by an API or e2e test`).toMatch(route);
     }
     if (reach.action) {
