@@ -314,6 +314,20 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect(generate()!.disabled).toBe(true);
   });
 
+  it('Generate CV PDF stays off while a pdf session started from the row\'s Documents tab runs (R18-feat-a-L1-02)', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') {
+        return json([{ ...URL_SESSION, id: 's-pdf-docs', mode: 'pdf', status: 'running', target: { type: 'app', value: '12' } }]);
+      }
+      return inner(input, init);
+    });
+    await openApply();
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-docs"]'), 'the link to the running Documents tab session');
+    expect(generate()!.disabled).toBe(true);
+  });
+
   it('Generate CV PDF comes back once the tailored CV session ended', async () => {
     docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
     pdfStatus = 'error';

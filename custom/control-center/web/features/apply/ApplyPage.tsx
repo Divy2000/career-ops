@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
-import { useEngine, useSessionStream, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
+import { useEngine, useSessionStream, useSessions, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
 import { UnsavedProvider, useUnsaved } from '../../lib/unsaved';
@@ -32,6 +32,10 @@ export interface AnswerField {
 const MANUAL_TYPES = new Set(['checkbox', 'radio']);
 // A single checkbox (consent) or a group whose options were not listed counts too: the fill turn skips it all the same.
 const isManualField = (f: AnswerField): boolean => MANUAL_TYPES.has(f.type);
+
+// A pdf session still owns its row's CV: a second paid session for the same row must not start beside it (AskDrawer's
+// generatePdf guard reads the same statuses from the sessions list).
+const LIVE_PDF = new Set(['queued', 'running', 'awaiting_user']);
 
 export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onChange: (fields: AnswerField[]) => void }) {
   const set = (id: string, value: string) => onChange(fields.map((f) => (f.id === id ? { ...f, value } : f)));
@@ -209,6 +213,11 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const pdfSession = useRememberedSession(`cc.pdf.${n ?? 'none'}`);
   const pdfId = n ? pdfSession.panel.sessionId : null;
   const pdfStream = useSessionStream(pdfId);
+  // The sessions list also backs the per-row tailored-CV guard: a pdf session for this row started from its Documents
+  // tab (cc.application.<n>.documents) is not remembered under cc.pdf.<n>, so the guard reads it from the list, exactly
+  // as AskDrawer's generatePdf does, and links it instead of starting a second paid CV write.
+  const sessions = useSessions();
+  const livePdf = n === null ? undefined : sessions.data?.find((s) => s.mode === 'pdf' && LIVE_PDF.has(s.status) && s.target.value === n);
   const { onStatus: pdfOnStatus, onStarting: pdfOnStarting, onSessionId: pdfOnSessionId, onStartFailed: pdfOnStartFailed } = pdfSession.panel;
   useEffect(() => {
     // A session waiting for the user's reply is still the row's CV run: the reply finishes it, so it stays live here.
@@ -338,13 +347,13 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                 ))}
                 {blockers.needsPdf && n && (
                   <div>
-                    <button type="button" disabled={generating || pdfSession.busy} onClick={() => void generatePdf()}>
+                    <button type="button" disabled={generating || pdfSession.busy || livePdf !== undefined} onClick={() => void generatePdf()}>
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
-                    {pdfSession.busy && pdfId && (
+                    {(livePdf?.id ?? (pdfSession.busy ? pdfId : null)) && (
                       <span className="muted small">
                         {' '}
-                        <Link to="/sessions/$id" params={{ id: pdfId }}>
+                        <Link to="/sessions/$id" params={{ id: livePdf?.id ?? pdfId! }}>
                           The tailored CV session
                         </Link>{' '}
                         is still running.
