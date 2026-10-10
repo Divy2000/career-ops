@@ -81,6 +81,53 @@ test('a paused sponsor is excluded whatever slug the alert row carries, keyed by
   assert.match(r.stdout, /shortlist: 0 kept, 5 excluded/);
 });
 
+// One ranked pipeline row per company, fresh 'strong' tier cache entries (no network lookup) and the given alert rows.
+function alertWorld(companies, alertRows) {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data', 'immigration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${companies.map((c, i) => `- [ ] https://jobs.example.com/${i} | ${c} | Backend Engineer | Remote | rank: 4.2/5 — fit`).join('\n')}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  const tier = { tier: 'strong', matched: 'X', checked: localToday() };
+  fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify(Object.fromEntries(companies.map((c) => [c, tier]))));
+  fs.writeFileSync(
+    path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
+    `date\tcompany\tslug\tstatus\theadline\turl\n${alertRows.map(([date, company, slug, status]) => `${date}\t${company}\t${slug}\t${status}\t${company} ${status} sponsorship\thttps://news.example/${slug}`).join('\n')}\n`,
+  );
+  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  return { stdout: r.stdout, md: fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8') };
+}
+
+test('the newest alert that names a company applies, whether it matches by slug or by normalized name (R11-scripts-a-L3-01)', () => {
+  // The older pause matches by slug, the newer resume by name once "Group" and "Holdings" are dropped.
+  const r = alertWorld(['Globex Group'], [['2026-09-01', 'Globex Group', 'globex-group', 'paused'], ['2026-10-01', 'Globex Holdings', 'globex-holdings', 'resumed']]);
+  assert.match(r.stdout, /shortlist: 1 kept, 0 excluded/, r.md);
+  assert.match(r.md, /strong; resumed 2026-10-01/);
+});
+
+test('a pause filed under the legal name excludes the rows that carry the name without its corporate suffix (R11-scripts-a-L3-01)', () => {
+  const r = alertWorld(['Acme Robotics'], [['2026-10-01', 'Acme Robotics, Inc.', 'acme-robotics-incorporated', 'paused']]);
+  assert.match(r.stdout, /shortlist: 0 kept, 1 excluded/, r.md);
+});
+
+test('a pause filed under a dotted domain name excludes the rows that carry the bare brand name (R11-scripts-a-L3-01)', () => {
+  const r = alertWorld(['Amazon'], [['2026-10-01', 'Amazon.com, Inc.', 'amazon-com', 'paused']]);
+  assert.match(r.stdout, /shortlist: 0 kept, 1 excluded/, r.md);
+});
+
+test('an alert for a longer name does not exclude a company whose name is its first word (R11-scripts-a-L3-01)', () => {
+  const r = alertWorld(['Meta'], [['2026-10-01', 'Meta Labs', 'meta-labs', 'paused']]);
+  assert.match(r.stdout, /shortlist: 1 kept, 0 excluded/, r.md);
+});
+
+test('an alert for a shorter name does not exclude a company whose name extends it (R11-scripts-a-L3-01)', () => {
+  // A standalone "AI" is part of the name, unlike a dotted ".ai" domain suffix.
+  for (const [company, alert, slug] of [['ABC Labs', 'ABC', 'abc'], ['X-Ray Labs', 'X Corp', 'x'], ['Acme AI', 'Acme', 'acme']]) {
+    const r = alertWorld([company], [['2026-10-01', alert, slug, 'paused']]);
+    assert.match(r.stdout, /shortlist: 1 kept, 0 excluded/, `${company} vs ${alert}\n${r.md}`);
+  }
+});
+
 for (const [what, write] of [
   ['no portals.yml (the pasted-URL workflow)', () => {}],
   ['an empty portals.yml', (root) => fs.writeFileSync(path.join(root, 'portals.yml'), '')],
