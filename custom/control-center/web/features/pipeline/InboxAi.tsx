@@ -10,6 +10,7 @@ import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
+import type { SessionMeta } from '@shared/api';
 
 /**
  * Process inbox runs pipeline mode over data/pipeline.md, whose liveness sweep puts every pending row in the file it
@@ -18,6 +19,10 @@ import { useRememberedSession } from '../../lib/useRememberedSession';
  */
 // A session waiting for the user's reply still owns the rows it works on: answering it carries on.
 const LIVE = new Set(['queued', 'running', 'awaiting_user']);
+
+/** The live Process inbox (pipeline) session the server lists, other than `except`: it owns the pending rows. */
+export const livePipelineId = (sessions: SessionMeta[] | undefined, except: string | null = null): string | null =>
+  (sessions ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== except)?.id ?? null;
 
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
@@ -78,7 +83,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   // Process inbox evaluates every pending row, and an evaluation started for one of them would evaluate, report and
   // bill it a second time: while either runs, the other does not start.
   const sessions = useSessions();
-  const livePipeline = (sessions.data ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== letGo)?.id ?? null;
+  const livePipeline = livePipelineId(sessions.data, letGo);
   const pipelineLive = process.busy || startingHere || livePipeline !== null;
   // The remembered session is this browser tab's only: a live one started in another tab (or before this tab was
   // reopened) is re-attached, so the button shows it instead of a start form for a second run.

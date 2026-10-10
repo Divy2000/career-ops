@@ -35,7 +35,8 @@ async function mount(component: 'BatchTab' | { inboxUrls: string[] } = 'BatchTab
       fetchHook?.(url);
       if (url === '/api/sessions/fanout' && method === 'POST') return json(fanoutResponse.status, fanoutResponse.body);
       if (url === '/api/actions') return json(200, []);
-      if (url === '/api/sessions' && method === 'GET' && listed) return json(200, listed);
+      // Batch evaluate waits for the sessions list (no Process inbox live) before it starts anything.
+      if (url === '/api/sessions' && method === 'GET') return json(200, listed ?? []);
       return json(404, { error: 'not stubbed' });
     }),
   );

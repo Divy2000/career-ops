@@ -73,6 +73,7 @@ async function doubleClickAsksOnce(target: () => HTMLButtonElement | null | unde
 
 describe('a double click on a confirm-opening button asks once', () => {
   it('Batch evaluate', async () => {
+    routes['GET /api/sessions'] = [];
     const { BatchTab } = await import('@web/features/pipeline/BatchTab');
     await render(() => createElement(BatchTab));
     const area = await until(() => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Batch URLs"]'), 'the box');

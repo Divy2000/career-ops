@@ -2,12 +2,14 @@ import { useRef, useState } from 'react';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { Message } from '../../components/ActionBar';
 import { Pill } from '../../components/ui';
-import { fanOut } from '../../lib/sessions';
+import { fanOut, useSessions } from '../../lib/sessions';
 import { apiGet } from '../../lib/api';
 import type { SessionMeta } from '@shared/api';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
+import { useRememberedSession } from '../../lib/useRememberedSession';
+import { livePipelineId } from './InboxAi';
 
 // Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
 // server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
@@ -43,6 +45,12 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const list = [...new Set(urls.split(/\s+/).filter(Boolean))];
   const tooMany = list.length > BATCH_MAX_URLS;
   const refused = list.filter((u) => !postingLike(u));
+  // Process inbox evaluates every pending row, so an evaluation of one of them beside it would evaluate, report and bill
+  // it a second time: Batch is off while one is starting or live, and until the sessions list tells there is none.
+  const sessions = useSessions();
+  const processStarting = useRememberedSession('cc.pipeline.process').waiting;
+  const pipelineLive = processStarting || livePipelineId(sessions.data) !== null;
+  const blocked = pipelineLive || sessions.isPending || sessions.isError;
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
   const asking = useRef(false);
   const start = async (...args: Parameters<typeof startAsked>) => {
@@ -55,7 +63,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     }
   };
   const startAsked = async () => {
-    if (list.length === 0 || tooMany || refused.length > 0) return;
+    if (list.length === 0 || tooMany || refused.length > 0 || blocked) return;
     const n = list.length;
     if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
     setBusy(true);
@@ -96,13 +104,15 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       <p className="muted">Each URL becomes one evaluation in its own session, under the Claude slot cap. Paste one URL per line (at most {BATCH_MAX_URLS} URLs).</p>
       <textarea aria-label="Batch URLs" rows={6} value={urls} onChange={(e) => setUrls(e.target.value)} />
       <div className="row gap">
-        <button type="button" disabled={busy || list.length === 0 || tooMany || refused.length > 0} onClick={() => void start()}>
+        <button type="button" disabled={busy || blocked || list.length === 0 || tooMany || refused.length > 0} onClick={() => void start()}>
           Batch evaluate <Pill tone="warn">Uses tokens</Pill>
         </button>
         <span className={tooMany ? 'danger-text' : 'faint'}>
           {list.length} URL{list.length === 1 ? '' : 's'}{tooMany ? `; at most ${BATCH_MAX_URLS} URLs per batch` : ''}
         </span>
       </div>
+      {pipelineLive && <p className="muted small">Process inbox is processing the pending rows, so Batch evaluate is off until it ends.</p>}
+      {!pipelineLive && sessions.isError && <p className="danger-text small">Could not check for a running Process inbox, so Batch evaluate is off until the sessions list loads.</p>}
       {refused.length > 0 && (
         <p className="danger-text small">
           Not posting URLs: {refused.join(', ')}. Paste http(s) posting links only; a saved JD (local:jds/) is evaluated from its Inbox row with Evaluate JD.
