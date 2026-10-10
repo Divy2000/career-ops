@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useActiveEvaluation, useStartEvaluation } from './evaluate';
 import { describeError } from '../../lib/actions';
@@ -17,6 +17,14 @@ export function QuickEvaluate() {
   // so Evaluate URL stays off rather than starting a second paid oferta (as the shortlist Evaluate does).
   const checking = sessions.isPending || sessions.isError;
   const startEvaluation = useStartEvaluation();
+  // The start can answer after the user left Today: only a still-mounted page opens the new session.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const go = async () => {
     if (checking) return;
     const u = url.trim();
@@ -35,7 +43,7 @@ export function QuickEvaluate() {
     setError(null);
     try {
       const m = await startEvaluation(u);
-      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(describeError(err));
     } finally {

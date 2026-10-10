@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useUserFile, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, alertTone, TableScroll } from '../../components/ui';
@@ -73,6 +73,14 @@ function EvaluateButton({ row }: { row: ShortlistRow }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const url = row.url;
+  // The start can answer after the user left Today: only a still-mounted page opens the new session.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const active = url ? activeFor(url) : undefined;
   const go = async () => {
     if (!url) return;
@@ -80,7 +88,7 @@ function EvaluateButton({ row }: { row: ShortlistRow }) {
     setError(null);
     try {
       const m = await startEvaluation(url);
-      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(describeError(err));
     } finally {

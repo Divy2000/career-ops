@@ -233,3 +233,36 @@ describe('Quick evaluate waits for the sessions list (R18-feat-c-L3-01)', () => 
     expect(posts).toHaveLength(0);
   });
 });
+
+describe('a start that answers after the user left Today (R18-feat-c-L1-05)', () => {
+  it('the shortlist Evaluate does not pull the user back to the session page', async () => {
+    await today();
+    held = [];
+    await click(evaluateIn('Globex')!);
+    await until(() => held?.length === 1, 'the start on its way');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await until(() => host.textContent?.includes('Tracker page'), 'the Tracker page');
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => sessions.length === 1, 'the start to answer');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
+  });
+
+  it('Quick evaluate does not pull the user back to the session page', async () => {
+    await today();
+    await typeQuickUrl('https://jobs.example.com/other/9');
+    held = [];
+    await click(quickButton());
+    await until(() => held?.length === 1, 'the start on its way');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await until(() => host.textContent?.includes('Tracker page'), 'the Tracker page');
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => sessions.length === 1, 'the start to answer');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
+  });
+});
