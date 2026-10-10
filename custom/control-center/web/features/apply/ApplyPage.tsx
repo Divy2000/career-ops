@@ -211,7 +211,8 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
       // The turn is running from here on, but its running event over the stream may come later and the button would
       // wake up. A status the stream already delivered since the click is newer than this answer, so it stays.
       if (statusSeq.current === seqAtClick) setStatus(meta.status);
-      setFillNote('Fill turn sent with your edited answers.');
+      // A 202 can carry a turn that failed before it ran (no approved CLI, no token): nothing was sent.
+      setFillNote(meta.status === 'error' ? `Could not send the fill turn: ${meta.error ?? 'the turn failed to start'}` : 'Fill turn sent with your edited answers.');
     } catch (err) {
       setFillNote(`Could not send the fill turn: ${describeError(err)}`);
     } finally {

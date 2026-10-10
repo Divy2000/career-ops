@@ -1,6 +1,7 @@
 // Envelope contract: one per line, outside code fences: <<cc:KIND {json}>>.
 import { z } from 'zod';
 import { splitEnvelopes } from '../../shared/envelope-text.js';
+import { postingUrl } from '../../shared/posting-url.js';
 
 export const ENVELOPE_SCHEMAS = {
   answers: z.object({
@@ -17,7 +18,8 @@ export const ENVELOPE_SCHEMAS = {
     ),
   }),
   offer: z.object({
-    url: z.string().url(),
+    // The rule the pipeline add route checks by, so every offer shown can be added.
+    url: z.string().refine((u) => postingUrl(u) !== null, 'not an http(s) posting URL the pipeline can take'),
     company: z.string(),
     title: z.string(),
     location: z.string().optional(),

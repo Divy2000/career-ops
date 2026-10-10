@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { Pill } from './ui';
 import { useConfirm } from './ConfirmDialog';
 import type { ActionMeta } from '@shared/api';
@@ -14,6 +14,8 @@ export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
  */
 export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>, opts: { confirmed: boolean }) => void; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
   const confirm = useConfirm();
+  // Confirms queue, so a second click while one is asking would ask twice: it is ignored.
+  const asking = useRef(false);
   if (!meta) return null;
   return (
     <button
@@ -21,9 +23,15 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
       disabled={disabled}
       title={meta.confirm ?? undefined}
       onClick={() => {
+        if (asking.current) return;
+        asking.current = true;
         void (async () => {
-          if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
-          onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
+          try {
+            if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
+            onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
+          } finally {
+            asking.current = false;
+          }
         })();
       }}
     >

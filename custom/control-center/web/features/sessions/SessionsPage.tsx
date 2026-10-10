@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet, apiSend } from '../../lib/api';
@@ -152,7 +152,18 @@ export function SessionDetailPage() {
   // The stream never sends queued, so its starting value is not a status.
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const onStatus = useCallback((s: string) => setLiveStatus(s), []);
+  // Confirms queue, so a second click while one is asking or deleting would ask twice: it is ignored.
+  const asking = useRef(false);
   const remove = async () => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      await removeAsked();
+    } finally {
+      asking.current = false;
+    }
+  };
+  const removeAsked = async () => {
     if (!(await confirm({ title: 'Delete this session?', body: 'The transcript and its events are removed. Runs it started are kept.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await apiSend('DELETE', `/api/sessions/${id}`, {});

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
@@ -44,8 +44,11 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   // Busy from the click to the server's answer: the server dedupes URLs within one request only, so a second click
   // would start every evaluation again.
   const [busy, setBusy] = useState(false);
+  // The disabled button lags the click by a render, and confirms queue: a second click before it would ask twice.
+  const asking = useRef(false);
   const evaluateAll = async () => {
-    if (unique.length === 0 || tooMany) return;
+    if (unique.length === 0 || tooMany || asking.current) return;
+    asking.current = true;
     setBusy(true);
     try {
       if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
@@ -59,6 +62,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     } finally {
       // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
       onFanOut?.();
+      asking.current = false;
       setBusy(false);
     }
   };

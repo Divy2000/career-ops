@@ -12,7 +12,7 @@ import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
-import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
+import { conversationStarted, sessionsDir, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
@@ -115,6 +115,8 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
+  /** The postings (mode and URL) a fan-out is starting right now, before their sessions exist. */
+  private fanningOut = new Set<string>();
   readonly playwrightAvailable: boolean;
 
   constructor(
@@ -176,6 +178,20 @@ export class SessionManager {
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
   }
 
+  /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
+  isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
+    return target.type === 'url' && !!target.value && this.fanningOut.has(`${mode}\0${target.value}`);
+  }
+
+  /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
+  liveEvaluationFor(mode: string, target: SessionMeta['target']): string | null {
+    if (target.type !== 'url' || !target.value) return null;
+    for (const m of this.readableSessions()) {
+      if (m.mode === mode && m.target.type === 'url' && m.target.value === target.value && LIVE_STATUSES.has(m.status)) return m.id;
+    }
+    return null;
+  }
+
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
     const meta = this.must(id);
     assertCurrentPolicy(meta);
@@ -210,6 +226,46 @@ export class SessionManager {
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
   async fanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
     this.turnPolicy(input.mode);
+    // A second evaluation of a posting a live session of the mode evaluates (one waiting for the user's reply too: the
+    // reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
+    const live = new Map<string, string>();
+    for (const m of this.readableSessions()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
+    const key = (url: string) => `${input.mode}\0${url}`;
+    const refused: SessionMeta[] = [];
+    const urls: string[] = [];
+    for (const url of input.urls) {
+      const holder = live.get(url);
+      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
+      if (why) refused.push(unstartedMeta(input.mode, { type: 'url', value: url }, input.model ?? null, why));
+      else urls.push(url);
+    }
+    if (urls.length === 0) return { sessions: refused, reserved: [] };
+    for (const url of urls) this.fanningOut.add(key(url));
+    try {
+      // The i-th reserved number goes to the i-th session, so the refused ones come after the started ones.
+      const out = await this.startFanOut({ ...input, urls });
+      return { sessions: [...out.sessions, ...refused], reserved: out.reserved };
+    } finally {
+      for (const url of urls) this.fanningOut.delete(key(url));
+    }
+  }
+
+  /** Every session whose meta.json reads: one unreadable folder must not stop a fan-out (the list route fails on it). */
+  private readableSessions(): SessionMeta[] {
+    const out: SessionMeta[] = [];
+    for (const entry of fs.readdirSync(sessionsDir(this.cfg.dataRoot), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const meta = this.store.read(entry.name);
+        if (meta) out.push(meta);
+      } catch {
+        // Unreadable or half-written: not a session this guard can compare against.
+      }
+    }
+    return out;
+  }
+
+  private async startFanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
     const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(input.urls.length)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
     if (r.code !== 0) throw new Error(`reserve-report-num failed (exit ${r.code}): ${r.stderr.trim().slice(-400)}`);
     const reserved = parseReservedRange(r.stdout);
@@ -749,6 +805,8 @@ export class SessionManager {
 }
 
 /** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
+const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
+
 function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
   const now = new Date().toISOString();
   return { id: '', claudeSessionId: '', mode, policyClass: getModePolicy(mode)?.policyClass ?? 'read-only', target, model, status: 'error', createdAt: now, updatedAt: now, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error, reportNum: null, lastReason: error };

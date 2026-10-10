@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWhatsNew } from '../../lib/queries';
-import { apiSend } from '../../lib/api';
+import { ApiError, apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
@@ -133,11 +133,17 @@ interface RunTailState {
   status: string | null;
 }
 
+/** A run the server no longer has (deleted, or another data root since a restart): its stream answers 404. */
+const RUN_GONE = 'gone';
+
 /** Tails a run's SSE stream; state is keyed by run id so a new run starts from an empty log. */
 function useRunLines(runId: string | null) {
   const [state, setState] = useState<RunTailState>({ runId: null, lines: [], status: null });
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!runId) return;
+    let disposed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const es = new EventSource(`/api/runs/${runId}/events`);
     const forRun = (update: (prev: RunTailState) => RunTailState) => setState((prev) => update(prev.runId === runId ? prev : { runId, lines: [], status: null }));
     es.addEventListener('line', (ev) => {
@@ -149,9 +155,25 @@ function useRunLines(runId: string | null) {
       es.close();
     });
     // No close on error: the browser reconnects with Last-Event-ID and the server replays the lines after it, so a
-    // dropped stream (a server reload, a laptop waking up) still ends with the scan's results.
-    return () => es.close();
-  }, [runId]);
+    // dropped stream (a server reload, a laptop waking up) still ends with the scan's results. It gives up only when the
+    // answer is not an event stream (2 is EventSource.CLOSED): a 404 means the run is gone, anything else is tried again.
+    es.addEventListener('error', () => {
+      if (es.readyState !== 2) return;
+      const again = () => {
+        if (!disposed) retry = setTimeout(() => setAttempt((n) => n + 1), 2000);
+      };
+      apiGet(`/api/runs/${runId}`).then(again, (err: unknown) => {
+        if (disposed) return;
+        if (err instanceof ApiError && err.status === 404) forRun((prev) => ({ ...prev, status: RUN_GONE }));
+        else again();
+      });
+    });
+    return () => {
+      disposed = true;
+      clearTimeout(retry);
+      es.close();
+    };
+  }, [runId, attempt]);
   return state.runId === runId ? { lines: state.lines, status: state.status } : { lines: [], status: null };
 }
 
@@ -168,7 +190,7 @@ function RunLog({ lines, status }: { lines: RawLine[]; status: string | null }) 
           {l.line}
         </div>
       ))}
-      {status && <div className="faint">ended: {status}</div>}
+      {status && <div className="faint">{status === RUN_GONE ? 'This run is no longer on the server.' : `ended: ${status}`}</div>}
     </pre>
   );
 }
@@ -206,6 +228,11 @@ export function NetworkScan() {
   };
   const [filter, setFilter] = useState('');
   const { lines, status } = useRunLines(runId);
+  // Nothing to follow: the results card goes, and the run is not re-attached next time.
+  const gone = status === RUN_GONE;
+  useEffect(() => {
+    if (gone) networkRun.write(null);
+  }, [gone]);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const start = () =>
@@ -287,7 +314,7 @@ export function NetworkScan() {
         </div>
         <Message message={message} />
       </form>
-      {runId && (
+      {runId && !gone && (
         <div className="card stack">
           <div className="row gap" style={{ justifyContent: 'space-between' }}>
             <h2 style={{ margin: 0 }}>Results</h2>

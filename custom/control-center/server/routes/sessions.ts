@@ -142,6 +142,9 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
+    if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: `another batch evaluate is already starting ${parsed.data.target.value}` });
+    const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
+    if (liveId) return reply.code(409).send({ error: `session ${liveId} is already evaluating ${parsed.data.target.value}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);

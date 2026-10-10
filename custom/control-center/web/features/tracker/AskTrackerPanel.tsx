@@ -17,7 +17,7 @@ export function AskTrackerPanel() {
           Ask about tracker <Pill tone="warn">Uses tokens</Pill>
         </button>
       </div>
-      {open && <SessionPanel key={ask.panelKey} {...ask.panel} mode="tracker" title="Ask about the tracker" placeholder="Which applications went cold? What should I follow up on this week?" />}
+      {open && <SessionPanel key={ask.panelKey} {...ask.panel} mode="tracker" title="Ask about the tracker" placeholder="Which applications went cold? What should I follow up on this week?" draftKey="cc.tracker.ask.draft" />}
     </div>
   );
 }

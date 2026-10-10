@@ -4,6 +4,7 @@ import { usePipeline, useTracker } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { pipelineAddBatches } from '@shared/pipeline-add';
+import { postingUrl } from '@shared/posting-url';
 import { SessionPanel } from '../../components/SessionPanel';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { Pill, TableScroll } from '../../components/ui';
@@ -21,21 +22,8 @@ interface Offer {
 /** A sent offer's state from its batch's counts: the route reports totals, not which URL it skipped. */
 type Sent = 'added' | 'already there' | 'in pipeline';
 
-/**
- * The rule POST /api/pipeline/add checks every URL by (postingUrl in server/domains/inboxSkip.ts): one URL it refuses
- * fails the whole body, so such an offer is never sent.
- */
-function addableUrl(raw: string): boolean {
-  const s = raw.trim();
-  if (!s || s.length > 2048 || /[\0\r\n]/.test(s)) return false;
-  let u: URL;
-  try {
-    u = new URL(s);
-  } catch {
-    return false;
-  }
-  return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname) && !u.username && !u.password;
-}
+/** One URL POST /api/pipeline/add refuses fails the whole body, so such an offer is never sent. */
+const addableUrl = (raw: string): boolean => postingUrl(raw) !== null;
 
 /** Spec 1a: ai-search session with offer envelopes, dedup against known URLs, add one or all. */
 export function AiSearchTab() {

@@ -1,8 +1,10 @@
 // Port of the alpha's inbox Skip/undo: flip the checkbox of one Pending row in
 // data/pipeline.md by posting URL (or a saved JD's local:jds/ reference). Either is a matcher, never a path.
 import { localJdPath } from '../../shared/local-jd.js';
+import { postingUrl } from '../../shared/posting-url.js';
 
-const MAX_URL_LEN = 2048;
+export { postingUrl };
+
 // `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
 // The Pending and Processed headings every shipped modes/*/pipeline.md writes, as pairs (modes/pipeline.md: they "may be
@@ -74,22 +76,6 @@ export function unescapeMarkdownCell(cell: string): string {
 /** The key a scan-history URL has in pipeline.md once unescaped: | is written as %7C there. */
 export function pipelineUrlKey(url: string): string {
   return unescapeMarkdownUrl(url.trim().split(/\s+/)[0] ?? '').replace(/\|/g, '%7C');
-}
-
-/** Accept only a real http(s) posting URL; anything else cannot become a write. */
-export function postingUrl(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const s = raw.trim();
-  if (!s || s.length > MAX_URL_LEN || /[\0\r\n]/.test(s)) return null;
-  let u: URL;
-  try {
-    u = new URL(s);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  if (!u.hostname || u.username || u.password) return null;
-  return s;
 }
 
 /** The key a Pending row is matched by: its posting URL, or the local:jds/ reference of a saved JD. */
