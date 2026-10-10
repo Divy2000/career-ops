@@ -35,6 +35,9 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   const [saving, setSaving] = useState(false);
   const current = rows ?? q.data?.rows ?? [];
   const dirty = rows !== null;
+  // The server refuses a save that would drop these cells (422), so Save stays off until they are moved by hand.
+  const unkept = q.data?.unkept ?? [];
+  const columnWarning = q.data?.columnWarning ?? null;
   useUnsaved('data/blacklist.md', dirty);
   const addRow = () => {
     if (!draft.company.trim()) return;
@@ -56,6 +59,7 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
           <p>
             {current.length} row{current.length === 1 ? '' : 's'} will be written ({added >= 0 ? `${added} added` : `${-added} removed`}). The scanner skips every listed company and domain on its next run.
           </p>
+          {columnWarning && <p>{columnWarning}</p>}
           <p>This is the only way the app writes the blacklist; AI sessions are denied this file.</p>
         </>
       ),
@@ -91,13 +95,23 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
           <button type="button" className="button--ghost" disabled={!dirty || saving} onClick={() => setRows(null)}>
             Discard
           </button>
-          <button type="button" className="button--danger" disabled={!dirty || saving} onClick={() => void save()}>
+          <button type="button" className="button--danger" disabled={!dirty || saving || unkept.length > 0} onClick={() => void save()}>
             Save blacklist
           </button>
         </div>
       </div>
       <p className="muted small">Format follows templates/blacklist.example.md: Company, Since, Scope (company or domain), Reason. Nothing is written until you confirm.</p>
       <DataState query={q} editable>
+        {columnWarning && (
+          <p role="status" className="card card--warn">
+            {columnWarning}
+          </p>
+        )}
+        {unkept.length > 0 && (
+          <p role="alert" className="danger-text">
+            data/blacklist.md has cells the editor has no column for, which a save would drop: {unkept.join('; ')}. Move them into the main table&apos;s columns by hand; saving is off until then.
+          </p>
+        )}
         {current.length === 0 ? (
           <Empty>No blacklisted companies. Add one below.</Empty>
         ) : (
