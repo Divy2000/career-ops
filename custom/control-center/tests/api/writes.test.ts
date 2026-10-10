@@ -461,6 +461,16 @@ describe('documents for a row whose number differs from its report', () => {
     expect(kinds['output/acme-robotics-staff-cover.pdf']).toBe('cover');
     expect(kinds['output/acme-robotics-senior-cover.pdf']).toBe('cover');
   });
+
+  it('a manifest kind wins over what the name alone would say', async () => {
+    write('output/acme-robotics-letter.pdf');
+    write('output/cover-acme-robotics-cv.pdf');
+    appendIndex('1\toutput/acme-robotics-letter.pdf\t\tletter\t2026-09-22\tcover');
+    appendIndex('1\toutput/cover-acme-robotics-cv.pdf\t\tletter\t2026-09-23\tcv');
+    const kinds = Object.fromEntries((await docsOf(1)).files.map((f: { path: string; kind: string }) => [f.path, f.kind]));
+    expect(kinds['output/acme-robotics-letter.pdf']).toBe('cover');
+    expect(kinds['output/cover-acme-robotics-cv.pdf']).toBe('cv');
+  });
 });
 
 describe('daily job awareness', () => {
