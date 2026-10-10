@@ -1,6 +1,6 @@
 // Follow-ups page: its paid launcher sessions survive a tab switch, a failed invite match does not leave the previous
 // invite's result under the new text, and a retired application offers no pin that the cadence would ignore.
-import { createElement, type ComponentType } from 'react';
+import { createElement, type ReactNode } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -55,7 +55,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(component: ComponentType) {
+async function render(component: () => ReactNode) {
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
   const page = createRoute({ getParentRoute: () => rootRoute, path: '/', component });

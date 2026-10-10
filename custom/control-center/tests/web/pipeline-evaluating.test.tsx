@@ -23,7 +23,7 @@ vi.mock('@web/components/SessionPanel', () => ({
 const row = (url: string, company: string, line: number) => ({ url, company, role: 'Engineer', location: null, compensation: null, done: false, needsJd: false, section: 'pending' as const, postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'other', seniority: null, line });
 const READ: PipelineRead = { kind: 'ok', path: 'data/pipeline.md', etag: 'e', rows: [row('https://jobs.example.com/busy', 'Busy Co', 3), row('https://jobs.example.com/free', 'Free Co', 4), row('local:jds/acme.md', 'Acme', 5)] };
 const session = (id: string, status: string, target: SessionMeta['target']): SessionMeta => ({
-  id, claudeSessionId: '33333333-3333-4333-8333-333333333333', mode: 'oferta', policyClass: 'oferta', target, model: null, status, createdAt: '2026-10-10T10:00:00.000Z', updatedAt: '2026-10-10T10:00:00.000Z',
+  id, claudeSessionId: '33333333-3333-4333-8333-333333333333', mode: 'oferta', policyClass: 'evaluate', target, model: null, status, createdAt: '2026-10-10T10:00:00.000Z', updatedAt: '2026-10-10T10:00:00.000Z',
   turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error: null, reportNum: 150, lastReason: null, policyVersion: 2,
 } as SessionMeta);
 const SHORTLIST: ShortlistRead = {
