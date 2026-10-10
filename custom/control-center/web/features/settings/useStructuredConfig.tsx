@@ -43,6 +43,14 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const [saving, setSaving] = useState(false);
   const edit = useEditBase(q.data);
   useUnsaved(fileKey === 'portals' ? 'portals.yml' : 'config/profile.yml', pending.length > 0);
+  // When the last save answered. A read that lands after it holds the version written (or a newer one another writer
+  // made): with nothing pending, the editor follows the live copy again instead of staying pinned to the written one
+  // and its ETag. A failed read leaves the pre-save copy, so the written version stays the base until one succeeds.
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  if (savedAt !== null && q.dataUpdatedAt > savedAt && pending.length === 0) {
+    setSavedAt(null);
+    edit.rebase(null);
+  }
   const server = edit.base ?? q.data ?? null;
   const doc = useMemo(() => applyOpsJs(server?.doc ?? null, pending), [server, pending]);
   const addOp = (op: YamlOp) => {
@@ -75,12 +83,10 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
       // editor still moves onto that version instead of falling back to the pre-save copy, so the next edit is not a
       // false 409 against the stale ETag.
       edit.rebase(server ? { ...server, doc: applyOpsJs(server.doc, sent), etag: r.etag } : null);
+      setSavedAt(Date.now());
       setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${sent.length} change${sent.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
       toast.success(`Saved ${server?.path ?? fileKey}`);
       await qc.invalidateQueries({ queryKey: ['config'] });
-      // The refetch holds the version just written (or a newer one another writer made): with nothing pending, the
-      // editor follows the live copy again instead of staying pinned to the written one and its ETag.
-      if (latest.current.length === 0) edit.rebase(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         const current = (err.body as { current: ConfigRead }).current;
