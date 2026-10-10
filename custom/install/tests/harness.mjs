@@ -201,7 +201,10 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
     },
     /** Runs the script under a real pseudo-terminal, sending each answer once its prompt has appeared. */
     runInPty(args, { steps, env = {}, script = INSTALL_SH, timeout = 120_000 } = {}) {
-      const childEnv = { ...baseEnv, ...env };
+      // pty_run.py's own deadline ends first, so a hang reports "timed out" with the transcript; the spawnSync
+      // timeout, which leaves no output at all, is only the backstop.
+      const ptyTimeout = (timeout - Math.min(10_000, timeout / 4)) / 1000;
+      const childEnv = { ...baseEnv, PTY_RUN_TIMEOUT: String(ptyTimeout), ...env };
       delete childEnv.CAREER_OPS_INSTALL_TTY;
       const r = spawnSync('python3', [path.join(HERE, 'pty_run.py'), JSON.stringify(steps), '--', 'bash', script, ...args], {
         env: childEnv, cwd, encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'],

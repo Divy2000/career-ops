@@ -461,6 +461,15 @@ test('under a real pseudo-terminal the same questions work through /dev/tty (pyt
   }
 });
 
+test('an installer that hangs under the pty ends with pty_run\'s own timeout and the transcript, not a silent kill (R11-tests-custom-L1-06)', { skip: WORLD_PTY_SKIP }, () => {
+  const { w } = fresh();
+  const hang = w.write('hang.sh', 'echo "waiting for an answer that never comes"\nexec sleep 60\n');
+  const r = w.runInPty([], { steps: [], script: hang, timeout: 8_000 });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /waiting for an answer that never comes/);
+  assert.match(r.out, /pty_run: timed out after [0-9.]+ s; killed the command/);
+});
+
 test('docs go to documents/projects, a different file of the same name gets a -1 suffix, and article-digest.md is never written', () => {
   const { w, D, args } = fresh();
   w.makeCheckout(D, { files: { 'documents/projects/proj.md': 'EXISTING\n' } });
