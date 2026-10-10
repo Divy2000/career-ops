@@ -154,6 +154,20 @@ describe('Compare selected', () => {
     expect(back!.autoStart).toBeFalsy();
   });
 
+  it('Compare is off while the comparison is starting or running, so a second click starts no second paid session', async () => {
+    const { CompareSelected } = await import('@web/features/tracker/CompareSelected');
+    const rows = [trackerRow(1, 'Acme', null), trackerRow(2, 'Globex', null)];
+    await render(createElement(CompareSelected, { rows, onClear: () => {} }));
+    await act(async () => button('Compare selected')!.click());
+    expect(button('Compare selected')!.disabled).toBe(true);
+    const panel = panels.filter((p) => p.mode === 'ofertas').pop()!;
+    await act(async () => panel.onSessionId!('cmp-1'));
+    await act(async () => panels.filter((p) => p.mode === 'ofertas').pop()!.onStatus!('running', null));
+    expect(button('Compare selected')!.disabled).toBe(true);
+    await act(async () => panels.filter((p) => p.mode === 'ofertas').pop()!.onStatus!('done', 'clean exit with output'));
+    expect(button('Compare selected')!.disabled).toBe(false);
+  });
+
   it('renders nothing with no selection and no comparison', async () => {
     const { CompareSelected } = await import('@web/features/tracker/CompareSelected');
     await render(createElement(CompareSelected, { rows: [], onClear: () => {} }));

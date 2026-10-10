@@ -24,7 +24,7 @@ export function CompareSelected({ rows, onClear }: { rows: TrackerRow[]; onClear
       {rows.length > 0 && (
         <div className="toolbar selection-bar" role="region" aria-label="Selected rows">
           <span className="muted small">{rows.length} selected</span>
-          <button type="button" disabled={rows.length < 2} onClick={launch} title={rows.length < 2 ? 'Select at least two rows' : undefined}>
+          <button type="button" disabled={rows.length < 2 || compare.busy} onClick={launch} title={rows.length < 2 ? 'Select at least two rows' : compare.busy ? 'A comparison is running' : undefined}>
             Compare selected (ofertas) <Pill tone="warn">Uses tokens</Pill>
           </button>
           <button type="button" className="button--ghost" onClick={onClear}>
