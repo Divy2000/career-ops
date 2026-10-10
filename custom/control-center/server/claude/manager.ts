@@ -185,9 +185,10 @@ export class SessionManager {
 
   /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
   liveEvaluationFor(mode: string, target: SessionMeta['target']): string | null {
-    if (target.type !== 'url' || !target.value) return null;
+    const key = postingKey(target);
+    if (key === null) return null;
     for (const m of this.readableSessions()) {
-      if (m.mode === mode && m.target.type === 'url' && m.target.value === target.value && LIVE_STATUSES.has(m.status)) return m.id;
+      if (m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
     }
     return null;
   }
@@ -812,6 +813,16 @@ export class SessionManager {
 
 /** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
 const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
+
+/** The dedupe key of a posting a session evaluates: its URL, or the saved JD a local:jds/ text target names (as finalize keys it). */
+function postingKey(target: SessionMeta['target']): string | null {
+  if (target.type === 'url' && target.value) return `url\0${target.value}`;
+  if (target.type === 'text' && target.value) {
+    const jd = localJdPath(target.value);
+    if (jd !== null) return `jds\0${jd}`;
+  }
+  return null;
+}
 
 function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
   const now = new Date().toISOString();

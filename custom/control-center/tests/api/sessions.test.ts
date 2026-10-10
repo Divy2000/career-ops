@@ -1788,3 +1788,28 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 });
+
+describe('r18 manager fixes', () => {
+  const freshApp = async (deps: Parameters<typeof makeTestApp>[1] = {}) => makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, deps);
+  const reserve = (app: TestApp, num: number) => {
+    const sentinel = path.join(app.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
+    return sentinel;
+  };
+
+  it('a second Evaluate JD on the same local:jds/ text target is refused while the first is live (R18-claude-L1-01)', async () => {
+    const app = await freshApp();
+    try {
+      const ref = 'local:jds/acme-pm.md';
+      const ask = scenarioFile({ events: [INIT, result('Which of these two JD copies do you mean?', 0.01)] });
+      const first = await withScenario(ask, async () => (await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'text', value: ref }, prompt: 'Evaluate the job description saved at jds/acme-pm.md following the mode file.' })).json());
+      expect((await settleOn(app, first.id)).meta.status).toBe('awaiting_user');
+      // A second tab (or a raw POST) starts the same saved JD while the first is still live: refused, not a second paid evaluation.
+      const second = await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'text', value: ref }, prompt: 'Evaluate the job description saved at jds/acme-pm.md following the mode file.' });
+      expect(second.statusCode, second.body).toBe(409);
+      expect(second.json().error).toMatch(new RegExp(`session ${first.id} is already evaluating`));
+    } finally {
+      await app.close();
+    }
+  });
+});
