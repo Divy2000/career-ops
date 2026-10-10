@@ -24,6 +24,9 @@ export default {
     '!tests/**',
   ],
   coverageAnalysis: 'perTest',
+  // A static mutant (module-level code) reruns every related test; in server/claude, Stryker put 24% of the mutants at 69% of the time.
+  // `--ignoreStatic false` includes them.
+  ignoreStatic: true,
   // The dry run is the whole related suite in one vitest worker.
   dryRunTimeoutMinutes: 60,
   incremental: true,
