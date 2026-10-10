@@ -806,6 +806,61 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     await until(() => here.store.read(long.id)?.status === 'cancelled' && Boolean(here.store.readExit(long.id)));
   });
 
+  /** A queued claude run a dead server claimed and had just begun starting (its `starting` written now), no wrapper recorded. */
+  const interruptedStart = (root: string) => {
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'test.other', label: 'x', cost: 'free', resources: [], claude: true, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: '/' }, params: {} }, { env: {}, secrets: [] });
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'claim'), JSON.stringify({ pid: deadPid(), start: 1_700_000_000 }));
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'starting'), '');
+    return run;
+  };
+
+  it('a run a dead server had just begun starting, whose wrapper has recorded nothing yet, keeps its Claude slot for a grace period (the wrapper may be spawning its command), then ends lost and frees it', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(here);
+    const mine = here.start(req(['0'], { claude: true }));
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    expect(fs.existsSync(path.join(here.store.dirOf(theirs.id), 'cancel'))).toBe(true);
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(theirs.id)?.status).toBe('lost');
+    expect(here.store.read(mine.id)!.startedAt! >= here.store.read(theirs.id)!.endedAt!).toBe(true);
+  });
+
+  it('cancelling such a run during its grace period keeps its slot held until the grace ends, rather than freeing it while its wrapper may still be spawning', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(here);
+    // The cancel is the first to find the claim the dead server left.
+    expect(here.cancel(theirs.id)?.status).toBe('queued');
+    const mine = here.start(req(['0'], { claude: true }));
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    await wait(1000);
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(theirs.id)?.status).toBe('lost');
+  });
+
+  it('a wrapper that records itself within that grace period is taken over as running, holds its slot until it exits, and its run is never marked lost', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const here = new Runner(root, new EventBus(), { pollMs: 50, claudeSlots: 1 });
+    runners.push(here);
+    const mine = here.start(req(['0'], { claude: true }));
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    // The wrapper had spawned its command just before the cancel was written: it records itself now.
+    const wrapper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(wrapper);
+    fs.writeFileSync(path.join(here.store.dirOf(theirs.id), 'wrapper.json'), JSON.stringify({ wrapperPid: wrapper.pid, childPid: wrapper.pid, startedAt: new Date().toISOString() }));
+    await until(() => here.store.read(theirs.id)?.status === 'running', 10_000);
+    expect(here.store.read(mine.id)?.status).toBe('queued');
+    fs.writeFileSync(path.join(here.store.dirOf(theirs.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+    await until(() => here.store.read(mine.id)?.status === 'done', 15_000);
+    expect(here.store.read(theirs.id)?.status).toBe('done');
+  });
+
   it('a server killed after spawning a wrapper that recorded nothing yet: the run ends lost, its wrapper told to stop, and it is never started again', async () => {
     const root = tmpRoot();
     // A wrapper stand-in that never gets as far as recording anything.

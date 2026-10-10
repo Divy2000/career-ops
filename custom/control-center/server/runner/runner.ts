@@ -23,6 +23,11 @@ const SECRET_NAME = /TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i;
 const SCHEDULE_LOCK = '.schedule.lock';
 /** Written in a run's folder just before its wrapper is spawned: a process that dies after it may have started it. */
 const STARTING_FILE = 'starting';
+/**
+ * How long a start a dead process left, with no wrapper recorded, still holds its slot after its wrapper is told to stop:
+ * the wrapper may have passed its first cancel check and be spawning its command, which it records right after.
+ */
+const STARTING_GRACE_MS = 5000;
 
 /** The process a claim or the schedule lock names: a bare PID in the earlier claim format; null when unreadable. */
 function parseHolder(text: string): { pid: number; start: number | null } | null {
@@ -121,6 +126,8 @@ export class Runner {
   private adopting = new Set<string>();
   /** A later pump, while the queue waits on another process (its runs, its claim, or the schedule lock it holds). */
   private retryTimer: NodeJS.Timeout | null = null;
+  /** Starts a dead process left whose wrapper was told to stop and may still record itself: held until it does or the grace ends. */
+  private stopping = new Set<string>();
   /** This process as claims and the schedule lock name it, read once. */
   private self: { pid: number; start: number | null } | null = null;
 
@@ -255,10 +262,12 @@ export class Runner {
    * A queued run whose claim was taken over from a process that is gone, which may have begun starting it. Null when
    * it never spawned a wrapper: start it as usual. Otherwise it is never started again: its wrapper's exit settles it,
    * a wrapper that recorded itself is tracked as running, and one that recorded nothing yet is told to stop (it reads
-   * the cancel file before it spawns the command and again after) and the run ends lost.
+   * the cancel file before it spawns the command and again after) and the run ends lost once STARTING_GRACE_MS has
+   * passed since it began starting. Until then it stays queued, held in `stopping`: the pump counts it and looks again.
    */
   private resumeInterruptedStart(meta: RunMeta): RunMeta | null {
-    if (!fs.existsSync(path.join(this.store.dirOf(meta.id), STARTING_FILE))) return null;
+    const startingFile = path.join(this.store.dirOf(meta.id), STARTING_FILE);
+    if (!fs.existsSync(startingFile)) return null;
     const wrapper = this.store.readWrapper(meta.id);
     const exit = this.store.readExit(meta.id);
     const begun: RunMeta = { ...meta, startedAt: meta.startedAt ?? new Date().toISOString(), wrapperPid: wrapper?.wrapperPid ?? null, childPid: wrapper?.childPid ?? null };
@@ -274,6 +283,12 @@ export class Runner {
       return running;
     }
     this.store.requestCancel(meta.id);
+    if (Date.now() - this.mtimeOrZero(startingFile) < STARTING_GRACE_MS) {
+      this.stopping.add(meta.id);
+      this.retryLater();
+      return meta;
+    }
+    this.stopping.delete(meta.id);
     const lost: RunMeta = {
       ...meta,
       status: 'lost',
@@ -285,6 +300,16 @@ export class Runner {
     this.dropInputs(lost);
     this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
     return lost;
+  }
+
+  /** A file's mtime in ms; 0 when it is gone. */
+  private mtimeOrZero(file: string): number {
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw err;
+    }
   }
 
   /** A run that ended (any way) no longer needs the input files the app wrote for it: those recorded, and any its arguments name. */
@@ -441,7 +466,7 @@ export class Runner {
    * queue waits on another process (the lock, a claim, or runs only that process tracks), it is pumped again later.
    */
   private pump(): void {
-    if (this.queue.length === 0) return;
+    if (this.queue.length === 0 && this.stopping.size === 0) return;
     const unlock = this.lockSchedule();
     if (!unlock) {
       this.retryLater();
@@ -474,7 +499,7 @@ export class Runner {
     } finally {
       unlock();
     }
-    if (waitsOnOthers) this.retryLater();
+    if (waitsOnOthers || this.stopping.size) this.retryLater();
   }
 
   /**
@@ -485,14 +510,20 @@ export class Runner {
    */
   private resumeAbandonedStarts(): RunMeta[] {
     const starting: RunMeta[] = [];
+    for (const id of this.stopping) if (this.store.read(id)?.status !== 'queued') this.stopping.delete(id);
     for (const meta of this.store.list()) {
       if (meta.status !== 'queued' || !fs.existsSync(path.join(this.store.dirOf(meta.id), STARTING_FILE))) continue;
+      // Taken over here already, its wrapper told to stop: settled once it records itself or the grace ends.
+      if (this.stopping.has(meta.id)) {
+        if (this.resumeInterruptedStart(meta)?.status === 'queued') starting.push(meta);
+        continue;
+      }
       if (this.claim(meta.id, true) === 'held') {
         starting.push(meta);
         continue;
       }
       const current = this.store.read(meta.id);
-      if (current?.status === 'queued') this.resumeInterruptedStart(current);
+      if (current?.status === 'queued' && this.resumeInterruptedStart(current)?.status === 'queued') starting.push(current);
     }
     return starting;
   }
@@ -522,7 +553,8 @@ export class Runner {
     if (meta.status !== 'queued') return 'gone';
     if (claim === 'recovered') {
       const resumed = this.resumeInterruptedStart(meta);
-      if (resumed) return resumed.status === 'running' ? 'started' : 'gone';
+      // Still queued: its wrapper may yet record itself, so it holds its slot like one that runs.
+      if (resumed) return resumed.status === 'running' || resumed.status === 'queued' ? 'started' : 'gone';
     }
     const runDir = this.store.dirOf(meta.id);
     let child: ReturnType<typeof spawn>;
@@ -628,6 +660,8 @@ export class Runner {
       if (!meta) return null;
       // Taken over from a process that died starting it: settle what it began, then cancel that like any other.
       if (claim === 'recovered' && meta.status === 'queued') meta = this.resumeInterruptedStart(meta) ?? meta;
+      // Its wrapper is told to stop already and may still record itself: it settles once it does or the grace ends.
+      if (this.stopping.has(id)) return meta;
       if (claim !== 'held' && meta.status === 'queued') {
         this.envById.delete(id);
         const cancelled: RunMeta = { ...meta, status: 'cancelled', endedAt: new Date().toISOString() };
