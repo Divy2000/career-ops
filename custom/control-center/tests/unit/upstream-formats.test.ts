@@ -329,6 +329,12 @@ describe('localized pipeline.md headings (every modes/*/pipeline.md, R13-feat-b-
     for (const f of modeFiles) expect(headingsOf(f), f).toHaveLength(2);
   });
 
+  it('reads the Japanese headings modes/ja/pipeline.md lets an existing file keep (未処理 / 処理済み)', () => {
+    const md = '## 未処理\n\n- [ ] https://jobs.example.com/1 | Acme | Eng\n\n## 処理済み\n\n- [x] #143 | https://jobs.example.com/2 | Acme | AI PM | 4.2/5 | PDF ✅\n';
+    expect(parsePipeline(md).map((r) => r.section)).toEqual(['pending', 'done']);
+    expect(applyInboxSkip(md, 'https://jobs.example.com/1', true)).toMatchObject({ ok: true, matched: 1 });
+  });
+
   for (const file of modeFiles) {
     it(`reads the Pending and Processed sections ${path.relative(DEFAULT_CODE_ROOT, file)} writes, and Skip finds its pending rows`, () => {
       const [pending, processed] = headingsOf(file);

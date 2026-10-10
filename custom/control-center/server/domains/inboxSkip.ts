@@ -24,6 +24,8 @@ const HEADING_PAIRS: ReadonlyArray<readonly [pending: string, processed: string]
   ['Bekleyenler', 'İşlenenler'],
   ['लंबित', 'संसाधित'],
   ['대기', '처리 완료'],
+  // modes/ja/pipeline.md writes Pending/Processed but keeps a file's existing Japanese headings.
+  ['未処理', '処理済み'],
 ];
 const PENDING_HEADINGS = HEADING_PAIRS.map(([p]) => p);
 // Traitées: the accented spelling of the French heading, which a hand edit may use.
@@ -115,10 +117,10 @@ function pendingRange(lines: string[]): { start: number; end: number } | null {
   return start === -1 ? null : { start, end: lines.length };
 }
 
-// Every modes/*/pipeline.md writes a URL it could not fetch as `- [!] URL <em dash or --> Error: <reason>`, the label
-// localized (Fehler:, Erreur :, 错误：): that labeled note in the first cell, which a scanned row never has. A plain
-// hand note (`URL - asked to wait`) is not one.
-const FLAGGED_NOTE = /^\s*\S+\s+(?:--|\u2014)\s*[^\s:\uff1a]+\s?[:\uff1a]/;
+// Every modes/*/pipeline.md writes a URL it could not fetch as `- [!] URL <em dash or --> <note>` (Error: login
+// required, Fehler: ..., or a bare reason in the ua mode): that note in the first cell, which a scanned row never has.
+// A hand note after a plain hyphen (`URL - asked to wait`) is not one.
+const FLAGGED_NOTE = /^\s*\S+\s+(?:--|\u2014)\s*\S/;
 
 /** The open mark a restored row gets back: `!` for a skipped needs-JD row, so it still waits for its JD text. */
 function restoredMark(rest: string): '!' | ' ' {
