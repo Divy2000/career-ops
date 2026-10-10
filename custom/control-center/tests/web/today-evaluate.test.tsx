@@ -74,7 +74,8 @@ async function today() {
   const rootRoute = createRootRoute();
   const index = createRoute({ getParentRoute: () => rootRoute, path: '/', component: TodayPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
-  router = createRouter({ routeTree: rootRoute.addChildren([index, session]), history: createMemoryHistory({ initialEntries: ['/'] }) });
+  const elsewhere = createRoute({ getParentRoute: () => rootRoute, path: '/tracker', component: () => createElement('p', null, 'Tracker page') });
+  router = createRouter({ routeTree: rootRoute.addChildren([index, session, elsewhere]), history: createMemoryHistory({ initialEntries: ['/'] }) });
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(RouterProvider, { router }))));
   await until(() => rowOf('Globex'), 'the shortlist rows');
@@ -82,6 +83,14 @@ async function today() {
 const rowOf = (company: string) => [...host.querySelectorAll('tbody tr')].find((tr) => tr.textContent?.includes(`${company} engineer`));
 const evaluateIn = (company: string) => [...(rowOf(company)?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim().startsWith('Evaluate'));
 const click = (el: HTMLElement) => act(async () => el.click());
+const quickButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === 'Evaluate URL')!;
+async function typeQuickUrl(value: string) {
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Posting URL to evaluate"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
 
 describe('a saved-JD shortlist row', () => {
   it('links to the saved file, not the literal local: reference', async () => {
@@ -196,5 +205,31 @@ describe('Evaluate waits for the sessions list (R17-feat-c-L3-01)', () => {
     await today();
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(evaluateIn('Globex')!.disabled).toBe(true);
+  });
+});
+
+describe('Quick evaluate waits for the sessions list (R18-feat-c-L3-01)', () => {
+  it('disables Evaluate URL while the sessions list is still loading, then offers it', async () => {
+    slowList = [];
+    await today();
+    await typeQuickUrl('https://jobs.example.com/globex/1');
+    expect(quickButton().disabled).toBe(true);
+    const waiting = slowList!;
+    slowList = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(quickButton().disabled).toBe(false);
+  });
+
+  it('disables Evaluate URL when the sessions list cannot be read, and a submit starts nothing', async () => {
+    sessionsError = true;
+    await today();
+    await typeQuickUrl('https://jobs.example.com/globex/1');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(quickButton().disabled).toBe(true);
+    const form = host.querySelector('[aria-label="Posting URL to evaluate"]')!.closest('form')!;
+    await act(async () => form.requestSubmit());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(posts).toHaveLength(0);
   });
 });
