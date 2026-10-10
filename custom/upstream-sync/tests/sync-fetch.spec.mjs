@@ -837,6 +837,7 @@ const LIVE_CASES = [
   { name: 'a failed Control Center reinstall is reported, not fatal (SW3-scripts-01)', opts: { ccChange: true, npmExit: 1 }, setup: () => {}, status: 3, moves: true, npm: /^--prefix custom\/control-center ci$/m, out: /npm --prefix custom\/control-center ci failed; run it by hand/ },
   { name: 'tracked local changes leave the checkout alone', setup: (w) => writeFileSync(path.join(w.live, 'package.json'), '{"edited":true}\n'), status: 10, moves: false, npm: '', out: /^the live checkout has local changes$/ },
   { name: 'a branch other than main leaves the checkout alone', setup: (w) => git(w.live, 'checkout', '-q', '-b', 'mine'), status: 10, moves: false, npm: '', out: /^the live checkout is not on main$/ },
+  { name: 'a checkout someone already pulled past the sync commit is left alone (R11-scripts-b-L1-01)', opts: { laterCommit: true }, setup: (w) => git(w.live, 'pull', '-q', '--ff-only'), status: 10, moves: false, npm: '', out: /^the live checkout is already past the sync commit$/ },
   { name: 'a main that cannot fast-forward fails', setup: (w) => commitFile(w.live, 'local.txt', 'mine\n', 'a local commit'), status: 1, moves: false, npm: '', out: /^live checkout could not fast-forward$/ },
 ];
 

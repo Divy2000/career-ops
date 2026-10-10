@@ -486,19 +486,20 @@ merge_blockers() {
 
 # update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
 # merged, bring the live checkout (the current directory) up to <commit>, the
-# tested sync commit the fork's main was moved to: this never moves it past <commit> to a later
-# origin/main, which this run did not test (a checkout someone already pulled
-# further is theirs, and is left where it is). Fetch, then fast-forward only
-# when it is on main with no tracked local changes. Then reinstall what the merge changed, as a user's own install would:
+# tested sync commit the fork's main was moved to: this never moves it past
+# <commit> to a later origin/main, which this run did not test (a checkout
+# someone already pulled further is theirs, and is left alone with exit 10).
+# Fetch, then fast-forward only when it is on main with no tracked local
+# changes. Then reinstall what the merge changed, as a user's own install would:
 # the root dependencies (lifecycle scripts included) when deps_fingerprint
 # changed, and the Control Center's (npm ci) when its tracked lockfile changed,
 # since bin/cc only checks that its node_modules exists. All of it runs holding
 # <daily-lock>, the lock run-daily.sh holds for its whole run, so scripts and
 # node_modules never change under a running daily job; it waits up to
-# <wait-seconds> for that run to end. Prints one line saying what happened.
-# Returns 0 when updated, 3 when updated but an install failed, 10 when left
-# alone (not on main, local changes, or the daily job still running), 1 when
-# the arguments, the fetch, the fingerprint or the fast-forward failed.
+# <wait-seconds> for that run to end. Prints one line saying what happened. Returns 0
+# when updated, 3 when updated but an install failed, 10 when left alone (not on
+# main, local changes, already past <commit>, or the daily job still running), 1
+# when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
   local deps_before cc_before failed="" rc
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
@@ -516,6 +517,11 @@ update_live_checkout() {
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
+  # Pulled further by hand: neither moved back nor reinstalled here, since its dependencies are whatever that pull left.
+  if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify --quiet "$3^{commit}")" ] && git merge-base --is-ancestor "$3" HEAD 2>/dev/null; then
+    echo "the live checkout is already past the sync commit"
+    return 10
+  fi
   deps_before="$(deps_fingerprint HEAD)" || { echo "cannot read the live checkout's dependency files"; return 1; }
   cc_before="$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)"
   git merge -q --ff-only "$3" || { echo "live checkout could not fast-forward"; return 1; }
