@@ -455,6 +455,33 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
 });
 
 
+describe('Ask drawer: setStatus names its row and shows the note it writes (R17-shared-comp-L3-01)', () => {
+  const TRACKER = { kind: 'ok', path: 'data/applications.md', etag: 'e', rows: [{ num: 1, date: '2026-10-01', company: 'Acme', role: 'Engineer' }] };
+  beforeEach(async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return new Response(JSON.stringify({ result: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        if (url === '/api/tracker') return new Response(JSON.stringify(TRACKER), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+
+  it('shows the note it writes and names the row by company and role', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 1, state: 'Applied', note: 're-linked report 12' } }, 1));
+    await act(async () => bodyButton('Review and run')!.click());
+    const dialog = document.body.querySelector('.dialog')!;
+    expect(dialog.textContent).toContain('Acme');
+    expect(dialog.textContent).toContain('Engineer');
+    expect(dialog.textContent).toContain('re-linked report 12');
+  });
+});
+
 describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
   let posts: Array<{ url: string; body: unknown }>;
   const row = (url: string, company: string, done = false) => ({ url, company, role: 'Engineer', location: null, compensation: null, done, section: done ? 'done' : 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });

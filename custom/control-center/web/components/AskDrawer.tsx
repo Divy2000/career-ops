@@ -14,6 +14,7 @@ import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
+import { useTracker } from '../lib/queries';
 import type { PipelineRead } from '@shared/api';
 
 export interface Proposal {
@@ -38,7 +39,7 @@ const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   explore: () => 'Open Discover (network scan)',
   research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
   generatePdf: (p) => `Generate the tailored CV PDF for ${rowOf(p)} (uses tokens)`,
-  setStatus: (p) => `Set ${rowOf(p)} to ${String(p.state ?? '')}`,
+  setStatus: (p) => `Set ${rowOf(p)} to ${String(p.state ?? '')}${p.note ? ` with note "${String(p.note)}"` : ''}`,
   apply: (p) => `Open Apply for ${rowOf(p)}`,
   setApplyField: (p) => `Set the apply field ${String(p.id ?? '')}`,
   remember: (p) => `Remember: ${String(p.fact ?? '')}`,
@@ -121,6 +122,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const startEvaluation = useStartEvaluation();
   // The sessions list also backs the per-row tailored-CV guard (cc.pdf.N) the Apply page shares.
   const sessions = useSessions();
+  // The tracker names a row by company and role in the setStatus confirm, whose note can re-link reports.
+  const tracker = useTracker();
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (open) return afterFocusSettles(() => drawerRef.current?.focus());
@@ -162,12 +165,22 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         return;
       }
     }
+    // A row named by number only is easy to confuse with another application: the setStatus confirm names it by
+    // company and role, and shows the note it appends to the Notes cell (which can re-link reports).
+    const nameRow = (p: Record<string, unknown>): string => {
+      const n = String(p.row ?? p.n ?? '').trim();
+      const num = Number(n);
+      const row = Number.isInteger(num) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === num) : undefined;
+      return row ? `row #${n} (${row.company}${row.role ? ` - ${row.role}` : ''})` : `row #${n}`;
+    };
     const question =
       p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
         ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.`, confirmLabel: 'Start them', focusCancel: true }
         : p.action === 'evaluateCompany'
           ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens). Continue?`, confirmLabel: 'Do it', danger: true }
-          : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
+          : p.action === 'setStatus'
+            ? { title: 'The advisor proposes a write', body: `Set ${nameRow(p.params)} to ${String(p.params.state ?? '')}${p.params.note ? `, writing the note "${String(p.params.note)}" into its Notes cell` : ''}. Continue?`, confirmLabel: 'Do it', danger: true }
+            : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
     if (def.confirm && !(await confirm(question))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
