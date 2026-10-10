@@ -216,4 +216,12 @@ describe('Discover > AI search: add', () => {
     expect(mounts.count).toBe(before + 1);
     expect(panel!.sessionId ?? null).toBeNull();
   });
+
+  it('a search deleted elsewhere takes its results with it, so they do not mix into the next search (merge review)', async () => {
+    await act(async () => panel!.onSessionId!('s-ai-1'));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/gone', company: 'Gone Co', title: 'SRE' }, 1));
+    expect(host.textContent).toContain('Gone Co');
+    await act(async () => panel!.onStatus!('gone', null));
+    expect(host.textContent).not.toContain('Gone Co');
+  });
 });

@@ -50,22 +50,26 @@ export function AiSearchTab() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [sent, setSent] = useState<Map<string, Sent>>(new Map());
   const [note, setNote] = useState<string | null>(null);
-  // A search deleted elsewhere while this panel shows it: a fresh panel, so the start form comes back.
-  const rememberStatus = remembered.panel.onStatus;
-  const onStatus = useCallback(
-    (s: string) => {
-      rememberStatus(s);
-      if (s === 'gone') setFresh((n) => n + 1);
-    },
-    [rememberStatus],
-  );
-  const newSearch = () => {
-    // Letting go is what a deleted session gets: the store forgets it and no session is attached.
-    remembered.panel.onStatus('gone');
+  // A fresh panel on its start form, without the results of the search it let go of.
+  const reset = useCallback(() => {
     setFresh((n) => n + 1);
     setOffers([]);
     setSent(new Map());
     setNote(null);
+  }, []);
+  // A search deleted elsewhere while this panel shows it: the start form comes back, and its results go with it.
+  const rememberStatus = remembered.panel.onStatus;
+  const onStatus = useCallback(
+    (s: string) => {
+      rememberStatus(s);
+      if (s === 'gone') reset();
+    },
+    [rememberStatus, reset],
+  );
+  const newSearch = () => {
+    // Letting go is what a deleted session gets: the store forgets it and no session is attached.
+    remembered.panel.onStatus('gone');
+    reset();
   };
   const known = new Set<string>([...(pipeline.data?.kind === 'ok' ? pipeline.data.rows.map((r) => r.url) : []), ...(tracker.data?.kind === 'ok' ? tracker.data.rows.map((r) => r.url ?? '') : [])]);
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
