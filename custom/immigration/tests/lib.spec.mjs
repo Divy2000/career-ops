@@ -185,6 +185,32 @@ test('parseCompanyAlerts rejects an unknown status loudly', () => {
   assert.throws(() => parseCompanyAlerts('2026-10-03\tAcme\tacme\tmaybe\th\tu'), /line 1.*status/);
 });
 
+test('parsePolicyChanges rejects a row with more or fewer than six fields, naming the line (R11-scripts-a-X-02)', () => {
+  const header = 'detected_date\tannounced_date\tsource\ttitle\turl\timpact';
+  // A tab inside the title shifts the url and impact; a dropped column leaves the impact missing.
+  assert.throws(() => parsePolicyChanges(`${header}\n2026-10-03\t2026-10-01\tFR\tH-1B\tfee rule\thttps://x\tcosts up`), /line 2.*6 tab-separated fields, got 7/);
+  assert.throws(() => parsePolicyChanges(`${header}\n2026-10-03\t2026-10-01\tFR\tH-1B fee rule\thttps://x`), /line 2.*6 tab-separated fields, got 5/);
+});
+
+test('parsePolicyChanges rejects a row with an empty required field; only announced_date may be empty (R11-scripts-a-X-02)', () => {
+  for (const [field, row] of [
+    ['source', '2026-10-03\t\t\tH-1B fee rule\thttps://x\tcosts up'],
+    ['title', '2026-10-03\t\tFR\t\thttps://x\tcosts up'],
+    ['url', '2026-10-03\t\tFR\tH-1B fee rule\t \tcosts up'],
+    ['impact', '2026-10-03\t\tFR\tH-1B fee rule\thttps://x\t'],
+  ]) assert.throws(() => parsePolicyChanges(row), new RegExp(`line 1: ${field} is empty`), field);
+});
+
+test('parseCompanyAlerts rejects a row with more or fewer than six fields or an empty field, naming the line (R11-scripts-a-X-02)', () => {
+  assert.throws(() => parseCompanyAlerts('2026-10-03\tAcme\tacme\tpaused\tAcme pauses\tH-1B\thttps://x/1'), /line 1.*6 tab-separated fields, got 7/);
+  assert.throws(() => parseCompanyAlerts('2026-10-03\tAcme\tacme\tpaused\tAcme pauses H-1B'), /line 1.*6 tab-separated fields, got 5/);
+  for (const [field, row] of [
+    ['company', '2026-10-03\t\tacme\tpaused\tAcme pauses H-1B\thttps://x/1'],
+    ['headline', '2026-10-03\tAcme\tacme\tpaused\t\thttps://x/1'],
+    ['url', '2026-10-03\tAcme\tacme\tpaused\tAcme pauses H-1B\t'],
+  ]) assert.throws(() => parseCompanyAlerts(row), new RegExp(`line 1: ${field} is empty`), field);
+});
+
 test('date validation rejects calendar-impossible dates', () => {
   assert.throws(() => decideRefresh({ today: '2026-02-30', checkedAt: null, changes: [] }), /today/);
   assert.throws(() => decideRefresh({ today: '2026-03-01', checkedAt: '2026-02-30', changes: [] }), /checkedAt/);
