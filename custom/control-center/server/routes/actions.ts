@@ -11,7 +11,7 @@ import { importCore } from '../core/adapter.js';
 
 const SYNC_TIMEOUT_MS = 30_000;
 
-export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; runner: Runner; bus: EventBus; exec?: Exec; daily?: { runningNow(): Promise<boolean> } }): Promise<void> {
+export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; runner: Runner; bus: EventBus; exec?: Exec; daily?: { runningNow(): Promise<boolean> }; policyPass?: () => { owner: string } | null }): Promise<void> {
   const { cfg, runner } = opts;
   const exec = opts.exec ?? execNoShell;
   const coreEnv = { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1' };
@@ -32,7 +32,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     }
     const daily = opts.daily;
     const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined };
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined, policyPassRunning: opts.policyPass };
     const problem = await action.check?.(parsed.data, ctx);
     if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });
     const cmd = action.build(parsed.data, ctx);

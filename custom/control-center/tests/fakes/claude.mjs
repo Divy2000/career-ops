@@ -236,6 +236,11 @@ for (const ev of events) {
     sleep(ev.__sleep);
     continue;
   }
+  if (ev.__ignoreSigterm) {
+    // A CLI slow to stop: a cancel's SIGTERM does nothing, so the run ends only at the runner's SIGKILL.
+    process.on('SIGTERM', () => {});
+    continue;
+  }
   if (ev.__waitFor) {
     // Holds the run until another run has written its files: { dir, pattern, count, timeoutMs }. Gives up with exit 4,
     // so a test that orders two runs fails instead of checking nothing.

@@ -36,12 +36,11 @@ async function finished(runId: string): Promise<{ meta: RunMeta; text: string }>
 
 describe('Keyword match', () => {
   it('reads the numbered report from reports/, not a file named by the number in the code checkout', async () => {
-    const report = path.join(t.cfg.dataRoot, 'reports', '001-acme-robotics.md');
-    fs.appendFileSync(report, '\n## Keywords extracted\n\n- Python, Kafka, Kubernetes\n');
+    // Report 001 is in the full oferta layout, its Keywords extracted block included (SW5-tests-12).
     const res = await post('insights.keywordMatch', { report: 1 });
     expect(res.statusCode, res.body).toBe(200);
     const result = res.json().result as { total?: number; matched?: unknown[]; missing?: unknown[] };
-    expect(result).toMatchObject({ total: 3 });
+    expect(result).toMatchObject({ total: 15 });
   });
 
   it('asks for a report that has a file, before running', async () => {

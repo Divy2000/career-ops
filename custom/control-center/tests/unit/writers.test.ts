@@ -37,6 +37,15 @@ describe('inbox skip port', () => {
     const same = applyInboxSkip(PIPELINE, 'https://a.example/2', true);
     expect(same).toMatchObject({ ok: true, matched: 1, changed: 0 });
   });
+  it('skips a [!] row that waits for its JD, keeping its error note (SW5-tests-02)', () => {
+    const text = `## Pending\n\n- [!] https://private.example/job/1 ${String.fromCharCode(0x2014)} Error: login required\n`;
+    const r = applyInboxSkip(text, 'https://private.example/job/1', true);
+    expect(r).toMatchObject({ ok: true, matched: 1, changed: 1 });
+    if (!r.ok) return;
+    expect(r.text).toBe(text.replace('- [!]', '- [x]'));
+    // Restoring a row that was never checked off changes nothing.
+    expect(applyInboxSkip(text, 'https://private.example/job/1', false)).toMatchObject({ ok: true, matched: 1, changed: 0 });
+  });
   it('reports unmatched and invalid URLs', () => {
     expect(applyInboxSkip(PIPELINE, 'https://a.example/nope', true)).toEqual({ ok: false, error: 'unmatched' });
     expect(applyInboxSkip(PIPELINE, 'ftp://a.example/1', true)).toEqual({ ok: false, error: 'invalid-url' });
@@ -230,6 +239,20 @@ describe('action registry covers section 3.3', () => {
     expect(keep('Backend Engineer')).toBe(true);
     expect(keep('Sales Manager')).toBe(false);
     expect(keep('Backend Intern')).toBe(false);
+  });
+  it('scan.network writes location_filter keys the scanner reads: an allowed location passes, others and a blocked one do not (SW5-tests-13)', async () => {
+    const dataRoot = copyFixtureRoot();
+    const { buildLocationFilter } = (await import(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'scan.mjs')).href)) as { buildLocationFilter: (f: unknown) => (location: string, url?: string, title?: string) => boolean };
+    const filterFor = (locationAllow: string[], block: string[]) => {
+      const cmd = findAction('scan.network')!.build({ roles: [], exclude: [], locationAllow, block, sinceDays: 7, ats: ['greenhouse'], limit: 100 }, { codeRoot: '/code', dataRoot, tmpInputs: [] });
+      return buildLocationFilter(YAML.parse(fs.readFileSync(cmd.env!.CAREER_OPS_PORTALS!, 'utf8')).location_filter);
+    };
+    const remote = filterFor(['Remote'], []);
+    expect(remote('Remote - US', 'https://boards.greenhouse.io/acme/jobs/1', 'Backend Engineer')).toBe(true);
+    expect(remote('Berlin, Germany', 'https://boards.greenhouse.io/acme/jobs/2', 'Backend Engineer')).toBe(false);
+    const blocked = filterFor([], ['Berlin']);
+    expect(blocked('Berlin, Germany', 'https://boards.greenhouse.io/acme/jobs/2', 'Backend Engineer')).toBe(false);
+    expect(blocked('Austin, TX', 'https://boards.greenhouse.io/acme/jobs/3', 'Backend Engineer')).toBe(true);
   });
   it('every input file a build writes is collected for the run to remove, the network scan filters file named only in the env included', () => {
     const dataRoot = copyFixtureRoot();

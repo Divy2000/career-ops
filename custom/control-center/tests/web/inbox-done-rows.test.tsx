@@ -14,7 +14,13 @@ import { until } from '../helpers/until';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const row = (url: string, company: string, done: boolean, section: 'pending' | 'done', line: number) => ({ url, company, role: 'Engineer', location: null, compensation: null, done, section, postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'other', seniority: null, line });
-const ROWS = [row('https://jobs.example.com/open', 'Open Co', false, 'pending', 3), row('https://jobs.example.com/checked', 'Checked Co', true, 'pending', 4), row('https://jobs.example.com/old', 'Old Co', true, 'done', 8)];
+const ROWS = [
+  row('https://jobs.example.com/open', 'Open Co', false, 'pending', 3),
+  row('https://jobs.example.com/checked', 'Checked Co', true, 'pending', 4),
+  row('https://jobs.example.com/old', 'Old Co', true, 'done', 8),
+  // A `- [!]` row pipeline mode wrote for a posting behind a login wall.
+  { ...row('https://jobs.example.com/walled', 'Walled Co', false, 'pending', 5), needsJd: true, note: 'Error: login required' },
+];
 
 let host: HTMLElement;
 let root: Root;
@@ -81,6 +87,17 @@ describe('Inbox rows that are checked off', () => {
   });
 });
 
+
+describe('Inbox rows waiting for their JD (SW5-tests-02)', () => {
+  it('shows a [!] row as needing the JD with the error pipeline mode noted, offers Skip, and leaves it out of Evaluate visible', () => {
+    const walled = rowOf('Walled Co');
+    expect(walled.textContent).toContain('needs JD');
+    expect(walled.textContent).toContain('Error: login required');
+    expect(walled.querySelector('button')?.textContent?.trim()).toBe('Skip');
+    // Open Co is the only open row an evaluation can fetch.
+    expect([...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Evaluate visible'))?.textContent).toContain('(1)');
+  });
+});
 
 describe('Inbox with no data/pipeline.md yet (SW6-web-a-04)', () => {
   it('still offers Add URLs, which creates the file, beside the note that there is no pipeline yet', async () => {

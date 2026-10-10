@@ -521,6 +521,42 @@ describe('Runner', () => {
     expect(runner.store.read(queued.id)?.status).toBe('cancelled');
   });
 
+  it('children never inherit a Claude or Anthropic credential exported in the shell; a session still gets its own (SW8-server-02)', async () => {
+    const creds = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
+    const saved = Object.fromEntries(creds.map((k) => [k, process.env[k]]));
+    Object.assign(process.env, { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-shell', ANTHROPIC_API_KEY: 'sk-ant-api-shell', ANTHROPIC_AUTH_TOKEN: 'shell-bearer' });
+    try {
+      const dump = `process.stdout.write(${JSON.stringify(creds)}.filter((k) => k in process.env).map((k) => k + '=' + process.env[k]).join(','))`;
+      for (const k of creds) expect(childEnv()[k], k).toBeUndefined();
+      // What a session passes for itself wins.
+      expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'from-keychain', ANTHROPIC_API_KEY: '' })).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'from-keychain', ANTHROPIC_API_KEY: '' });
+      const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', dump], cwd: PACKAGE_ROOT } });
+      await until(() => runner.store.read(meta.id)?.status === 'done');
+      expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toEqual([]);
+      expect((await execNoShell(process.execPath, ['-e', dump], { timeoutMs: 10_000 })).stdout).toBe('');
+      expect((await runModule(dump, { cwd: PACKAGE_ROOT, env: {}, input: null, timeoutMs: 10_000 })).stdout).toBe('');
+    } finally {
+      for (const k of creds) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  });
+
+  it('every ANTHROPIC_ variable and every CLAUDE_CODE_ credential is dropped, while CLAUDE_CODE_ settings pass (SW8-server-02 review)', () => {
+    const base = {
+      ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer x', ANTHROPIC_BASE_URL: 'https://proxy.example',
+      CLAUDE_CODE_OAUTH_TOKEN: 'o', CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'r', CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '1', CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: 'p', CLAUDE_CODE_CLIENT_CERT: '/c.pem', CLAUDE_CODE_SESSION_ACCESS_TOKEN: 's',
+      CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', PATH: '/bin', HOME: '/h',
+    };
+    const env = childEnv({}, base);
+    expect(Object.keys(env).sort()).toEqual(['CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // A session's own credentials, passed explicitly, still reach it.
+    expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
+  });
+
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
     const saved = { ...process.env };
     Object.assign(process.env, { CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', CC_DATA_ROOT: '/x', CC_GUARD_DIR: '/g' });

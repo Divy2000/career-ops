@@ -50,7 +50,46 @@ describe('reports', () => {
     });
     expect(r.report.tldr).toMatch(/^Senior backend role/);
     expect(r.report.via).toBeNull();
-    expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'G']);
+    expect(r.report.sections.map((s) => s.letter)).toEqual([null, 'A', 'B', 'C', 'D', 'E', 'F', 'G', null, null, null, null, null]);
+  });
+
+  it('keeps an archived JD whose text has its own ## headings as one section, after every section of the report template (SW5-tests-12)', () => {
+    const r = readReport(root, 1);
+    expect(r.kind).toBe('ok');
+    if (r.kind !== 'ok') return;
+    expect(r.report.sections.map((s) => s.heading)).toEqual([
+      'Machine Summary', 'A) Role Summary', 'B) Match with CV', 'C) Level and Strategy', 'D) Comp and Demand', 'E) Customization Plan', 'F) Interview Plan', 'G) Posting Legitimacy',
+      'Risk Summary', 'Score Evidence', 'Keywords extracted', 'Keyword Coverage', 'Job Description (archived verbatim)',
+    ]);
+    const jd = r.report.sections.at(-1)!.content;
+    expect(jd.startsWith('Posted: 2026-09-15')).toBe(true);
+    expect(jd).toContain('## Responsibilities');
+    expect(jd).toContain('## Requirements');
+    expect(jd.endsWith('Reports to the Director of Platform Engineering.')).toBe(true);
+    // A report section after the JD still starts its own section.
+    const after = splitSections('## Job Description (archived verbatim)\nPosted: today\n\n## About us\nWe build.\n\n## Cover Letter Draft\nDear team');
+    expect(after.sections.map((s) => s.heading)).toEqual(['Job Description (archived verbatim)', 'Cover Letter Draft']);
+    expect(after.sections[0]!.content).toBe('Posted: today\n\n## About us\nWe build.');
+  });
+
+  it('keeps a JD heading that only starts like a report section inside the archived JD, while a template heading with its own note still ends it (SW5-tests-12 review)', () => {
+    const { sections } = splitSections('## Job Description (archived verbatim)\nPosted: today\n\n## Risk Summary and Mitigations\nOwn the risk register.\n\n## Step 0 of onboarding\nShadow.\n\n## Liveness gate (URL inputs)\nLive.\n\n## Risk Summary\nNone.');
+    expect(sections.map((s) => s.heading)).toEqual(['Job Description (archived verbatim)', 'Liveness gate (URL inputs)', 'Risk Summary']);
+    expect(sections[0]!.content).toContain('## Risk Summary and Mitigations\nOwn the risk register.');
+    expect(sections[0]!.content).toContain('## Step 0 of onboarding');
+  });
+
+  it('keeps a JD heading that only starts like a Block heading inside the archived JD, while a template Block heading still ends it', () => {
+    const dash = String.fromCharCode(0x2014);
+    const { sections } = splitSections(`## Job Description (archived verbatim)\nPosted: today\n\n## Block A Benefits\nHealth and dental.\n\n## Block B -- Match with CV\nStrong.\n\n## Block C ${dash} Level and Strategy\nSenior.`);
+    expect(sections.map((s) => s.heading)).toEqual(['Job Description (archived verbatim)', 'Block B -- Match with CV', `Block C ${dash} Level and Strategy`]);
+    expect(sections[0]!.content).toBe('Posted: today\n\n## Block A Benefits\nHealth and dental.');
+  });
+
+  it('keeps the own ## headings of an archived JD whose heading is written in another case, as check-jd-archive.mjs reads it', () => {
+    const { sections } = splitSections('## job description (archived verbatim)\nPosted: today\n\n## Responsibilities\nShip.\n\n## Risk Summary\nLow.');
+    expect(sections.map((s) => s.heading)).toEqual(['job description (archived verbatim)', 'Risk Summary']);
+    expect(sections[0]!.content).toBe('Posted: today\n\n## Responsibilities\nShip.');
   });
 
   it('keeps a report\'s **URL:** only when it is a real http(s) URL, cleaned the way merge-tracker.mjs cleans it (SW2-server-06)', () => {
@@ -211,13 +250,17 @@ describe('pipeline', () => {
 
   it('parses checkbox rows with labels, sections and rank reasons containing the em dash', () => {
     const rows = parsePipeline(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'));
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(9);
     const acme = rows[0]!;
     expect(acme).toMatchObject({ company: 'Acme Robotics', location: 'Austin, TX', rank: 4.4, rankReason: 'strong backend match, sponsors visas', postedAt: '2026-09-15', done: false, section: 'pending', seniority: 'senior' });
     expect(rows.find((r) => r.company === 'Initech Cloud')).toMatchObject({ done: true, rank: null, section: 'pending' });
     // The Processed row is in the shape the app writes when it moves an evaluated posting (#NNN | URL | ...).
     expect(rows.find((r) => r.company === 'Old Corp')).toMatchObject({ url: 'https://jobs.example.com/oldcorp/1', role: 'Engineer', location: null, section: 'done', done: true });
     expect(rows.some((r) => r.url === 'not a checkbox line')).toBe(false);
+    // Every row shape pipeline mode and the liveness sweep write (SW5-tests-02).
+    expect(rows.find((r) => r.url === 'https://www.linkedin.com/jobs/view/4100000001')).toMatchObject({ needsJd: true, done: false, note: 'Error: login required', section: 'pending' });
+    expect(rows.find((r) => r.company === 'Kramerica Industries')).toMatchObject({ role: 'Import Analyst', done: true, needsJd: false, section: 'done' });
+    expect(rows.find((r) => r.url === 'https://jobs.example.com/pendant/3')).toMatchObject({ company: '', done: true, section: 'done', note: 'skipped (pre-screen mismatch: requires on-site in Palo Alto)' });
   });
 
   it('reads every documented Processed row shape: #NNN, a report link, a #-- pre-screen skip and a struck-out expired row (SW5-server-01)', () => {
@@ -248,6 +291,20 @@ describe('pipeline', () => {
     expect(rows[0]).toMatchObject({ company: 'Acme', role: 'PM', section: 'pending', done: false, line: 3 });
     expect(rows[1]).toMatchObject({ company: 'Acme', role: 'Staff Engineer', location: 'Remote' });
     expect(sourceOf('local:jds/apify-acme-staff.md', null)).toBe('local');
+  });
+
+  it('reads a [!] row pipeline mode wrote for a URL it could not fetch as open and needing the JD, with its error as the note (SW5-tests-02)', () => {
+    const dash = String.fromCharCode(0x2014);
+    const rows = parsePipeline(['## Pending', `- [!] https://private.example/job/1 ${dash} Error: login required`, '- [!] https://jobs.example.com/acme/9 | Acme | Backend Engineer', ''].join('\n'));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ url: 'https://private.example/job/1', company: '', role: '', done: false, needsJd: true, note: 'Error: login required', section: 'pending', line: 2 });
+    expect(rows[1]).toMatchObject({ url: 'https://jobs.example.com/acme/9', company: 'Acme', role: 'Backend Engineer', done: false, needsJd: true, note: null });
+    expect(parsePipeline('## Pending\n- [ ] https://jobs.example.com/a | A\n- [x] https://jobs.example.com/b | B\n').map((r) => r.needsJd)).toEqual([false, false]);
+  });
+
+  it('reads the error after the -- that localized pipeline modes write on a [!] row (modes/es/pipeline.md)', () => {
+    const rows = parsePipeline('## Pending\n- [!] https://private.example/job -- Error: requiere inicio de sesión\n');
+    expect(rows[0]).toMatchObject({ url: 'https://private.example/job', needsJd: true, note: 'Error: requiere inicio de sesión' });
   });
 
   it('keeps a bare pasted URL row and a URL row with only labeled segments, with company and role empty', () => {

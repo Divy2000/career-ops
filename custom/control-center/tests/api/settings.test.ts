@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { fakeLaunchdExec } from '../../server/system/fake-launchd.js';
@@ -86,7 +88,9 @@ describe('blacklist (explicit confirm gate)', () => {
   it('reads the legacy fixture table into rows', async () => {
     const res = await get('/api/blacklist');
     expect(res.statusCode).toBe(200);
-    expect(res.json().rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop reposting the same role weekly' }]);
+    // By position, as scan.mjs reads it (SW8 review 3): the legacy Reason column is Since, and Added is kept as its own column.
+    expect(res.json().rows).toEqual([{ company: 'Spam Staffing Ltd', since: 'body-shop reposting the same role weekly', scope: 'company', reason: '', extra: ['2026-09-01'] }]);
+    expect(res.json().columnWarning).toContain('Company | Reason | Added');
   });
   it('returns 403 without the X-CC-Explicit header or without confirm:true and writes nothing', async () => {
     const before = readData('data/blacklist.md');
@@ -103,8 +107,8 @@ describe('blacklist (explicit confirm gate)', () => {
     expect(res.statusCode, res.body).toBe(200);
     const raw = readData('data/blacklist.md');
     expect(raw).toContain('| Company | Since | Scope | Reason |');
-    expect(raw).toContain('| ibm.com | 2026-10-03 | domain | avoid IBM-owned ATS hosts |');
-    expect(raw).toContain('| Spam Staffing Ltd | 2026-09-01 | company |');
+    expect(raw).toContain('| ibm.com | 2026-10-03 | domain | avoid IBM-owned ATS hosts |  |');
+    expect(raw).toContain('| Spam Staffing Ltd | body-shop reposting the same role weekly | company |  | 2026-09-01 |');
     expect((await send('PUT', '/api/blacklist', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT })).statusCode).toBe(409);
     const invalid = await send('PUT', '/api/blacklist', { confirm: true, rows: [{ company: 'a|b', since: '2026-10-03', scope: 'company', reason: '' }] }, { 'if-match': res.json().etag, ...EXPLICIT });
     expect(invalid.statusCode).toBe(400);
@@ -121,18 +125,148 @@ describe('blacklist saves keep what the editor does not manage', () => {
       fs.writeFileSync(file, `# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Old Corp | reposts | Sept 2025 |\n| Undated Ltd | spam |  |\n${tail}`);
       const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
       const current = (await req('GET')).json();
-      expect(current.rows.map((r: { since: string }) => r.since)).toEqual(['Sept 2025', '']);
+      // By position, as scan.mjs reads it (SW8 review 3): the legacy Reason cells are the Since cells.
+      expect(current.rows.map((r: { since: string }) => r.since)).toEqual(['reposts', 'spam']);
       const rows = [...current.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'ghosted twice' }];
       const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
       expect(saved.statusCode, saved.body).toBe(200);
       const raw = fs.readFileSync(file, 'utf8');
-      expect(raw).toContain('| Old Corp | Sept 2025 | company | reposts |');
-      expect(raw).toContain('| Undated Ltd |  | company | spam |');
-      expect(raw).toContain('| Initech | 2026-10-03 | company | ghosted twice |');
+      expect(raw).toContain('| Old Corp | reposts | company |  | Sept 2025 |');
+      expect(raw).toContain('| Undated Ltd | spam | company |  |  |');
+      expect(raw).toContain('| Initech | 2026-10-03 | company | ghosted twice |  |');
       expect(raw.endsWith(tail)).toBe(true);
       const bad = await req('PUT', { confirm: true, rows: [...rows, { company: 'Globex', since: 'yesterday', scope: 'company', reason: '' }] }, { 'if-match': saved.json().etag, ...EXPLICIT });
       expect(bad.statusCode).toBe(400);
       expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('the blacklist editor shows exactly the entries the scanner blocks (SW5-tests-03)', () => {
+  // scan.mjs is a writer and never loads into the app, so its parser runs in a child.
+  function scannerEntries(file: string): Array<{ company: string; since: string; scope: string; reason: string }> {
+    const code = `const { loadBlacklist } = await import(${JSON.stringify(pathToFileURL(path.join(PACKAGE_ROOT, '..', '..', 'scan.mjs')).href)}); process.stdout.write(JSON.stringify([...loadBlacklist(${JSON.stringify(file)}).values()]));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: path.join(PACKAGE_ROOT, '..', '..'), env: { ...process.env, CAREER_OPS_ROOT: tempDir('cc-blacklist-scan-'), NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout);
+  }
+  it('rows after a blank line in the table and in a second table are listed, and a save that removes one stops the scanner blocking it', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      fs.writeFileSync(file, [
+        '# Blacklist', '', 'Intro.', '',
+        '| Company | Since | Scope | Reason |', '|---------|-------|-------|--------|', '| Acme Corp | 2026-01-15 | company | ghosted |', '',
+        '| Spam Staffing Ltd | 2026-02-01 | company | body-shop |', '',
+        '## Added by hand', '', 'Keep this paragraph.', '',
+        '| Company | Since | Scope | Reason |', '|---|---|---|---|', '| ibm.com | 2026-03-01 | domain | IBM-owned ATS hosts |', '| Initech | 2026-04-01 | company | reposts |', '',
+      ].join('\n'));
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      const blocked = scannerEntries(file);
+      expect(blocked.map((e) => e.company)).toEqual(['Acme Corp', 'Spam Staffing Ltd', 'ibm.com', 'Initech']);
+      expect(current.rows).toEqual(blocked);
+      const rows = current.rows.filter((r: { company: string }) => r.company !== 'Initech');
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(scannerEntries(file).map((e) => e.company)).toEqual(['Acme Corp', 'Spam Staffing Ltd', 'ibm.com']);
+      expect((await req('GET')).json().rows).toEqual(scannerEntries(file));
+      expect(fs.readFileSync(file, 'utf8')).toContain('## Added by hand\n\nKeep this paragraph.\n');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('the blacklist editor reads the table by position, as the scanner does (SW8 review 3)', () => {
+  function scannerEntries(file: string): Array<{ company: string; since: string; scope: string; reason: string }> {
+    const code = `const { loadBlacklist } = await import(${JSON.stringify(pathToFileURL(path.join(PACKAGE_ROOT, '..', '..', 'scan.mjs')).href)}); process.stdout.write(JSON.stringify([...loadBlacklist(${JSON.stringify(file)}).values()]));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: path.join(PACKAGE_ROOT, '..', '..'), env: { ...process.env, CAREER_OPS_ROOT: tempDir('cc-blacklist-scan-'), NO_COLOR: '1' }, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout);
+  }
+  const fields = (rows: Array<{ company: string; since: string; scope: string; reason: string }>) => rows.map(({ company, since, scope, reason }) => ({ company, since, scope, reason }));
+  it('a reordered header is read by position, with a warning, and a save keeps every cell while the scanner goes on blocking the same entries', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      fs.writeFileSync(file, '# Blacklist\n\n| Company | Scope | Since | Reason |\n|---|---|---|---|\n| ibm.com | domain | 2026-01-15 | IBM-owned ATS hosts |\n| Initech | company | 2026-02-01 | reposts |\n');
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      const blocked = scannerEntries(file);
+      // The scanner reads the third column as the scope: ibm.com is matched as a company name, never as a domain.
+      expect(blocked).toEqual([
+        { company: 'ibm.com', since: 'domain', scope: 'company', reason: 'IBM-owned ATS hosts' },
+        { company: 'Initech', since: 'company', scope: 'company', reason: 'reposts' },
+      ]);
+      expect(fields(current.rows)).toEqual(blocked);
+      expect(current.columnWarning).toMatch(/Company, Since, Scope, Reason/);
+      expect(current.columnWarning).toContain('Company | Scope | Since | Reason');
+      const saved = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      const raw = fs.readFileSync(file, 'utf8');
+      // The cells the scanner read as a scope are kept in a column of their own.
+      expect(raw).toContain('2026-01-15');
+      expect(raw).toContain('2026-02-01');
+      expect(fields(scannerEntries(file))).toEqual(blocked);
+      const after = (await req('GET')).json();
+      expect(fields(after.rows)).toEqual(blocked);
+      expect(after.columnWarning).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+  it('a row outside the table keeps its cells after Reason on save, and a save that would drop a cell is refused (SW8 review 3, review)', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      // A second table with the main table's Ticket column: its cells move into the main table with it.
+      fs.writeFileSync(file, '# Blacklist\n\n| Company | Since | Scope | Reason | Ticket |\n|---|---|---|---|---|\n| Initech | 2026-02-01 | company | reposts | T-1 |\n\n## More\n\n| Company | Since | Scope | Reason | Ticket |\n|---|---|---|---|---|\n| Acme | 2026-01-01 | company | x | T-42 |\n');
+      let current = (await req('GET')).json();
+      expect(current.rows.find((r: { company: string }) => r.company === 'Acme').extra).toEqual(['T-42']);
+      const saved = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toContain('| Acme | 2026-01-01 | company | x | T-42 |');
+      // A second table wider than the main one: its extra cell has no column to go to, so nothing is written.
+      const wide = '# Blacklist\n\n| Company | Since | Scope | Reason |\n|---|---|---|---|\n| Initech | 2026-02-01 | company | reposts |\n\n## More\n\n| Company | Since | Scope | Reason | Ticket |\n|---|---|---|---|---|\n| Acme | 2026-01-01 | company | x | T-42 |\n';
+      fs.writeFileSync(file, wide);
+      current = (await req('GET')).json();
+      expect(current.rows.map((r: { company: string }) => r.company)).toEqual(['Initech', 'Acme']);
+      const refused = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(refused.statusCode, refused.body).toBe(422);
+      expect(refused.json().error).toContain('T-42');
+      expect(fs.readFileSync(file, 'utf8')).toBe(wide);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a header line the scanner reads as an entry ("Company Name") is listed, and a save keeps the scanner blocking it (SW8 review 3, review)', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      fs.writeFileSync(file, '# Blacklist\n\n| Company Name | Since | Scope | Reason |\n|---|---|---|---|\n| Initech | 2026-02-01 | company | reposts |\n');
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const blocked = scannerEntries(file);
+      expect(blocked.map((e) => e.company)).toEqual(['Company Name', 'Initech']);
+      const current = (await req('GET')).json();
+      expect(fields(current.rows)).toEqual(blocked);
+      const saved = await req('PUT', { confirm: true, rows: current.rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fields(scannerEntries(file))).toEqual(blocked);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a header in the scanner order has no warning', async () => {
+    const app = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(app.cfg.dataRoot, 'data', 'blacklist.md'), '# Blacklist\n\n| Company | Since | Scope | Reason | Contact |\n|---|---|---|---|---|\n| Acme | 2026-01-15 | company | x | a@b.example |\n');
+      const current = (await app.app.inject({ method: 'GET', url: '/api/blacklist', headers: app.authed })).json();
+      expect(current.columnWarning).toBeNull();
+      expect(current.rows).toEqual([{ company: 'Acme', since: '2026-01-15', scope: 'company', reason: 'x', extra: ['a@b.example'] }]);
     } finally {
       await app.close();
     }
@@ -147,13 +281,14 @@ describe('blacklist saves keep columns the editor does not show', () => {
       fs.writeFileSync(file, '# Blacklist\n\n| Company | Reason | Added | Contact |\n|---|---|---|---|\n| Old Corp | reposts | 2025-09-01 | jane@old.example |\n');
       const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
       const current = (await req('GET')).json();
-      expect(current.extraColumns).toEqual(['Contact']);
+      // By position, as scan.mjs reads it (SW8 review 3): Contact is the Reason column, Added is kept as its own.
+      expect(current.extraColumns).toEqual(['Added']);
       const rows = [...current.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'ghosted' }];
       const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, 'x-cc-explicit': 'blacklist' });
       expect(saved.statusCode, saved.body).toBe(200);
       const raw = fs.readFileSync(file, 'utf8');
-      expect(raw).toContain('| Company | Since | Scope | Reason | Contact |');
-      expect(raw).toContain('| Old Corp | 2025-09-01 | company | reposts | jane@old.example |');
+      expect(raw).toContain('| Company | Since | Scope | Reason | Added |');
+      expect(raw).toContain('| Old Corp | reposts | company | jane@old.example | 2025-09-01 |');
       expect(raw).toContain('| Initech | 2026-10-03 | company | ghosted |  |');
       const smuggled = await req('PUT', { confirm: true, rows: [{ ...rows[0], extra: ['a', 'b'] }] }, { 'if-match': saved.json().etag, 'x-cc-explicit': 'blacklist' });
       expect(smuggled.statusCode).toBe(400);

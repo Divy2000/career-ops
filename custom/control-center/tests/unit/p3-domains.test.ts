@@ -169,19 +169,22 @@ Some intro text about the file.
   it('reads a table whose company column is headed "Company name", so a save keeps its rows', () => {
     const md = '# Blacklist\n\n| Company name | Reason |\n|---|---|\n| Spam Staffing Ltd | body-shop |\n| Acme Recruiting | spam |\n';
     const parsed = parseBlacklist(md);
-    expect(parsed.rows.map((r) => r.company)).toEqual(['Spam Staffing Ltd', 'Acme Recruiting']);
+    // scan.mjs skips a header only when its first cell is exactly Company, so it blocks "Company name" too (SW8 review 3).
+    expect(parsed.rows.map((r) => r.company)).toEqual(['Company name', 'Spam Staffing Ltd', 'Acme Recruiting']);
     expect(parsed.extraColumns).toEqual([]);
     const saved = renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, parsed.extraColumns);
     expect(parseBlacklist(saved).rows).toEqual(parsed.rows);
   });
 
-  it('maps the legacy three-column table (Company, Reason, Added) to company scope', () => {
+  it('reads the legacy three-column table (Company, Reason, Added) by position as scan.mjs does, keeps Added as a column, and warns (SW8 review 3)', () => {
     const parsed = parseBlacklist('# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Spam Staffing Ltd | body-shop | 2026-09-01 |\n');
-    expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: '2026-09-01', scope: 'company', reason: 'body-shop' }]);
+    expect(parsed.rows).toEqual([{ company: 'Spam Staffing Ltd', since: 'body-shop', scope: 'company', reason: '', extra: ['2026-09-01'] }]);
+    expect(parsed.extraColumns).toEqual(['Added']);
+    expect(parsed.columnWarning).toContain('Company | Reason | Added');
   });
-  it('keeps everything after the table verbatim and never merges a second table into the rows', () => {
+  it('keeps the notes after the table verbatim', () => {
     const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme Corp | 2026-01-15 | company | x |\n';
-    const tail = '\n## Notes\n\nKeep this paragraph.\n\n| Other | Table |\n|---|---|\n| a | b |\n';
+    const tail = '\n## Notes\n\nKeep this paragraph.\n';
     const md = `# Blacklist\n\nIntro.\n\n${table}${tail}`;
     const parsed = parseBlacklist(md);
     expect(parsed.rows).toEqual([{ company: 'Acme Corp', since: '2026-01-15', scope: 'company', reason: 'x' }]);
@@ -191,20 +194,54 @@ Some intro text about the file.
     expect(added).toBe(`# Blacklist\n\nIntro.\n\n${table}| Initech | 2026-10-03 | company | y |\n${tail}`);
   });
 
+  it('lists every | line after the table as scan.mjs blocks it, a second table header included, and a save moves them into the table (SW5-tests-03)', () => {
+    const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme Corp | 2026-01-15 | company | x |\n';
+    const md = `# Blacklist\n\nIntro.\n\n${table}\n## Notes\n\nKeep this paragraph.\n\n| Other | Table |\n|---|---|\n| a | b |\n`;
+    const parsed = parseBlacklist(md);
+    // scan.mjs parseBlacklist skips only separators and a first cell of Company: "| Other | Table |" blocks "Other".
+    expect(parsed.rows).toEqual([
+      { company: 'Acme Corp', since: '2026-01-15', scope: 'company', reason: 'x' },
+      { company: 'Other', since: 'Table', scope: 'company', reason: '' },
+      { company: 'a', since: 'b', scope: 'company', reason: '' },
+    ]);
+    expect(parsed.postamble).toBe('\n## Notes\n\nKeep this paragraph.\n');
+    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble)).toBe(`# Blacklist\n\nIntro.\n\n${table}| Other | Table | company |  |\n| a | b | company |  |\n\n## Notes\n\nKeep this paragraph.\n`);
+  });
+
+  it('lists the | rows of a file with no Company header as scan.mjs blocks them, and a save moves them into the table once (SW8 review 3, review)', () => {
+    const md = '# Blacklist\n\nIntro.\n\n| Acme | 2026-01-01 | company | no |\n';
+    const parsed = parseBlacklist(md);
+    expect(parsed.rows).toEqual([{ company: 'Acme', since: '2026-01-01', scope: 'company', reason: 'no' }]);
+    const saved = renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, parsed.extraColumns);
+    expect(saved).toBe('# Blacklist\n\nIntro.\n\n| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme | 2026-01-01 | company | no |\n');
+    expect(parsed.unkept).toEqual([]);
+    // A header with no separator row under it is no table: a cell past Reason has no column to go to.
+    expect(parseBlacklist('| Company | Since | Scope | Reason | Ticket |\n| Acme | 2026-01-01 | company | no | T-1 |\n').unkept).toEqual(['Acme (T-1)']);
+  });
+
+  it('keeps the spacing of the text around the table where no row was taken out of it (SW8 review 3, review)', () => {
+    const table = '| Company | Since | Scope | Reason |\n|---|---|---|---|\n| A | 2026-01-01 | company | x |\n';
+    const parsed = parseBlacklist(`# Blacklist\n\nIntro.\n\n${table}\n## Notes\n\n\nKeep this spacing.\n\n| B | 2026-01-02 | company | y |\n\nMore.\n`);
+    expect(parsed.rows.map((r) => r.company)).toEqual(['A', 'B']);
+    expect(parsed.postamble).toBe('\n## Notes\n\n\nKeep this spacing.\n\nMore.\n');
+  });
+
   it('carries columns it does not manage through every row, in order, and leaves them empty on new rows', () => {
     const md = '# Blacklist\n\n| Company | Reason | Added | Contact | Ticket |\n|---|---|---|---|---|\n| Old Corp | reposts | 2025-09-01 | jane@old.example | T-1 |\n| Short Row | spam | 2025-10-01 |\n';
     const parsed = parseBlacklist(md);
-    expect(parsed.extraColumns).toEqual(['Contact', 'Ticket']);
+    // By position, as scan.mjs reads it: Reason is the Since column, Added the Scope column (kept as its own column),
+    // Contact the Reason column (SW8 review 3).
+    expect(parsed.extraColumns).toEqual(['Added', 'Ticket']);
     expect(parsed.rows).toEqual([
-      { company: 'Old Corp', since: '2025-09-01', scope: 'company', reason: 'reposts', extra: ['jane@old.example', 'T-1'] },
-      { company: 'Short Row', since: '2025-10-01', scope: 'company', reason: 'spam', extra: ['', ''] },
+      { company: 'Old Corp', since: 'reposts', scope: 'company', reason: 'jane@old.example', extra: ['2025-09-01', 'T-1'] },
+      { company: 'Short Row', since: 'spam', scope: 'company', reason: '', extra: ['2025-10-01', ''] },
     ]);
     const rendered = renderBlacklist([...parsed.rows, { company: 'Initech', since: '2026-10-03', scope: 'company', reason: 'y' }], parsed.preamble, parsed.postamble, parsed.extraColumns);
-    expect(rendered).toContain('| Company | Since | Scope | Reason | Contact | Ticket |\n|---------|-------|-------|--------|---|---|\n');
-    expect(rendered).toContain('| Old Corp | 2025-09-01 | company | reposts | jane@old.example | T-1 |\n');
+    expect(rendered).toContain('| Company | Since | Scope | Reason | Added | Ticket |\n|---------|-------|-------|--------|---|---|\n');
+    expect(rendered).toContain('| Old Corp | reposts | company | jane@old.example | 2025-09-01 | T-1 |\n');
     expect(rendered).toContain('| Initech | 2026-10-03 | company | y |  |  |\n');
-    expect(parseBlacklist(rendered).extraColumns).toEqual(['Contact', 'Ticket']);
-    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, [])).not.toContain('Contact');
+    expect(parseBlacklist(rendered).extraColumns).toEqual(['Added', 'Ticket']);
+    expect(renderBlacklist(parsed.rows, parsed.preamble, parsed.postamble, [])).not.toContain('Ticket');
   });
 
   it('renders the template format and round-trips its own output', () => {

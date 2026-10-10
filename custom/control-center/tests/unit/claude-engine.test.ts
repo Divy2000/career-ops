@@ -735,7 +735,13 @@ describe('guard hook', () => {
     // The real files of this checkout: install.sh and upstream-sync run `node --test custom/*/tests/*.spec.mjs`, and every
     // spec imports custom/test-support.
     const custom = path.join(PACKAGE_ROOT, '..');
-    const files = (fs.readdirSync(custom, { recursive: true }) as string[]).map((f) => `custom/${f.split(path.sep).join('/')}`).filter((f) => !f.includes('/node_modules/') && fs.statSync(path.join(custom, '..', f)).isFile());
+    // node_modules is never entered: Vite creates and removes its deps_temp folders there while other suites run.
+    const walk = (rel: string): string[] => fs.readdirSync(path.join(custom, rel), { withFileTypes: true }).flatMap((e) => {
+      if (e.name === 'node_modules') return [];
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      return e.isDirectory() ? walk(child) : e.isFile() ? [`custom/${child}`] : [];
+    });
+    const files = walk('');
     const suites = files.filter((f) => /^custom\/[^/]+\/tests\//.test(f) || /\.(spec|test)\.[cm]?[jt]sx?$/.test(f) || f.startsWith('custom/test-support/') || f.startsWith('custom/install/'));
     for (const must of ['custom/test-support/tmp.mjs', 'custom/install/install.sh', 'custom/install/bootstrap.sh', 'custom/projects/tests/rank.spec.mjs']) expect(suites, must).toContain(must);
     expect(suites.length).toBeGreaterThan(20);

@@ -107,6 +107,11 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.getByText('At or above the 4.0 apply line')).toBeVisible();
     await expect(page.getByText('Recommendation: Apply')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'A) Role Summary' })).toBeVisible();
+    // The archived JD is one card, its own "## Responsibilities" heading inside it (SW5-tests-12).
+    await expect(page.locator('details.card.section > summary', { hasText: 'Job Description (archived verbatim)' })).toHaveCount(1);
+    await expect(page.locator('details.card.section > summary', { hasText: 'Responsibilities' })).toHaveCount(0);
+    await expect(page.locator('details.card.section > summary', { hasText: 'Risk Summary' })).toHaveCount(1);
+    await expect(page.locator('details.card.section > summary', { hasText: 'Score Evidence' })).toHaveCount(1);
     await expect(page.getByText('sponsor: sponsoring')).toBeVisible();
     await axeClean(page);
     await page.getByRole('tab', { name: 'Timeline' }).click();
@@ -126,7 +131,7 @@ test.describe('read-only pages render fixture data', () => {
     await expect(page.locator('tbody tr')).toHaveCount(1);
     await expect(page.getByRole('row', { name: /Soylent Foods/ })).toBeVisible();
     await page.getByLabel('Filter inbox').fill('');
-    await expect(page.locator('tbody tr')).toHaveCount(4);
+    await expect(page.locator('tbody tr')).toHaveCount(5);
     await expect(page).not.toHaveURL(/q=soylent/);
   });
 
@@ -134,9 +139,14 @@ test.describe('read-only pages render fixture data', () => {
     await page.goto('/pipeline');
     await expect(page.getByRole('heading', { level: 1, name: 'Pipeline' })).toBeVisible();
     await expect(page.getByText('Soylent Foods')).toBeVisible();
-    await expect(page.locator('tbody tr')).toHaveCount(4);
+    await expect(page.locator('tbody tr')).toHaveCount(5);
+    // A posting pipeline mode could not fetch waits for its JD, with the error it noted (SW5-tests-02).
+    const walled = page.getByRole('row', { name: /linkedin\.com\/jobs\/view\/4100000001/ });
+    await expect(walled.getByText('needs JD')).toBeVisible();
+    await expect(walled.getByText('Error: login required')).toBeVisible();
     await page.getByLabel('Show done').check();
-    await expect(page.locator('tbody tr')).toHaveCount(6);
+    await expect(page.locator('tbody tr')).toHaveCount(9);
+    await expect(page.getByRole('row', { name: /Kramerica Industries/ })).toBeVisible();
     await axeClean(page);
     await page.getByRole('tab', { name: 'Shortlist' }).click();
     await expect(page).toHaveURL(/tab=shortlist/);
@@ -227,6 +237,10 @@ test.describe('read-only pages render fixture data', () => {
     expect(plain.startsWith('BEGIN:VCARD\r\n')).toBe(true);
     expect(plain.match(/BEGIN:VCARD/g)).toHaveLength(2);
     expect(plain).toContain('FN:Pat Example\r\n');
+    // An empty contacts.tsv cell is empty, never a '-' placeholder that would land in the card (SW5-tests-09).
+    expect(plain).toContain('FN:Sam Sample\r\n');
+    expect(plain).not.toMatch(/^(TEL|EMAIL|URL)[^:\r\n]*:-\r$/m);
+    expect(plain).not.toMatch(/^NOTE:.* -\r$/m);
     await page.getByRole('checkbox', { name: /caller ID/i }).check();
     expect(await save()).toContain('FN:Pat Example (Acme Robotics recruiter)\r\n');
     await axeClean(page);
