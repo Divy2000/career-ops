@@ -27,7 +27,7 @@ const CADENCE: FollowupCadence = {
   metadata: { analysisDate: '2026-10-10', totalTracked: 2, actionable: 1, overdue: 1, urgent: 0, cold: 0, waiting: 0, retired: 1 },
   entries: [entry({}), entry({ num: 12, company: 'Globex', urgency: 'retired', nextFollowupDate: null, daysUntilNext: null })],
 };
-const ACTIONS: ActionMeta[] = [{ id: 'followups.inviteMatch', label: 'Match invite', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }];
+const ACTIONS: ActionMeta[] = [{ id: 'followups.inviteMatch', label: 'Match invite', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }, { id: 'followups.replyPaste', label: 'Paste a reply', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }];
 
 let host: HTMLElement;
 let root: Root;
@@ -43,6 +43,7 @@ beforeEach(() => {
       if (url === '/api/followups') return json(200, CADENCE);
       if (url === '/api/actions') return json(200, ACTIONS);
       if (url === '/api/actions/followups.inviteMatch') return inviteAnswer();
+      if (url === '/api/actions/followups.replyPaste') return json(200, { result: { added: 1 } });
       return json(404, { error: 'not stubbed' });
     }),
   );
@@ -104,5 +105,29 @@ describe('Follow-ups page', () => {
     await act(async () => match().click());
     await until(() => host.textContent?.includes('Could not run followups.inviteMatch'), 'the failure');
     expect(host.textContent).not.toContain('Globex');
+  });
+
+  it('a successful reply paste clears the form, so a second click cannot append a duplicate (R18-feat-a-L3-03)', async () => {
+    const { RepliesTab } = await import('@web/features/followups/FollowupsPage');
+    await render(RepliesTab);
+    const subject = await until(() => host.querySelector<HTMLInputElement>('input[aria-label="Reply subject"]'), 'the subject box');
+    const from = host.querySelector<HTMLInputElement>('input[aria-label="Reply sender"]')!;
+    const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Reply body"]')!;
+    const type = (el: HTMLInputElement | HTMLTextAreaElement, value: string) =>
+      act(async () => {
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    await type(subject, 'Interview offer');
+    await type(from, 'recruiter@acme.example');
+    await type(body, 'Hello, see you Monday.');
+    const paste = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Paste a reply'))!;
+    await until(() => paste() && !paste().disabled, 'Paste a reply enabled');
+    await act(async () => paste().click());
+    await until(() => host.textContent?.includes('Done'), 'the paste result');
+    expect(subject.value).toBe('');
+    expect(from.value).toBe('');
+    expect(body.value).toBe('');
   });
 });
