@@ -318,22 +318,26 @@ test('a sync started while another holds the run lock is refused before it touch
   const wt = path.join(home, '.career-ops-sync');
   mkdirSync(wt, { recursive: true });
   writeFileSync(path.join(wt, 'mid-suite.txt'), 'the scheduled run is still testing here\n');
-  // Past the Keychain the run would go on to replace the worktree; npm then fails, so nothing reaches a registry.
-  stub(path.join(w.base, 'bin'), 'npm', 'exit 1');
+  // The Keychain lookup is the last step before the run replaces the worktree. A run that got past the lock records
+  // it there and stops, so a regressed lock never reaches the worktree removal or npm (sync.sh puts Homebrew's
+  // folders ahead of any stub on its PATH, so a stubbed npm would not be the one that runs).
+  const passedLock = path.join(w.base, 'passed-lock');
   const ready = path.join(w.base, 'holder-ready');
-  // The scheduled run, still going: it holds the lock while the manual run starts.
-  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/bin/sh', '-c', `touch "${ready}"; sleep 60`], { stdio: 'ignore' });
+  // The scheduled run, still going: it holds the lock while the manual run starts. Its own process group, so the
+  // cleanup kills the shell and its sleep along with lockf.
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/bin/sh', '-c', `touch "${ready}"; sleep 60`], { stdio: 'ignore', detached: true });
   try {
     const deadline = Date.now() + 10_000;
     while (!existsSync(ready) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
     assert.ok(existsSync(ready), 'the holder never took the lock');
-    const res = runSync(w, { home, security: 'echo tok-123' });
+    const res = runSync(w, { home, security: `touch "${passedLock}"\nexit 44` });
+    assert.equal(existsSync(passedLock), false, 'the run went past the held lock');
     assert.equal(res.status, 75, res.log + res.stderr);
     assert.match(res.stderr, /another upstream sync is running \(it holds .*\.career-ops-sync\.lockf\); not started/);
     assert.match(res.log, /another upstream sync is running .*; not started/);
     assert.equal(readFileSync(path.join(wt, 'mid-suite.txt'), 'utf8'), 'the scheduled run is still testing here\n');
   } finally {
-    holder.kill('SIGKILL');
+    try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ }
     rmSync(w.base, { recursive: true, force: true });
   }
 });
