@@ -140,7 +140,9 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: R
               `</li>`,
           )
           .join('');
-        return `<section><h3>Turn ${t.n}</h3>${files ? `<ul>${files}</ul>` : '<p class="s">No files changed.</p>'}<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><button>Revert whole turn</button></form></section>`;
+        // As in the app, a turn none of whose files can be reverted offers no whole-turn revert.
+        const whole = t.files.some((f) => f.canRevert) ? `<form method="post" action="/__recovery/revert" data-cc="revert"><input type="hidden" name="sessionId" value="${escapeHtml(meta.id)}"><input type="hidden" name="turn" value="${t.n}"><button>Revert whole turn</button></form>` : '';
+        return `<section><h3>Turn ${t.n}</h3>${files ? `<ul>${files}</ul>` : '<p class="s">No files changed.</p>'}${whole}</section>`;
       })
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;

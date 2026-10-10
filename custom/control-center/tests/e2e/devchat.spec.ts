@@ -191,8 +191,15 @@ test.describe('Dev Chat', () => {
     const errors: string[] = [];
     page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
     await page.goto('/__recovery');
-    await page.locator('article', { has: page.getByRole('heading', { name: new RegExp(id) }) }).getByRole('button', { name: 'Revert whole turn' }).click();
+    const article = page.locator('article', { has: page.getByRole('heading', { name: new RegExp(id) }) });
+    await article.getByRole('button', { name: 'Revert whole turn' }).click();
+    // The first press only asks, as the app's dialog does (R14-supervisor-L3-01).
+    await expect(page.getByRole('alert')).toContainText('deletes files it created');
+    expect((await (await page.request.get('/api/files/user/customMd')).json()).text).toContain('Added by Dev Chat');
+    await article.getByRole('button', { name: 'Confirm revert' }).click();
     await expect.poll(async () => (await (await page.request.get('/api/files/user/customMd')).json()).text).toBe(preSession);
+    // The reply's per-file outcome survives the reload that shows the reverted state (R14-supervisor-L3-03).
+    await expect(page.getByRole('alert')).toContainText('Reverted: ');
     expect(errors).toEqual([]);
   });
 
@@ -221,6 +228,8 @@ test.describe('Dev Chat', () => {
       expect(html).toContain('data/notes/became-a-dir');
       expect(html).toMatch(/unreadable \+0 -0 \(EISDIR/);
       expect(html).toContain(ids[1]);
+      // Its one file cannot be reverted, so the turn offers no whole-turn revert either (R14-supervisor-L3-01).
+      expect(html.split('<article>').find((a) => a.includes(ids[0]!))).not.toContain('Revert whole turn');
       expect((await page.request.get('/__supervisor/status')).status()).toBe(200);
       // Anything else that throws while the supervisor answers is a 500, never a crash: an id the guard dir refuses.
       fs.mkdirSync(path.join(sessions, ids[2]!));

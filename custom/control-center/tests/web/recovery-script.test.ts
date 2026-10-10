@@ -17,7 +17,13 @@ const ERROR = [
 ].join('\n');
 
 const reply = (status: number, text: string) => vi.fn(async () => ({ ok: status < 300, status, text: async () => text }));
-const submit = (kind: string) => document.querySelector<HTMLFormElement>(`form[data-cc="${kind}"]`)!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+const form = (kind: string) => document.querySelector<HTMLFormElement>(`form[data-cc="${kind}"]`)!;
+const press = (kind: string) => form(kind).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+/** Both steps: the first press asks, the second confirms and sends. */
+const submit = (kind: string) => {
+  press(kind);
+  press(kind);
+};
 const status = () => document.getElementById('revert-status')!;
 
 describe('the recovery page script', () => {
@@ -64,5 +70,70 @@ describe('the recovery page script', () => {
     submit('revert');
     await until(() => status().textContent === 'Revert failed: network down', 'the network failure');
     expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/__recovery\/revert$/), expect.objectContaining({ method: 'POST', credentials: 'same-origin', headers: expect.objectContaining({ 'X-CC': '1' }), body: 'turn=1' }));
+  });
+  it('a revert or restart asks first: the first press only asks, and only the second sends it (R14-supervisor-L3-01)', async () => {
+    document.body.innerHTML = PAGE;
+    const fetch = reply(409, 'refused');
+    vi.stubGlobal('fetch', fetch);
+    press('revert');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(status().textContent).toMatch(/deletes files it created.*again to confirm/);
+    expect(form('revert').querySelector('button')!.textContent).toBe('Confirm revert');
+    press('restart');
+    expect(fetch).not.toHaveBeenCalled();
+    // Asking about another form takes the first one's question back.
+    expect(form('revert').querySelector('button')!.textContent).toBe('Revert whole turn');
+    expect(status().textContent).toMatch(/drains the running server.*again to confirm/);
+    press('restart');
+    await until(() => status().textContent === 'Restart failed: refused', 'the restart reply');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(form('restart').querySelector('button')!.textContent).toBe('Restart the server');
+  });
+
+  it('while one request is in flight, every button is disabled and further presses send nothing (R14-supervisor-L3-04)', async () => {
+    document.body.innerHTML = PAGE;
+    let answer: (v: { ok: boolean; status: number; text: () => Promise<string> }) => void = () => undefined;
+    const fetch = vi.fn(() => new Promise<{ ok: boolean; status: number; text: () => Promise<string> }>((r) => (answer = r)));
+    vi.stubGlobal('fetch', fetch);
+    submit('restart');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect([...document.querySelectorAll('button')].every((b) => b.disabled)).toBe(true);
+    submit('restart');
+    submit('revert');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    answer({ ok: false, status: 502, text: async () => 'the server still does not start: boom' });
+    await until(() => status().textContent!.startsWith('Restart failed:'), 'the restart failure');
+    expect([...document.querySelectorAll('button')].every((b) => !b.disabled)).toBe(true);
+  });
+
+  // It runs the script a second time, as the reload does.
+  it('a revert that succeeds shows its per-file outcome after the page reloads (R14-supervisor-L3-03)', async () => {
+    document.body.innerHTML = PAGE;
+    vi.stubGlobal('fetch', reply(200, 'notes.md: restored\nplan.md: no-snapshot'));
+    submit('revert');
+    await until(() => sessionStorage.length > 0, 'the outcome kept for the reload');
+    document.body.innerHTML = PAGE;
+    new Function(RECOVERY_SCRIPT)();
+    expect(status().textContent).toContain('Reverted: notes.md: restored');
+    expect(status().querySelector('pre')!.textContent).toBe('plan.md: no-snapshot');
+    expect(sessionStorage.length).toBe(0);
+  });
+  // After the reload test, which leaves the scripts before it waiting for a reload.
+  it('a successful revert whose outcome cannot be kept (storage full) still reloads, and is never shown as failed', async () => {
+    document.body.innerHTML = PAGE;
+    // The earlier reloads left their scripts waiting for the reload; a fresh one stands for the reloaded page.
+    new Function(RECOVERY_SCRIPT)();
+    vi.stubGlobal('fetch', reply(200, 'notes.md: restored'));
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    });
+    try {
+      submit('revert');
+      await until(() => setItem.mock.calls.length > 0, 'the attempt to keep the outcome');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(status().textContent).toBe('Reverting...');
+    } finally {
+      setItem.mockRestore();
+    }
   });
 });
