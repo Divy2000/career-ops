@@ -336,6 +336,13 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(navigations).toEqual([{ to: '/sessions' }]);
   });
 
+  it('leaves saved-JD rows and needs-JD rows out, as Evaluate visible does (R13-shared-comp-L2-01)', async () => {
+    rows.push(row('local:jds/2026-10-06_acme_pm.pdf', 'Acme'), { ...row('https://www.linkedin.com/jobs/view/4100000001', 'Acme'), needsJd: true } as ReturnType<typeof row>);
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
   it('a fan-out whose sessions fail to start is reported, names the postings left pending, and stays on the page (review fix)', async () => {
     const session = (id: string, url: string, status: string) => ({ id, status, target: { type: 'url', value: url }, reportNum: null, error: status === 'error' ? 'the Claude CLI is not approved' : null });
     vi.mocked(fetch).mockImplementation(async (url, init) => {
