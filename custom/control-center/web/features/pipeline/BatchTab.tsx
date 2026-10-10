@@ -9,12 +9,14 @@ import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 
-// Only http(s) postings go through the URL fan-out: a saved JD (local:jds/) or another scheme would start a paid
-// session on the liveness and fetch path, which cannot read it.
+// Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
+// server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
+// and fetch path, which cannot read it, and a URL carrying credentials would put them in the session's prompt.
 const postingLike = (s: string): boolean => {
+  if (s.length > 2048) return false;
   try {
     const u = new URL(s);
-    return u.protocol === 'http:' || u.protocol === 'https:';
+    return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname) && !u.username && !u.password;
   } catch {
     return false;
   }

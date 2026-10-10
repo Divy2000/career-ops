@@ -137,9 +137,9 @@ describe('Pipeline > Batch', () => {
 
   it('a pasted saved-JD reference or other non-posting entry is refused before anything starts (R13-feat-b-L3-02)', async () => {
     await mount();
-    await type(textarea(), 'local:jds/acme.md\nhttps://jobs.example.com/1\nfile:///etc/hosts');
+    await type(textarea(), 'local:jds/acme.md\nhttps://jobs.example.com/1\nfile:///etc/hosts\nhttps://user:secret@jobs.example.com/2');
     expect(button('Batch evaluate')!.disabled).toBe(true);
-    expect(host.textContent).toContain('Not posting URLs: local:jds/acme.md, file:///etc/hosts');
+    expect(host.textContent).toContain('Not posting URLs: local:jds/acme.md, file:///etc/hosts, https://user:secret@jobs.example.com/2');
     expect(host.textContent).toContain('Evaluate JD');
   });
 
