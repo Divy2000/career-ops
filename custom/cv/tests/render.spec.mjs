@@ -370,6 +370,25 @@ test('given a final render that overflows the budget under --strict-pages, when 
   assert.deepEqual(scratchIn(root), []);
 });
 
+test('given a final render stopped while it writes the PDF, leaving a truncated file, when run, then the input and the indexed PDF stay as they were (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  const goodPdf = pdfWith(1);
+  fs.writeFileSync(pdf, goodPdf);
+  // Only the final generate-pdf.mjs: its PDF is cut short and it exits 1, as a stop in the middle of the write leaves it.
+  const preload = path.join(root, 'truncate-final.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';\nif (process.argv[1]?.endsWith('generate-pdf.mjs') && !process.argv[2]?.includes('.render-pdf-')) process.on('exit', () => { fs.writeFileSync(process.argv[3], fs.readFileSync(process.argv[3]).subarray(0, 200)); process.exitCode = 1; });\n`);
+  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'the input keeps its layout');
+  assert.deepEqual(fs.readFileSync(pdf), goodPdf, 'the earlier PDF is put back');
+  assert.deepEqual(scratchIn(root), []);
+});
+
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);

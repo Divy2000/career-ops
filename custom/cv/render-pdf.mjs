@@ -105,21 +105,27 @@ async function main() {
     }
   };
   let outputBefore = null;
+  // A changed PDF whose page tree reads, so not one cut short by a stop in the middle of the write.
   const publishedOutput = () => {
     const now = outputBytes();
-    return now !== null && (outputBefore === null || !now.equals(outputBefore));
-  };
-  // After the final render: the input keeps the chosen layout only when the PDF it shows was published. A strict
-  // overflow wrote its over-budget PDF and then refused it, before the index, so the old PDF is put back too.
-  const settlePublish = (result) => {
-    if (result?.status === 0) return;
-    if (result && strictOverflow(result)) {
-      writeFileSync(input, html);
-      if (outputBefore === null) rmSync(output, { force: true });
-      else writeFileSync(output, outputBefore);
-    } else if (!publishedOutput()) {
-      writeFileSync(input, html);
+    if (now === null || (outputBefore !== null && now.equals(outputBefore))) return false;
+    try {
+      countPdfPages(now);
+      return true;
+    } catch {
+      return false;
     }
+  };
+  // After the final render: the input keeps the chosen layout only when the PDF it shows was published. Otherwise the
+  // input gets its layout back, and so does the output when the render left a PDF it never indexed: a strict overflow
+  // writes its over-budget PDF and then refuses it, and a stop in the middle of the write leaves a truncated one.
+  const settlePublish = (result) => {
+    if (result?.status === 0 || (!(result && strictOverflow(result)) && publishedOutput())) return;
+    writeFileSync(input, html);
+    const now = outputBytes();
+    if (now === null || (outputBefore !== null && now.equals(outputBefore))) return;
+    if (outputBefore === null) rmSync(output, { force: true });
+    else writeFileSync(output, outputBefore);
   };
   const removeDrafts = () => {
     rmSync(draftHtml, { force: true });
