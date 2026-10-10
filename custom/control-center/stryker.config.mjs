@@ -1,5 +1,11 @@
 // Mutation testing for the server-side code. `npm run mutate` runs every subtree; pass `-- --mutate '<glob>'` for one.
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { blockClaude } from '../test-support/no-claude.mjs';
+
+// The test runner processes inherit this PATH, so a mutant that drops a fake Claude path cannot reach the real CLI.
+process.env.PATH = blockClaude(path.join(path.dirname(fileURLToPath(import.meta.url)), 'reports/bin')).PATH;
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {

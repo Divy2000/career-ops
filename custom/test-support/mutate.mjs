@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { blockClaude } from './no-claude.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const custom = path.dirname(here);
@@ -51,6 +52,6 @@ const config = {
 const configFile = path.join(out, 'stryker.config.json');
 fs.writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
 
-const run = spawnSync(process.execPath, [stryker, 'run', configFile, ...rest], { cwd: pkgDir, stdio: 'inherit' });
+const run = spawnSync(process.execPath, [stryker, 'run', configFile, ...rest], { cwd: pkgDir, stdio: 'inherit', env: blockClaude(path.join(out, 'bin')) });
 if (run.error) fail(run.error.message);
 process.exit(run.status ?? 1);

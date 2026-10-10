@@ -112,3 +112,14 @@ test('stryker-leftovers skips node_modules and Stryker\'s own temp and report fo
   const r = node(leftovers, [dir]);
   assert.equal(r.status, 0, r.stderr);
 });
+
+test('blockClaude puts a claude that always fails first on PATH, so a mutant cannot reach the real CLI', async () => {
+  const { blockClaude } = await import('../no-claude.mjs');
+  const dir = tempDir('no-claude-');
+  const env = blockClaude(dir, { PATH: '/usr/bin:/bin', HOME: '/home/me' });
+  assert.equal(env.HOME, '/home/me');
+  assert.equal(env.PATH, `${dir}${path.delimiter}/usr/bin:/bin`);
+  const r = spawnSync('claude', ['-p', 'hi'], { env, encoding: 'utf8' });
+  assert.equal(r.status, 127);
+  assert.match(r.stderr, /claude is blocked during mutation testing/);
+});
