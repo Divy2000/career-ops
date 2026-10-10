@@ -128,6 +128,27 @@ export interface SessionPanelProps {
   onStartFailed?: () => void;
   /** Called as the panel sends a start, before the server answers (onSessionId or onStartFailed follows). */
   onStarting?: () => void;
+  /** Keeps a typed, unsent prompt under this key (this browser tab), so closing the panel or leaving the page keeps it. */
+  draftKey?: string;
+}
+
+// A storage that throws (a private window) only loses the kept draft.
+function readDraft(key: string | undefined): string | null {
+  if (!key) return null;
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writeDraft(key: string | undefined, text: string | null): void {
+  if (!key) return;
+  try {
+    if (text) sessionStorage.setItem(key, text);
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Kept in memory only.
+  }
 }
 
 /** Prompt box plus live session for one mode. Host pages embed it; the Sessions page shows the same thing standalone. */
@@ -136,7 +157,11 @@ export function SessionPanel(props: SessionPanelProps) {
   const [localId, setSessionId] = useState<string | null>(null);
   const sessionId = props.sessionId ?? localId;
   // The host's prompt follows its inputs (Apply builds it from the posting URL) until the user types their own.
-  const [editedPrompt, setPrompt] = useState<string | null>(null);
+  const [editedPrompt, setEditedPrompt] = useState<string | null>(() => readDraft(props.draftKey));
+  const setPrompt = (text: string) => {
+    setEditedPrompt(text);
+    writeDraft(props.draftKey, text);
+  };
   const prompt = editedPrompt ?? props.initialPrompt ?? '';
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
@@ -164,7 +189,10 @@ export function SessionPanel(props: SessionPanelProps) {
     try {
       const m = await startSession({ mode: props.mode, target: props.target, prompt: text, blacklistAllowed: props.blacklistAllowed });
       // A 202 can carry a session that failed before its turn ran (no approved CLI, no token): nothing was sent.
-      if (m.status !== 'error') props.onSent?.();
+      if (m.status !== 'error') {
+        props.onSent?.();
+        writeDraft(props.draftKey, null);
+      }
       seen.current = 0;
       setSessionId(m.id);
       props.onSessionId?.(m.id);
@@ -195,13 +223,19 @@ export function SessionPanel(props: SessionPanelProps) {
     try {
       if (fork) {
         const m = await forkSession(sessionId, text, props.blacklistAllowed);
-        if (m.status !== 'error') props.onSent?.();
+        if (m.status !== 'error') {
+        props.onSent?.();
+        writeDraft(props.draftKey, null);
+      }
         seen.current = 0;
         setSessionId(m.id);
         props.onSessionId?.(m.id);
       } else {
         const m = await sendTurn(sessionId, text, props.blacklistAllowed);
-        if (m.status !== 'error') props.onSent?.();
+        if (m.status !== 'error') {
+        props.onSent?.();
+        writeDraft(props.draftKey, null);
+      }
       }
       setReply('');
     } catch (err) {
