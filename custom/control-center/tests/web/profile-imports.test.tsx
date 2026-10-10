@@ -125,6 +125,38 @@ describe('Import CV parse sessions', () => {
     expect((await until(dialog, 'the discard question')).textContent).toContain('the CV import');
   });
 
+  it('a parse whose result landed does not come back as running on a repeated status, so a saved import asks nothing (merge review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => panel.onStatus!('running', null));
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# Parsed CV' }, 1));
+    // The panel re-sends its current status after the re-render; then the honesty gate asks a follow-up.
+    await act(async () => panels.get('/data/uploads/cv.pdf')!.onStatus!('running', null));
+    await act(async () => panels.get('/data/uploads/cv.pdf')!.onStatus!('awaiting_user', 'asked a question'));
+    await act(async () => button('Save as cv.md').click());
+    await until(() => host.textContent?.includes('cv.md saved'), 'the save');
+    await act(async () => button('Leave').click());
+    await until(() => host.dataset.left === 'yes', 'leaving without a question');
+    expect(dialog()).toBeNull();
+    expect(sent('POST', '/api/sessions/s-cv/cancel')).toBe(0);
+  });
+
+  it('the parser panel gets the same callbacks on every render, so it does not re-send its status (merge review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const first = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="CV markdown"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, '# typed');
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(panels.get('/data/uploads/cv.pdf')!.onStatus).toBe(first.onStatus);
+  });
+
   it('picking another PDF cancels the parse still running for the first', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));
