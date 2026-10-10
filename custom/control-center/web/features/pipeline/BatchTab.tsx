@@ -73,14 +73,17 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     } catch (err) {
       // The fan-out starts its sessions one by one and answers an error without the ones it already started: those are
       // taken out of the box, so a retry does not evaluate them twice.
-      let note: string;
-      try {
-        if (!before) throw new Error('no sessions list from before the start');
-        const started = await startedSince(list, before);
-        if (started.size > 0) setUrls(list.filter((u) => !started.has(u)).join('\n'));
-        note = started.size > 0 ? ` ${started.size} started before the failure and ${started.size === 1 ? 'was' : 'were'} taken out of the box; see Sessions.` : '';
-      } catch {
-        note = ' Check Sessions for any that started before retrying.';
+      const unknown = ' Check Sessions for any that started before retrying.';
+      let note = unknown;
+      // Without the list from before the start, which sessions this batch started cannot be told.
+      if (before) {
+        try {
+          const started = await startedSince(list, before);
+          if (started.size > 0) setUrls(list.filter((u) => !started.has(u)).join('\n'));
+          note = started.size > 0 ? ` ${started.size} started before the failure and ${started.size === 1 ? 'was' : 'were'} taken out of the box; see Sessions.` : '';
+        } catch {
+          note = unknown;
+        }
       }
       setMessage({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}${note ? `.${note}` : ''}` });
     } finally {
