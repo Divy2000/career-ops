@@ -183,6 +183,15 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
     if (pdfId) pdfOnStatus(pdfStream.gone ? 'gone' : pdfStream.transcript.status === 'awaiting_user' ? 'running' : pdfStream.transcript.status);
   }, [pdfId, pdfStream.gone, pdfStream.transcript.status, pdfOnStatus]);
   const [generating, setGenerating] = useState(false);
+  // The start can answer after the user left the page: it is remembered under cc.pdf.<n> and linked here on return,
+  // so only a still-mounted form opens its session page.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const generatePdf = async () => {
     if (!n) return;
     setGenerating(true);
@@ -190,7 +199,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
     try {
       const m = await startTailoredCvSession(n);
       pdfOnSessionId(m.id);
-      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       pdfOnStartFailed();
       actions.setMessage({ tone: 'danger', text: `Could not start the tailored CV session: ${describeError(err)}` });
