@@ -114,3 +114,24 @@ describe('an application page', () => {
     expect(panels.some((p) => p.sessionId === 'cover-1' && p.mode !== 'cover')).toBe(false);
   });
 });
+
+describe('Ask about tracker', () => {
+  it('shows its session again when the Tracker comes back', async () => {
+    const { AskTrackerPanel } = await import('@web/features/tracker/AskTrackerPanel');
+    await render(createElement(AskTrackerPanel));
+    await act(async () => button('Ask about tracker')!.click());
+    const panel = panels.filter((p) => p.mode === 'tracker').pop()!;
+    expect(panel.sessionId ?? null).toBeNull();
+    await act(async () => panel.onSessionId!('ask-1'));
+    await leave();
+
+    await render(createElement(AskTrackerPanel));
+    expect(panels.filter((p) => p.mode === 'tracker').pop()).toMatchObject({ sessionId: 'ask-1' });
+  });
+
+  it('opens nothing on first visit', async () => {
+    const { AskTrackerPanel } = await import('@web/features/tracker/AskTrackerPanel');
+    await render(createElement(AskTrackerPanel));
+    expect(panels.filter((p) => p.mode === 'tracker')).toHaveLength(0);
+  });
+});
