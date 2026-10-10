@@ -168,6 +168,14 @@ export interface ScanHistoryRow {
 /** The leading columns scan.mjs formatScanHistoryRow writes, in order; a legacy file has no header row naming them. */
 const SCAN_HISTORY_COLUMNS = ['url', 'first_seen', 'portal', 'title', 'company', 'status', 'location', 'fingerprint', 'posted_at'];
 
+/**
+ * Reverses scan.mjs sanitizeTsvField: a cell whose first character is one of = + - @ is written with a leading `'`
+ * (a formula guard), so the reader strips that guard to show the name as it was. The encoding is lossy: a raw value
+ * that itself began with `'=`, `'+`, `'-` or `'@` is written unchanged and reads back without its apostrophe. Such names
+ * are far rarer than ones starting with = + - @, so the guard reading wins; only scan.mjs could tell them apart.
+ */
+const stripFormulaGuard = (v: string): string => (v.length > 1 && v[0] === "'" && /^[=+\-@]/.test(v[1]!) ? v.slice(1) : v);
+
 export function readScanHistory(dataRoot: string): ScanHistoryRow[] {
   const read = readText(path.join(dataRoot, 'data', 'scan-history.tsv'));
   if (read.kind !== 'ok') return [];
@@ -178,10 +186,10 @@ export function readScanHistory(dataRoot: string): ScanHistoryRow[] {
     url: r.url ?? '',
     firstSeen: r.first_seen ?? '',
     portal: r.portal ?? '',
-    title: r.title ?? '',
-    company: r.company ?? '',
+    title: stripFormulaGuard(r.title ?? ''),
+    company: stripFormulaGuard(r.company ?? ''),
     status: r.status ?? '',
-    location: r.location ?? '',
+    location: stripFormulaGuard(r.location ?? ''),
     postedAt: r.posted_at ?? '',
   }));
 }
