@@ -189,6 +189,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 1, state: 'Responded' } } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
+
+  it('a setStatus naming its row by the older key "n" sets that row, as the other row actions do (review fix 3)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { n: 3, state: 'Applied' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    expect(item.textContent).toContain('Set row #3 to Applied');
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 3, state: 'Applied' } } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
 });
 
 describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25)', () => {

@@ -29,7 +29,7 @@ const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   explore: () => 'Open Discover (network scan)',
   research: (p) => `Research ${String(p.topic ?? p.company ?? '')} (uses tokens)`,
   generatePdf: (p) => `Generate the tailored CV PDF for row #${String(p.row ?? p.n ?? '')} (uses tokens)`,
-  setStatus: (p) => `Set row #${String(p.row ?? '')} to ${String(p.state ?? '')}`,
+  setStatus: (p) => `Set row #${String(p.row ?? p.n ?? '')} to ${String(p.state ?? '')}`,
   apply: (p) => `Open Apply for row #${String(p.row ?? p.n ?? '')}`,
   setApplyField: (p) => `Set the apply field ${String(p.id ?? '')}`,
   remember: (p) => `Remember: ${String(p.fact ?? '')}`,
@@ -186,7 +186,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'setStatus':
-          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
+          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row ?? p.params.n), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
           await qc.invalidateQueries({ queryKey: ['tracker'] });
           break;
         case 'remember': {
