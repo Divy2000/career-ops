@@ -6,6 +6,22 @@ const SESSION_ID = /^[\w-]{1,80}$/;
 // the mark is cleared so the start form is not disabled forever.
 export const START_REPORT_WINDOW_MS = 15_000;
 
+// Cross-mount notification: a write/setStarting through a raw lastSession (AskDrawer's generatePdf) must reach every
+// useRememberedSession mounted under the same key (the Apply page's pdf guard), so they re-sync their busy state.
+const sessionListeners = new Map<string, Set<() => void>>();
+export function subscribeSession(key: string, fn: () => void): () => void {
+  const set = sessionListeners.get(key) ?? new Set();
+  set.add(fn);
+  sessionListeners.set(key, set);
+  return () => {
+    set.delete(fn);
+    if (set.size === 0) sessionListeners.delete(key);
+  };
+}
+export function notifySession(key: string): void {
+  for (const fn of [...(sessionListeners.get(key) ?? [])]) fn();
+}
+
 export interface LastSession {
   read(): string | null;
   write(id: string | null): void;
@@ -32,6 +48,7 @@ export function lastSession(key: string): LastSession {
     } catch {
       // storage refused: only the re-attaching is lost
     }
+    notifySession(key);
   };
   const startKey = `${key}:starting`;
   // The mark self-expires: a start that never reports (its page reloaded and the POST was lost) must not leave the
@@ -53,6 +70,7 @@ export function lastSession(key: string): LastSession {
     } catch {
       // storage refused: a page mounted mid-start only misses that the start is under way
     }
+    notifySession(key);
   };
   return { read, write, forget: (id) => void (read() === id && write(null)), starting, setStarting };
 }
