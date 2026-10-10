@@ -191,7 +191,13 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
   const start = async () => {
     setBusy(true);
     try {
+      setError(null);
       const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
+      // A 202 can carry a session that failed before its turn ran (no approved CLI, no token): say why and stay for a retry.
+      if (meta.status === 'error') {
+        setError(meta.error ?? 'session failed to start');
+        return;
+      }
       toast.success(`Started ${mode} session`);
       onClose();
       await navigate({ to: '/sessions/$id', params: { id: meta.id } });

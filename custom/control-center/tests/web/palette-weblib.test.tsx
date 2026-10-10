@@ -80,3 +80,18 @@ describe('the palette params dialog', () => {
     expect(document.body.querySelector<HTMLInputElement>('input[aria-label="state"]')?.value).toBe('Applied');
   });
 });
+
+describe('the palette mode launch', () => {
+  it('keeps the dialog and says why when the started session failed before its turn ran', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => (url === '/api/sessions' && init?.method === 'POST' ? json(202, FAILED) : json(200, []))));
+    let closed = 0;
+    const { ModeLaunchDialog } = await import('@web/components/CommandPalette');
+    await render(createElement(ModeLaunchDialog, { mode: 'research', onClose: () => void closed++ }));
+    await type(document.body.querySelector<HTMLTextAreaElement>('textarea[aria-label="Session prompt"]')!, 'Research Acme');
+    await act(async () => button('Start (uses tokens)')!.click());
+    await until(() => document.body.querySelector('[role="alert"]')?.textContent?.includes('no token in the Keychain'), 'the start failure');
+    expect(closed).toBe(0);
+    expect(navigated).toEqual([]);
+    expect(button('Start (uses tokens)')!.disabled).toBe(false);
+  });
+});
