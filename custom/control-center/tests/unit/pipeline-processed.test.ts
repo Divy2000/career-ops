@@ -46,6 +46,12 @@ describe('moving an evaluated posting to Processed', () => {
     expect(r.text).toBe(`## Pendientes\n\n\n## Procesadas\n\n- [x] #042 | ${URL} | Acme (report) | Engineer (report) | 4.0/5 | PDF ✅\n`);
   });
 
+  it('writes the report\'s company and role the way scan.mjs sanitizes cells, so a | cannot add a column (R12-srv-dom-b-L3-01)', () => {
+    const md = `## Pending\n\n- [ ] ${URL} |  | \n\n## Processed\n`;
+    const r = moveToProcessed(md, URL, { ...POSTING, company: 'Acme [Labs]', role: 'Software Engineer | Payments\\EU', score: 4.2 });
+    expect(r.text).toContain(`- [x] #042 | ${URL} | Acme \\[Labs\\] | Software Engineer / Payments\\\\EU | 4.2/5 | PDF ❌`);
+  });
+
   it('a report with no generated PDF, or no readable score, says so', () => {
     const r = moveToProcessed(`## Pending\n- [ ] ${URL} | Acme | Eng\n## Processed\n`, URL, { ...POSTING, score: null, pdf: false });
     expect(r.text).toContain(`- [x] #042 | ${URL} | Acme | Eng | N/A | PDF ❌`);

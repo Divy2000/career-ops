@@ -59,6 +59,19 @@ function scoreCell(score: number | null): string {
   return `${Number.isInteger(score) ? score.toFixed(1) : String(score)}/5`;
 }
 
+/**
+ * scan.mjs sanitizeMarkdownField, for the report's own company and role: one line, `\`, `[` and `]` backslashed, and a
+ * `|` written as `/` so it cannot open another cell. The row's own cells were written that way already.
+ */
+function markdownField(value: string): string {
+  return value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim()
+    .replace(/[\\[\]]/g, (c) => `\\${c}`)
+    .replace(/\|/g, '/');
+}
+
 /** Moves the Pending row(s) for `url` to Processed; every other line stays as written. */
 export function moveToProcessed(text: string, url: string, posting: EvaluatedPosting): { text: string; moved: boolean } {
   const nl = text.includes('\r\n') ? '\r\n' : '\n';
@@ -94,7 +107,7 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     // Company and role are the positional cells after the URL: a rank, posted, trust or note segment a writer appended
     // (rank-pipeline.mjs puts the rank right after a bare URL) is not one, so the report's own values stand in.
     const parts = body.split('|').map((s) => s.trim()).filter((cell, i) => i === 0 || !WRITTEN_SEGMENT.test(cell));
-    processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || posting.company} | ${parts[2] || posting.role} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
+    processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || markdownField(posting.company)} | ${parts[2] || markdownField(posting.role)} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
   }
   if (remove.size === 0) return { text, moved: false };
   const out: string[] = [];
