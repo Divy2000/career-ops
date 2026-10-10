@@ -24,6 +24,8 @@ const READY_FILES = {
   'cv.md': '# Me\n',
   'config/profile.yml': 'name: x\n',
   'modes/_profile.md': 'mine\n',
+  // Seeded from its template otherwise, which the doctor reports as not personalized.
+  'modes/_brief.md': 'my brief\n',
   'portals.yml': 'x: 1\n',
 };
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
@@ -831,6 +833,17 @@ test('launchd is skipped while doctor still reports an unpersonalized file', () 
   w.makeCheckout(D, { files: READY_FILES });
   w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_UNPERSONALIZED: 'modes/_profile.md' } });
   assert.equal(w.calls('launchd-install').length, 0);
+});
+
+test('launchd is skipped while modes/_brief.md is still the template the install seeded, as the real doctor reports it (R11-tests-custom-L1-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const { 'modes/_brief.md': _brief, ...rest } = READY_FILES;
+  w.makeCheckout(D, { files: rest });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(read(D, 'modes', '_brief.md'), read(D, 'modes', '_brief.template.md'), 'the install seeded _brief.md from its template');
+  assert.equal(w.calls('launchd-install').length, 0, r.out);
+  assert.match(r.out, /Onboarding is not finished \(still needed: modes\/_brief\.md\)/);
+  assert.equal(r.status, 3, r.out);
 });
 
 test('a ready install gets the daily job only; --with-upstream-sync gets both', () => {
