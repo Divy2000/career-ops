@@ -105,7 +105,20 @@ export function DiscoverPage() {
 export function ScriptTab({ id, intro, params }: { id: string; intro: string; params: Record<string, unknown> }) {
   const actions = useActions();
   const { run, busy, message } = useRunAction();
-  const [runId, setRunId] = useState<string | null>(null);
+  // The running run's id is remembered per action id (this browser tab), so switching tabs and coming back follows the
+  // same run instead of showing an idle button and letting a second scan be queued behind the first.
+  const store = useMemo(() => lastSession(`cc.discover.script.${id}`), [id]);
+  const [runId, setRunIdState] = useState<string | null>(store.read);
+  const setRunId = (rid: string) => {
+    store.write(rid);
+    setRunIdState(rid);
+  };
+  const { lines, status } = useRunLines(runId);
+  // Nothing to follow: the log goes, and the run is not re-attached next time.
+  const gone = status === RUN_GONE;
+  useEffect(() => {
+    if (gone) store.write(null);
+  }, [gone, store]);
   return (
     <div className="card stack">
       <p className="muted">{intro}</p>
@@ -122,7 +135,7 @@ export function ScriptTab({ id, intro, params }: { id: string; intro: string; pa
         />
       </div>
       <Message message={message} />
-      {runId && <RunTail runId={runId} />}
+      {runId && !gone && <RunLog lines={lines} status={status} />}
     </div>
   );
 }
@@ -175,10 +188,6 @@ function useRunLines(runId: string | null) {
     };
   }, [runId, attempt]);
   return state.runId === runId ? { lines: state.lines, status: state.status } : { lines: [], status: null };
-}
-
-function RunTail({ runId }: { runId: string }) {
-  return <RunLog {...useRunLines(runId)} />;
 }
 
 /** A run's log from lines its host already follows: a second stream for the same run would hold another connection. */
