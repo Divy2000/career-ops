@@ -15,7 +15,7 @@ import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { useTracker } from '../lib/queries';
-import type { PipelineRead } from '@shared/api';
+import type { PipelineRead, SessionMeta } from '@shared/api';
 
 export interface Proposal {
   id: number;
@@ -260,6 +260,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
             }
             store.write(m.id);
             store.setStarting(false);
+            // The new session goes into the sessions list at once, so a second generatePdf for the same row inside the
+            // poll window opens this one instead of starting a second paid session (as startEvaluation does).
+            await qc.cancelQueries({ queryKey: ['sessions'], exact: true });
+            qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => [m, ...(prev ?? []).filter((s) => s.id !== m.id)]);
             await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
           } catch (err) {
             store.setStarting(false);
