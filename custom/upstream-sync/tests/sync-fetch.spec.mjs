@@ -885,23 +885,39 @@ test('update_live_checkout moves the live checkout to the verified sync merge, n
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+/**
+ * A shell prefix that starts a daily job holding run-daily's lock in the background and returns once it holds it, so
+ * the update after it always meets a held lock. `body` is what the job does while it holds the lock.
+ */
+function holdDailyLock(w, body) {
+  const ready = path.join(w.base, 'holder-ready');
+  return `mkdir -p "$(dirname "$LOCK")"
+/usr/bin/lockf -k -t 0 "$LOCK" /bin/sh -c 'touch "$1"; ${body}' holder "${ready}" >/dev/null 2>&1 &
+for _ in $(seq 400); do [ -e "${ready}" ] && break; sleep 0.05; done
+[ -e "${ready}" ] || { echo "the daily job never took its lock"; exit 99; }
+`;
+}
+
 test('a daily job holding its lock for longer than the wait leaves the live checkout alone, reinstalls nothing, and says why (R11-scripts-b-L1-03)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true });
   try {
     const before = w.head();
-    // The daily job, mid-run: it holds run-daily.sh's lock while the sync reaches the live update.
-    const res = w.update({ wait: 1, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 4 >/dev/null 2>&1 &\nsleep 0.5\n` });
+    // The daily job, mid-run: it holds run-daily.sh's lock until the update has returned.
+    const res = w.update({ wait: 1, prefix: holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`) });
     assert.equal(res.status, 10, res.stdout + res.stderr);
     assert.equal(res.stdout, 'the daily job is still running');
     assert.equal(w.head(), before);
     assert.equal(w.npm(), '');
-  } finally { rmSync(w.base, { recursive: true, force: true }); }
+  } finally {
+    writeFileSync(path.join(w.base, 'release'), '');
+    rmSync(w.base, { recursive: true, force: true });
+  }
 });
 
 test('a daily job that finishes within the wait is waited for, then the live checkout is updated (R11-scripts-b-L1-03)', () => {
   const w = liveWorld({ depsChange: true });
   try {
-    const res = w.update({ wait: 20, prefix: `mkdir -p "$(dirname "$LOCK")"\n/usr/bin/lockf -k -t 0 "$LOCK" sleep 1 >/dev/null 2>&1 &\nsleep 0.3\n` });
+    const res = w.update({ wait: 20, prefix: holdDailyLock(w, 'sleep 1') });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(res.stdout, /^live checkout now at [0-9a-f]+$/);
     assert.equal(w.head(), w.target);
