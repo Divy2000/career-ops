@@ -442,14 +442,16 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(gone.revert(false).status).toBe(200);
   });
 
-  it('a queued run the next server will start again blocks the revert; one it cannot start (no start request) ends lost there, so it does not (R14-supervisor-L2-01)', () => {
+  it('a queued run no server will start does not block the revert; one a server began starting does until its processes or its grace decide (R14-supervisor-L2-01, R17-supervisor-L3-01)', () => {
     const request = JSON.stringify({ env: {}, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
+    // A queued run with a start request but no server running to start it: nothing will ever run it, so the revert
+    // goes ahead instead of refusing every revert of the session forever (R17-supervisor-L3-01).
     const restartable = stalled((dir) => {
       runMeta(dir, { status: 'queued' });
       fs.writeFileSync(path.join(dir, 'request.json'), request);
     });
-    expect(restartable.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
-    expect(fs.readFileSync(restartable.file, 'utf8')).toBe('broken by the turn\n');
+    expect(restartable.revert(false)).toMatchObject({ status: 200, text: 'notes.md: restored' });
+    expect(fs.readFileSync(restartable.file, 'utf8')).toBe('before\n');
     // A server that died while starting it: the wrapper runs (still queued on disk), so its processes decide.
     const starting = stalled((dir) => {
       runMeta(dir, { status: 'queued' });
