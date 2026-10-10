@@ -36,11 +36,13 @@ let host: HTMLElement;
 let root: Root;
 let sessions: SessionMeta[];
 let fanouts: unknown[];
+let fanoutFails: boolean;
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
   panels = [];
   fanouts = [];
+  fanoutFails = false;
   sessions = [];
   sessionStorage.clear();
   vi.stubGlobal(
@@ -51,6 +53,7 @@ beforeEach(() => {
       if (url === '/api/sessions' && !init?.method) return json(sessions);
       if (url === '/api/sessions/fanout') {
         fanouts.push(JSON.parse(String(init!.body)));
+        if (fanoutFails) return new Response(JSON.stringify({ error: 'spawn failed' }), { status: 502, headers: { 'content-type': 'application/json' } });
         return json({ sessions: [], reserved: [] });
       }
       return json([]);
@@ -87,6 +90,24 @@ describe('Pipeline evaluations already running', () => {
     await act(async () => button('Evaluate visible (1)')!.click());
     await until(() => fanouts.length === 1 || undefined, 'the fan-out');
     expect(fanouts).toEqual([{ mode: 'oferta', urls: ['https://jobs.example.com/free'] }]);
+  });
+
+  it('a session waiting for the user still holds its row (R13-feat-b-L1-01 review)', async () => {
+    sessions = [session('s-wait', 'awaiting_user', { type: 'url', value: 'https://jobs.example.com/busy' })];
+    await mount();
+    await until(() => button('Evaluate visible (1)'), 'Evaluate visible without the waiting row');
+  });
+
+  it('a fan-out that failed part way reads the sessions list again, so rows it started are left out at once (R13-feat-b-L1-01 review)', async () => {
+    fanoutFails = true;
+    await mount();
+    await until(() => button('Evaluate visible (2)'), 'Evaluate visible');
+    const reads = () => vi.mocked(fetch).mock.calls.filter(([u, i]) => u === '/api/sessions' && !(i as RequestInit | undefined)?.method).length;
+    const before = reads();
+    sessions = [session('s-new', 'queued', { type: 'url', value: 'https://jobs.example.com/busy' }), session('s-new2', 'queued', { type: 'url', value: 'https://jobs.example.com/free' })];
+    await act(async () => button('Evaluate visible (2)')!.click());
+    await until(() => reads() > before || undefined, 'the sessions list read again');
+    await until(() => button('Evaluate visible (0)'), 'the started rows left out');
   });
 
   it('Evaluate JD stays off while that saved JD is being evaluated (R13-feat-b-L1-01)', async () => {

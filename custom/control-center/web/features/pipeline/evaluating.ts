@@ -1,6 +1,7 @@
 import type { SessionMeta } from '@shared/api';
 
-const LIVE = new Set(['queued', 'running']);
+// A session waiting for the user's reply still owns its row: answering it finishes the evaluation.
+const LIVE = new Set(['queued', 'running', 'awaiting_user']);
 
 /**
  * The posting URLs and saved-JD references an oferta session is evaluating right now. The server starts a second

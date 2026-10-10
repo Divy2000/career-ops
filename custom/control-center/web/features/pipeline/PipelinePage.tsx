@@ -158,6 +158,7 @@ function Inbox() {
         <InboxAi
           urls={visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && !evaluating.has(r.url)).map((r) => r.url)}
           savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length}
+          onFanOut={() => void qc.invalidateQueries({ queryKey: ['sessions'] })}
           evaluating={new Set(visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && evaluating.has(r.url)).map((r) => r.url)).size}
         />
         {skipError && (

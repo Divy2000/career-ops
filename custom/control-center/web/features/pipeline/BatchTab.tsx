@@ -20,11 +20,13 @@ const postingLike = (s: string): boolean => {
   }
 };
 
-/** The URLs an oferta session was created for since `since` (ms): what a fan-out that failed part way did start. */
-async function startedSince(urls: string[], since: number): Promise<Set<string>> {
+const sessionIds = async (): Promise<Set<string>> => new Set((await apiGet<SessionMeta[]>('/api/sessions')).map((s) => s.id));
+
+/** The URLs of oferta sessions the server lists now and did not list in `before`: what a fan-out that failed part way did start. */
+async function startedSince(urls: string[], before: Set<string>): Promise<Set<string>> {
   const sessions = await apiGet<SessionMeta[]>('/api/sessions');
   const wanted = new Set(urls);
-  return new Set(sessions.filter((s) => s.mode === 'oferta' && s.target.value && wanted.has(s.target.value) && Date.parse(s.createdAt) >= since).map((s) => s.target.value!));
+  return new Set(sessions.filter((s) => s.mode === 'oferta' && !before.has(s.id) && s.target.value && wanted.has(s.target.value)).map((s) => s.target.value!));
 }
 
 /**
@@ -45,8 +47,8 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
     setBusy(true);
     setMessage(null);
-    // The server and this page share a clock; the margin covers rounding between them.
-    const since = Date.now() - 1000;
+    // The sessions listed before the start, so a failure part way can tell which ones it started.
+    const before = await sessionIds().catch(() => null);
     try {
       const r = await fanOut('oferta', list);
       const outcome = fanoutOutcome(r);
@@ -60,7 +62,8 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       // taken out of the box, so a retry does not evaluate them twice.
       let note: string;
       try {
-        const started = await startedSince(list, since);
+        if (!before) throw new Error('no sessions list from before the start');
+        const started = await startedSince(list, before);
         if (started.size > 0) setUrls(list.filter((u) => !started.has(u)).join('\n'));
         note = started.size > 0 ? ` ${started.size} started before the failure and ${started.size === 1 ? 'was' : 'were'} taken out of the box; see Sessions.` : '';
       } catch {

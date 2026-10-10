@@ -22,7 +22,7 @@ export const PROCESS_INBOX_PROMPT =
  * Both take posting URLs only; `savedJds` counts the visible rows that are a saved JD (local:jds/), which are evaluated
  * from their own row instead.
  */
-export function InboxAi({ urls, savedJds = 0, evaluating = 0 }: { urls: string[]; savedJds?: number; evaluating?: number }) {
+export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
   // The pipeline session is paid and edits data/pipeline.md: the last one is re-attached when the page comes back, and
@@ -50,6 +50,8 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0 }: { urls: string[]
     } catch (err) {
       setNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {
+      // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
+      onFanOut?.();
       setBusy(false);
     }
   };
