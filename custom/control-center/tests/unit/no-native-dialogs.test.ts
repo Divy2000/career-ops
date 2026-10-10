@@ -9,7 +9,7 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const abs = path.join(dir, e.name);
     if (e.isDirectory()) walk(abs, out);
-    else if (/\.(ts|tsx)$/.test(e.name)) out.push(abs);
+    else if (/\.(ts|tsx|js|mjs)$/.test(e.name)) out.push(abs);
   }
   return out;
 }
@@ -18,7 +18,10 @@ function walk(dir: string, out: string[] = []): string[] {
 describe('web/ never uses the native browser dialogs', () => {
   it('has no window.confirm, window.alert, window.prompt or bare confirm()/alert() calls', () => {
     const offenders: string[] = [];
-    for (const file of walk(WEB)) {
+    const files = walk(WEB);
+    // Plain scripts served as they are (the theme boot) can call the dialogs too.
+    expect(files).toContain(path.join(WEB, 'public', 'theme-boot.js'));
+    for (const file of files) {
       const text = fs.readFileSync(file, 'utf8');
       text.split('\n').forEach((line, i) => {
         if (/^\s*(\/\/|\/\*|\*)/.test(line)) return;

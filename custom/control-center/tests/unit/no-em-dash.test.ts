@@ -20,6 +20,12 @@ describe('no em dash in text we write', () => {
     expect(hits[0]).toMatch(/bad\.ts:2$/);
   });
 
+  it('scans every script and declaration extension the package uses (.mts, .cts, .cjs)', () => {
+    const dir = tempDir('cc-emdash-ext-');
+    for (const name of ['policy.d.mts', 'shim.cts', 'conf.cjs']) fs.writeFileSync(path.join(dir, name), `// x ${EM_DASH} y\n`);
+    expect(findEmDashes(dir).sort()).toEqual([expect.stringMatching(/conf\.cjs:1$/), expect.stringMatching(/policy\.d\.mts:1$/), expect.stringMatching(/shim\.cts:1$/)]);
+  });
+
   it('skips symlinked directories and files instead of crashing, and does not follow them', () => {
     const dir = tempDir('cc-emdash-link-');
     const outside = tempDir('cc-emdash-outside-');
