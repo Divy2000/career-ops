@@ -9,7 +9,8 @@ export function domainFor(relPath: string): Domain | null {
   if (p === 'data/applications.md' || p === 'applications.md' || p === 'data/status-log.tsv' || p === 'status-log.tsv') return 'tracker';
   if (p === 'data/pipeline.md' || p === 'data/scan-history.tsv') return 'pipeline';
   if (p.startsWith('reports/')) return 'reports';
-  if (p.startsWith('data/immigration/')) return 'immigration';
+  // The weekly sync's logs show in the Job logs view, whose queries sit under the immigration key.
+  if (p.startsWith('data/immigration/') || p.startsWith('data/upstream-sync/')) return 'immigration';
   // Interview prep, debrief and story-bank sessions write under interview-prep/; the active list has two upstream homes.
   if (p === 'data/active-interviews.md' || p === 'active-interviews.md' || p.startsWith('interview-prep/')) return 'interviews';
   // A re-render or a tailored CV writes its PDF and HTML under output/, and generate-pdf.mjs files it in the PDF index.

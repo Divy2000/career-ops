@@ -432,6 +432,8 @@ describe('events', () => {
     expect(domainFor('data/pipeline.md')).toBe('pipeline');
     expect(domainFor('reports/001-x.md')).toBe('reports');
     expect(domainFor('data/immigration/companies/a.md')).toBe('immigration');
+    // The weekly sync's logs feed the Job logs view, whose queries sit under the immigration key (R18-feat-b-L3-06).
+    expect(domainFor('data/upstream-sync/2026-10-10.log')).toBe('immigration');
     expect(domainFor('data/follow-ups.md')).toBe('followups');
     expect(domainFor('data/shortlist.md')).toBe('shortlist');
     expect(domainFor('portals.yml')).toBe('config');
