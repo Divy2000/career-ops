@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { FIXTURE_ROOT, makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
@@ -37,7 +37,7 @@ const WRITERS: Array<{ name: string; rel: string; seed: string; write: () => Pro
   {
     name: 'PUT /api/config/portals',
     rel: 'portals.yml',
-    seed: fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'fixtures', 'root', 'portals.yml'), 'utf8'),
+    seed: fs.readFileSync(path.join(FIXTURE_ROOT, 'portals.yml'), 'utf8'),
     write: async () => {
       const before = (await get('/api/config/portals')).json();
       return send('PUT', '/api/config/portals', { raw: `# edited\n${before.raw}` }, { 'if-match': before.etag });
