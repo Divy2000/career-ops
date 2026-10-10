@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
+import { pipelineSection, pipelineUrlKey, unescapeMarkdownCell, unescapeMarkdownUrl } from './inboxSkip.js';
 import { parseTsv, readText } from './files.js';
 import { localJdPath } from '../../shared/local-jd.js';
 
@@ -86,8 +86,7 @@ export function parsePipeline(md: string): PipelineRow[] {
   md.split('\n').forEach((line, i) => {
     const h = line.match(/^##\s+(.+?)\s*$/);
     if (h) {
-      const t = h[1]!.toLowerCase();
-      section = /^(pending|pendientes)/.test(t) ? 'pending' : /^(done|hecho|processed|procesadas)/.test(t) ? 'done' : 'other';
+      section = pipelineSection(h[1]!);
       return;
     }
     const m = line.match(CHECKBOX_RE);

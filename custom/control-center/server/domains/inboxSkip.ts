@@ -5,7 +5,26 @@ import { localJdPath } from '../../shared/local-jd.js';
 const MAX_URL_LEN = 2048;
 // `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
-const PENDING_HEADING = /^##\s+(Pending|Pendientes)\s*$/i;
+// The Pending and Processed headings every shipped modes/*/pipeline.md writes (modes/pipeline.md: they "may be in EN,
+// ES, or any other language a market mode set writes them in"), plus the older done/hecho; tests/unit/upstream-formats
+// checks the list against the mode files.
+const PENDING_HEADINGS = ['Pending', 'Pendientes', 'Pendentes', 'Offen', 'Afventer', 'En attente', 'In attesa', 'In afwachting', 'Menunggu', 'Oczekujące', 'Ожидающие', 'Очікуючі', 'Bekleyenler', 'लंबित', '대기'];
+const PROCESSED_HEADINGS = ['Processed', 'Procesadas', 'Processadas', 'Verarbeitet', 'Behandlede', 'Traitees', 'Traitées', 'Elaborati', 'Verwerkt', 'Diproses', 'Przetworzone', 'Обработанные', 'Оброблені', 'İşlenenler', 'संसाधित', '처리 완료', 'Done', 'Hecho'];
+
+const startsWithHeading = (title: string, names: string[]): boolean => {
+  const t = title.toLowerCase();
+  return names.some((n) => {
+    const name = n.toLowerCase();
+    // A whole leading word: "Pending (12)" is the Pending section, "Pendingly" is not.
+    return t.startsWith(name) && !/^[\p{L}\p{N}]/u.test(t.slice(name.length));
+  });
+};
+
+/** Which pipeline.md section a `## ` heading's title opens, in any shipped mode language. */
+export function pipelineSection(title: string): 'pending' | 'done' | 'other' {
+  const t = title.trim();
+  return startsWithHeading(t, PENDING_HEADINGS) ? 'pending' : startsWithHeading(t, PROCESSED_HEADINGS) ? 'done' : 'other';
+}
 
 /**
  * The posting URL a pipeline.md or shortlist.md cell stands for: scan.mjs backslash-escapes \\, [ and ] in it
@@ -56,7 +75,8 @@ function pendingRange(lines: string[]): { start: number; end: number } | null {
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i]!.trim();
-    if (PENDING_HEADING.test(t)) {
+    const h = t.match(/^##\s+(.+)$/);
+    if (h && pipelineSection(h[1]!) === 'pending') {
       start = i + 1;
       continue;
     }

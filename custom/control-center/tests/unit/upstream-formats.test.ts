@@ -301,6 +301,35 @@ describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
   });
 });
 
+describe('localized pipeline.md headings (every modes/*/pipeline.md, R13-feat-b-L3-01)', () => {
+  const modeFiles = [path.join(DEFAULT_CODE_ROOT, 'modes', 'pipeline.md'), ...fs.readdirSync(path.join(DEFAULT_CODE_ROOT, 'modes'), { withFileTypes: true }).filter((d) => d.isDirectory() && fs.existsSync(path.join(DEFAULT_CODE_ROOT, 'modes', d.name, 'pipeline.md'))).map((d) => path.join(DEFAULT_CODE_ROOT, 'modes', d.name, 'pipeline.md'))];
+  /** The two section headings a mode's format block writes, in order: Pending first, Processed second. */
+  const headingsOf = (file: string): string[] => {
+    let fenced = false;
+    const out: string[] = [];
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (line.startsWith('```')) fenced = !fenced;
+      else if (fenced && line.startsWith('## ')) out.push(line.slice(3).trim());
+    }
+    return out;
+  };
+
+  it('finds the format headings of every shipped mode', () => {
+    expect(modeFiles.length).toBeGreaterThan(10);
+    for (const f of modeFiles) expect(headingsOf(f), f).toHaveLength(2);
+  });
+
+  for (const file of modeFiles) {
+    it(`reads the Pending and Processed sections ${path.relative(DEFAULT_CODE_ROOT, file)} writes, and Skip finds its pending rows`, () => {
+      const [pending, processed] = headingsOf(file);
+      const md = `# Pipeline\n\n## ${pending}\n\n- [ ] https://jobs.example.com/1 | Acme | Eng\n\n## ${processed}\n\n- [x] #143 | https://jobs.example.com/2 | Acme | AI PM | 4.2/5 | PDF ✅\n`;
+      expect(parsePipeline(md).map((r) => r.section)).toEqual(['pending', 'done']);
+      expect(applyInboxSkip(md, 'https://jobs.example.com/1', true)).toMatchObject({ ok: true, matched: 1, changed: 1 });
+      expect(applyInboxSkip(md, 'https://jobs.example.com/2', false)).toEqual({ ok: false, error: 'unmatched' });
+    });
+  }
+});
+
 describe('follow-up pins (followup-cadence.mjs resolveNextOverride)', () => {
   it('the Timeline keeps or drops a pin exactly as the cadence does', () => {
     const pin = { appNum: 1, date: '2026-10-10', setOn: '2026-10-01' };
