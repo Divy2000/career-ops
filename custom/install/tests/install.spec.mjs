@@ -526,10 +526,20 @@ test('--dry-run with --projects says what it would do and writes nothing', () =>
   assert.equal(exists(D, 'article-digest.md'), false);
 });
 
+/** A cpSync filter for a copy of `root` (custom/install) without its tests/ folder, wherever the checkout lives. */
+const withoutTests = (root) => (src) => path.relative(root, src).split(path.sep)[0] !== 'tests';
+
+test('the custom/install copies leave out only its tests/ folder, also from a checkout under a tests folder (R11-tests-custom-L1-04)', () => {
+  const root = path.join(path.sep, 'Users', 'me', 'tests', 'career-ops', 'custom', 'install');
+  const keep = withoutTests(root);
+  for (const rel of ['', 'install.sh', 'lib.mjs', path.join('templates', '_custom.md'), 'tests-notes.md']) assert.equal(keep(path.join(root, rel)), true, rel || '(the root)');
+  for (const rel of ['tests', path.join('tests', 'harness.mjs'), path.join('tests', 'stubs', 'git')]) assert.equal(keep(path.join(root, rel)), false, rel);
+});
+
 // A copy of custom/install outside any checkout (downloaded on its own): the projects parser is not next to it.
 function standalone(w, { parser = true } = {}) {
   const dl = path.join(w.T, 'dl', 'custom', 'install');
-  fs.cpSync(INSTALL_DIR, dl, { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
+  fs.cpSync(INSTALL_DIR, dl, { recursive: true, filter: withoutTests(INSTALL_DIR) });
   if (parser) {
     const repo = path.resolve(INSTALL_DIR, '..', '..');
     for (const rel of ['custom/projects/lib.mjs', 'tracker-parse.mjs', 'tracker-aliases.json', 'skill-extract.mjs']) {
@@ -974,7 +984,7 @@ test('a script that lives inside a checkout uses that checkout: no clone, and th
   const inside = path.join(w.T, 'inside');
   w.makeCheckout(inside);
   // Without tests/: the installer runs a checkout's custom specs, and these would run this test again.
-  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: (src) => !src.includes(`${path.sep}tests`) });
+  fs.cpSync(INSTALL_DIR, path.join(inside, 'custom', 'install'), { recursive: true, filter: withoutTests(INSTALL_DIR) });
   const r = w.run(['--non-interactive', ...QUIET], { script: path.join(inside, 'custom', 'install', 'install.sh') });
   assert.match(r.out, /no custom\/\*\/tests specs in this checkout; skipping the self-tests/);
   assert.equal(r.status, 0, r.out);
