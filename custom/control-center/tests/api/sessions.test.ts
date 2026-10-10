@@ -1595,6 +1595,22 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('an evaluation whose answer is only an envelope has produced no output, even with a report written (SEED-claude-04)', async () => {
+    const app = await freshApp();
+    try {
+      const oferta = JSON.parse(fs.readFileSync(path.join(SCENARIO_DIR, 'oferta.json'), 'utf8')) as { events: Array<Record<string, unknown>> };
+      const envelope = '<<cc:offer {"url":"https://jobs.example.com/synthetic/67","company":"Synthetic Corp","title":"Platform Engineer"}>>';
+      const events = oferta.events.filter((e) => e.type !== 'stream_event' && e.type !== 'result');
+      events.push(delta(envelope), result(envelope, 0.02));
+      const id = await withScenario(scenarioFile({ events }), async () => (await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/synthetic/67' }, prompt: 'Evaluate' })).json().id as string);
+      const { meta } = await settleOn(app, id);
+      expect(fs.readdirSync(path.join(app.cfg.dataRoot, 'reports'))).toContain('008-synthetic-corp.md');
+      expect(meta).toMatchObject({ status: 'awaiting_user', lastReason: expect.stringMatching(/a report appeared but the turn produced no output/) });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {

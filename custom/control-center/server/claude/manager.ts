@@ -452,6 +452,7 @@ export class SessionManager {
           sawResult = true;
         }
         // The honesty gate reads the last message (the result), as it always has; text.done holds every message for the transcript.
+        // Its visible text can be empty (an answer that is only an envelope): that is the turn's output, not a reason to fall back to the raw stream.
         if (ev.type === 'text.done') finalText = parser.lastVisibleText;
         // A fork's first turn reports the id --fork-session minted; later turns must resume that one.
         if (ev.type === 'session.init') {
@@ -481,7 +482,7 @@ export class SessionManager {
       clearInterval(timer);
       this.active.delete(id);
       pull();
-      this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: finalText || parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, run, { turnDone, denials }, err));
+      this.finalize(id, n, run, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, run, { turnDone, denials }, err));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
