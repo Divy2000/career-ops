@@ -284,7 +284,7 @@ test('sync.sh uses the shared helpers: no bare "git fetch upstream main", no unc
   assert.match(sync, /\^\[0-9\]\+\$/, 'BEHIND is checked to be numeric');
 });
 
-test('Given the shell exports a data root (as the launchd plist does), sync.sh under test still logs to the test checkout and never into that root', () => {
+test('Given the shell exports a data root (as the launchd plist does), the runSync harness keeps sync.sh under test logging to the test checkout and never into that root', () => {
   const w = makeWorld({ upstreamAhead: false });
   const home = path.join(w.base, 'home');
   const decoy = path.join(w.base, 'real-data-root');
@@ -1121,12 +1121,14 @@ test('a contract.json the gate cannot parse after the merge holds the PR (SW5-sc
 });
 
 test('sync.sh under test runs on the node running these specs, pinned the way the plist pins one (SW4-tests-26)', () => {
-  const w = makeWorld({ upstreamAhead: false });
+  const w = makeWorld();
   const home = path.join(w.base, 'home');
   mkdirSync(home);
   try {
-    const res = runSync(w, { home });
-    assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.env.CC_NODE_BIN, process.execPath, 'pinned-node.sh puts this node ahead of Homebrew on the job PATH');
+    const seen = path.join(w.base, 'security-node.txt');
+    // The Keychain lookup runs after sync.sh has set its PATH; it records which node that PATH finds and stops the run.
+    const res = runSync(w, { home, security: `command -v node > "${seen}"\nexit 44` });
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
+    assert.equal(readFileSync(seen, 'utf8').trim(), process.execPath, 'pinned-node.sh puts this node ahead of Homebrew on the job PATH');
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
