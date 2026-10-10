@@ -441,7 +441,7 @@ test('on a terminal a differing cv.md shows a summary and asks; n keeps it, y ba
     const resume = md(w, 'resume.md', '# New\n');
     const r = w.run(['--dir', D, ...QUIET, '--resume', resume], { tty: `y\n${answer}\n` });
     assert.match(r.out, /Replace cv\.md\? \[y\/N\]/);
-    assert.match(r.out, /1 line.* added|added.*1/i);
+    assert.ok(r.out.includes('Summary: 1 line(s) added, 1 line(s) removed if replaced.'), r.out);
     assert.equal(read(D, 'cv.md'), replaced ? '# New\n' : 'OLD line\n', r.out);
     assert.equal(fs.readdirSync(D).filter((n) => n.startsWith('cv.md.bak-')).length, replaced ? 1 : 0);
   }
