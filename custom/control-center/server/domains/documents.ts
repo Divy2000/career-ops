@@ -95,10 +95,10 @@ const bundleReport = (file: string): number | null => {
 
 /**
  * Why re-rendering (html, pdf) for `report` would file another report's document under it, or null when the pair is
- * indexed under that report, sits in that report's application folder, or is claimed by no report at all.
+ * indexed under that report, sits in that report's application folder, or is claimed by no report at all, and no other
+ * report claims either file (a conflicting pdf-index.tsv fails closed).
  */
 export function rerenderProblem(index: PdfIndexRow[], report: number, html: string, pdf: string): string | null {
-  if (bundleReport(pdf) === report && bundleReport(html) === report) return null;
   for (const file of [pdf, html]) {
     const indexed = index.find((r) => r.report !== report && (r.pdf === file || r.html === file))?.report;
     const bundled = bundleReport(file);

@@ -80,4 +80,12 @@ describe('rerenderProblem', () => {
       'output/acme-cv.pdf belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.',
     );
   });
+
+  it('fails closed when a file in this report folder is also indexed under another report (R17-review-docs-01)', () => {
+    const folder = 'output/001-acme-robotics-backend/cv/tailored/v002/cv';
+    const claimed = [row(99, `${folder}.pdf`, `${folder}.html`)];
+    expect(rerenderProblem(claimed, 1, `${folder}.html`, `${folder}.pdf`)).toBe(
+      `${folder}.pdf belongs to report 99, so re-rendering it here would file it under report 1. Re-render it from that application instead.`,
+    );
+  });
 });
