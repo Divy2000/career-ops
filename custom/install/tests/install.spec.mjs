@@ -1075,20 +1075,15 @@ test('a malformed Control Center lock past its grace is not running, so npm ci r
 test('a Control Center lock that cannot be read is treated as running: no npm ci, no second start (R18-scripts-b-review-05)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
+  // A directory in the lock's place: reading it fails (EISDIR) for every user, root included, unlike chmod 000.
   const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
-  fs.mkdirSync(path.dirname(lock), { recursive: true });
-  fs.writeFileSync(lock, JSON.stringify({ pid: 1, start: 1, port: 4317, nonce: 'test' }));
+  fs.mkdirSync(lock, { recursive: true });
   const old = new Date(Date.now() - 60000);
   fs.utimesSync(lock, old, old);
-  fs.chmodSync(lock, 0o000);
-  try {
-    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
-    assert.equal(r.status, 0, r.out);
-    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run while the lock cannot be read');
-    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
-  } finally {
-    fs.chmodSync(lock, 0o600);
-  }
+  const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run while the lock cannot be read');
+  assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
 });
 
 test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {

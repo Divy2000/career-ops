@@ -998,16 +998,17 @@ test('a malformed Control Center lock within its grace is treated as running, as
 // acquireInstanceLock throws on a lock it cannot read rather than replacing it, so no second instance starts.
 test('a Control Center lock that cannot be read is treated as running, as the supervisor refuses to replace it (R18-scripts-b-review-05)', () => {
   const w = liveWorld({ ccChange: true });
-  writeControlCenterLock(w, JSON.stringify({ pid: 1, start: 1, port: 4317, nonce: 'test' }), 60000);
+  // A directory in the lock's place: reading it fails (EISDIR) for every user, root included, unlike chmod 000.
   const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
-  chmodSync(lock, 0o000);
+  mkdirSync(lock, { recursive: true });
+  const at = new Date(Date.now() - 60000);
+  utimesSync(lock, at, at);
   try {
     const res = w.update();
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.equal(w.npm(), '', 'npm ci must not run while the lock cannot be read');
     assert.match(res.stdout, /Control Center is running/);
   } finally {
-    chmodSync(lock, 0o600);
     rmSync(w.base, { recursive: true, force: true });
   }
 });
