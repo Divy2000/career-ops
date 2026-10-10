@@ -68,7 +68,11 @@ export function RunsPage() {
   const quick = (actions.data ?? []).filter((a) => !a.sync && !a.confirm && Object.keys((a.params.properties as object) ?? {}).length === 0);
   const groups = groupQuickActions(quick);
 
+  // One start at a time: a second click before the first answers would start a second run.
+  const [launching, setLaunching] = useState(false);
   const launch = async (id: string) => {
+    if (launching) return;
+    setLaunching(true);
     try {
       const r = await apiSend<{ runId: string }>('POST', `/api/actions/${id}`, { params: {} });
       setSelected(r.runId);
@@ -76,6 +80,8 @@ export function RunsPage() {
       await qc.invalidateQueries({ queryKey: ['runs'] });
     } catch (err) {
       setMessage(`Could not start ${id}: ${describeError(err)}`);
+    } finally {
+      setLaunching(false);
     }
   };
   const cancel = async (id: string) => {
@@ -104,7 +110,7 @@ export function RunsPage() {
               <span className="quick-runs__label muted small">{g.label}</span>
               <div className="quick-runs__buttons">
                 {g.actions.map((a) => (
-                  <button key={a.id} type="button" onClick={() => void launch(a.id)} title={`Cost: ${a.cost}`}>
+                  <button key={a.id} type="button" disabled={launching} onClick={() => void launch(a.id)} title={`Cost: ${a.cost}`}>
                     Run {a.label} <Pill>{a.cost}</Pill>
                   </button>
                 ))}
