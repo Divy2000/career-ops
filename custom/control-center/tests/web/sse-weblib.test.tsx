@@ -88,3 +88,50 @@ describe('what each domain refetches', () => {
     await until(() => fetches.insights === 2, `the insights refetch after ${domain}`);
   });
 });
+
+describe('a stream the browser closed for good (R13-weblib-L1-01, R13-weblib-L3-01)', () => {
+  it('is opened again, its subscribers keep hearing frames, and the reopen refetches everything', async () => {
+    const first = latest();
+    await act(async () => first.emit('open', null));
+    await act(async () => first.fail());
+    await until(() => FakeEventSource.all.length === 2, 'a new EventSource');
+    expect(first.closed).toBe(true);
+    const second = latest();
+    await act(async () => second.emit('open', null));
+    await until(() => fetches.storyBank === 2 && fetches.insights === 2, 'the refetch on reopen');
+    await act(async () => second.emit('data.changed', { domain: 'interviews', paths: [] }));
+    await until(() => fetches.storyBank === 3, 'a frame on the new stream');
+  });
+
+  it('a later subscriber attaches to the new stream, not the dead one', async () => {
+    await act(async () => latest().fail());
+    await until(() => FakeEventSource.all.length === 2, 'a new EventSource');
+    const heard: string[] = [];
+    const off = subscribeAppEvents('session.event', (ev) => heard.push(String(ev.data)));
+    await act(async () => latest().emit('session.event', { sessionId: 's1' }));
+    off();
+    expect(heard).toHaveLength(1);
+  });
+
+  it('keeps trying while each new stream is refused too', async () => {
+    await act(async () => latest().fail());
+    await until(() => FakeEventSource.all.length === 2, 'a second EventSource');
+    await act(async () => latest().fail());
+    await until(() => FakeEventSource.all.length === 3, 'a third EventSource');
+  });
+
+  it('leaves a dropped connection to the browser, which retries it itself', async () => {
+    await act(async () => latest().emit('open', null));
+    await act(async () => latest().drop());
+    await act(async () => new Promise((r) => setTimeout(r, 40)));
+    expect(FakeEventSource.all).toHaveLength(1);
+  });
+
+  it('stops trying once its last subscriber leaves', async () => {
+    await act(async () => latest().fail());
+    await act(async () => root.unmount());
+    await act(async () => new Promise((r) => setTimeout(r, 40)));
+    expect(FakeEventSource.all).toHaveLength(1);
+    root = createRoot(host);
+  });
+});

@@ -28,8 +28,44 @@ interface SharedStream {
   listeners: Map<string, Set<Listener>>;
   opens: Set<(reconnect: boolean) => void>;
   opened: boolean;
+  retry: ReturnType<typeof setTimeout> | null;
+  failures: number;
 }
 let shared: SharedStream | null = null;
+
+/**
+ * Opens `s`'s EventSource and routes its frames to `s`'s subscribers. The browser retries a dropped connection by itself,
+ * but an answer that is not a 200 event stream (the supervisor's 503 down page, or its 502, while the server child is
+ * down after a crash) closes the source for good: a new one is opened after a backoff, and since `opened` stays true
+ * its open reports a reconnect, so every live query refetches and each session panel reloads its stored events.
+ */
+function connect(s: SharedStream): void {
+  const es = new EventSource('/api/events');
+  s.es = es;
+  es.addEventListener('open', () => {
+    s.failures = 0;
+    const reconnect = s.opened;
+    s.opened = true;
+    for (const fn of [...s.opens]) fn(reconnect);
+  });
+  es.addEventListener('error', () => {
+    if (es.readyState !== EventSource.CLOSED || s.es !== es || shared !== s || s.retry) return;
+    es.close();
+    const delay = Math.min(APP_STREAM_RETRY.baseMs * 2 ** s.failures, APP_STREAM_RETRY.maxMs);
+    s.failures += 1;
+    s.retry = setTimeout(() => {
+      s.retry = null;
+      if (shared === s) connect(s);
+    }, delay);
+  });
+  for (const type of s.listeners.keys()) dispatch(s, es, type);
+}
+
+function dispatch(s: SharedStream, es: EventSource, type: string): void {
+  es.addEventListener(type, (ev) => {
+    for (const l of [...(s.listeners.get(type) ?? [])]) l(ev as MessageEvent);
+  });
+}
 
 /**
  * The page's one connection to /api/events, shared by everything that follows server events (live invalidation and
@@ -38,19 +74,16 @@ let shared: SharedStream | null = null;
  */
 function stream(): SharedStream {
   if (shared) return shared;
-  const es = new EventSource('/api/events');
-  const s: SharedStream = { es, listeners: new Map(), opens: new Set(), opened: false };
-  es.addEventListener('open', () => {
-    const reconnect = s.opened;
-    s.opened = true;
-    for (const fn of [...s.opens]) fn(reconnect);
-  });
+  const s = { listeners: new Map(), opens: new Set(), opened: false, retry: null, failures: 0 } as unknown as SharedStream;
   shared = s;
+  connect(s);
   return s;
 }
 
 function release(s: SharedStream): void {
   if (shared !== s || s.opens.size > 0 || [...s.listeners.values()].some((l) => l.size > 0)) return;
+  if (s.retry) clearTimeout(s.retry);
+  s.retry = null;
   s.es.close();
   shared = null;
 }
@@ -60,12 +93,9 @@ export function subscribeAppEvents(type: string, fn: Listener): () => void {
   const s = stream();
   let set = s.listeners.get(type);
   if (!set) {
-    const listeners = new Set<Listener>();
-    set = listeners;
-    s.listeners.set(type, listeners);
-    s.es.addEventListener(type, (ev) => {
-      for (const l of [...listeners]) l(ev as MessageEvent);
-    });
+    set = new Set<Listener>();
+    s.listeners.set(type, set);
+    dispatch(s, s.es, type);
   }
   set.add(fn);
   return () => {
