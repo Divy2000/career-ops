@@ -10,7 +10,8 @@ import { InboxAi } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
 import { localJdPath } from '@shared/local-jd';
-import { startSavedJdSession } from '../../lib/sessions';
+import { startSavedJdSession, useSessions } from '../../lib/sessions';
+import { evaluatingTargets } from './evaluating';
 
 const route = getRouteApi('/pipeline');
 
@@ -131,6 +132,7 @@ function Inbox() {
   const rows = useMemo(() => (data?.kind === 'ok' ? data.rows : []), [data]);
   const sources = useMemo(() => [...new Set(rows.map((r) => r.source))].sort(), [rows]);
   const seniorities = useMemo(() => [...new Set(rows.map((r) => r.seniority ?? 'unknown'))].sort(), [rows]);
+  const evaluating = evaluatingTargets(useSessions().data);
   const visible = rows.filter(
     (r) =>
       (showDone || !r.done) &&
@@ -152,7 +154,12 @@ function Inbox() {
       <Message message={message} />
       <DataState query={q} missing={<span>No pipeline yet. Add URLs or run a scan from Discover.</span>}>
         {/* A row waiting for its JD could not be fetched, so an evaluation would hit the same wall. */}
-        <InboxAi urls={visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null).map((r) => r.url)} savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length} />
+        {/* A row whose evaluation is still running is left out: a second one would write a duplicate report. */}
+        <InboxAi
+          urls={visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && !evaluating.has(r.url)).map((r) => r.url)}
+          savedJds={visible.filter((r) => !r.done && localJdPath(r.url) !== null).length}
+          evaluating={new Set(visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && evaluating.has(r.url)).map((r) => r.url)).size}
+        />
         {skipError && (
           <p role="alert" className="danger-text">
             {skipError}
@@ -235,7 +242,7 @@ function Inbox() {
                     <td>
                       {!r.done ? (
                         <div className="row gap">
-                          {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} />}
+                          {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} running={evaluating.has(r.url)} />}
                           <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
                             Skip
                           </button>
@@ -258,7 +265,7 @@ function Inbox() {
 }
 
 /** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
-function EvaluateJd({ reference, label }: { reference: string; label: string }) {
+function EvaluateJd({ reference, label, running }: { reference: string; label: string; running: boolean }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -278,9 +285,10 @@ function EvaluateJd({ reference, label }: { reference: string; label: string }) 
   };
   return (
     <>
-      <button type="button" aria-label={`Evaluate JD for ${label}`} disabled={busy} onClick={() => void go()}>
+      <button type="button" aria-label={`Evaluate JD for ${label}`} disabled={busy || running} onClick={() => void go()}>
         Evaluate JD <Pill tone="warn">Uses tokens</Pill>
       </button>
+      {running && <Pill tone="info">evaluating</Pill>}
       {error && (
         <span role="alert" className="danger-text small">
           {error}
@@ -330,7 +338,7 @@ function Shortlist() {
                       )}
                     </td>
                     <td>{r.company}</td>
-                    <td>{r.url ? <a href={r.url} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
+                    <td>{r.url ? <a href={postingHref(r.url)} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
                     <td className="muted">{r.location ?? ''}</td>
                     <td className="mono muted">{r.posted ?? ''}</td>
                     <td className="muted">{r.why ?? ''}</td>
@@ -347,7 +355,7 @@ function Shortlist() {
               <ul className="bullets">
                 {q.data.excluded.map((e) => (
                   <li key={`${e.company} ${e.url ?? e.role}`}>
-                    <strong>{e.company}</strong> {e.url ? <a href={e.url} target="_blank" rel="noreferrer noopener">{e.role}</a> : e.role} <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
+                    <strong>{e.company}</strong> {e.url ? <a href={postingHref(e.url)} target="_blank" rel="noreferrer noopener">{e.role}</a> : e.role} <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
                   </li>
                 ))}
               </ul>
