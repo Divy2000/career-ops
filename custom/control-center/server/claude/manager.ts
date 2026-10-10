@@ -199,6 +199,9 @@ export class SessionManager {
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
     if (this.sending.has(id)) throw new BusyError(`session ${id} is starting a turn`);
     if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${id} is ${meta.status}`);
+    // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a reply now
+    // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
+    if (this.active.has(id)) throw new BusyError(`session ${id} is still finishing its previous turn`);
     this.sending.add(id);
     try {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
@@ -610,16 +613,19 @@ export class SessionManager {
         // stopped run has ended, so it may still write its report: the session keeps its number.
         fail(err);
         clearInterval(timer);
-        this.active.delete(id);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.active.delete(id));
         return;
       }
-      if (!run || run.status === 'running' || run.status === 'queued') return;
+      // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
+      // SIGKILL: the turn is only over once the run has ended (its exit recorded), so the tracker waits for that instead
+      // of finalizing a turn whose process is still writing the conversation.
+      if (!run || run.endedAt === null) return;
       clearInterval(timer);
-      this.active.delete(id);
       safePull();
       const ended = run;
-      this.finalize(id, n, ended, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err));
+      this.finalize(id, n, ended, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
+        .catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err))
+        .finally(() => this.active.delete(id));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
