@@ -140,8 +140,9 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
   const files: DocumentFile[] = [];
   const seen = new Set<string>();
   for (const r of report === null ? [] : rows.filter((x) => x.report === report)) {
-    // outcome.mjs --clean-output archives indexed PDFs and leaves their rows: a missing file is not offered as a link.
-    if (seen.has(r.pdf) || !exists(dataRoot, r.pdf)) continue;
+    // Only a file /api/files/serve can open (a regular file under output/): outcome.mjs --clean-output archives indexed
+    // PDFs and leaves their rows, and an external workspace's output/ is not served.
+    if (seen.has(r.pdf) || !resolveOutputFile(dataRoot, r.pdf)) continue;
     seen.add(r.pdf);
     files.push({ path: r.pdf, html: r.html && exists(dataRoot, r.html) ? r.html : null, kind: documentKind(r.kind, r.pdf), format: r.format || null, date: r.date || null, source: 'index', rerenderBlock: null });
   }
@@ -151,7 +152,7 @@ export function readDocuments(dataRoot: string, report: number | null, company: 
     for (const name of fs.readdirSync(outDir)) {
       if (!name.toLowerCase().endsWith('.pdf') || !namesCompany(slug, name)) continue;
       const rel = `output/${name}`;
-      if (seen.has(rel)) continue;
+      if (seen.has(rel) || !resolveOutputFile(dataRoot, rel)) continue;
       seen.add(rel);
       const twin = `output/${name.slice(0, -4)}.html`;
       files.push({ path: rel, html: exists(dataRoot, twin) ? twin : null, kind: documentKind(undefined, rel), format: null, date: null, source: 'output', rerenderBlock: null });

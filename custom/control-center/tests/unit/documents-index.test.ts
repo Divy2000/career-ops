@@ -60,9 +60,20 @@ describe('the PDF index is read where generate-pdf.mjs writes it (R12-srv-dom-a-
     write(path.join(root, 'ws', 'output', 'cv-acme-robotics-v2.pdf'), '%PDF-1.4\n');
     write(path.join(root, 'ws', 'data', 'pdf-index.tsv'), '12\toutput/cv-acme-robotics-v2.pdf\toutput/cv-acme-robotics-v2.html\tletter\t2026-10-01\tcv\n');
     expect(readPdfIndex(root)).toMatchObject([{ report: 12, pdf: 'ws/output/cv-acme-robotics-v2.pdf', html: 'ws/output/cv-acme-robotics-v2.html' }]);
+    // The re-render guard sees the row; Documents offers only what /api/files/serve can open (the data root's output/).
     const docs = readDocuments(root, 12, 'Nobody');
     expect(docs.indexPresent).toBe(true);
-    expect(docs.files.map((f) => f.path)).toEqual(['ws/output/cv-acme-robotics-v2.pdf']);
+    expect(docs.files).toEqual([]);
+  });
+
+  it('offers an indexed PDF of a flat-layout tracker workspace, which is the data root', () => {
+    const root = copyFixtureRoot();
+    const index = fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8');
+    fs.rmSync(path.join(root, 'data'), { recursive: true });
+    write(path.join(root, 'applications.md'), '# Applications\n');
+    write(path.join(root, 'data', 'pdf-index.tsv'), index);
+    process.env.CAREER_OPS_TRACKER = path.join(root, 'applications.md');
+    expect(readDocuments(root, 1, 'Acme Robotics').files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.source).toBe('index');
   });
 });
 
@@ -72,6 +83,8 @@ describe('index rows whose PDF is gone (R12-srv-dom-a-01)', () => {
     fs.rmSync(path.join(root, 'output', 'acme-robotics-cv.pdf'));
     const docs = readDocuments(root, 1, 'Acme Robotics');
     expect(docs.files.map((f) => f.path)).not.toContain('output/acme-robotics-cv.pdf');
+    fs.mkdirSync(path.join(root, 'output', 'acme-robotics-cv.pdf'));
+    expect(readDocuments(root, 1, 'Acme Robotics').files.map((f) => f.path)).not.toContain('output/acme-robotics-cv.pdf');
     expect(readApplyDocuments(root, { report: 1, company: 'Acme Robotics' }).suggestedPdf).not.toBe('output/acme-robotics-cv.pdf');
   });
 });
