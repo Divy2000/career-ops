@@ -122,7 +122,7 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
-const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'`;
+const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'`;
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
 export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState): string {
@@ -277,7 +277,9 @@ async function main(): Promise<void> {
       res.writeHead(401, { 'content-type': 'text/plain' }).end('open the token URL printed at startup first');
       return true;
     }
-    const headers = { 'content-security-policy': RECOVERY_CSP, 'x-content-type-options': 'nosniff' };
+    // Never framed: any other 127.0.0.1 port counts as same-site, so a page there would render this one signed in and could
+    // steer clicks on Revert or Restart past the Origin and X-CC check.
+    const headers = { 'content-security-policy': RECOVERY_CSP, 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' };
     if (url.pathname === '/__supervisor/status') {
       res.writeHead(200, { ...headers, 'content-type': 'application/json' }).end(JSON.stringify({ ...bg.status, activePid: bg.active?.pid ?? null, activePort: bg.active?.port ?? null }));
       return true;
@@ -335,7 +337,7 @@ async function main(): Promise<void> {
         // The startup URL (/auth?t=) lands here once the server child is gone, and only that child's /auth would set the
         // session cookie: set it here, so the page's link to /__recovery opens.
         const signIn = hostOk(req) && tokenOk(url) ? { 'set-cookie': sessionCookie } : {};
-        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'retry-after': '5', ...signIn }).end(html);
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff', 'content-security-policy': "frame-ancestors 'none'", 'x-frame-options': 'DENY', 'retry-after': '5', ...signIn }).end(html);
         return;
       }
       const upstream = http.request({ host: '127.0.0.1', port: active.port, path: req.url, method: req.method, headers: req.headers }, (ures) => {

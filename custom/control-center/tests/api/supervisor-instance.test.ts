@@ -361,6 +361,11 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       const down = await request(port, 'GET', '/', { cookie });
       expect(down.status).toBe(503);
       expect(down.body).toMatch(/The server stopped/);
+      // Neither page may be framed by another 127.0.0.1 port, whose page the cookie would sign in (R14-supervisor-L3-02).
+      for (const r of [page, down]) {
+        expect(String(r.headers['content-security-policy'])).toContain("frame-ancestors 'none'");
+        expect(r.headers['x-frame-options']).toBe('DENY');
+      }
       // A Restart runs the same broken code: it fails again, and the supervisor still stays up.
       const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' });
       // The restarted child is dropped in its turn, and the supervisor, which used to stop here, is still up.
@@ -461,13 +466,13 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     const port = await new Promise<number>((resolve) => blocker.listen(0, '127.0.0.1', () => resolve((blocker.address() as net.AddressInfo).port)));
     return { port, release: () => new Promise<void>((resolve) => blocker.close(() => resolve())) };
   }
-  type Reply = { status: number; body: string; setCookie: string };
+  type Reply = { status: number; body: string; setCookie: string; headers: http.IncomingHttpHeaders };
   const request = (port: number, method: 'GET' | 'POST', url: string, headers: Record<string, string> = {}) =>
     new Promise<Reply>((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port, path: url, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, (res) => {
         let body = '';
         res.on('data', (d: Buffer) => (body += d.toString()));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, setCookie: String(res.headers['set-cookie'] ?? '') }));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, setCookie: String(res.headers['set-cookie'] ?? ''), headers: res.headers }));
       });
       req.on('error', reject);
       req.end();
