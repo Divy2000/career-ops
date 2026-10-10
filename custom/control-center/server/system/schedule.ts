@@ -250,6 +250,21 @@ export class ScheduleService {
     if (print.code === 0 && parseLaunchctlPrint(print.stdout).state === 'running') {
       return { ok: false, status: 409, error: `${job.title} is running now, and changing its schedule would stop it. Try again once it finishes.`, stderr: '' };
     }
+    const target = `gui/${this.deps.uid}/${job.label}`;
+    // What a failed save puts back: the installed plist, whether launchd had the job loaded, and (when this save
+    // enables it) whether it was disabled.
+    const wasLoaded = print.code === 0;
+    let wasDisabled = false;
+    if (input.enabled) {
+      const disabled = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
+      wasDisabled = disabled.code === 0 && parsePrintDisabled(disabled.stdout, job.label);
+    }
+    let previous: Buffer | null = null;
+    try {
+      previous = fs.readFileSync(plistPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
     fs.mkdirSync(this.deps.agentsDir, { recursive: true });
     const tmp = `${plistPath}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, renderPlist(this.deps.codeRoot, job, input, this.deps.dataRoot, { pinDataRoot: this.deps.dataRootFromEnv, claudeBin: this.deps.claudeBin, nodeBin: this.deps.nodeBin }));
@@ -264,20 +279,47 @@ export class ScheduleService {
     // launchd does not create the log directory; without it the job's output is lost.
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);
-    const target = `gui/${this.deps.uid}/${job.label}`;
+    let enabledNow = false;
+    const failed = async (error: string, stderr: string): Promise<ScheduleWriteResult> => {
+      const restored = await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled });
+      return { ok: false, status: 502, error: `${error}; ${restored ? 'the previous schedule was restored' : 'restoring the previous schedule also failed'}`, stderr };
+    };
     if (input.enabled) {
       const enable = await this.deps.exec('launchctl', ['enable', target], { timeoutMs: 20_000 });
-      if (enable.code !== 0) return { ok: false, status: 502, error: `launchctl enable failed (exit ${enable.code})`, stderr: enable.stderr.trim() };
+      if (enable.code !== 0) return failed(`launchctl enable failed (exit ${enable.code})`, enable.stderr.trim());
+      enabledNow = true;
     } else {
       const disable = await this.deps.exec('launchctl', ['disable', target], { timeoutMs: 20_000 });
-      if (disable.code !== 0) return { ok: false, status: 502, error: `launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, stderr: disable.stderr.trim() };
+      if (disable.code !== 0) return failed(`launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, disable.stderr.trim());
     }
     // bootout fails when the job is not loaded; that is the expected state before the first install.
     await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
     if (input.enabled) {
       const boot = await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, plistPath], { timeoutMs: 20_000 });
-      if (boot.code !== 0) return { ok: false, status: 502, error: `launchctl bootstrap failed (exit ${boot.code})`, stderr: boot.stderr.trim() };
+      if (boot.code !== 0) return failed(`launchctl bootstrap failed (exit ${boot.code})`, boot.stderr.trim());
     }
     return { ok: true, state: await this.readOne(job) };
+  }
+
+  /**
+   * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the disabled flag the
+   * save cleared, and the loaded job the save booted out. Answers whether every step worked.
+   */
+  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; reDisable: boolean }): Promise<boolean> {
+    if (s.previous === null) fs.rmSync(s.plistPath, { force: true });
+    else {
+      const tmp = `${s.plistPath}.restore-${process.pid}`;
+      fs.writeFileSync(tmp, s.previous);
+      fs.renameSync(tmp, s.plistPath);
+    }
+    let ok = true;
+    const loaded = (await this.deps.exec('launchctl', ['print', s.target], { timeoutMs: 10_000 })).code === 0;
+    if (s.wasLoaded && !loaded && s.previous !== null) {
+      ok = (await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, s.plistPath], { timeoutMs: 20_000 })).code === 0 && ok;
+    } else if (!s.wasLoaded && loaded) {
+      ok = (await this.deps.exec('launchctl', ['bootout', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+    }
+    if (s.reDisable) ok = (await this.deps.exec('launchctl', ['disable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+    return ok;
   }
 }
