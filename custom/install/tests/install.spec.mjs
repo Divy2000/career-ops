@@ -1050,6 +1050,27 @@ test('a stale Control Center lock naming a reused PID of another user is reinsta
   assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock names another user\'s process that started at another time');
 });
 
+// The supervisor rejects a lock without an integer port (parseHolder) and replaces it once it is older than
+// UNREADABLE_LOCK_GRACE_MS, live PID or not.
+test('a malformed Control Center lock past its grace is not running, so npm ci runs and the Control Center starts (R18-scripts-b-review-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null }));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 0, r.out);
+    assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must run when the lock is malformed');
+    assert.equal(w.calls('cc').length, 1, 'the Control Center starts when the lock is malformed');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
 test('a failing doctor is reported as a pending action, not hidden', () => {
   const { w, D, args } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });

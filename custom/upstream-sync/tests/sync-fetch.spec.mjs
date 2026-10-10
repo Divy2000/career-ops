@@ -4,7 +4,7 @@ import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -953,6 +953,43 @@ test('a stale Control Center lock naming a reused PID of another user is not tre
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.equal(w.head(), w.target, 'the fast-forward still happens');
     assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock names another user\'s process that started at another time');
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+// The supervisor rejects a lock without an integer port (parseHolder). It leaves a malformed lock younger than
+// UNREADABLE_LOCK_GRACE_MS (5 s) alone, refusing to start, and replaces an older one, live PID or not.
+function writeControlCenterLock(w, text, ageMs) {
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, text);
+  const at = new Date(Date.now() - ageMs);
+  utimesSync(lock, at, at);
+}
+
+test('a malformed Control Center lock past its grace is not treated as running, so npm ci still runs (R18-scripts-b-review-02)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  writeControlCenterLock(w, JSON.stringify({ pid: child.pid, start: null }), 60000);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock has no port');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('a malformed Control Center lock within its grace is treated as running, as the supervisor does (R18-scripts-b-review-02)', () => {
+  const w = liveWorld({ ccChange: true });
+  writeControlCenterLock(w, '{"pid":', 0);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.npm(), '', 'npm ci must not run while a malformed lock is within its grace');
+    assert.match(res.stdout, /Control Center is running/);
   } finally {
     rmSync(w.base, { recursive: true, force: true });
   }
