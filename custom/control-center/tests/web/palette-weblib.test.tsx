@@ -25,7 +25,7 @@ const ACTION: ActionMeta = {
   params: { type: 'object', properties: { n: { type: 'integer' }, state: { type: 'string' } }, required: ['n', 'state'] },
 };
 const FAILED: SessionMeta = {
-  id: 's-failed', claudeSessionId: '11111111-1111-4111-8111-111111111111', mode: 'research', policyClass: 'research', target: { type: 'none', value: null }, model: null,
+  id: 's-failed', claudeSessionId: '11111111-1111-4111-8111-111111111111', mode: 'research', policyClass: 'analysis', target: { type: 'none', value: null }, model: null,
   status: 'error', createdAt: '2026-10-06T12:00:00.000Z', updatedAt: '2026-10-06T12:00:00.000Z', turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null,
   error: 'no token in the Keychain', reportNum: null, lastReason: null, policyVersion: 2,
 };
