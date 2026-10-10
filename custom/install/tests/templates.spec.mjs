@@ -65,6 +65,12 @@ test('the sponsorship house rule appends company-alerts.tsv rows oldest first, n
   assert.match(rule, /at the end of the file \(oldest first, newest last\)/, rule);
 });
 
+test('the sponsorship house rule records every alert status it lists, expansion included (R18-scripts-b-review-04)', () => {
+  const rule = read(path.join(TEMPLATES, '_custom-sponsorship.md')).split('\n').find((l) => l.includes('company-alerts.tsv') && l.includes('append'));
+  assert.ok(rule, 'the template names when to append a company alert');
+  for (const event of ['pause', 'stop', 'restriction', 'resumption', 'expansion']) assert.ok(rule.includes(event), `the trigger does not name ${event}: ${rule}`);
+});
+
 test('the house rule updates the way the README does: the README installs a detached tag checkout, so it switches to main before pulling', () => {
   const readme = read(path.join(ROOT, '.github', 'README.md'));
   const updating = readme.slice(readme.indexOf('## Updating'));

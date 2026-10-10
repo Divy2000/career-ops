@@ -21,7 +21,7 @@ I need visa sponsorship (H-1B and possibly a green card), and employer behaviour
      ## Evidence
      - <YYYY-MM-DD> <source>: <one line> (<url>)
      ```
-   - If the news shows a new pause, stop, restriction or resumption not already in `company-alerts.tsv`, append one row at the end of the file (oldest first, newest last) in its 6-column, tab-separated format, no header: `<date>\t<company>\t<slug>\t<status>\t<headline>\t<url>`.
+   - If the news shows a new pause, stop, restriction, resumption or expansion of sponsorship not already in `company-alerts.tsv`, append one row at the end of the file (oldest first, newest last) in its 6-column, tab-separated format, no header: `<date>\t<company>\t<slug>\t<status>\t<headline>\t<url>`.
      - `<date>` is a real `YYYY-MM-DD`; `<company>` the exact name; `<slug>` the normalized company slug; `<headline>` one line; `<url>` the source link. Every column is filled, and no tab inside a column (a tab shifts every column after it and the row is refused).
      - `<status>` is one of `paused`, `stopped`, `restricted`, `resumed`, `expanded`. A resumption is `resumed`, never `resumption`.
 5. **Use it in the evaluation.** Add a "Sponsorship" bullet to Block A with the verdict, `checked_at`, DOL tier and the strongest dated evidence link.
