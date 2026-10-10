@@ -98,5 +98,62 @@ describe('a session panel on a session that no longer exists', () => {
     await until(() => failed === 1, 'the start failure');
     expect(host.textContent).toContain('mode batch never runs as a session');
   });
+
+  // The Ask drawer's panel stays mounted for the life of the app and starts its own sessions: once that session is
+  // deleted it must offer a fresh start, not leave the advisor unusable until a reload (R13-shared-comp-L1-01).
+  const OK: SessionMeta = { ...FAILED, id: 's-own', status: 'done', error: null };
+  const render = async (props: Record<string, unknown>) => {
+    const { SessionPanel } = await import('@web/components/SessionPanel');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(SessionPanel, { mode: 'advisor', initialPrompt: 'Ask.', ...props }))));
+  };
+  const button = (text: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === text);
+
+  it('a panel whose own session was deleted offers a new start', async () => {
+    let deleted = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === '/api/sessions' && init?.method === 'POST') return json(202, OK);
+        if (url === `/api/sessions/${OK.id}`) return deleted ? json(404, { error: 'no such session' }) : json(200, { meta: OK, events: [] });
+        if (url === `/api/sessions/${OK.id}/turns`) return json(404, { error: 'no such session' });
+        return json(200, []);
+      }),
+    );
+    await render({ autoStart: true });
+    await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the started session');
+    deleted = true;
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Reply to the session"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'And then?');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => input.form!.requestSubmit());
+    await until(() => host.textContent?.includes('This session no longer exists'), 'the gone message after the 404');
+    await act(async () => button('Start a new session')!.click());
+    expect(host.querySelector('textarea[aria-label="Prompt for advisor"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('This session no longer exists');
+  });
+
+  it('tells its host a 404 on a reply means the session is gone', async () => {
+    const statuses: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === `/api/sessions/${OK.id}`) return json(200, { meta: OK, events: [] });
+        if (url === `/api/sessions/${OK.id}/turns`) return json(404, { error: 'no such session' });
+        return json(200, []);
+      }),
+    );
+    await render({ sessionId: OK.id, onStatus: (s: string) => void statuses.push(s) });
+    const input = await until(() => host.querySelector<HTMLInputElement>('input[aria-label="Reply to the session"]'), 'the reply box');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Again');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => input.form!.requestSubmit());
+    await until(() => statuses.includes('gone'), 'the gone status');
+    // The host owns this id: it decides what comes next, so the panel offers no start of its own.
+    expect(button('Start a new session')).toBeUndefined();
+  });
 });
 
