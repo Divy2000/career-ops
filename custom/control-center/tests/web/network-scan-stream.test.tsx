@@ -112,4 +112,36 @@ describe('Network scan run stream', () => {
     await act(async () => again.emit('line', summaryLine({ companiesAvailable: 1, companiesScanned: 1, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'ok' }, offers: [{ company: 'Back Co', title: 'SRE', url: 'https://boards.example.com/back/1', source: 'greenhouse' }] })));
     await until(() => host.textContent?.includes('Back Co'), 'the results');
   });
+
+  it('a double click on Add all sends one add, so the second is not relabelled "already there" (R17-feat-a-L3-02)', async () => {
+    const stream = await runScan();
+    const offers = [
+      { company: 'One Co', title: 'SRE', url: 'https://boards.example.com/one/1', source: 'greenhouse' },
+      { company: 'Two Co', title: 'SRE', url: 'https://boards.example.com/two/2', source: 'lever' },
+    ];
+    await act(async () => stream.emit('line', summaryLine({ companiesAvailable: 2, companiesScanned: 2, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'ok' }, unreachableBoards: 0, offers })));
+    await until(() => host.textContent?.includes('One Co'), 'the results');
+
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let posts = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input) === '/api/pipeline/add' && init?.method === 'POST') {
+        posts += 1;
+        await gate;
+        return new Response(JSON.stringify({ added: offers.length, skipped: 0 }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return inner(input, init);
+    });
+
+    const addAll = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Add all'))!;
+    await act(async () => {
+      addAll().click();
+      addAll().click();
+    });
+    expect(posts).toBe(1);
+    release();
+    await until(() => host.textContent?.includes('Added 2'), 'the add result');
+  });
 });
