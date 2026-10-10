@@ -85,15 +85,17 @@ export function CadenceTab() {
   const [message, setMessage] = useState<string | null>(null);
   const confirm = useConfirm();
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['followups'] }), qc.invalidateQueries({ queryKey: ['tracker'] })]);
-  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
-  const asking = useRef(false);
+  // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored. Each action has
+  // its own guard, released once its write answered (the refresh runs on its own), so another action is not blocked.
+  const pinning = useRef(false);
+  const removing = useRef(false);
   const pin = async (...args: Parameters<typeof pinAsked>) => {
-    if (asking.current) return;
-    asking.current = true;
+    if (pinning.current) return;
+    pinning.current = true;
     try {
       await pinAsked(...args);
     } finally {
-      asking.current = false;
+      pinning.current = false;
     }
   };
   const pinAsked = async (appNum: number, date: string | null) => {
@@ -103,18 +105,18 @@ export function CadenceTab() {
       if (date) await apiSend('POST', '/api/followups/override', { appNum, date });
       else await apiSend('DELETE', '/api/followups/override', { appNum });
       setMessage(date ? `Next follow-up pinned to ${date}` : 'Pin cleared');
-      await refresh();
+      void refresh();
     } catch (err) {
       setMessage(`Could not update pin: ${describeError(err)}`);
     }
   };
   const remove = async (...args: Parameters<typeof removeAsked>) => {
-    if (asking.current) return;
-    asking.current = true;
+    if (removing.current) return;
+    removing.current = true;
     try {
       await removeAsked(...args);
     } finally {
-      asking.current = false;
+      removing.current = false;
     }
   };
   const removeAsked = async (num: number) => {
@@ -122,7 +124,7 @@ export function CadenceTab() {
     try {
       await apiSend('DELETE', '/api/followups/log', { num });
       setMessage(`Deleted follow-up #${num}`);
-      await refresh();
+      void refresh();
     } catch (err) {
       setMessage(`Could not delete: ${describeError(err)}`);
     }
