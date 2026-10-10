@@ -358,7 +358,7 @@ const STARTING_GRACE_MS = 5000;
  * process started at another time is gone too). What cannot be shown to have ended (no record, a live PID with no
  * recorded start, a start ps cannot read) counts as running.
  */
-export function runEnded(dataRoot: string, runId: string | undefined, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
+export function runEnded(dataRoot: string, runId: string | undefined, startOf: (pid: number) => ProcessStart = processStartTime, serverRunning = true): boolean {
   if (!runId || !/^[\w-]+$/.test(runId)) return false;
   const dir = path.join(dataRoot, 'data', 'control-center', 'runs', runId);
   if (fs.existsSync(path.join(dir, 'exit.json'))) return true;
@@ -370,10 +370,10 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
   }
   if (!run) return false;
   if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost') return true;
-  // A queued run is not over: the next server queues it again from its start request and runs it. Only one with no
-  // request.json never starts (that server marks it lost). One a dead server had begun starting (its `starting` file)
-  // may have a wrapper running already, so its processes decide below.
-  if (run.status === 'queued' && !fs.existsSync(path.join(dir, 'starting'))) return !fs.existsSync(path.join(dir, 'request.json'));
+  // A queued run is not over while a server will start it: the next server queues it again from its start request and
+  // runs it. Only one with no request.json never starts (that server marks it lost). With no server running at all,
+  // neither a start request nor its absence can be answered, so the run is as good as lost and no longer blocks a revert.
+  if (run.status === 'queued' && !fs.existsSync(path.join(dir, 'starting'))) return !serverRunning || !fs.existsSync(path.join(dir, 'request.json'));
   // Begun starting, and no wrapper recorded itself within the runner's grace (STARTING_GRACE_MS in runner.ts): the next
   // server marks it lost and never starts it again. As the runner does, it first leaves the cancel file, which a wrapper
   // that is only slow reads before it spawns the command (and right after, before it could record itself).
@@ -409,7 +409,7 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
  * Whether every run of a session has ended: the server starts a turn's run before it records the turn in the session's
  * meta, so a run can be live that the meta does not name yet. A runs folder that cannot be read counts as not ended.
  */
-export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
+export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (pid: number) => ProcessStart = processStartTime, serverRunning = true): boolean {
   const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
   let names: string[];
   try {
@@ -425,8 +425,45 @@ export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (
       // Not readable as a run (a stray file, a torn write): nothing ties it to this session.
       return true;
     }
-    return run?.params?.sessionId !== sessionId || runEnded(dataRoot, name, startOf);
+    return run?.params?.sessionId !== sessionId || runEnded(dataRoot, name, startOf, serverRunning);
   });
+}
+
+/**
+ * A queued run a dead server left behind is over only because no server will start it (runEnded above), but it is still
+ * `queued` on disk with its request.json, so the next server's reconcile() would re-adopt and re-run it over the revert
+ * it just allowed. Mark each such run of the session lost first. A run with a `starting` file may still have its wrapper
+ * running, so its processes decide and it is left alone.
+ */
+export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
+  const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
+  let names: string[];
+  try {
+    names = fs.readdirSync(runs);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const dir = path.join(runs, name);
+    if (fs.existsSync(path.join(dir, 'starting'))) continue;
+    let meta: Record<string, unknown> | null;
+    try {
+      meta = readJson<Record<string, unknown>>(path.join(dir, 'meta.json'));
+    } catch {
+      continue;
+    }
+    if (!meta || meta.status !== 'queued') continue;
+    if ((meta.params as { sessionId?: unknown } | undefined)?.sessionId !== sessionId) continue;
+    if (!fs.existsSync(path.join(dir, 'request.json'))) continue;
+    const tmp = path.join(dir, 'meta.json.tmp');
+    const lost = { ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'the server was down and this queued run was reverted before it started' };
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(lost, null, 2));
+      fs.renameSync(tmp, path.join(dir, 'meta.json'));
+    } catch {
+      /* Best effort: a run that cannot be marked still does not block the revert (runEnded already said it ended). */
+    }
+  }
 }
 
 /** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
@@ -440,9 +477,11 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     // finalized here the way the server would: its post-turn record from the hashes the hook took at each write.
     if (opts.serverRunning !== false) return { status: 409, text: 'the session is still running; cancel it before reverting' };
     const last = Array.isArray(meta.turns) ? meta.turns.at(-1) : undefined;
-    if (!last || !runEnded(opts.ctx.dataRoot, last.runId) || !sessionRunsEnded(opts.ctx.dataRoot, meta.id)) {
+    if (!last || !runEnded(opts.ctx.dataRoot, last.runId, processStartTime, false) || !sessionRunsEnded(opts.ctx.dataRoot, meta.id, processStartTime, false)) {
       return { status: 409, text: 'the session is still running (one of its runs has not ended); wait for it to finish before reverting' };
     }
+    // A queued run is over only because no server will start it: mark it lost so the next server does not re-run it.
+    markQueuedRunsLost(opts.ctx.dataRoot, meta.id);
     const offset = turnOffset(sessionDir, last.n);
     if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
   }

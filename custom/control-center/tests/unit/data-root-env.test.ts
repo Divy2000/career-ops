@@ -44,3 +44,16 @@ describe('configFromEnv claudeBin', () => {
     expect(configFromEnv({ ...base, CC_CLAUDE_BIN: '/opt/custom/claude' }).claudeBin).toBe('/opt/custom/claude');
   });
 });
+
+describe('configFromEnv pluginsLocalDir', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => {
+    for (const [k, v] of Object.entries({ CC_DATA_ROOT: '/d', CC_GUARD_DIR: '/g', CC_TOKEN: 't', CC_SESSION_SECRET: 's' })) vi.stubEnv(k, v);
+  });
+  const base = { CC_PUBLIC_PORT: '4999' };
+  it('honors CC_PLUGINS_LOCAL_DIR only under NODE_ENV=test, so e2e servers never scan the developer\'s real plugins.local (R17-tests-cc-X-01)', () => {
+    expect(configFromEnv({ ...base, NODE_ENV: 'test', CC_PLUGINS_LOCAL_DIR: '/tmp/plugins-local' }).pluginsLocalDir).toBe('/tmp/plugins-local');
+    expect(configFromEnv({ ...base, NODE_ENV: 'production', CC_PLUGINS_LOCAL_DIR: '/tmp/plugins-local' }).pluginsLocalDir).toBeUndefined();
+    expect(configFromEnv({ ...base, NODE_ENV: 'test' }).pluginsLocalDir).toBeUndefined();
+  });
+});

@@ -39,7 +39,15 @@ const SESSION_COOKIE = 'cc_session';
 const CORE_ENTRIES = () => serverEntries(CODE_ROOT, PACKAGE_ROOT, CONTRACT.exports.map((e) => e.module));
 
 async function resolveDataRoot(): Promise<string> {
-  if (process.env.CC_DATA_ROOT) return path.resolve(process.env.CC_DATA_ROOT);
+  const raw = process.env.CC_DATA_ROOT?.trim();
+  if (raw) {
+    // An absolute root is kept as given; a relative one is resolved against the folder the user started from (INIT_CWD,
+    // which npm sets), not npm's package cwd, so launching from anywhere uses the same data root.
+    if (path.isAbsolute(raw)) return path.resolve(raw);
+    const from = process.env.INIT_CWD;
+    const base = from && path.isAbsolute(from) ? from : process.cwd();
+    return path.resolve(base, raw);
+  }
   const mod = (await import(pathToFileURL(path.join(CODE_ROOT, 'path-resolver.mjs')).href)) as { getCareerOpsRoot: () => string };
   const prev = process.cwd();
   process.chdir(CODE_ROOT);
@@ -79,6 +87,13 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       proc.kill('SIGTERM');
       reject(new Error(`server child did not report a port within 20 s\n${tail.text()}`));
     }, 20_000);
+    // A spawn that fails (the bin is missing, the cwd is gone) or a send() on a closed IPC channel emits 'error'; with no
+    // listener that throws uncaught and kills the supervisor, the app and /__recovery with it. Rejecting handles the
+    // startup failure, and after a successful start the listener still swallows later channel errors on drain/activate.
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`server child failed to spawn: ${err.message}\n${tail.text()}`));
+    });
     proc.on('message', (msg: unknown) => {
       const m = msg as { type?: string; port?: number };
       if (m?.type === 'listening' && typeof m.port === 'number') {
@@ -197,7 +212,8 @@ async function main(): Promise<void> {
     CC_CODE_ROOT: CODE_ROOT,
     CC_DATA_ROOT: dataRoot,
     // Read before CAREER_OPS_ROOT is overwritten below: only an environment-chosen root (CC_DATA_ROOT included) is pinned into launchd plists.
-    CC_DATA_ROOT_FROM_ENV: process.env.CC_DATA_ROOT || dataRootFromEnv(process.env) ? '1' : '0',
+    // CC_DATA_ROOT is trimmed like resolveDataRoot trims it, so a whitespace-only value falls back to the default root and is not pinned.
+    CC_DATA_ROOT_FROM_ENV: process.env.CC_DATA_ROOT?.trim() || dataRootFromEnv(process.env) ? '1' : '0',
     CC_GUARD_DIR: guardRoot,
     CC_PUBLIC_PORT: String(PORT),
     CC_TOKEN: token,
@@ -326,6 +342,13 @@ async function main(): Promise<void> {
     return true;
   };
 
+  /** The supervisor's answer to an event stream while the server child is down: a text/event-stream response the browser
+   *  reconnects to (after `retry`) instead of a non-stream answer it closes for good. */
+  const answerEventStreamRetry = (res: http.ServerResponse) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.end('retry: 2000\n\n');
+  };
+
   const proxy = http.createServer((req, res) => {
     // A request that throws (a disk error on /__recovery) answers 500; an unhandled rejection would exit the supervisor and the app.
     const failed = (err: unknown) => {
@@ -338,6 +361,12 @@ async function main(): Promise<void> {
       const active = bg.active;
       if (!active) {
         const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
+        // An event stream (the run log, /api/events) must not get the HTML down page: a non-event-stream answer makes
+        // the browser close the EventSource for good instead of reconnecting once the server child returns.
+        if (req.headers.accept?.includes('text/event-stream')) {
+          answerEventStreamRetry(res);
+          return;
+        }
         const signedIn = hostOk(req) && authed(req, url);
         const devChatChanged = signedIn && devChatChangeInEffect(sessionsDir, guardRoot, serverLoads(CODE_ROOT, PACKAGE_ROOT, CORE_ENTRIES), CODE_ROOT);
         const html = renderDownPage(bg.status, signedIn ? { devChatChanged } : null);
@@ -355,7 +384,14 @@ async function main(): Promise<void> {
         pipeline(ures, res, () => undefined);
       });
       upstream.on('error', (err) => {
-        if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
+        if (!res.headersSent) {
+          // The child died as the stream was being asked for: answer as a stream too, or the EventSource closes for good.
+          if (req.headers.accept?.includes('text/event-stream')) {
+            answerEventStreamRetry(res);
+            return;
+          }
+          res.writeHead(502, { 'content-type': 'text/plain' });
+        }
         res.end(`server child unavailable: ${err.message}`);
       });
       // A client that goes away mid-response (a video seek cancels its range request) must release the child's file too.

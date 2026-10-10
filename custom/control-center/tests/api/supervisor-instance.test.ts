@@ -311,6 +311,31 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     return pkg;
   }
 
+  /** A copy of the package whose server child command points at a bin that cannot spawn, so spawn() emits 'error'. */
+  function packageWhoseChildCannotSpawn(): string {
+    const pkg = path.join(tempDir('cc-sup-pkg-badbin-'), 'control-center');
+    for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
+    fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    fs.symlinkSync(path.join(PACKAGE_ROOT, '..', 'immigration'), path.join(pkg, '..', 'immigration'));
+    const cc = path.join(pkg, 'supervisor', 'child-command.ts');
+    fs.writeFileSync(cc, fs.readFileSync(cc, 'utf8').replace('bin: process.execPath', "bin: '/definitely/not/a/real/node'"));
+    return pkg;
+  }
+
+  it('a server child that cannot spawn (a spawn error) leaves the supervisor and /__recovery up instead of crashing it (R17-supervisor-L1-01)', async () => {
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageWhoseChildCannotSpawn(), reload: true });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen after the spawn fails', 50_000);
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      expect(s.output()).toMatch(/server child could not start/);
+      expect(s.output()).not.toMatch(/Unhandled 'error' event|ERR_IPC_CHANNEL_CLOSED/);
+      expect((await request(port, 'GET', '/__recovery', { cookie: await signIn(port) })).status).toBe(200);
+    } finally {
+      await stop(s);
+    }
+  }, 70_000);
+
   it('a server child that listens but never answers /healthz fails its start after the health timeout instead of hanging the supervisor (SW4-claude-01)', async () => {
     const port = await freePort();
     const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: packageThatNeverAnswers(), reload: true });
@@ -508,6 +533,25 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('an event stream asked while no child runs answers as an event stream, so the browser reconnects instead of closing for good (R17-supervisor-L2-02)', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      const cookie = await signIn(port);
+      const res = await request(port, 'GET', '/api/runs/whatever/events', { cookie, accept: 'text/event-stream' });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/text\/event-stream/);
+      expect(res.body).toMatch(/^retry:/);
+      expect(res.body).not.toContain('/__recovery');
+      expect(s.proc.exitCode).toBeNull();
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
   it('a CC_PORT that is not a port from 1 to 65535 stops the launch with a message, before anything starts (R14-supervisor-X-01)', async () => {
     for (const bad of ['0', '70000', 'abc', '43.5']) {
       const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_PORT: bad } });
@@ -678,6 +722,21 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     } finally {
       await stop(s);
       await held.release();
+    }
+  });
+
+  it('a relative, space-padded CC_DATA_ROOT resolves against INIT_CWD and is trimmed (R17-supervisor-L2-01)', async () => {
+    const base = tempDir('cc-data-root-base-');
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { env: { CC_DATA_ROOT: '  rel-data  ', INIT_CWD: base } });
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      expect(fs.existsSync(path.join(base, 'rel-data', 'data', 'control-center', 'supervisor.lock')), s.output()).toBe(true);
+      // Not resolved against the package cwd, and the padding is gone.
+      expect(fs.existsSync(path.join(PACKAGE_ROOT, 'rel-data'))).toBe(false);
+      expect(fs.existsSync(path.join(PACKAGE_ROOT, '  rel-data  '))).toBe(false);
+    } finally {
+      await stop(s);
     }
   });
 
