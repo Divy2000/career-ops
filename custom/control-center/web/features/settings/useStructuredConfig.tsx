@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend, ApiError } from '../../lib/api';
@@ -31,7 +31,13 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', fileKey], queryFn: () => apiGet<ConfigRead>(`/api/config/${fileKey}`) });
-  const [pending, setPending] = useState<YamlOp[]>([]);
+  const [pending, setPendingState] = useState<YamlOp[]>([]);
+  // The ops as last edited, read when a save answers: ops added while it was on its way were not sent and stay pending.
+  const latest = useRef<YamlOp[]>([]);
+  const setPending = (next: YamlOp[]) => {
+    latest.current = next;
+    setPendingState(next);
+  };
   const [conflict, setConflict] = useState<ConfigRead | null>(null);
   const [note, setNote] = useState<EditorNote | null>(null);
   const [saving, setSaving] = useState(false);
@@ -41,7 +47,7 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
   const doc = useMemo(() => applyOpsJs(server?.doc ?? null, pending), [server, pending]);
   const addOp = (op: YamlOp) => {
     edit.pin();
-    setPending((p) => [...p, op]);
+    setPending([...latest.current, op]);
   };
   const discard = () => {
     setPending([]);
@@ -50,25 +56,29 @@ export function useStructuredConfig(fileKey: 'portals' | 'profile') {
     edit.rebase(null);
   };
   const save = async () => {
-    if (pending.length === 0) return;
+    const sent = latest.current;
+    if (sent.length === 0 || saving) return;
     setSaving(true);
     setNote(null);
     try {
       const etag = server?.etag ?? null;
-      const r = await apiSend<{ etag: string; warnings: unknown }>('PUT', `/api/config/${fileKey}`, { ops: pending }, etag ? { 'If-Match': etag } : {});
+      const r = await apiSend<{ etag: string; warnings: unknown }>('PUT', `/api/config/${fileKey}`, { ops: sent }, etag ? { 'If-Match': etag } : {});
       const warnings = typeof r.warnings === 'string' ? r.warnings : JSON.stringify(r.warnings, null, 2);
-      setPending([]);
+      const rest = latest.current.slice(sent.length);
+      setPending(rest);
       setConflict(null);
-      edit.rebase(null);
-      setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${pending.length} change${pending.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
+      // Ops added meanwhile were made on top of the sent ones, which is the version just written.
+      edit.rebase(rest.length > 0 && server ? { ...server, doc: applyOpsJs(server.doc, sent), etag: r.etag } : null);
+      setNote({ tone: 'ok', text: `Saved ${server?.path ?? fileKey} (${sent.length} change${sent.length === 1 ? '' : 's'}, validated).`, details: warnings && warnings !== '""' ? warnings : undefined });
       toast.success(`Saved ${server?.path ?? fileKey}`);
       await qc.invalidateQueries({ queryKey: ['config'] });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         const current = (err.body as { current: ConfigRead }).current;
-        const positional = pending.filter(byPosition);
-        const overwritten = pending.filter((op) => !byPosition(op) && changedOnDisk(op, server?.doc ?? null, current.doc));
-        const kept = pending.filter((op) => !positional.includes(op) && !overwritten.includes(op));
+        const all = latest.current;
+        const positional = all.filter(byPosition);
+        const overwritten = all.filter((op) => !byPosition(op) && changedOnDisk(op, server?.doc ?? null, current.doc));
+        const kept = all.filter((op) => !positional.includes(op) && !overwritten.includes(op));
         setConflict(current);
         edit.rebase(current);
         setPending(kept);

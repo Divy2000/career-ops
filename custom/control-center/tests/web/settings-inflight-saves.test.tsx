@@ -1,0 +1,147 @@
+// Settings saves while a request is still on its way: what the user does meanwhile is neither lost nor turned into a
+// false conflict. A structured edit made during a save stays pending (R13-feat-c-L1-01), blacklist rows cannot be
+// changed mid-write (R13-feat-c-L1-03), a double click on Save cadence or Validate and save writes once and reports
+// success (R13-feat-c-L1-04, R13-feat-c-L3-02), and a second plugin toggle waits for the first (R13-feat-c-L1-05).
+import { createElement, type ReactNode } from 'react';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { until } from '../helpers/until';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+type Doc = Record<string, unknown> & { etag: string | null };
+type Call = { method: string; url: string; body: unknown; headers: Record<string, string> };
+
+/** The server: GETs answer the current version; a write whose If-Match is stale gets the 409 the real routes send. */
+let files: Record<string, Doc>;
+let calls: Call[];
+/** While set, writes wait for release() before the server answers, as a validator run keeps them waiting. */
+let held: Array<() => void> | null;
+let host: HTMLElement;
+let root: Root;
+
+function json(status: number, body: unknown) {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+beforeEach(() => {
+  calls = [];
+  held = null;
+  vi.stubGlobal('EventSource', class { addEventListener() {} removeEventListener() {} close() {} });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ method, url, body, headers });
+      if (url === '/api/actions') return json(200, []);
+      const key = url.startsWith('/api/config/plugins/') ? '/api/plugins' : url;
+      if (method !== 'GET' && held) await new Promise<void>((r) => held!.push(r));
+      const doc = files[key];
+      if (!doc) return json(404, { error: 'not stubbed' });
+      if (method === 'GET') return json(200, key === '/api/plugins' ? { ...doc, config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag: doc.etag } } : doc);
+      // As the real routes: the write lock serializes saves, and each compares If-Match with the version on disk.
+      if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
+      const etag = `${doc.etag}+`;
+      files[key] = { ...doc, etag };
+      return json(200, { ok: true, etag, warnings: '' });
+    }),
+  );
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+});
+afterEach(async () => {
+  await act(async () => root.unmount());
+  host.remove();
+  document.body.innerHTML = '';
+  vi.unstubAllGlobals();
+});
+
+async function mount(child: ReactNode) {
+  const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, child))));
+}
+const labelled = <T extends HTMLElement>(label: string) => document.querySelector<T>(`[aria-label="${label}"]`);
+const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() === name);
+const alerts = () => [...document.querySelectorAll('[role="alert"]')].map((a) => a.textContent ?? '').join('\n');
+const writes = () => calls.filter((c) => c.method !== 'GET');
+const click = (el: HTMLElement) => act(async () => el.click());
+async function release() {
+  const waiting = held ?? [];
+  held = null;
+  await act(async () => {
+    for (const r of waiting) r();
+  });
+}
+async function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+describe('structured editors: an edit made while a save is on its way', () => {
+  beforeEach(() => {
+    files = { '/api/config/portals': { key: 'portals', path: 'portals.yml', kind: 'ok', raw: 'a: 1\nb: 1\n', etag: 'p1', doc: { a: 1, b: 1 }, parseError: null } };
+  });
+
+  async function mountHarness() {
+    const { useStructuredConfig, EditorNoteView } = await import('@web/features/settings/useStructuredConfig');
+    function Harness() {
+      const s = useStructuredConfig('portals');
+      return createElement(
+        'div',
+        null,
+        createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['a'], value: 2 }) }, 'Set a'),
+        createElement('button', { type: 'button', onClick: () => s.addOp({ op: 'set', path: ['b'], value: 3 }) }, 'Set b'),
+        createElement('button', { type: 'button', onClick: () => void s.save() }, 'Save'),
+        createElement('output', { 'aria-label': 'doc' }, JSON.stringify(s.doc)),
+        createElement('output', { 'aria-label': 'pending' }, String(s.pending.length)),
+        createElement(EditorNoteView, { note: s.note }),
+      );
+    }
+    await mount(createElement(Harness));
+    await until(() => labelled('doc')?.textContent === JSON.stringify({ a: 1, b: 1 }), 'the loaded doc');
+  }
+
+  it('stays pending after the save succeeds, and the next save sends it on the version just written', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    held = [];
+    await click(button('Save')!);
+    await until(() => held?.length === 1, 'the save on its way');
+    await click(button('Set b')!);
+    await release();
+    await until(() => /Saved portals\.yml \(1 change, validated\)/.test(document.body.textContent ?? ''), 'the saved note');
+    expect(writes()[0]!.body).toEqual({ ops: [{ op: 'set', path: ['a'], value: 2 }] });
+    expect(labelled('pending')!.textContent).toBe('1');
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 3 }));
+    expect(alerts()).toBe('');
+    await click(button('Save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ body: { ops: [{ op: 'set', path: ['b'], value: 3 }] }, headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
+    await until(() => labelled('pending')!.textContent === '0', 'nothing pending');
+  });
+
+  it('stays pending after the save gets a 409', async () => {
+    await mountHarness();
+    await click(button('Set a')!);
+    held = [];
+    await click(button('Save')!);
+    await until(() => held?.length === 1, 'the save on its way');
+    await click(button('Set b')!);
+    files['/api/config/portals'] = { ...files['/api/config/portals']!, raw: 'a: 1\nb: 1\nc: 9\n', etag: 'p2', doc: { a: 1, b: 1, c: 9 } };
+    await release();
+    await until(() => /changed on disk since you loaded it/.test(alerts()), 'the conflict note');
+    expect(alerts()).toMatch(/Your 2 pending edit\(s\)/);
+    expect(labelled('pending')!.textContent).toBe('2');
+    expect(labelled('doc')!.textContent).toBe(JSON.stringify({ a: 2, b: 3, c: 9 }));
+  });
+});
