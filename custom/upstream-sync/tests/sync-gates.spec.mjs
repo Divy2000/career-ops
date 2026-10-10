@@ -429,6 +429,26 @@ function baselineGate({ before, after, between }) {
   return second;
 }
 
+test('a baseline run that crashed stops the sync before the merge instead of becoming the list of existing failures (R15-tests-custom-L3-18)', () => {
+  const w = suiteWorld({ output: '' });
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('suite_failures "$STATE_DIR/$TODAY.baseline-failures.txt"'));
+  const to = lines.findIndex((l, i) => i >= from && l.includes("grep -q '^SUITE CRASHED'"));
+  assert.ok(from > -1 && to > from, 'the baseline lines and the crash guard are not found in sync.sh');
+  const bin = path.join(w.dir, 'bin');
+  const run = (output) => {
+    stub(bin, 'node', `printf '%s\\n' "${output}"\nexit 1`);
+    return spawnSync('bash', ['-c', `source "${LIB}"\nSTATE_DIR="${w.dir}" TODAY=t\nfail() { echo "!!! $1" >&2; exit 1; }\n${lines.slice(from, to + 1).join('\n')}\necho past the guard`], { cwd: w.dir, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  };
+  const crashed = run('Error: Cannot find module ./lib/x.mjs');
+  assert.equal(crashed.status, 1, crashed.stdout + crashed.stderr);
+  assert.match(crashed.stderr, /^!!! upstream suite crashed on origin\/main before the merge; cannot compare$/m);
+  assert.doesNotMatch(crashed.stdout, /past the guard/);
+  const red = run('  ❌ alpha broke\n📊 Results: 9 passed, 1 failed, 0 warnings');
+  assert.equal(red.status, 0, red.stderr);
+  assert.match(red.stdout, /past the guard/);
+});
+
 test('a baseline file deleted or edited after it was read cannot hide a new upstream-suite failure', () => {
   const before = '  ❌ alpha broke\n📊 Results: 9 passed, 1 failed, 0 warnings';
   const after = '  ❌ alpha broke\n  ❌ beta broke\n📊 Results: 9 passed, 2 failed, 0 warnings';
