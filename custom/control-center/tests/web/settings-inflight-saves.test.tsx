@@ -213,3 +213,27 @@ describe('a double click on Save', () => {
     expect(alerts()).toBe('');
   });
 });
+
+describe('plugin toggles', () => {
+  const plugin = (id: string, enabled: boolean) => ({ id, name: id, description: '', version: '1.0.0', hooks: ['export'], requiredEnv: [], optionalEnv: [], humanInTheLoop: false, hasSkill: false, source: 'bundled', enabled, configured: true });
+
+  it('a second toggle waits for the first to land and its refetch, so it never sends the stale ETag', async () => {
+    files = { '/api/plugins': { etag: 'g1', plugins: [plugin('alpha', false), plugin('beta', false)] } };
+    const { PluginsTab } = await import('@web/features/settings/PluginsTab');
+    await mount(createElement(PluginsTab));
+    const box = (id: string) => labelled<HTMLInputElement>(`Enable ${id}`);
+    await until(() => box('alpha') && box('beta'), 'the plugin rows');
+    held = [];
+    await click(box('alpha')!);
+    await until(() => held?.length === 1, 'the first toggle on its way');
+    expect(box('beta')!.disabled).toBe(true);
+    expect(box('alpha')!.disabled).toBe(true);
+    await release();
+    await until(() => !box('beta')!.disabled, 'the toggles back');
+    await click(box('beta')!);
+    await until(() => writes().length === 2, 'the second toggle');
+    expect(writes()[1]!.headers['If-Match']).toBe('g1+');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(alerts()).toBe('');
+  });
+});
