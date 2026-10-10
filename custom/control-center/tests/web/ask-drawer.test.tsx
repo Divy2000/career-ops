@@ -396,6 +396,65 @@ describe('Ask drawer: evaluate joins an already-running evaluation (R17-shared-c
 });
 
 
+describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shared-comp-L3-03)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  let listed: Array<Record<string, unknown>>;
+  beforeEach(async () => {
+    posts = [];
+    listed = [];
+    sessionStorage.clear();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          return new Response(JSON.stringify({ id: 's-new', mode: 'pdf', status: 'queued', target: { type: 'app', value: '2' } }), { status: 202, headers: { 'content-type': 'application/json' } });
+        }
+        if (url === '/api/sessions') return new Response(JSON.stringify(listed), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const run = async (row = '2') => {
+    await act(async () => emitEnvelope!('act', { action: 'generatePdf', params: { row } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    return item;
+  };
+
+  it('starts the session, writes cc.pdf.N, and clears the in-flight mark', async () => {
+    const item = await run();
+    expect(posts).toHaveLength(1);
+    expect(sessionStorage.getItem('cc.pdf.2')).toBe('s-new');
+    expect(sessionStorage.getItem('cc.pdf.2:starting')).toBeNull();
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-new' } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('opens a live pdf session for the row instead of starting a second', async () => {
+    listed = [{ id: 's-pdf', mode: 'pdf', status: 'running', target: { type: 'app', value: '2' } }];
+    await remountDrawer();
+    await run();
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-pdf' } }]);
+  });
+
+  it('refuses to start while another mount is starting the row\'s CV', async () => {
+    sessionStorage.setItem('cc.pdf.2:starting', '1');
+    await remountDrawer();
+    const item = await run();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('already starting');
+  });
+});
+
+
 describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
   let posts: Array<{ url: string; body: unknown }>;
   const row = (url: string, company: string, done = false) => ({ url, company, role: 'Engineer', location: null, compensation: null, done, section: done ? 'done' : 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });

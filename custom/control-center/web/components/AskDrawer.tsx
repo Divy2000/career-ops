@@ -6,7 +6,8 @@ import { SessionPanel } from './SessionPanel';
 import { Pill } from './ui';
 import { apiGet, apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
-import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
+import { fanOut, startSession, startTailoredCvSession, useSessions } from '../lib/sessions';
+import { lastSession } from '../lib/lastSession';
 import { afterFocusSettles } from '../lib/focus';
 import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@shared/ask-actions';
 import { fanoutOutcome } from '../lib/fanoutOutcome';
@@ -84,6 +85,9 @@ export function useAskHotkey(toggle: () => void): void {
 // Older keys the run switch still reads in place of a param's name (row or n, topic or company, q or query).
 const PARAM_ALIASES: Record<string, string> = { row: 'n', topic: 'company', q: 'query' };
 
+/** Statuses that still own their row or posting: a second paid session for the same target must not start. */
+const LIVE = new Set(['queued', 'running', 'awaiting_user']);
+
 /**
  * Why a proposal's params cannot run, or null: every param the advisor's contract marks required must be there, not
  * blank, and a row is a tracker row number. A navigate stays in the app (`//host` or `/\\host` would leave it) and an
@@ -115,6 +119,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   // The oferta guard the Evaluate entry points share: an active session for a posting is opened, and a start is deduped.
   const activeFor = useActiveEvaluation();
   const startEvaluation = useStartEvaluation();
+  // The sessions list also backs the per-row tailored-CV guard (cc.pdf.N) the Apply page shares.
+  const sessions = useSessions();
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (open) return afterFocusSettles(() => drawerRef.current?.focus());
@@ -220,12 +226,32 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         }
         case 'generatePdf': {
           const n = String(p.params.row ?? p.params.n ?? '');
-          const m = await startTailoredCvSession(n);
-          if (m.status === 'error') {
-            update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+          // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled.
+          const live = sessions.data?.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.value === n);
+          if (live) {
+            await router.navigate({ to: '/sessions/$id', params: { id: live.id } });
+            break;
+          }
+          const store = lastSession(`cc.pdf.${n}`);
+          if (store.starting()) {
+            update(p.id, { state: 'failed', note: `A tailored CV session for row #${n} is already starting.` });
             return;
           }
-          await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
+          store.setStarting(true);
+          try {
+            const m = await startTailoredCvSession(n);
+            if (m.status === 'error') {
+              store.setStarting(false);
+              update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
+              return;
+            }
+            store.write(m.id);
+            store.setStarting(false);
+            await router.navigate({ to: '/sessions/$id', params: { id: m.id } });
+          } catch (err) {
+            store.setStarting(false);
+            throw err;
+          }
           break;
         }
         case 'setStatus':
