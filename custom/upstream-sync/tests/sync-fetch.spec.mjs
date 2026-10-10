@@ -338,6 +338,19 @@ test('a sync started while another holds the run lock is refused before it touch
   }
 });
 
+test('the lock marker the re-exec sets stays out of every child of the locked run, so a test run inside the weekly sync still exercises the lock (R15-scripts-b-L1-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'security-env.txt');
+  mkdirSync(home);
+  try {
+    // The Keychain lookup runs inside the locked run; it records what it inherits and stops the run.
+    const res = runSync(w, { home, security: `env | grep '^CC_SYNC_LOCKED=' > "${seen}"\nexit 44` });
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
+    assert.equal(readFileSync(seen, 'utf8'), '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('Given the plist pins a node (CC_NODE_BIN), sync.sh resolves the data root with it, though Homebrew comes first on its PATH', () => {
   const w = makeWorld({ upstreamAhead: false });
   const home = path.join(w.base, 'home');

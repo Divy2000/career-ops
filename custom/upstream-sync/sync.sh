@@ -47,6 +47,9 @@ if [ -z "${CC_SYNC_LOCKED:-}" ]; then
   fi
   exit "$rc"
 fi
+# The marker is exported by the re-exec: dropped here so no child inherits it. A test run of sync.sh inside this sync
+# (the custom suite runs the lock spec) would otherwise skip the lock it is meant to exercise.
+unset CC_SYNC_LOCKED
 # The log and reports go to STATE_DIR, resolved above. Everything after this runs code from the sync worktree
 # (installs, both upstream suite runs, the custom and control-center checks, Claude), which must never see the
 # user's data root: test-all's live archive test, for one, writes into getCareerOpsRoot()/jds.
