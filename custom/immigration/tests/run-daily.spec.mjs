@@ -64,7 +64,9 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   // Each step and the rank-pipeline stand-in also note whether the Claude OAuth token reached them.
   const tokenLog = path.join(T, 'step-tokens.log');
   const nodeLog = path.join(T, 'step-nodes.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\n`;
+  // ... and which Anthropic or Claude Code variables reached them, by name.
+  const envLog = path.join(T, 'step-env.log');
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\nfs.appendFileSync(${JSON.stringify(envLog)}, ${JSON.stringify(name)} + ' ' + Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -105,8 +107,9 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
     const digestFile = path.join(imm, 'policy-digest.md');
     const digest = fs.existsSync(digestFile) ? readFileSync(digestFile, 'utf8') : null;
     const stepTokens = fs.existsSync(tokenLog) ? readFileSync(tokenLog, 'utf8') : '';
+    const stepEnv = fs.existsSync(envLog) ? readFileSync(envLog, 'utf8') : '';
     const stepNodes = fs.existsSync(nodeLog) ? [...new Set(readFileSync(nodeLog, 'utf8').trim().split('\n'))] : [];
-    return { stepNodes, stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
+    return { stepEnv, stepNodes, stepTokens, status: r.status, stderr: r.stderr, log, calls, rankCalls, versionCalls, steps, imm, digest, leftovers: fs.readdirSync(tmp) };
   };
   return { T, root, data, home, tmp, fakeClaude, run, start };
 }
@@ -564,6 +567,21 @@ jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan
   assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
   assert.equal(r.rankCalls.length, 1);
   assert.equal(r.rankCalls[0].token, true, 'the rank call reaches claude with the token, through the shim only');
+});
+
+jobTest('no step sees an inherited ANTHROPIC_* variable or a credential CLAUDE_CODE_* one, and the claude calls still get the Keychain token', () => {
+  const w = dailyWorld();
+  const scrubbed = { ANTHROPIC_API_KEY: 'sk-ant-x', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_BASE_URL: 'https://proxy.example', ANTHROPIC_CUSTOM_HEADERS: 'X-Key: k', CLAUDE_CODE_API_KEY_HELPER: '/bin/k', CLAUDE_CODE_CLIENT_CERT: '/c.pem', CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: 'p', CLAUDE_CODE_SECRET: 's', CLAUDE_CODE_PASSWORD: 'p', CLAUDE_CODE_CREDENTIALS: 'c', CLAUDE_CODE_CREDENTIAL_FILE: 'f', CLAUDE_CODE_EXTRA_HEADER: 'h' };
+  const r = w.run({ ...scrubbed, CLAUDE_CODE_USE_BEDROCK: '0' });
+  assert.equal(r.status, 0, r.log);
+  const lines = r.stepEnv.trim().split('\n');
+  for (const step of ['watch', 'scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) {
+    const line = lines.find((l) => l.startsWith(`${step} `));
+    assert.ok(line, `${step} did not run:\n${r.stepEnv}`);
+    assert.deepEqual(line.slice(step.length + 1).split(',').filter(Boolean), ['CLAUDE_CODE_USE_BEDROCK'], `${step} saw a credential variable: ${line}`);
+  }
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
 });
 
 test('the daily policy pass and the Control Center immigration-policy session may write exactly the same files (parity with modes.ts)', () => {

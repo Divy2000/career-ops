@@ -69,8 +69,20 @@ cd "$ROOT"
 
 # The subscription token goes only to the claude calls (the policy pass, and the rank through the shim), never into
 # this shell's environment: scan.mjs loads third-party provider plugins into its own process, and every other step is
-# upstream code that has no use for it. An inherited copy is dropped too.
-unset CLAUDE_CODE_OAUTH_TOKEN
+# upstream code that has no use for it. An inherited copy is dropped too, with every other Anthropic credential a manual
+# or launchd start may carry: every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential name segment
+# (the rule the Control Center server applies to its children).
+for var in $(compgen -e); do
+  case "$var" in
+    ANTHROPIC_*) unset "$var" ;;
+    CLAUDE_CODE_*)
+      case "_${var}_" in
+        *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+      esac
+      ;;
+  esac
+done
+unset var
 if ! CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
   echo "!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
   exit 1
