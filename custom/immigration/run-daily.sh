@@ -267,6 +267,10 @@ process.stdout.write(policy.sha256);
     return 1
   fi
   rc=0
+  # The pass's output is untrusted text and must not reach the day log unprefixed: a line it prints that starts with
+  # !!!, === or --- would be read by parseDailyLog as a run marker and forge the run status or failure text shown in the
+  # app. Prefix every line (both stdout and stderr) so the anchored markers never match. pipefail keeps the pass's own
+  # exit code as the pipeline's, so a failed pass still fails the step.
   DISABLE_AUTOUPDATER=1 CC_POLICY_FILE="$settings_dir/policy.json" CC_POLICY_SHA256="$policy_sha" CC_SESSION_DIR="$settings_dir" \
   CLAUDE_CODE_OAUTH_TOKEN="$CC_OAUTH_TOKEN" ANTHROPIC_API_KEY="" "$CLAUDE_REAL" -p "$prompt" \
     --restricted \
@@ -277,7 +281,7 @@ process.stdout.write(policy.sha256);
     --strict-mcp-config \
     --effort medium \
     --max-turns 40 \
-    --output-format text || rc=$?
+    --output-format text 2>&1 | sed 's/^/  /' || rc=$?
   rm -rf "$settings_dir"
   [ "$rc" -eq 0 ] || return 1
   # Only a successful pass acknowledges the batch; failures retry tomorrow.
