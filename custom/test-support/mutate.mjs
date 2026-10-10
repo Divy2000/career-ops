@@ -26,6 +26,9 @@ const specs = fs.existsSync(testsDir) ? fs.readdirSync(testsDir).filter((f) => f
 if (path.dirname(pkgDir) !== custom || specs.length === 0) fail(`custom/${pkg} has no tests/*.spec.mjs`);
 if (!fs.existsSync(stryker)) fail('Stryker is not installed: run `npm ci` in custom/control-center first');
 
+const guard = spawnSync(process.execPath, [path.join(here, 'stryker-leftovers.mjs'), pkgDir], { stdio: 'inherit' });
+if (guard.status !== 0) process.exit(guard.status ?? 1);
+
 const out = path.join(here, 'reports', pkg);
 fs.mkdirSync(out, { recursive: true });
 const config = {

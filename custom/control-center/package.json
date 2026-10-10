@@ -19,7 +19,7 @@
     "probe:claude": "node scripts/claude-probe.mjs",
     "probe:reads": "node scripts/claude-probe-reads.mjs",
     "preflight": "tsx supervisor/preflight-cli.ts",
-    "mutate": "stryker run"
+    "mutate": "node ../test-support/stryker-leftovers.mjs server supervisor shared && stryker run"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

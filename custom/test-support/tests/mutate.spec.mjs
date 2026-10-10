@@ -80,3 +80,35 @@ test('mutate refuses a package without node:test specs, and a path outside custo
     assert.match(r.stderr, /has no tests\/\*\.spec\.mjs/, pkg);
   }
 });
+
+const leftovers = path.join(here, '../stryker-leftovers.mjs');
+
+test('stryker-leftovers passes when no file under the given folders carries Stryker instrumentation', () => {
+  const dir = tempDir('leftovers-');
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, 'sub/a.ts'), 'export const a = 1;\n');
+  const r = node(leftovers, [dir]);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('stryker-leftovers fails, naming each instrumented file and the restore command, when a killed run left one behind', () => {
+  const dir = tempDir('leftovers-');
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, 'sub/a.ts'), 'function stryNS_9fa48() {}\nexport const a = 1;\n');
+  fs.writeFileSync(path.join(dir, 'b.mjs'), 'export const b = 2;\n');
+  const r = node(leftovers, [dir]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /sub\/a\.ts/);
+  assert.doesNotMatch(r.stderr, /b\.mjs/);
+  assert.match(r.stderr, /git checkout/);
+});
+
+test('stryker-leftovers skips node_modules and Stryker\'s own temp and report folders', () => {
+  const dir = tempDir('leftovers-');
+  for (const sub of ['node_modules/x', '.stryker-tmp/backup', 'reports']) {
+    fs.mkdirSync(path.join(dir, sub), { recursive: true });
+    fs.writeFileSync(path.join(dir, sub, 'a.js'), 'function stryNS_1() {}\n');
+  }
+  const r = node(leftovers, [dir]);
+  assert.equal(r.status, 0, r.stderr);
+});

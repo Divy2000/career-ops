@@ -145,7 +145,8 @@ node custom/test-support/survivors.mjs custom/control-center/reports/mutation/mu
   custom/test-support/reports/immigration/mutation.json       # file:line | mutator | original -> mutated
 ```
 
-- Stryker mutates the files in place (the code imports `../../../immigration` and the repo root, which a copied sandbox lacks) and restores them when it ends. Do not edit files under the mutated paths during a run, and if a run is killed, restore them with `git checkout`.
+- Stryker mutates the files in place (the code imports `../../../immigration` and the repo root, which a copied sandbox lacks) and restores them when it ends. Do not edit files under the mutated paths during a run, and run one mutation run at a time: the server imports `custom/immigration`, and two runs would share mutant ids. Both commands first run `custom/test-support/stryker-leftovers.mjs`, which refuses to start while files still carry instrumentation from a run that is going or was killed; restore those with `git checkout -- <file>`.
+- A test that reads a source file as text breaks when Stryker instruments that line. Keep the line out with a `// Stryker disable next-line all: <reason>` comment (see `custom/immigration/lib.mjs`).
 - The Control Center uses the vitest runner with per-test coverage, so each mutant only reruns the tests that reach it. A mutant reached only through a spawned child process (`tsx`, the fake Claude) shows as "no coverage", not survived.
 - Stryker has no node:test runner, so `mutate.mjs` uses its command runner: `node --test` on all of the package's specs per mutant, which also activates the mutant in processes the specs spawn. Reports land in `custom/test-support/reports/<package>/`.
 
