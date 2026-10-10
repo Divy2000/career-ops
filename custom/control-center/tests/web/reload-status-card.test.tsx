@@ -63,6 +63,14 @@ describe('the Server reload card', () => {
     expect(host.querySelector('a[href="/__recovery"]')).not.toBeNull();
   });
 
+  it('given a reload that failed with no server child running (no crashed flag), then it says the server stopped', async () => {
+    // What supervisor/index.ts reports when a reload fails and there is no active child to keep serving.
+    await render({ state: 'failed', at: '2026-10-06T09:00:00.000Z', error: 'healthz did not return 200 in time', stderrTail: '', activePid: null, activePort: null }, ReloadStatusCard);
+    await until(() => /stopped/.test(host.textContent ?? ''), 'the stopped state');
+    expect(host.textContent).toContain('No server is running');
+    expect(host.textContent).not.toMatch(/previous server/i);
+  });
+
   it('given a failed reload while the old server still runs, then the card keeps saying so', async () => {
     await render({ state: 'failed', at: '2026-10-06T09:00:00.000Z', error: 'healthz did not return 200 in time', stderrTail: '', activePid: 4242, activePort: 50123 }, ReloadStatusCard);
     await until(() => /failed/.test(host.textContent ?? ''), 'the failed state');
