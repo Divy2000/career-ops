@@ -135,3 +135,28 @@ describe('Ask about tracker', () => {
     expect(panels.filter((p) => p.mode === 'tracker')).toHaveLength(0);
   });
 });
+
+describe('Compare selected', () => {
+  it('shows the comparison session again when the Tracker comes back with nothing selected', async () => {
+    const { CompareSelected } = await import('@web/features/tracker/CompareSelected');
+    const rows = [trackerRow(1, 'Acme', null), trackerRow(2, 'Globex', null)];
+    await render(createElement(CompareSelected, { rows, onClear: () => {} }));
+    await act(async () => button('Compare selected')!.click());
+    const panel = panels.filter((p) => p.mode === 'ofertas').pop()!;
+    expect(panel).toMatchObject({ autoStart: true });
+    expect(panel.initialPrompt).toContain('#1 Acme');
+    await act(async () => panel.onSessionId!('cmp-1'));
+    await leave();
+
+    await render(createElement(CompareSelected, { rows: [], onClear: () => {} }));
+    const back = panels.filter((p) => p.mode === 'ofertas').pop();
+    expect(back).toMatchObject({ sessionId: 'cmp-1' });
+    expect(back!.autoStart).toBeFalsy();
+  });
+
+  it('renders nothing with no selection and no comparison', async () => {
+    const { CompareSelected } = await import('@web/features/tracker/CompareSelected');
+    await render(createElement(CompareSelected, { rows: [], onClear: () => {} }));
+    expect(host.innerHTML).toBe('');
+  });
+});
