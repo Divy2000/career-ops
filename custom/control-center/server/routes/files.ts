@@ -97,9 +97,20 @@ export async function fileRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const dir = path.join(cfg.dataRoot, 'data', 'control-center', 'uploads');
     fs.mkdirSync(dir, { recursive: true });
     const safeName = (req.query.name ?? 'cv').replace(/[^\w.-]+/g, '_').replace(/\.[^.]*$/, '').slice(0, 60) || 'cv';
-    // The random part keeps two uploads of the same name in the same millisecond apart; wx refuses to overwrite either way.
-    const abs = path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${safeName}${ext}`);
-    fs.writeFileSync(abs, req.body, { flag: 'wx' });
+    // The random part keeps two uploads of the same name in the same millisecond apart; wx refuses to overwrite either
+    // way. A collision (two same-ms uploads, or a leftover file with the same name) must not become a 500: try again
+    // with a new random part a few times before giving up.
+    let abs = '';
+    for (let attempt = 0; attempt < 5 && !abs; attempt += 1) {
+      const candidate = path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${safeName}${ext}`);
+      try {
+        fs.writeFileSync(candidate, req.body, { flag: 'wx' });
+        abs = candidate;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+    }
+    if (!abs) return reply.code(500).send({ error: 'could not store the upload under a unique name' });
     return { path: abs, bytes: req.body.length };
   });
 }

@@ -28,4 +28,24 @@ describe('CV uploads with the same name at the same time', () => {
     expect(fs.readFileSync(pa, 'utf8')).toBe('%PDF-1.4 first');
     expect(fs.readFileSync(pb, 'utf8')).toBe('%PDF-1.4 second');
   });
+
+  it('retries a name that already exists instead of failing the upload', async () => {
+    // Force the first candidate to collide (a same-millisecond collision or a leftover file): the handler must
+    // pick another name, not answer 500.
+    const real = fs.writeFileSync.bind(fs);
+    let first = true;
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, data: unknown, opts?: unknown) => {
+      if (first) {
+        first = false;
+        const err = new Error('EEXIST: file already exists') as NodeJS.ErrnoException;
+        err.code = 'EEXIST';
+        throw err;
+      }
+      return (real as (f: fs.PathOrFileDescriptor, d: unknown, o?: unknown) => void)(file, data, opts);
+    }) as typeof fs.writeFileSync);
+    const res = await t.app.inject({ method: 'POST', url: '/api/cv/upload?name=cv.pdf', headers: { ...t.authedWrite, 'content-type': 'application/pdf' }, payload: Buffer.from('%PDF-1.4 retried') });
+    expect(res.statusCode).toBe(200);
+    const p = res.json().path as string;
+    expect(fs.readFileSync(p, 'utf8')).toBe('%PDF-1.4 retried');
+  });
 });
