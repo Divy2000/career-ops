@@ -15,7 +15,7 @@ import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const row = (url: string, company: string, role: string, source: string, line: number) => ({ url, company, role, location: null, compensation: null, done: false, section: 'pending' as const, postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source, seniority: null, line });
+const row = (url: string, company: string, role: string, source: string, line: number) => ({ url, company, role, location: null, compensation: null, done: false, needsJd: false, section: 'pending' as const, postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source, seniority: null, line });
 const READ: PipelineRead = { kind: 'ok', path: 'data/pipeline.md', etag: 'e', rows: [row('https://jobs.example.com/open', 'Open Co', 'Engineer', 'other', 3), row('local:jds/2026-10-06_acme_pm.pdf', 'Acme', 'PM', 'local', 4)] };
 
 let host: HTMLElement;
