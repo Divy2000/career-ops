@@ -267,7 +267,7 @@ export function DevChatPage() {
   // The unlock covers the one turn it was sent with; the next turn needs the box ticked again.
   const onSent = useCallback(() => setBlacklist(false), []);
   // The Changes panel polls only a Dev Chat session the server confirmed, while its stream does not report it finished.
-  const live = sessionId !== null && meta.isSuccess && !missing && !isTerminal(status);
+  const live = sessionId !== null && meta.isSuccess && !missing && status !== 'gone' && !isTerminal(status);
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
