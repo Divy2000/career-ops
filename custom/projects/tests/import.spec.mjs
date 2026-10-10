@@ -38,23 +38,28 @@ test('wordDiff marks changed words with a little context and returns null for eq
   assert.equal(wordDiff('alpha beta', 'alpha beta gamma'), 'alpha beta {+gamma+}');
 });
 
-test('given long texts differing in one word, when diffed, then the diff is exact and quick', () => {
+// The work bounds are checked through the output, not the wall clock, so a slow or busy host cannot fail them
+// (R11-tests-custom-X-01): the common prefix and suffix are trimmed before the LCS table, and what is left is capped.
+test('given long texts differing in one word, when diffed, then the diff is exact and the shared words are trimmed before the comparison', () => {
   const words = Array.from({ length: 20000 }, (_, i) => `w${i}`);
   const changed = [...words];
   changed[10000] = 'CHANGED';
-  const t0 = Date.now();
-  assert.equal(wordDiff(words.join(' '), changed.join(' ')), '... w9997 w9998 w9999 [-w10000-]{+CHANGED+} w10001 w10002 w10003 ...');
-  assert.ok(Date.now() - t0 < 1000);
+  const out = wordDiff(words.join(' '), changed.join(' '));
+  assert.equal(out, '... w9997 w9998 w9999 [-w10000-]{+CHANGED+} w10001 w10002 w10003 ...');
+  // An untrimmed comparison of 20000 words would hit the cap and say so.
+  assert.doesNotMatch(out, /diff truncated/);
 });
 
 test('given long texts with no words in common, when diffed, then the work is capped and the output says it was truncated', () => {
   const a = Array.from({ length: 6000 }, (_, i) => `a${i}`).join(' ');
   const b = Array.from({ length: 6000 }, (_, i) => `b${i}`).join(' ');
-  const t0 = Date.now();
   const out = wordDiff(a, b);
-  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
   assert.match(out, /^\[-a0 a1 /);
-  assert.match(out, /\(diff truncated: compared the first \d+ differing words of each text\)$/);
+  const cap = Number(out.match(/\(diff truncated: compared the first (\d+) differing words of each text\)$/)?.[1]);
+  // At most a thousand words a side, so the LCS table stays near a million cells: none past the cap is compared.
+  assert.ok(cap > 0 && cap <= 1000, `compared ${cap} words a side`);
+  assert.ok(out.includes(` a${cap - 1}`) && out.includes(` b${cap - 1}`), 'the first words up to the cap are compared');
+  assert.ok(!out.includes(` a${cap} `) && !out.includes(` b${cap} `) && !out.includes(`a${cap}-]`) && !out.includes(`b${cap}+}`), 'nothing past the cap is compared');
 });
 
 test('findCvBlock returns the raw lines of a cv.md entry: heading through body, or a bold item and its continuation lines', () => {
