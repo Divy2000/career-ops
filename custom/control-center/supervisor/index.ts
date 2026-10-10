@@ -341,6 +341,13 @@ async function main(): Promise<void> {
     return true;
   };
 
+  /** The supervisor's answer to an event stream while the server child is down: a text/event-stream response the browser
+   *  reconnects to (after `retry`) instead of a non-stream answer it closes for good. */
+  const answerEventStreamRetry = (res: http.ServerResponse) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.end('retry: 2000\n\n');
+  };
+
   const proxy = http.createServer((req, res) => {
     // A request that throws (a disk error on /__recovery) answers 500; an unhandled rejection would exit the supervisor and the app.
     const failed = (err: unknown) => {
@@ -353,6 +360,12 @@ async function main(): Promise<void> {
       const active = bg.active;
       if (!active) {
         const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
+        // An event stream (the run log, /api/events) must not get the HTML down page: a non-event-stream answer makes
+        // the browser close the EventSource for good instead of reconnecting once the server child returns.
+        if (req.headers.accept?.includes('text/event-stream')) {
+          answerEventStreamRetry(res);
+          return;
+        }
         const signedIn = hostOk(req) && authed(req, url);
         const devChatChanged = signedIn && devChatChangeInEffect(sessionsDir, guardRoot, serverLoads(CODE_ROOT, PACKAGE_ROOT, CORE_ENTRIES), CODE_ROOT);
         const html = renderDownPage(bg.status, signedIn ? { devChatChanged } : null);
@@ -370,7 +383,14 @@ async function main(): Promise<void> {
         pipeline(ures, res, () => undefined);
       });
       upstream.on('error', (err) => {
-        if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
+        if (!res.headersSent) {
+          // The child died as the stream was being asked for: answer as a stream too, or the EventSource closes for good.
+          if (req.headers.accept?.includes('text/event-stream')) {
+            answerEventStreamRetry(res);
+            return;
+          }
+          res.writeHead(502, { 'content-type': 'text/plain' });
+        }
         res.end(`server child unavailable: ${err.message}`);
       });
       // A client that goes away mid-response (a video seek cancels its range request) must release the child's file too.

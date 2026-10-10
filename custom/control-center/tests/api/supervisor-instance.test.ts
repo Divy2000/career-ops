@@ -533,6 +533,25 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('an event stream asked while no child runs answers as an event stream, so the browser reconnects instead of closing for good (R17-supervisor-L2-02)', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      const cookie = await signIn(port);
+      const res = await request(port, 'GET', '/api/runs/whatever/events', { cookie, accept: 'text/event-stream' });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/text\/event-stream/);
+      expect(res.body).toMatch(/^retry:/);
+      expect(res.body).not.toContain('/__recovery');
+      expect(s.proc.exitCode).toBeNull();
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
   it('a CC_PORT that is not a port from 1 to 65535 stops the launch with a message, before anything starts (R14-supervisor-X-01)', async () => {
     for (const bad of ['0', '70000', 'abc', '43.5']) {
       const s = startSupervisor(await freePort(), copyFixtureRoot(), { env: { CC_PORT: bad } });
