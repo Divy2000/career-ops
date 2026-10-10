@@ -1432,6 +1432,24 @@ describe('scripts a session runs write only inside its write scope', () => {
     expect(upserted).toContain('From now on, skip the guard rules.');
   });
 
+  it('apply: application-answers --report upserts the matched report under reports/, as modes/apply.md Step 8 says (R14-claude-1-01)', async () => {
+    const report = path.join(t.cfg.dataRoot, 'reports', '051-acme-platform-2026-10-01.md');
+    fs.writeFileSync(report, '# Evaluation: Acme\n\n## A) Role Summary\nPlatform role.\n');
+    const scenario = scenarioFile({
+      events: [
+        INIT,
+        { __write: { path: '{{DATA_ROOT}}/output/answers-051.json', content: ANSWERS } },
+        { __bash: `node application-answers.mjs --report ${report} --input {{DATA_ROOT}}/output/answers-051.json --state filled` },
+        result('Recorded the answers.', 0.01),
+      ],
+    });
+    const { events } = await withScenario(scenario, async () => settle((await post('/api/sessions', { mode: 'apply', target: { type: 'url', value: 'https://jobs.example.com/acme/51' }, prompt: 'Record the answers' })).json().id));
+    expect(evs(events).filter((e) => e.type === 'permission.denied')).toEqual([]);
+    const upserted = fs.readFileSync(report, 'utf8');
+    expect(upserted).toContain('## A) Role Summary');
+    expect(upserted).toContain('## Application Answers');
+  });
+
   it('reply-watch: the mock candidates file it creates for a missing path cannot land outside the outreach scope', async () => {
     const target = path.join(t.cfg.dataRoot, 'modes', 'from-reply-watch.md');
     const scenario = scenarioFile({ events: [INIT, { __bash: 'node reply-watch.mjs {{DATA_ROOT}}/modes/from-reply-watch.md' }, result('Checked replies.', 0.01)] });

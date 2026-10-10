@@ -67,7 +67,7 @@ describe('mode registry', () => {
     }
     for (const lang of ['de', 'es', 'fr', 'id', 'it', 'ja', 'ko', 'pt', 'ru', 'ua', 'zh']) for (const sub of ['debrief', 'plan', 'practice']) expect(classForMode(`${lang}/interview/${sub}`), `${lang}/interview/${sub}`).toBe('interview');
     expect(getModePolicy('de/angebot')?.writeGlobs).toContain('reports/**');
-    expect(getModePolicy('fr/postuler')?.writeGlobs).toEqual(['output/**']);
+    expect(getModePolicy('fr/postuler')?.writeGlobs).toEqual(['output/**', 'reports/*.md']);
     // Every mode under a language folder is either the English mode under the same name or a translation listed above,
     // so a new localized mode that is neither fails here instead of silently running read-only.
     for (const m of MODES) {

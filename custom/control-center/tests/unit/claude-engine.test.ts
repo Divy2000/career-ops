@@ -414,6 +414,13 @@ describe('guard hook', () => {
     expect(writesFor(['intake'], ['portals.yml'])).toEqual({ 'intake portals.yml': 2 });
   });
 
+  it('apply may update a report in reports/ (modes/apply.md Step 8 and 9.3), and nothing else there or in the tracker (R14-claude-L2-02, R14-claude-1-01)', () => {
+    const rels = ['reports/012-acme-platform-2026-10-01.md', 'reports/nested/012-acme.md', 'data/applications.md', 'cv.md'];
+    for (const mode of ['apply', 'de/bewerben']) {
+      expect(writesFor([mode], rels)).toEqual(Object.fromEntries(rels.map((rel, i) => [`${mode} ${rel}`, i === 0 ? 0 : 2])));
+    }
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));
@@ -1259,8 +1266,10 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(apply, 'node application-answers.mjs --report output/r.md --input output/a.json --state filled --date 2026-10-05');
     ok(apply, 'node application-answers.mjs --input output/a.json --report output/r.md');
     // The review trigger: the script appends the answers it is given to whatever file --report names.
-    for (const target of ['modes/_custom.md', 'modes/_shared.md', 'AGENTS.md', 'cv.md', 'config/profile.yml', 'custom/control-center/server/claude/guard-hook.mjs', 'reports/001-acme.md', 'data/applications.md', '../outside.md', '/etc/hosts'])
+    for (const target of ['modes/_custom.md', 'modes/_shared.md', 'AGENTS.md', 'cv.md', 'config/profile.yml', 'custom/control-center/server/claude/guard-hook.mjs', 'reports/nested/001-acme.md', 'data/applications.md', '../outside.md', '/etc/hosts'])
       no(apply, `node application-answers.mjs --report ${target} --input output/a.json --state filled`);
+    // The matched report itself is in scope: modes/apply.md Step 8 and 9.3 upsert its ## Application Answers section (R14-claude-1-01).
+    ok(apply, 'node application-answers.mjs --report reports/001-acme.md --input output/a.json --state filled');
     // Its parser takes the next token as the value even when it starts with a single dash, and path.resolve drops -x/..
     no(apply, 'node application-answers.mjs --report -x/../modes/_custom.md --input output/a.json');
     // The last --report wins in the script, so every one is checked.

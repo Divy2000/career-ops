@@ -255,6 +255,8 @@ const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   scan: ['data/pipeline.md', 'data/scan-history.tsv', 'jds/*.md'],
   // modes/titles.md: portals.yml's title_filter is the only file the mode writes (after the user confirms the diff).
   titles: ['portals.yml'],
+  // modes/apply.md Step 8 and 9.3: application-answers.mjs upserts the matched report's ## Application Answers section.
+  apply: ['reports/*.md'],
 };
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
