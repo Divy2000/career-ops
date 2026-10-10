@@ -4,7 +4,7 @@ import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyFileSync, chmodSync, existsSync, rmSync, utimesSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1008,6 +1008,22 @@ test('a Control Center lock that cannot be read is treated as running, as the su
     assert.match(res.stdout, /Control Center is running/);
   } finally {
     chmodSync(lock, 0o600);
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+// acquireInstanceLock cannot take a lock path that is a dangling symlink (the link fails, the read finds nothing).
+test('a Control Center lock that is a dangling symlink is treated as running, as the supervisor cannot take it (R18-scripts-b-review-08)', () => {
+  const w = liveWorld({ ccChange: true });
+  const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  symlinkSync(path.join(w.base, 'nowhere'), lock);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.npm(), '', 'npm ci must not run while the lock path is a dangling symlink');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
     rmSync(w.base, { recursive: true, force: true });
   }
 });

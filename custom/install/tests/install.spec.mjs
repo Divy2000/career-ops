@@ -1129,6 +1129,10 @@ test('the Control Center preflight runs again after the deferred npm ci, before 
   }
 });
 
+// acquireInstanceLock cannot take a lock path that is a dangling symlink (the link fails, the read finds nothing),
+// so it refuses to start: the helpers must not reinstall or start a second instance either.
+test('a Control Center lock that is a dangling symlink is treated as running (R18-scripts-b-review-08)', () => {
+  const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
   const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true });

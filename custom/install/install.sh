@@ -289,7 +289,6 @@ trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[
 # second instance that would refuse the lock.
 cc_running() {
   local lock="$DATA/data/control-center/supervisor.lock"
-  [ -f "$lock" ] || return 1
   node -e '
 const fs = require("fs");
 const { execFileSync } = require("child_process");
@@ -297,8 +296,13 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 let text;
 try { text = fs.readFileSync(process.argv[1], "utf8"); }
-// Gone is not running; a lock that cannot be read is, since acquireInstanceLock throws on it rather than replacing it.
-catch (e) { process.exit(e.code === "ENOENT" ? 1 : 0); }
+catch (e) {
+  // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
+  // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
+  let entry = e.code !== "ENOENT";
+  if (!entry) try { fs.lstatSync(process.argv[1]); entry = true; } catch { /* nothing there */ }
+  process.exit(entry ? 0 : 1);
+}
 let pid = 0, start = null;
 try {
   const l = JSON.parse(text);
