@@ -81,4 +81,16 @@ describe('Discover > Portal scan re-attaches its run', () => {
     const posts = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/actions/scan.portals' && i?.method === 'POST').length;
     expect(posts).toBe(1);
   });
+
+  it('the reattached running scan disables Scan portals, so a click cannot queue a second scan', async () => {
+    await runScan();
+    await act(async () => root.unmount());
+    await mount();
+    await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && !s.closed), 'the run stream after coming back');
+    const b = await until(() => scanButton() ?? undefined, 'the Scan portals button');
+    expect(b!.disabled).toBe(true);
+    await act(async () => b!.click());
+    const posts = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/actions/scan.portals' && i?.method === 'POST').length;
+    expect(posts).toBe(1);
+  });
 });

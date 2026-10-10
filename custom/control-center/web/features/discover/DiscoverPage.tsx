@@ -125,7 +125,7 @@ export function ScriptTab({ id, intro, params }: { id: string; intro: string; pa
       <div className="row gap">
         <ActionButton
           meta={actions.data?.find((a) => a.id === id)}
-          disabled={busy !== null}
+          disabled={busy !== null || (runId !== null && status === null)}
           params={params}
           onRun={(p) =>
             void run(id, p).then((out) => {
