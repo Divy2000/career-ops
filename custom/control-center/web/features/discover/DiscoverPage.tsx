@@ -228,12 +228,11 @@ export function NetworkScan() {
   };
   const [filter, setFilter] = useState('');
   const { lines, status } = useRunLines(runId);
+  // Nothing to follow: the results card goes, and the run is not re-attached next time.
+  const gone = status === RUN_GONE;
   useEffect(() => {
-    // Nothing to follow: the results card goes, and the run is not re-attached next time.
-    if (status !== RUN_GONE) return;
-    networkRun.write(null);
-    setRunIdState(null);
-  }, [status]);
+    if (gone) networkRun.write(null);
+  }, [gone]);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const start = () =>
@@ -315,7 +314,7 @@ export function NetworkScan() {
         </div>
         <Message message={message} />
       </form>
-      {runId && (
+      {runId && !gone && (
         <div className="card stack">
           <div className="row gap" style={{ justifyContent: 'space-between' }}>
             <h2 style={{ margin: 0 }}>Results</h2>
