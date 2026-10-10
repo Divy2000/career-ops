@@ -187,8 +187,66 @@ export function checkSearch(policy, tool, input, cwd) {
   if (syntax) return syntax;
   // A search pattern that itself names a secret file (`.env`, `**/.env`, `*.pem`, `id_rsa*`, `.git/config`, ...) is
   // refused: the pattern is what Glob/Grep match, so an explicit secret-targeting glob would list or read its contents.
-  const hit = (policy.readDeny ?? []).find((g) => matches(value, [g]));
+  const readDeny = policy.readDeny ?? [];
+  const hit = readDeny.find((g) => matches(value, [g]));
   if (hit) return `${tool} ${key}: ${value} can match ${hit}, a protected secret file (.env, keys, credentials); sessions never read them`;
+  // Grep reads the contents of every file its glob matches, and ripgrep's glob overrides .gitignore, so any glob that
+  // can match a secret file's name (`*`, `.e*`, `[.]env`, `{.env,x}`) is refused too. Glob lists names only.
+  if (tool === 'Grep') {
+    const reach = searchGlobReach(value, readDeny);
+    if (reach) return `${tool} ${key}: ${value} can match ${reach}, a protected secret file (.env, keys, credentials); sessions never read them`;
+  }
+  return null;
+}
+
+/** `{a,b}` alternatives of a ripgrep glob, innermost first; an unbalanced brace is left as written. */
+function expandBraces(glob) {
+  const m = glob.match(/\{([^{}]*)\}/);
+  if (!m) return [glob];
+  const head = glob.slice(0, m.index);
+  const tail = glob.slice(m.index + m[0].length);
+  return m[1].split(',').flatMap((alt) => expandBraces(head + alt + tail));
+}
+
+/** One path segment of a ripgrep glob as a case-insensitive regex: `*`, `?`, `[...]`/`[!...]` classes. */
+function segmentRegExp(segment) {
+  let re = '';
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if (c === '[') {
+      const close = segment.indexOf(']', i + 2);
+      if (close === -1) re += '\\[';
+      else {
+        const body = segment.slice(i + 1, close);
+        re += `[${body.replace(/^!/, '^').replace(/\\/g, '\\\\')}]`;
+        i = close;
+      }
+    } else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, 'i');
+}
+
+/**
+ * A secret file name `glob` can match, or null. Grep may split its glob on whitespace and commas, every brace
+ * alternative is tried, and a file matches on its last path segment, so each alternative's last segment is tested
+ * against the readDeny names, with each `*` in them read as nothing and as one character (`id_rsa`, `x.pem`).
+ * A `!` glob excludes files and reaches nothing.
+ */
+function searchGlobReach(glob, readDeny) {
+  const names = readDeny.flatMap((g) => {
+    const last = g.slice(g.lastIndexOf('/') + 1);
+    return [last.replace(/\*/g, ''), last.replace(/\*/g, 'x')];
+  });
+  for (const part of glob.split(/[\s,]+(?![^{]*\})/)) {
+    if (!part || part.startsWith('!')) continue;
+    for (const alt of expandBraces(part)) {
+      const segment = segmentRegExp(alt.slice(alt.lastIndexOf('/') + 1));
+      const name = names.find((n) => segment.test(n));
+      if (name) return name;
+    }
+  }
   return null;
 }
 

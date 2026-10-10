@@ -1635,6 +1635,14 @@ describe('read confinement: guard policy', () => {
     }
   });
 
+  it('a Grep glob whose wildcards, classes or braces can reach a secret file is refused, since Grep reads contents', () => {
+    const grep = (glob: string) => checkSearch(policy, 'Grep', { pattern: 'x', path: code, glob }, code);
+    for (const glob of ['*', '**/*', '**', '.e*', '**/.en?', '[.]env', '.[e]nv', '{.env,README.md}', '**/{x,.env}', '*.{md,env}', '*.p?m', '**/*.k*', 'id_*', '.git/*', '**/config', 'cred*', '*.md .env', '*.md,.env', 'src/**', '.env.local', '**/.ENV']) {
+      expect(grep(glob), glob).toMatch(/protected secret file/);
+    }
+    for (const glob of ['*.md', '**/*.ts', '*.{ts,tsx}', 'src/**/*.md', 'reports/*.md', '!.env', '*.yml']) expect(grep(glob), glob).toBeNull();
+  });
+
   it('Glob and Grep are refused when the policy does not grant search', () => {
     expect(checkSearch({ ...policy, search: false }, 'Glob', { pattern: '*' }, code)).toMatch(/not granted/);
     const { search: _search, ...old } = policy;
