@@ -625,7 +625,7 @@ update_live_checkout() {
     fi
   fi
   if [ -n "$failed" ]; then
-    echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand"
+    echo "live checkout now at $(git rev-parse --short HEAD), but $failed failed; run it by hand${deferred:+; $deferred}"
     return 3
   fi
   if [ -n "$deferred" ]; then

@@ -944,6 +944,22 @@ test('a stale Control Center lock whose PID was reused is not treated as running
   }
 });
 
+test('a running Control Center with a failed root install still reports the skipped Control Center deps (R17-scripts-b-L1-01)', () => {
+  const w = liveWorld({ depsChange: true, ccChange: true, npmExit: 1 });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  holdRunningControlCenter(w, child);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 3, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.match(res.stdout, /npm install failed; run it by hand/);
+    assert.match(res.stdout, /Control Center is running/, 'the deferred Control Center deps are still reported when the root install also failed');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 /**
  * A shell prefix that starts a daily job holding run-daily's lock in the background and returns once it holds it, so
  * the update after it always meets a held lock. `body` is what the job does while it holds the lock.
