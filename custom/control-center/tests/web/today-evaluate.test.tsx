@@ -45,8 +45,12 @@ beforeEach(() => {
         sessions.push(meta);
         return json(202, meta);
       }
-      if (url === '/api/sessions' && slowList) await new Promise<void>((r) => slowList!.push(r));
-      if (url === '/api/sessions') return json(200, sessions);
+      if (url === '/api/sessions') {
+        // The list as it was when asked, even if it answers after a start.
+        const snapshot = [...sessions];
+        if (slowList) await new Promise<void>((r) => slowList!.push(r));
+        return json(200, snapshot);
+      }
       if (url === '/api/shortlist') return json(200, shortlist);
       return json(502, { error: 'not stubbed' });
     }),
@@ -157,8 +161,11 @@ describe('a posting whose evaluation is still active', () => {
     await act(async () => router.history.back());
     await until(() => rowOf('Globex'), 'Today again');
     expect(evaluateIn('Globex')).toBeUndefined();
+    // The list asked for before the start answers afterwards: it must not take the new session away.
     const waiting = slowList!;
     slowList = null;
     await act(async () => waiting.forEach((r) => r()));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(evaluateIn('Globex')).toBeUndefined();
   });
 });

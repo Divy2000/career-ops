@@ -37,7 +37,9 @@ export function useStartEvaluation() {
     if (pending) return pending;
     const jd = localJdPath(ref);
     const start = (jd === null ? startEvaluateSession(ref) : startSavedJdSession(ref, jd))
-      .then((m) => {
+      .then(async (m) => {
+        // A list fetch asked before the start would answer without it: drop that answer, keep the new session.
+        await qc.cancelQueries({ queryKey: ['sessions'], exact: true });
         qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => [m, ...(prev ?? []).filter((s) => s.id !== m.id)]);
         return m;
       })
