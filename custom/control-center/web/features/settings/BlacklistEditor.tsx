@@ -62,13 +62,21 @@ export function BlacklistEditor({ prefillCompany }: { prefillCompany?: string })
   };
   const confirmAndWrite = async () => {
     const from = edit.base ?? q.data;
-    const added = current.length - (from?.rows.length ?? 0);
+    // Added and removed are counted against the rows on disk, not as a net of the two lengths: a swap (remove one,
+    // add another) leaves the length unchanged but is still one added and one removed.
+    const fromRows = from?.rows ?? [];
+    const key = (r: BlacklistRow) => [r.company, r.since, r.scope, r.reason].join('\u0000');
+    const fromSet = new Set(fromRows.map(key));
+    const currentSet = new Set(current.map(key));
+    const addedCount = current.filter((r) => !fromSet.has(key(r))).length;
+    const removedCount = fromRows.filter((r) => !currentSet.has(key(r))).length;
+    const diff = [addedCount > 0 ? `${addedCount} added` : null, removedCount > 0 ? `${removedCount} removed` : null].filter((s): s is string => s !== null);
     const ok = await confirm({
       title: 'Write data/blacklist.md?',
       body: (
         <>
           <p>
-            {current.length} row{current.length === 1 ? '' : 's'} will be written ({added >= 0 ? `${added} added` : `${-added} removed`}). The scanner skips every listed company and domain on its next run.
+            {current.length} row{current.length === 1 ? '' : 's'} will be written{current.length > 0 && diff.length > 0 ? ` (${diff.join(', ')})` : ''}. The scanner skips every listed company and domain on its next run.
           </p>
           {columnWarning && <p>{columnWarning}</p>}
           <p>This is the only way the app writes the blacklist; AI sessions are denied this file.</p>
