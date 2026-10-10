@@ -103,6 +103,16 @@ describe('Import CV parse sessions', () => {
     expect(dialog()).toBeNull();
   });
 
+  it('a parse waiting for the user\'s reply still holds the page, since its result has not landed', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onStatus!('awaiting_user', 'asked a question'));
+    await act(async () => button('Leave').click());
+    expect((await until(dialog, 'the discard question')).textContent).toContain('the CV import');
+  });
+
   it('picking another PDF cancels the parse still running for the first', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));

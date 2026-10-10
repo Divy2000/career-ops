@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cancelSession } from '../../lib/sessions';
 
+const ENDED = new Set(['done', 'error', 'cancelled', 'gone']);
+
 /**
  * The paid parser session an import starts for an uploaded PDF. While it runs (from the upload until its envelope
  * lands or it ends) the import counts as unsaved, since leaving drops its result. Retiring it (a newer pick, or the
@@ -40,7 +42,8 @@ export function useParseSession() {
         else if (forPath.current === path) sessionId.current = id;
       },
       onStatus: (status: string) => {
-        if (forPath.current === path && status !== 'queued' && status !== 'running') settle();
+        // A parse waiting for the user's reply has not delivered its result yet either.
+        if (forPath.current === path && ENDED.has(status)) settle();
       },
       onStartFailed: () => {
         retiredStarts.current.delete(path);
