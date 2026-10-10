@@ -6,6 +6,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { fanOut, useSessions } from '../../lib/sessions';
 import { usePipeline } from '../../lib/queries';
 import { evaluatingTargets } from './evaluating';
+import { localJdPath } from '@shared/local-jd';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
@@ -93,7 +94,8 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   }, [livePipeline, processId, process.waiting, attachProcess]);
   const pipeline = usePipeline();
   const beingEvaluated = evaluatingTargets(sessions.data);
-  const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
+  // Process inbox leaves saved-JD rows out, so their evaluations (Evaluate JD) do not hold it back.
+  const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && localJdPath(r.url) === null && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
   // One fan-out takes at most BATCH_MAX_URLS. Splitting a bigger set into several requests would leave a partial start
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
   const unique = [...new Set(urls)];

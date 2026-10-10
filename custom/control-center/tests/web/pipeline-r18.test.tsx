@@ -136,3 +136,14 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
   });
 });
 
+describe('A saved-JD evaluation and Process inbox (R18-feat-b-L3-04)', () => {
+  it('given Evaluate JD running on a local:jds/ row, Process inbox still offers its start form', async () => {
+    sessions = [session('s-jd', 'running', { type: 'text', value: 'local:jds/acme.md' })];
+    await mount();
+    await until(() => host.querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]')?.disabled, 'the sessions list');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => pipelinePanel(), 'the start form');
+    expect(host.textContent).not.toContain('being evaluated, and Process inbox would evaluate them again');
+  });
+});
+
