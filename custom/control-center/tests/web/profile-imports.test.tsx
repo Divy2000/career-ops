@@ -113,6 +113,18 @@ describe('Import CV parse sessions', () => {
     expect((await until(dialog, 'the discard question')).textContent).toContain('the CV import');
   });
 
+  it('a parse resumed after it ended is tracked again (review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => panel.onStatus!('error', 'exit 1'));
+    await act(async () => panel.onStatus!('running', null));
+    await act(async () => button('Leave').click());
+    expect((await until(dialog, 'the discard question')).textContent).toContain('the CV import');
+  });
+
   it('picking another PDF cancels the parse still running for the first', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));

@@ -39,11 +39,22 @@ export function useParseSession() {
     (path: string) => ({
       onSessionId: (id: string) => {
         if (retiredStarts.current.delete(path)) void cancelSession(id).catch(() => undefined);
-        else if (forPath.current === path) sessionId.current = id;
+        else if (forPath.current === path) {
+          // A fork answers with a new session: that is the one to cancel now.
+          sessionId.current = id;
+          running.current = true;
+          setParsing(true);
+        }
       },
       onStatus: (status: string) => {
+        if (forPath.current !== path) return;
         // A parse waiting for the user's reply has not delivered its result yet either.
-        if (forPath.current === path && ENDED.has(status)) settle();
+        if (ENDED.has(status)) settle();
+        else if (status === 'queued' || status === 'running') {
+          // Resumed by a reply after it ended: it is running for a result again.
+          running.current = true;
+          setParsing(true);
+        }
       },
       onStartFailed: () => {
         retiredStarts.current.delete(path);
