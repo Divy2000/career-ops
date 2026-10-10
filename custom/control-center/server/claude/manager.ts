@@ -25,6 +25,10 @@ import { ackPolicyPass } from '../domains/policyPass.js';
 
 export type TokenReader = () => Promise<string>;
 
+/** A report-number release that fails (the tracker lock busy) is tried this many times, waiting longer each time. */
+const RELEASE_ATTEMPTS = 3;
+const RELEASE_RETRY_MS = 250;
+
 const KEYCHAIN_HELP = 'Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
 
 /** Reads the OAuth token from the Keychain at spawn time; the value never leaves the process except into the child's env. */
@@ -630,17 +634,28 @@ export class SessionManager {
 
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
   /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
+  /** A failed attempt is tried again (the tracker lock may be busy): nothing else would drop the RESERVED file before a gc. */
   private async releaseReportNum(num: number, used: boolean | null): Promise<string> {
-    let r: Awaited<ReturnType<Exec>>;
-    try {
-      r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
-    } catch (err) {
-      // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
-      return `could not release the reservation for ${num}: ${(err as Error).message}`;
+    let failure = '';
+    for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
+      if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
+      failure = await this.tryReleaseReportNum(num);
+      if (!failure) break;
     }
-    if (r.code !== 0) return `could not release the reservation for ${num}: ${(r.stderr || r.stdout).trim().slice(-200)}`;
+    if (failure) return `could not release the reservation for ${num}: ${failure}`;
     if (used === null) return `the reservation for report number ${num} was released`;
     return used ? `report number ${num} is now held by the report` : `report number ${num} returned to the pool`;
+  }
+
+  /** One release attempt: '' on success, else why it failed. */
+  private async tryReleaseReportNum(num: number): Promise<string> {
+    try {
+      const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--release', String(num)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+      return r.code === 0 ? '' : (r.stderr || r.stdout).trim().slice(-200) || `exit ${r.code}`;
+    } catch (err) {
+      // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
+      return (err as Error).message;
+    }
   }
 }
 

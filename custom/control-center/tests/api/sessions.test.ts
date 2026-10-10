@@ -1611,6 +1611,25 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('a release of the reserved report number that fails once is tried again, so its RESERVED file goes (SEED-claude-05)', async () => {
+    let releases = 0;
+    const flaky: Exec = async (cmd, args, opts) => {
+      if (args.includes('--release') && ++releases === 1) return { code: 1, stdout: '', stderr: 'tracker lock busy' };
+      return execNoShell(cmd, args, opts);
+    };
+    const app = await freshApp({ exec: flaky });
+    try {
+      const sentinel = reserve(app, 68);
+      const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 68 }));
+      const { meta } = await settleOn(app, id);
+      expect(releases).toBe(2);
+      expect(fs.existsSync(sentinel)).toBe(false);
+      expect(meta.lastReason).toMatch(/report number 68 returned to the pool/);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {
