@@ -253,6 +253,8 @@ export function writeGlobsByRoot(globs: readonly string[]): { data: string[]; co
 const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   pipeline: ['data/pipeline.md', 'data/discard.log'],
   scan: ['data/pipeline.md', 'data/scan-history.tsv', 'jds/*.md'],
+  // modes/titles.md: portals.yml's title_filter is the only file the mode writes (after the user confirms the diff).
+  titles: ['portals.yml'],
 };
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */

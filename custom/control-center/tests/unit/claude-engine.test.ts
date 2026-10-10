@@ -396,6 +396,24 @@ describe('guard hook', () => {
     for (const rel of adds) expect(write(discover, path.join(data, rel)), `discover ${rel}`).toBe(2);
   });
 
+  /** The guard's answer to a Write of `rel` (relative to the data root) for each mode; 0 allows it, 2 refuses it. */
+  function writesFor(modes: string[], rels: string[]): Record<string, number> {
+    const code = fs.realpathSync(tempDir('cc-extra-code-'));
+    const data = fs.realpathSync(tempDir('cc-extra-data-'));
+    const out: Record<string, number> = {};
+    for (const mode of modes) {
+      const dir = fs.realpathSync(tempDir(`cc-extra-guard-${mode.replace(/\//g, '-')}-`));
+      const pf = writePolicyFile(dir, { codeRoot: code, dataRoot: data, policy: getModePolicy(mode)!, deny: [...ALWAYS_DENIED_WRITES] });
+      for (const rel of rels) out[`${mode} ${rel}`] = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(data, rel), content: 'x' }, cwd: code, session_id: 's' }).status!;
+    }
+    return out;
+  }
+
+  it('titles mode may write portals.yml, the only file modes/titles.md writes; other profile modes may not (R14-claude-L2-01)', () => {
+    expect(writesFor(['titles'], ['portals.yml', 'data/applications.md'])).toEqual({ 'titles portals.yml': 0, 'titles data/applications.md': 2 });
+    expect(writesFor(['intake'], ['portals.yml'])).toEqual({ 'intake portals.yml': 2 });
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));
