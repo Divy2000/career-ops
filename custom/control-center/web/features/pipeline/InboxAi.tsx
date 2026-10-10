@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
@@ -36,10 +36,22 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   const [open, setOpen] = useState(process.panel.sessionId !== null);
   // New run lets go of the finished run (it stays on the Sessions page) and remounts the panel on its start form.
   const [fresh, setFresh] = useState(0);
+  // The run's own status: one waiting for the user's reply still owns the inbox (the reply carries it on), so it offers
+  // no New run beside it.
+  const [processStatus, setProcessStatus] = useState<string | null>(null);
+  const rememberProcessStatus = process.panel.onStatus;
+  const onProcessStatus = useCallback(
+    (s: string) => {
+      setProcessStatus(s);
+      rememberProcessStatus(s);
+    },
+    [rememberProcessStatus],
+  );
   // The session New run let go of: a sessions list read before it ended may still list it as live.
   const [letGo, setLetGo] = useState<string | null>(null);
   const newRun = () => {
     setLetGo(process.panel.sessionId);
+    setProcessStatus(null);
     // Letting go is what a deleted session gets: the store forgets it and no session is attached.
     process.panel.onStatus('gone');
     setFresh((n) => n + 1);
@@ -116,7 +128,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           </span>
         )}
       </div>
-      {open && process.shown && !process.busy && (
+      {open && process.shown && !process.busy && processStatus !== 'awaiting_user' && (
         <div className="row gap">
           <button type="button" onClick={newRun}>
             New run
@@ -128,7 +140,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           <p role="status" className="muted small">
             Checking for a Process inbox already running.
           </p>
-        ) : !process.shown && sessions.data === undefined ? (
+        ) : !process.shown && sessions.isError ? (
           <p role="alert" className="danger-text small">
             Could not check for a running Process inbox, so it cannot start until the sessions list loads.
           </p>
@@ -137,7 +149,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
             {busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again. It can start once they finish.
           </p>
         ) : (
-          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
         ))}
     </div>
   );

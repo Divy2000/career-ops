@@ -192,6 +192,37 @@ describe('Process inbox and the evaluations do not run over the same rows', () =
   });
 });
 
+describe('Process inbox guard after review', () => {
+  it('given its run waiting for the user, Process inbox offers no New run, since the reply carries that run on (review)', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-wait');
+    sessions = [{ ...session('s-wait', 'awaiting_user', { type: 'none', value: null }), mode: 'pipeline' }];
+    await mount();
+    await until(() => pipelinePanel(), 'the re-attached panel');
+    await act(async () => pipelinePanel()!.onStatus!('awaiting_user', null));
+    expect(button('New run')).toBeUndefined();
+  });
+
+  it('given a sessions list whose refresh failed, Process inbox offers no start form on the stale list (review)', async () => {
+    let down = false;
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (down && input === '/api/sessions' && !init?.method ? new Response('down', { status: 503 }) : inner(input as string, init)));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { PipelinePage } = await import('@web/features/pipeline/PipelinePage');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    root = createRoot(host);
+    const rootRoute = createRootRoute();
+    const pipeline = createRoute({ getParentRoute: () => rootRoute, path: '/pipeline', component: PipelinePage, validateSearch: () => ({ tab: 'inbox' as const }) });
+    const router = createRouter({ routeTree: rootRoute.addChildren([pipeline]), history: createMemoryHistory({ initialEntries: ['/pipeline'] }) });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(RouterProvider, { router })))));
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'the sessions list');
+    down = true;
+    await act(async () => qc.refetchQueries({ queryKey: ['sessions'] }));
+    await act(async () => button('Process inbox')!.click());
+    await until(() => host.textContent?.includes('Could not check for a running Process inbox'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
+  });
+});
+
 describe('Process inbox new run', () => {
   it('after a finished run, New run offers the start form again instead of the old session (review)', async () => {
     sessionStorage.setItem('cc.pipeline.process', 's-old');
