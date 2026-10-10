@@ -280,7 +280,8 @@ trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[
 # supervisor.lock (the file the supervisor keeps via acquireInstanceLock). Running
 # means the lock names a PID that is alive and that started when the lock says it
 # did: a live PID that started at another time is a reused PID, not the Control
-# Center. A missing or stale lock, or a damaged one past its 5 s grace, is not running. npm ci deletes
+# Center. A missing or stale lock, or a damaged one past its 5 s grace, is not
+# running; one that cannot be read is. npm ci deletes
 # node_modules, so a re-run must not reinstall under a running instance (its
 # blue/green reload would race the deletion), and the finish must not start a
 # second instance that would refuse the lock.
@@ -292,14 +293,18 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+let text;
+try { text = fs.readFileSync(process.argv[1], "utf8"); }
+// Gone is not running; a lock that cannot be read is, since acquireInstanceLock throws on it rather than replacing it.
+catch (e) { process.exit(e.code === "ENOENT" ? 1 : 0); }
 let pid = 0, start = null;
 try {
-  const l = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const l = JSON.parse(text);
   if (Number.isInteger(l.pid) && l.pid > 0 && Number.isInteger(l.port)) {
     pid = l.pid;
     start = typeof l.start === "number" && Number.isFinite(l.start) ? l.start : null;
   }
-} catch { /* a damaged lock, judged below */ }
+} catch { /* damaged content, judged below */ }
 // A lock parseHolder in supervisor/instance-lock.ts rejects (no positive integer pid, no integer port) is damaged:
 // the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
 // as running, and replaces an older one, so that does not.
