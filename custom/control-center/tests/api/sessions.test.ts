@@ -1834,4 +1834,24 @@ describe('r18 manager fixes', () => {
       await app.close();
     }
   });
+
+  it('runEnded waits for a recorded exit, not a non-running status (R18-claude-L1-03)', async () => {
+    const app = await freshApp();
+    const runEnded = (app.sessions as unknown as { runEnded: (id: string) => Promise<boolean> }).runEnded.bind(app.sessions);
+    try {
+      // A cancelled run whose process has not exited yet: runner.cancel marks it cancelled at once, but no exit is recorded.
+      const run = app.runner.store.create({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT }, params: {} });
+      app.runner.store.write({ ...run, status: 'cancelled', endedAt: null });
+      let done = false;
+      const waiting = runEnded(run.id).then((v) => (done = v));
+      // The status left running, but the run has not ended: runEnded must not report it ended on status alone.
+      await wait(300);
+      expect(done).toBe(false);
+      // Its exit is recorded (the process ended): only now is the run over.
+      app.runner.store.write({ ...app.runner.store.read(run.id)!, endedAt: new Date().toISOString() });
+      expect(await waiting).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
 });

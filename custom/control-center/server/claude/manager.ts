@@ -672,8 +672,10 @@ export class SessionManager {
   private async runEnded(runId: string): Promise<boolean> {
     const deadline = Date.now() + RUN_END_WAIT_MS;
     for (;;) {
-      const status = this.runner.store.read(runId)?.status;
-      if (status !== 'queued' && status !== 'running') return true;
+      // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
+      // SIGKILL: only a recorded exit (endedAt) proves it can no longer write its report. A missing record proves nothing.
+      const run = this.runner.store.read(runId);
+      if (run !== null && run.endedAt !== null) return true;
       if (Date.now() > deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
