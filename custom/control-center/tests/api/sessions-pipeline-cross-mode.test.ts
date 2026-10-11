@@ -232,3 +232,63 @@ describe('an evaluation of a pending Inbox row while a reply to a finished Proce
     }, app);
   });
 });
+
+describe('a reply or fork of an evaluation of a pending Inbox row while Process inbox is live', () => {
+  for (const route of ['turns', 'fork'] as const) {
+    it(`POST /${route} is refused with 409 naming the Process inbox session, and nothing starts`, async () => {
+      await withApp(async (app) => {
+        const pipe = livePipeline(app);
+        const ended = evaluation(app, INBOX_URL, 'error');
+        const res = await call(app, `/api/sessions/${ended.id}/${route}`, { prompt: 'retry' });
+        expect(res.statusCode).toBe(409);
+        expect((res.json() as { error: string }).error).toContain(pipe.id);
+        expect(count(app, 'oferta')).toBe(1);
+        expect(app.sessions.read(ended.id)!.turns).toHaveLength(0);
+      });
+    });
+  }
+});
+
+describe('a Process inbox start while a reply to a finished evaluation of a pending row is starting', () => {
+  it('is refused with 409: the evaluation carries on, though it still reads done until its turn begins', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reading!: () => void;
+    let held = false;
+    const tokenRead = new Promise<void>((resolve) => {
+      reading = resolve;
+    });
+    const app = await makeTestApp(
+      { dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') },
+      {
+        // Only the reply's read is held: a Process inbox start the server wrongly lets through must not wait on it too.
+        readToken: async () => {
+          if (!held) {
+            held = true;
+            reading();
+            await gate;
+          }
+          return 'fake-oauth-token-for-tests';
+        },
+      },
+    );
+    await withApp(async () => {
+      const ended = evaluation(app, INBOX_URL, 'done');
+      const replyP = call(app, `/api/sessions/${ended.id}/turns`, { prompt: 'one more thing' });
+      let res;
+      try {
+        await tokenRead;
+        expect(app.sessions.read(ended.id)!.status).toBe('done');
+        res = await call(app, '/api/sessions', { mode: 'pipeline', prompt: 'Process the pending pipeline rows' });
+      } finally {
+        release();
+      }
+      expect((await replyP).statusCode).toBe(202);
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(ended.id);
+      expect(count(app, 'pipeline')).toBe(0);
+    }, app);
+  });
+});

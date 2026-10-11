@@ -150,21 +150,26 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const read = readPipeline(opts.cfg.dataRoot);
     return new Set(read.kind === 'ok' ? read.rows.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url) : []);
   };
-  // A reply to a finished Process inbox run carries it on, but the run reads done until its turn begins.
-  const processInboxTurnsStarting = new Set<string>();
+  // A reply to a finished session carries it on over its rows, but the session reads done until its turn begins.
+  const turnsStarting = new Set<string>();
+  const liveOrStarting = (): SessionMeta[] => {
+    const live = liveSessions();
+    const starting = [...turnsStarting].filter((id) => !live.some((m) => m.id === id)).map((id) => manager.read(id));
+    return [...live, ...starting.filter((m): m is SessionMeta => m !== null)];
+  };
   /** Null when evaluations of these URLs in `mode` may start, else the 409 reason: a live Process inbox holds a pending one. */
   const processInboxHolds = (mode: string, urls: string[]): string | null => {
     if (!isReportGated(mode)) return null;
-    const pipe = liveSessions().find((m) => isProcessInbox(m.mode))?.id ?? [...processInboxTurnsStarting][0];
+    const pipe = liveOrStarting().find((m) => isProcessInbox(m.mode));
     if (!pipe) return null;
     const pending = pendingInboxUrls();
     const held = urls.find((u) => pending.has(u));
-    return held ? `Process inbox (session ${pipe}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
+    return held ? `Process inbox (session ${pipe.id}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
   };
   /** Null when a Process inbox turn may run, else the 409 reason: an evaluation of a pending row is live or starting. */
   const evaluationsHold = (): string | null => {
     const pending = pendingInboxUrls();
-    const live = liveSessions().find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
+    const live = liveOrStarting().find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
     if (live) return `session ${live.id} is evaluating the pending Inbox row ${live.target.value}, and Process inbox would evaluate it a second time. Try again once it ends.`;
     const evaluationModes = listLaunchableModeIds().filter(isReportGated);
     for (const url of pending) {
@@ -172,10 +177,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
     return null;
   };
-  /** The 409 reason a reply or fork of a Process inbox run is refused with, or null. */
+  /** The 409 reason a reply or fork is refused with when it would carry on Process inbox or an evaluation over the same pending rows, or null. */
   const turnHeld = (id: string): string | null => {
-    const mode = manager.read(id)?.mode;
-    return mode && isProcessInbox(mode) ? evaluationsHold() : null;
+    const meta = manager.read(id);
+    if (!meta) return null;
+    if (isProcessInbox(meta.mode)) return evaluationsHold();
+    return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
   app.get('/api/sessions', async () => manager.list());
@@ -297,12 +304,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const busy = claimForTurn(req.params.id, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
     const id = req.params.id;
-    const tracked = isProcessInbox(manager.read(id)?.mode ?? '') && !processInboxTurnsStarting.has(id);
-    if (tracked) processInboxTurnsStarting.add(id);
+    const tracked = !turnsStarting.has(id);
+    if (tracked) turnsStarting.add(id);
     try {
       return await mutate(reply, async () => reply.code(202).send(await manager.send(id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
     } finally {
-      if (tracked) processInboxTurnsStarting.delete(id);
+      if (tracked) turnsStarting.delete(id);
     }
   });
 
