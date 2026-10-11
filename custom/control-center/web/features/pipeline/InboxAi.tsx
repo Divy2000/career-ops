@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -38,7 +39,7 @@ const subscribeBatch = (fn: () => void) => {
   batchListeners.add(fn);
   return () => void batchListeners.delete(fn);
 };
-const useBatchStarting = () => useSyncExternalStore(subscribeBatch, () => batchFanOuts > 0);
+export const useBatchStarting = () => useSyncExternalStore(subscribeBatch, () => batchFanOuts > 0);
 
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
@@ -51,6 +52,7 @@ export const PROCESS_INBOX_PROMPT =
 export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking = false, uncheckable = false }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void; checking?: boolean; uncheckable?: boolean }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
   // The pipeline session is paid and edits data/pipeline.md: the last one is re-attached when the page comes back, and
   // while it is starting, queued or running the button shows it instead of closing it, so a second one cannot start.
   const process = useRememberedSession('cc.pipeline.process');
@@ -133,8 +135,12 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     if (unique.length === 0 || tooMany || asking.current) return;
     asking.current = true;
     setBusy(true);
+    let marked = false;
     try {
       if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
+      // Counted like a Batch fan-out, so the Batch tab waits for it too once this tab is left.
+      markBatchStarting(true);
+      marked = true;
       const r = await fanOut('oferta', unique);
       const outcome = fanoutOutcome(r);
       setNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
@@ -145,6 +151,10 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     } finally {
       // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
       onFanOut?.();
+      if (marked) {
+        await queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined);
+        markBatchStarting(false);
+      }
       asking.current = false;
       setBusy(false);
     }
@@ -160,10 +170,11 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
         <button type="button" onClick={() => setOpen((o) => (process.busy ? true : !o))} aria-expanded={open}>
           Process inbox <Pill tone="warn">Uses tokens</Pill>
         </button>
-        <button type="button" disabled={busy || checking || pipelineLive || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
+        <button type="button" disabled={busy || batchStarting || checking || pipelineLive || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {pipelineLive && <span className="muted small">Process inbox is processing the pending rows, so Evaluate visible is off until it ends.</span>}
+        {batchStarting && <span className="muted small">Batch evaluations are starting, so Evaluate visible is off until they have.</span>}
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
         {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
         {savedJds > 0 && (

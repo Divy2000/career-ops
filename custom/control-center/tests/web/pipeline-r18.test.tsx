@@ -240,6 +240,37 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => hold!.release());
   });
 
+  it('given a Batch evaluate fan-out in flight, Evaluate visible and a remounted Batch evaluate are off', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    await act(async () => (await until(() => button('Start them'), 'the confirm')).click());
+    await until(() => hold, 'the fan-out sent');
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
+    await until(() => button('Evaluate visible (2)'), 'the Inbox tab');
+    await settle();
+    expect(button('Evaluate visible (2)')!.disabled).toBe(true);
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+    await typeUrls('https://jobs.example.com/busy');
+    await settle();
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+    await act(async () => hold!.release());
+  });
+
+  it('given an Evaluate visible fan-out in flight and the user on the Batch tab, Batch evaluate is off', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
+    await act(async () => button('Evaluate visible (2)')!.click());
+    await until(() => hold, 'the fan-out sent');
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+    await typeUrls('https://jobs.example.com/busy');
+    await settle();
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+  });
+
   it('given a Batch evaluate fan-out still in flight after the start window, Process inbox is still held back', async () => {
     holdUrl = '/api/sessions/fanout';
     const router = await mount('batch');

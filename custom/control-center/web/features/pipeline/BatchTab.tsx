@@ -11,7 +11,7 @@ import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
-import { livePipelineId, markBatchStarting } from './InboxAi';
+import { livePipelineId, markBatchStarting, useBatchStarting } from './InboxAi';
 
 // Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
 // server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
@@ -63,7 +63,9 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     void refetch().finally(() => setReadFor(processId));
   }, [processUnlisted, processId, readFor, refetch]);
   const pipelineLive = process.waiting || livePipelineId(sessions.data) !== null;
-  const blocked = pipelineLive || sessions.isPending || sessions.isError || (processUnlisted && readFor !== processId);
+  // Another mount's fan-out (this tab left and came back while it runs) is in no list yet either.
+  const fanningOut = useBatchStarting();
+  const blocked = fanningOut || pipelineLive || sessions.isPending || sessions.isError || (processUnlisted && readFor !== processId);
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
   const asking = useRef(false);
   // A start can answer after the user left the page: only a still-mounted one moves them to the session.
