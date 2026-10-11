@@ -295,15 +295,20 @@ function EvaluateJd({ reference, label, running, checking }: { reference: string
     if (jd === null) return;
     setBusy(true);
     setError(null);
-    // A start can answer after the user left the page: only one still on it moves them to the session. The page, not
-    // this row's button, which a filter or a refreshed list can take away while the user stays.
+    // A start can answer after the user left the page, or left and came back: only one that never left moves them to the
+    // session. The page, not this row's button, which a filter or a refreshed list can take away while the user stays.
     const page = router.state.location.pathname;
+    let left = false;
+    const unsubscribe = router.subscribe('onBeforeNavigate', (e) => {
+      if (e.toLocation.pathname !== page) left = true;
+    });
     try {
       const m = await startSavedJdSession(reference, jd);
-      if (router.state.location.pathname === page) await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (!left) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(`Could not start the evaluation: ${describeError(err)}`);
     } finally {
+      unsubscribe();
       setBusy(false);
     }
   };
