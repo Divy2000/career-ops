@@ -523,14 +523,15 @@ jobTest('a scheduled run that finds the update holding the lock an instant befor
   }
 });
 
-jobTest('a run the Control Center started while the weekly sync updates the live checkout says so instead of claiming the daily job runs (R15-scripts-b-L1-02)', async () => {
+// The installer borrows the same lock and marker as the weekly sync, so the message names neither alone (R18 review).
+jobTest('a run the Control Center started while an install or the weekly sync updates the live checkout says so instead of claiming the daily job runs (R15-scripts-b-L1-02)', async () => {
   const w = dailyWorld();
   const imm = path.join(w.data, 'data', 'immigration');
   const update = await liveUpdateHolder(imm, 60);
   try {
     const r = w.run({ CC_RUN_DAILY_SKIP_EXIT: '75' });
     assert.equal(r.status, 75, r.stderr);
-    assert.match(r.stderr, /^run-daily: skipped, because the weekly upstream sync is updating the live checkout \(it holds the daily job's lock\); try again in a few minutes$/m);
+    assert.match(r.stderr, /^run-daily: skipped, because an install or update is changing the live checkout \(it holds the daily job's lock\); try again in a few minutes$/m);
     assert.equal(r.steps, '');
   } finally {
     update.stop();
