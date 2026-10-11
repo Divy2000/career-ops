@@ -262,31 +262,34 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const actions = useActions();
   const modes = useQuery({ queryKey: ['modes'], queryFn: () => apiGet<ModePolicy[]>('/api/modes'), staleTime: 60_000, enabled: open });
   const confirm = useConfirm();
-  // Several palette runs can be in flight at once, so each run's message and output are kept with the action they belong
-  // to rather than read from the hook's shared state, which the last run to finish owns.
+  // Several palette runs can be in flight at once, so each run's message and output are kept with the run they belong to
+  // rather than read from the hook's shared state, which the last run to finish owns. A params dialog run answers only
+  // the dialog opening it came from: the same action's dialog closed and opened again is a new opening.
   const { run } = useRunAction();
   const [shownOutput, setShownOutput] = useState<{ label: string; text: string } | null>(null);
-  const [failure, setFailure] = useState<{ id: string; text: string } | null>(null);
+  const [failure, setFailure] = useState<{ opening: number; text: string } | null>(null);
+  const openings = useRef(0);
   const { setMode } = useTheme();
   const [launch, setLaunch] = useState<string | null>(null);
-  const [withParams, setWithParams] = useState<ActionMeta | null>(null);
+  const [withParams, setWithParams] = useState<{ action: ActionMeta; opening: number } | null>(null);
   const go = (to: string) => {
     onOpenChange(false);
     void navigate({ to: to as '/' });
   };
-  const execute = async (a: ActionMeta, params: Record<string, unknown>, fromDialog = false) => {
+  /** opening: the params dialog opening the run came from, if any. */
+  const execute = async (a: ActionMeta, params: Record<string, unknown>, opening?: number) => {
     if (a.confirm && !(await confirm({ title: a.label, body: a.confirm, confirmLabel: 'Run', danger: true }))) return;
-    setFailure((cur) => (cur?.id === a.id ? null : cur));
+    if (opening !== undefined) setFailure((cur) => (cur?.opening === opening ? null : cur));
     let result: RunResult | null = null;
     const out = await run(a.id, params, undefined, { confirmed: Boolean(a.confirm), onSettled: (r) => (result = r) });
     const settled = result as RunResult | null;
     // Refused or failed: the params dialog stays with what was typed and says why, so one field can be fixed.
-    if (out === null && fromDialog) {
-      if (settled) setFailure({ id: a.id, text: settled.message.text });
+    if (out === null && opening !== undefined) {
+      if (settled) setFailure({ opening, text: settled.message.text });
       return;
     }
-    // Another action's params dialog may have opened while this one ran: only this action's dialog closes.
-    setWithParams((cur) => (cur?.id === a.id ? null : cur));
+    // Another params dialog may have opened while this one ran: only the dialog this run came from closes.
+    if (opening !== undefined) setWithParams((cur) => (cur?.opening === opening ? null : cur));
     if (out && 'runId' in out) void navigate({ to: '/runs' });
     else if (settled?.output != null) setShownOutput({ label: a.label, text: settled.output });
   };
@@ -294,7 +297,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     onOpenChange(false);
     if (needsParamsDialog(a)) {
       setFailure(null);
-      setWithParams(a);
+      setWithParams({ action: a, opening: ++openings.current });
     }
     else void execute(a, {});
   };
@@ -355,7 +358,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       {launch && <ModeLaunchDialog key={launch} mode={launch} onClose={() => setLaunch(null)} />}
       {shownOutput && <ActionOutputDialog label={shownOutput.label} text={shownOutput.text} onClose={() => setShownOutput(null)} />}
       {withParams && (
-        <ActionParamsDialog action={withParams} error={failure?.id === withParams.id ? failure.text : null} onClose={() => setWithParams(null)} onRun={(p) => execute(withParams, p, true)} />
+        <ActionParamsDialog
+          key={withParams.opening}
+          action={withParams.action}
+          error={failure?.opening === withParams.opening ? failure.text : null}
+          onClose={() => setWithParams(null)}
+          onRun={(p) => execute(withParams.action, p, withParams.opening)}
+        />
       )}
     </>
   );
