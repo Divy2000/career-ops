@@ -5,6 +5,7 @@ import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { pipelineAddBatches } from '@shared/pipeline-add';
 import { postingUrl } from '@shared/posting-url';
+import { dedupUrlKey } from '@shared/dedup-url';
 import { SessionPanel } from '../../components/SessionPanel';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { Pill, TableScroll } from '../../components/ui';
@@ -59,15 +60,24 @@ export function AiSearchTab() {
     remembered.panel.onStatus('gone');
     reset();
   };
-  const known = new Set<string>([...(pipeline.data?.kind === 'ok' ? pipeline.data.rows.map((r) => r.url) : []), ...(tracker.data?.kind === 'ok' ? tracker.data.rows.map((r) => r.url ?? '') : [])]);
+  // Keyed as the add route dedups, so a tracking-parameter or fragment variant of a listed posting is already known.
+  const known = new Set<string>([...(pipeline.data?.kind === 'ok' ? pipeline.data.rows.map((r) => r.url) : []), ...(tracker.data?.kind === 'ok' ? tracker.data.rows.map((r) => r.url ?? '') : [])].map(dedupUrlKey));
+  const isKnown = (url: string) => known.has(dedupUrlKey(url));
+  // One row per posting as the add route keys it; an addable variant replaces an unaddable one of the same posting.
   const onEnvelope = useCallback((kind: string, payload: unknown) => {
-    if (kind === 'offer') setOffers((prev) => (prev.some((o) => o.url === (payload as Offer).url) ? prev : [...prev, payload as Offer]));
+    if (kind !== 'offer') return;
+    const offer = payload as Offer;
+    setOffers((prev) => {
+      const i = prev.findIndex((o) => dedupUrlKey(o.url) === dedupUrlKey(offer.url));
+      if (i === -1) return [...prev, offer];
+      return !addableUrl(prev[i]!.url) && addableUrl(offer.url) ? prev.map((o, j) => (j === i ? offer : o)) : prev;
+    });
   }, []);
   // One add at a time: a second click before the first answers would send the same offers and relabel them.
   const [adding, setAdding] = useState(false);
   const addingRef = useRef(false);
   const add = async (list: Offer[]) => {
-    const fresh = list.filter((o) => addableUrl(o.url) && !known.has(o.url) && !sent.has(o.url));
+    const fresh = list.filter((o) => addableUrl(o.url) && !isKnown(o.url) && !sent.has(o.url));
     if (fresh.length === 0 || addingRef.current) return;
     addingRef.current = true;
     setAdding(true);
@@ -93,7 +103,7 @@ export function AiSearchTab() {
       setAdding(false);
     }
   };
-  const newOnes = offers.filter((o) => addableUrl(o.url) && !known.has(o.url) && !sent.has(o.url));
+  const newOnes = offers.filter((o) => addableUrl(o.url) && !isKnown(o.url) && !sent.has(o.url));
   return (
     <div className="stack">
       {remembered.shown && !remembered.busy && (
@@ -141,7 +151,7 @@ export function AiSearchTab() {
                 {offers.map((o) => {
                   // What this page sent decides first: once added, the refetched pipeline lists the URL too.
                   const done = sent.get(o.url);
-                  const dup = done === undefined && known.has(o.url);
+                  const dup = done === undefined && isKnown(o.url);
                   const refused = done === undefined && !dup && !addableUrl(o.url);
                   return (
                     <tr key={o.url}>

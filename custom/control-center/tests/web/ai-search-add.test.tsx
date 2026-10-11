@@ -28,6 +28,8 @@ vi.mock('@web/components/SessionPanel', async () => {
 
 type Offer = { url: string; company: string; title: string; location?: string; portal?: string; postedAt?: string };
 let posted: Array<{ offers: Offer[] }>;
+/** URLs data/pipeline.md already lists before the test adds anything. */
+let listed: string[];
 let addResponse: (body: { offers: Offer[] }) => Response;
 let host: HTMLElement;
 let root: Root;
@@ -46,13 +48,14 @@ beforeEach(async () => {
   document.body.innerHTML = '';
   sessionStorage.clear();
   posted = [];
+  listed = [];
   addResponse = routeLike;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       // Like the server: what an add wrote is in the pipeline the next time it is read.
-      if (url === '/api/pipeline') return json(200, { kind: 'ok', path: 'data/pipeline.md', rows: posted.flatMap((b) => b.offers.map((o) => ({ url: o.url }))), etag: 'e' });
+      if (url === '/api/pipeline') return json(200, { kind: 'ok', path: 'data/pipeline.md', rows: [...listed.map((u) => ({ url: u })), ...posted.flatMap((b) => b.offers.map((o) => ({ url: o.url })))], etag: 'e' });
       if (url === '/api/tracker') return json(200, { kind: 'ok', rows: [] });
       if (url === '/api/pipeline/add' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as { offers: Offer[] };
@@ -88,6 +91,41 @@ async function until(fn: () => boolean, what: string) {
 }
 
 describe('Discover > AI search: add', () => {
+  it('two offers in one search that the add route dedups as one posting show once and add once (R19-feat-a-L2-01)', async () => {
+    await act(async () => emitEnvelope!('offer', { url: 'https://boards.greenhouse.io/acme/jobs/123', company: 'Acme', title: 'Backend Engineer' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://boards.greenhouse.io/acme/jobs/123?gh_src=x#apply', company: 'Acme', title: 'Backend Engineer' }, 1));
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
+    expect(button('Add all new').textContent).toContain('(1)');
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(status()).toBe('Added 1 to the pipeline');
+    expect(posted.flatMap((b) => b.offers.map((o) => o.url))).toEqual(['https://boards.greenhouse.io/acme/jobs/123']);
+  });
+
+  it('an unaddable variant arriving first gives way to an addable one of the same posting (R19-feat-a-L2-01)', async () => {
+    await act(async () => emitEnvelope!('offer', { url: `https://jobs.example.com/9?utm_source=${'x'.repeat(2100)}`, company: 'Acme', title: 'SRE' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/9', company: 'Acme', title: 'SRE' }, 1));
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
+    await act(async () => button('Add all new').click());
+    await until(() => status().startsWith('Added'), 'the add result');
+    expect(posted.flatMap((b) => b.offers.map((o) => o.url))).toEqual(['https://jobs.example.com/9']);
+  });
+
+  it('an offer whose URL differs from a listed posting only by tracking parameters, fragment, host case or a trailing slash is already known, as the add route dedups it (R19-feat-a-L2-01)', async () => {
+    listed = ['https://boards.greenhouse.io/acme/jobs/123', 'https://jobs.lever.co/globex/abc'];
+    // Mounted again so the pipeline is read with these rows already listed.
+    await act(async () => root.unmount());
+    await mount();
+    await act(async () => emitEnvelope!('offer', { url: 'https://boards.greenhouse.io/acme/jobs/123?gh_src=abc1&utm_source=x#apply', company: 'Acme', title: 'Backend Engineer' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://Jobs.Lever.co/globex/abc/?lever-origin=applied', company: 'Globex', title: 'SRE' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://boards.greenhouse.io/acme/jobs/124?gh_src=abc1', company: 'Acme', title: 'Data Engineer' }, 1));
+    await until(() => [...host.querySelectorAll('tbody tr')].filter((tr) => tr.textContent?.includes('already known')).length === 2, 'the listed postings marked already known');
+    const rows = [...host.querySelectorAll('tbody tr')];
+    expect(rows.map((tr) => tr.querySelectorAll('td')[3]!.textContent)).toEqual(['already known', 'already known', 'new']);
+    expect(rows[0]!.querySelector('button')!.disabled).toBe(true);
+    expect(button('Add all new').textContent).toContain('(1)');
+  });
+
   it('Add all new shortens a location or title past the route limits and adds every offer', async () => {
     const offices = Array.from({ length: 30 }, (_, i) => `Office ${i + 1}, Somewhere`).join('; ');
     await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/1', company: 'Acme', title: 'Backend Engineer', location: offices }, 1));

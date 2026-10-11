@@ -21,7 +21,7 @@ function urgencyTone(u: string): 'danger' | 'warn' | 'neutral' | 'info' {
   return 'neutral';
 }
 
-export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone: (msg: string) => void }) {
+export function LogForm({ entry, onDone, onBusyChange }: { entry: FollowupCadenceEntry; onDone: (msg: string) => void; onBusyChange?: (busy: boolean) => void }) {
   const [date, setDate] = useState(localDate());
   const [channel, setChannel] = useState('Email');
   const [contact, setContact] = useState('');
@@ -31,6 +31,7 @@ export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
+    onBusyChange?.(true);
     setError(null);
     try {
       const r = await apiSend<{ num: number }>('POST', '/api/followups/log', { appNum: entry.num, date, channel, contact, notes });
@@ -39,6 +40,7 @@ export function LogForm({ entry, onDone }: { entry: FollowupCadenceEntry; onDone
       setError(describeError(err));
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
     }
   };
   return (
@@ -81,6 +83,8 @@ export function CadenceTab() {
   const q = useFollowups();
   const qc = useQueryClient();
   const [logging, setLogging] = useState<number | null>(null);
+  // Opening Log on another row while a save is in flight would unmount the saving form, hiding its error.
+  const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const confirm = useConfirm();
@@ -173,7 +177,9 @@ export function CadenceTab() {
                       open={open === e.num}
                       onToggle={() => setOpen(open === e.num ? null : e.num)}
                       logging={logging === e.num}
+                      logLocked={saving && logging !== e.num}
                       onLog={() => setLogging(e.num)}
+                      onSaving={setSaving}
                       onLogged={(m) => {
                         setLogging(null);
                         if (m) {
@@ -364,7 +370,7 @@ export function FollowupHistory({ company, followups, onDelete }: { company: str
   );
 }
 
-function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; onLog: () => void; onLogged: (m: string) => void; onPin: (appNum: number, date: string | null) => void; onDelete: (num: number) => void }) {
+function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; logLocked: boolean; onLog: () => void; onSaving: (busy: boolean) => void; onLogged: (m: string) => void; onPin: (appNum: number, date: string | null) => void; onDelete: (num: number) => void }) {
   return (
     <>
       <tr>
@@ -392,7 +398,7 @@ function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete
         </td>
         <td>
           <div className="row gap">
-            <button type="button" aria-label={`Log follow-up for ${e.company}`} onClick={onLog}>
+            <button type="button" aria-label={`Log follow-up for ${e.company}`} onClick={onLog} disabled={logLocked} title={logLocked ? 'Another follow-up is being saved' : undefined}>
               Log
             </button>
             {/* The cadence keeps a retired application retired whatever date is pinned: logging a follow-up revives it. */}
@@ -408,7 +414,7 @@ function RowGroup({ e, open, onToggle, logging, onLog, onLogged, onPin, onDelete
       {logging && (
         <tr>
           <td colSpan={8}>
-            <LogForm entry={e} onDone={onLogged} />
+            <LogForm entry={e} onDone={onLogged} onBusyChange={onSaving} />
           </td>
         </tr>
       )}
