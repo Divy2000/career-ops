@@ -134,8 +134,9 @@ describe('the daily job probe on real processes', () => {
       fs.mkdirSync(bin);
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'immigration', 'run-daily.sh'), path.join(root, 'custom', 'immigration', 'run-daily.sh'));
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
-      // It waits until afterEach kills the job's process group, so how long the job lives never depends on the host's load.
-      fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nexec /bin/sleep 100000\n', { mode: 0o755 });
+      // It outlasts the test timeout, so afterEach's kill of the job's process group ends it, not the host's load; a
+      // worker that dies before afterEach still leaves nothing behind for longer than ten minutes.
+      fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nexec /bin/sleep 600\n', { mode: 0o755 });
       // The longest Keychain wait run-daily.sh allows, so its own bound never ends the job before the test does.
       const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, CAREER_OPS_ROOT: data, CC_KEYCHAIN_TIMEOUT: '3600' };
       return { root, data, env };
