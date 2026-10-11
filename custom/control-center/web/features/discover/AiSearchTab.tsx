@@ -10,6 +10,7 @@ import { SessionPanel } from '../../components/SessionPanel';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { Pill, TableScroll } from '../../components/ui';
 import { addNote } from './addNote';
+import { PostingLink } from './PostingLink';
 
 interface Offer {
   url: string;
@@ -161,9 +162,7 @@ export function AiSearchTab() {
                     <tr key={o.url}>
                       <td>{o.company}</td>
                       <td>
-                        <a href={o.url} target="_blank" rel="noreferrer noopener">
-                          {o.title}
-                        </a>
+                        <PostingLink url={o.url}>{o.title}</PostingLink>
                       </td>
                       <td className="muted">{o.location ?? ''}</td>
                       <td>{dup ? <Pill>already known</Pill> : refused ? <Pill tone="warn">not a posting URL</Pill> : done === 'added' ? <Pill tone="ok">added</Pill> : done ? <Pill>{done}</Pill> : <Pill tone="accent">new</Pill>}</td>

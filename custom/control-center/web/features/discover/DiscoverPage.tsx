@@ -8,10 +8,12 @@ import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
 import { addNote } from './addNote';
+import { PostingLink } from './PostingLink';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { lastSession } from '../../lib/lastSession';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
+import { postingUrl } from '@shared/posting-url';
 import { NETWORK_SCAN_SOURCES, type NetworkScanSource } from '@shared/network-scan';
 
 const route = getRouteApi('/discover');
@@ -221,27 +223,112 @@ function scanDegradations(summary: ScanSummary): { notes: string[]; noData: bool
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
 const networkRun = lastSession('cc.discover.networkScan');
 
+const SINCE_DAYS = [1, 3, 7, 14, 30] as const;
+const DEPTHS = [50, 100, 200, 500] as const;
+interface NetworkFilters {
+  roles: string;
+  exclude: string;
+  locations: string;
+  sinceDays: (typeof SINCE_DAYS)[number];
+  ats: NetworkScanSource[];
+  limit: number;
+}
+const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: 'intern', locations: 'Remote', sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 };
+
+// The filters the remembered run used, kept beside its id: a re-attached results card must sit under the form it ran.
+const NETWORK_FILTERS_KEY = 'cc.discover.networkScan.params';
+/** A stored or server-side filter record, field by field: a malformed field takes its default. */
+function filtersFrom(raw: unknown): NetworkFilters | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const v = raw as Record<string, unknown>;
+  const text = (x: unknown, fallback: string) => (typeof x === 'string' ? x : fallback);
+  const ats = Array.isArray(v.ats) && v.ats.length > 0 && new Set(v.ats).size === v.ats.length && v.ats.every((a) => (NETWORK_SCAN_SOURCES as readonly unknown[]).includes(a)) ? (v.ats as NetworkScanSource[]) : DEFAULT_FILTERS.ats;
+  return {
+    roles: text(v.roles, DEFAULT_FILTERS.roles),
+    exclude: text(v.exclude, DEFAULT_FILTERS.exclude),
+    locations: text(v.locations, DEFAULT_FILTERS.locations),
+    sinceDays: SINCE_DAYS.find((d) => d === v.sinceDays) ?? DEFAULT_FILTERS.sinceDays,
+    ats,
+    limit: DEPTHS.find((d) => d === v.limit) ?? DEFAULT_FILTERS.limit,
+  };
+}
+function readRunFilters(): NetworkFilters | null {
+  if (networkRun.read() === null) return null;
+  try {
+    return filtersFrom(JSON.parse(sessionStorage.getItem(NETWORK_FILTERS_KEY) ?? 'null'));
+  } catch {
+    return null;
+  }
+}
+/** The scan.network params the server ran a run with, in the form's terms (lists back to comma-separated text). */
+function filtersFromRunParams(params: unknown): NetworkFilters | null {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
+  const p = params as Record<string, unknown>;
+  const list = (x: unknown) => (Array.isArray(x) && x.every((s) => typeof s === 'string') ? x.join(', ') : undefined);
+  return filtersFrom({ roles: list(p.roles), exclude: list(p.exclude), locations: list(p.locationAllow), sinceDays: p.sinceDays, ats: p.ats, limit: p.limit });
+}
+function writeRunFilters(filters: NetworkFilters | null): void {
+  try {
+    if (filters) sessionStorage.setItem(NETWORK_FILTERS_KEY, JSON.stringify(filters));
+    else sessionStorage.removeItem(NETWORK_FILTERS_KEY);
+  } catch {
+    // storage refused: a re-attached run only shows the default filters
+  }
+}
+
 export function NetworkScan() {
   const actions = useActions();
   const qc = useQueryClient();
   const { run, busy, message, setMessage } = useRunAction();
-  const [roles, setRoles] = useState('backend, platform');
-  const [exclude, setExclude] = useState('intern');
-  const [locations, setLocations] = useState('Remote');
-  const [sinceDays, setSinceDays] = useState<1 | 3 | 7 | 14 | 30>(7);
-  const [ats, setAts] = useState<NetworkScanSource[]>(['greenhouse', 'lever']);
-  const [limit, setLimit] = useState(100);
+  const [stored] = useState(readRunFilters);
+  const initial = stored ?? DEFAULT_FILTERS;
+  const [roles, setRoles] = useState(initial.roles);
+  const [exclude, setExclude] = useState(initial.exclude);
+  const [locations, setLocations] = useState(initial.locations);
+  const [sinceDays, setSinceDays] = useState(initial.sinceDays);
+  const [ats, setAts] = useState(initial.ats);
+  const [limit, setLimit] = useState(initial.limit);
   const [runId, setRunIdState] = useState<string | null>(networkRun.read);
-  const setRunId = (id: string) => {
+  const setRunId = (id: string, filters: NetworkFilters) => {
+    writeRunFilters(filters);
     networkRun.write(id);
     setRunIdState(id);
   };
+  // A run remembered without its filters (an older page started it) takes them from the run itself, unless the form
+  // was edited or submitted first.
+  const edited = useRef(false);
+  const [initialRunId] = useState(runId);
+  useEffect(() => {
+    if (stored || !initialRunId) return;
+    let disposed = false;
+    apiGet<{ meta?: { params?: unknown } }>(`/api/runs/${initialRunId}`).then(
+      (r) => {
+        const f = filtersFromRunParams(r.meta?.params);
+        if (disposed || edited.current || !f) return;
+        writeRunFilters(f);
+        setRoles(f.roles);
+        setExclude(f.exclude);
+        setLocations(f.locations);
+        setSinceDays(f.sinceDays);
+        setAts(f.ats);
+        setLimit(f.limit);
+      },
+      () => {
+        // the run's own stream reports a run the server no longer has; the form keeps its defaults
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [stored, initialRunId]);
   const [filter, setFilter] = useState('');
   const { lines, status } = useRunLines(runId);
   // Nothing to follow: the results card goes, and the run is not re-attached next time.
   const gone = status === RUN_GONE;
   useEffect(() => {
-    if (gone) networkRun.write(null);
+    if (!gone) return;
+    networkRun.write(null);
+    writeRunFilters(null);
   }, [gone]);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
   // The remembered run is still going: a second sweep would replace it on the page while it keeps running.
@@ -249,8 +336,11 @@ export function NetworkScan() {
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const start = () => {
     if (running) return;
+    // The form now belongs to this run: a late answer about the older run must not overwrite it.
+    edited.current = true;
+    const filters: NetworkFilters = { roles, exclude, locations, sinceDays, ats, limit };
     void run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
-      if (out && 'runId' in out) setRunId(out.runId);
+      if (out && 'runId' in out) setRunId(out.runId, filters);
     });
   };
   // One add at a time: a second click before the first answers would send the same postings and relabel them.
@@ -282,11 +372,14 @@ export function NetworkScan() {
   };
   const degraded = summary ? scanDegradations(summary) : { notes: [], noData: false };
   const visible = (summary?.postings ?? []).filter((p) => !filter || `${p.company} ${p.title} ${p.location ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
+  // One URL POST /api/pipeline/add refuses fails the whole body, so such a posting is never sent.
+  const addable = visible.filter((p) => postingUrl(p.url) !== null);
   return (
     <div className="stack">
       <form
         className="card stack"
         aria-label="Network scan filters"
+        onChange={() => (edited.current = true)}
         onSubmit={(e) => {
           e.preventDefault();
           start();
@@ -305,7 +398,7 @@ export function NetworkScan() {
           <label>
             <span className="muted">Posted within</span>{' '}
             <select aria-label="Posted window" value={sinceDays} onChange={(e) => setSinceDays(Number(e.target.value) as typeof sinceDays)}>
-              {[1, 3, 7, 14, 30].map((d) => (
+              {SINCE_DAYS.map((d) => (
                 <option key={d} value={d}>
                   {d}d
                 </option>
@@ -315,7 +408,7 @@ export function NetworkScan() {
           <label>
             <span className="muted">Depth</span>{' '}
             <select aria-label="Scan depth" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-              {[50, 100, 200, 500].map((d) => (
+              {DEPTHS.map((d) => (
                 <option key={d} value={d}>
                   {d}
                 </option>
@@ -362,8 +455,8 @@ export function NetworkScan() {
             <>
               <div className="toolbar">
                 <input type="search" aria-label="Filter results" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                <button type="button" disabled={adding} onClick={() => void add(visible)}>
-                  Add all ({visible.length})
+                <button type="button" disabled={adding || addable.length === 0} onClick={() => void add(addable)}>
+                  Add all ({addable.length})
                 </button>
               </div>
               <TableScroll label="Network scan results">
@@ -385,9 +478,7 @@ export function NetworkScan() {
                       <tr key={p.url}>
                         <td>{p.company}</td>
                         <td>
-                          <a href={p.url} target="_blank" rel="noreferrer noopener">
-                            {p.title}
-                          </a>
+                          <PostingLink url={p.url}>{p.title}</PostingLink>
                         </td>
                         <td className="muted">{p.location ?? ''}</td>
                         <td className="mono muted">{p.postedAt ?? ''}</td>
@@ -395,9 +486,13 @@ export function NetworkScan() {
                           <Pill>{p.source ?? ''}</Pill>
                         </td>
                         <td>
-                          <button type="button" aria-label={`Add ${p.company} ${p.title}`} disabled={adding} onClick={() => void add([p])}>
-                            Add
-                          </button>
+                          {postingUrl(p.url) === null ? (
+                            <Pill tone="warn">not a posting URL</Pill>
+                          ) : (
+                            <button type="button" aria-label={`Add ${p.company} ${p.title}`} disabled={adding} onClick={() => void add([p])}>
+                              Add
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -413,7 +508,7 @@ export function NetworkScan() {
   );
 }
 
-function Fresh() {
+export function Fresh() {
   const q = useWhatsNew(7, 50);
   return (
     <DataState query={q}>
@@ -434,9 +529,7 @@ function Fresh() {
                 <tr key={o.url}>
                   <td>{o.company}</td>
                   <td>
-                    <a href={o.url} target="_blank" rel="noreferrer noopener">
-                      {o.title}
-                    </a>
+                    <PostingLink url={o.url}>{o.title}</PostingLink>
                   </td>
                   <td className="mono muted">{o.firstSeen}</td>
                 </tr>
