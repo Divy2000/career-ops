@@ -424,16 +424,18 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const currentUpload = useRef<string | null>(null);
   // Bumped by every change to the draft (file choice, parser fill); an async step that finishes under an older generation is dropped.
   const generation = useRef(0);
-  // Whether the user edited the draft while the current parse ran: its result is then held for them to apply.
-  const editedDuringParse = useRef(false);
+  // Whether the user edited the draft since the parser last wrote it: a result (a follow-up turn too) is then held for
+  // them to apply rather than written over the edit.
+  const editedSinceParse = useRef(false);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
-    editedDuringParse.current = false;
+    editedSinceParse.current = false;
     setHeldResult(null);
     parse.begin(p);
     setUploadPath(p);
   };
   const applyParsed = (markdown: string, forPath: string) => {
+    editedSinceParse.current = false;
     generation.current += 1;
     setSource(forPath);
     setFormat('markdown');
@@ -446,7 +448,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       if (kind !== 'projects' || currentUpload.current !== forPath) return;
       parseDone();
       const markdown = (payload as { markdown: string }).markdown;
-      if (editedDuringParse.current) setHeldResult({ markdown, source: forPath });
+      if (editedSinceParse.current) setHeldResult({ markdown, source: forPath });
       else applyParsed(markdown, forPath);
     },
     [parseDone],
@@ -487,7 +489,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   // A manual edit or format change makes the draft the user's own: it no longer restates the document, so provenance goes.
   const editDraft = (patch: { text?: string; format?: 'json' | 'markdown' }) => {
     generation.current += 1;
-    if (parse.parsing) editedDuringParse.current = true;
+    editedSinceParse.current = true;
     if (patch.text !== undefined) setText(patch.text);
     if (patch.format !== undefined) setFormat(patch.format);
     setSource(null);

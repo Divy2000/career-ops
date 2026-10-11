@@ -199,6 +199,24 @@ describe('Import CV parse sessions', () => {
     expect(button('Replace the draft with the parsed CV')).toBeUndefined();
   });
 
+  it('an edit after the parse result landed is kept from a follow-up turn, and after Replace the next result applies (review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => panel.onStatus!('running', null));
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# First parse' }, 1));
+    expect(textOf('CV markdown')).toBe('# First parse');
+    await typeInto('CV markdown', '# First parse, fixed by hand');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# Second turn' }, 2));
+    expect(textOf('CV markdown')).toBe('# First parse, fixed by hand');
+    await act(async () => button('Replace the draft with the parsed CV').click());
+    expect(textOf('CV markdown')).toBe('# Second turn');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# Third turn' }, 3));
+    expect(textOf('CV markdown')).toBe('# Third turn');
+  });
+
   it('picking another PDF cancels the parse still running for the first', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));
@@ -306,6 +324,25 @@ describe('Import projects', () => {
     expect(textOf('Projects to import')).toBe('## From the parser');
     expect(host.querySelector('[aria-label="Import source"]')?.textContent).toContain('documents/projects/one.pdf');
     expect(button('Replace the draft with the parsed projects')).toBeUndefined();
+  });
+
+  it('an edit after the parse result landed is kept from a follow-up turn, and after Replace the next result applies (review)', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await render(createElement(ProjectsLibrary));
+    await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
+    await choose('Projects file', 'one.pdf');
+    const panel = await until(() => panels.get('projects/one.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-proj'));
+    await act(async () => panel.onStatus!('running', null));
+    await act(async () => panel.onEnvelope!('projects', { markdown: '## First parse' }, 1));
+    expect(textOf('Projects to import')).toBe('## First parse');
+    await typeInto('Projects to import', '## First parse, fixed by hand');
+    await act(async () => panel.onEnvelope!('projects', { markdown: '## Second turn' }, 2));
+    expect(textOf('Projects to import')).toBe('## First parse, fixed by hand');
+    await act(async () => button('Replace the draft with the parsed projects').click());
+    expect(textOf('Projects to import')).toBe('## Second turn');
+    await act(async () => panel.onEnvelope!('projects', { markdown: '## Third turn' }, 3));
+    expect(textOf('Projects to import')).toBe('## Third turn');
   });
 
   it('an upload the network drops says it failed', async () => {

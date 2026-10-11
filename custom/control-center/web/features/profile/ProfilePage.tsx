@@ -136,17 +136,22 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const [conflict, setConflict] = useState<UserFile | null>(null);
   // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
   const currentUpload = useRef<string | null>(null);
-  // Whether the user edited the draft while the current parse ran: its result is then held for them to apply.
-  const editedDuringParse = useRef(false);
+  // Whether the user edited the draft since the parser last wrote it: a result (a follow-up turn too) is then held for
+  // them to apply rather than written over the edit.
+  const editedSinceParse = useRef(false);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
-    editedDuringParse.current = false;
+    editedSinceParse.current = false;
     setHeldResult(null);
     parse.begin(p);
     setUploadPath(p);
   };
+  const applyParsed = (markdown: string) => {
+    editedSinceParse.current = false;
+    setDraft(markdown);
+  };
   const editDraft = (text: string) => {
-    if (parse.parsing) editedDuringParse.current = true;
+    editedSinceParse.current = true;
     setDraft(text);
   };
   const parseDone = parse.done;
@@ -155,8 +160,8 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       if (kind !== 'cv' || currentUpload.current !== forPath) return;
       parseDone();
       const markdown = (payload as { markdown: string }).markdown;
-      if (editedDuringParse.current) setHeldResult(markdown);
-      else setDraft(markdown);
+      if (editedSinceParse.current) setHeldResult(markdown);
+      else applyParsed(markdown);
     },
     [parseDone],
   );
@@ -248,7 +253,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
           <button
             type="button"
             onClick={() => {
-              setDraft(heldResult);
+              applyParsed(heldResult);
               setHeldResult(null);
             }}
           >
