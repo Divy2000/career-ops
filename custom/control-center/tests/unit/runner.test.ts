@@ -227,6 +227,20 @@ describe('Runner', () => {
     expect(runner.store.read(meta.id)).toMatchObject({ status: 'failed', signal: 'SIGKILL', error: expect.stringMatching(/SIGKILL/) });
   });
 
+  it('a cancel that could only signal the wrapper still kills a command that ignores SIGTERM once the grace ends (R18-srv-core-L3-01 review)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(runner.store.read(meta.id)?.childStartedAt) && runner.store.readRaw(meta.id).lines.length >= 1);
+    // Its start could not be confirmed (as when ps answers unknown): cancel signals the wrapper, not the group.
+    runner.store.write({ ...runner.store.read(meta.id)!, childStartedAt: null });
+    runner.cancel(meta.id);
+    await until(() => Boolean(runner.store.read(meta.id)?.endedAt), 15_000);
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
+    expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('ignored');
+  }, 20_000);
+
   it('a cancel that lands while the wrapper is still starting ends the run cancelled, with an exit record and no command left running', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);

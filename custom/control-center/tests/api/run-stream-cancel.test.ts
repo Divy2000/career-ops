@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -81,9 +81,9 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
     }
   }, 30_000);
 
-  it('keeps streaming a cancelled run that takes longer than the SIGKILL grace to stop, when cancel could only signal its wrapper', async () => {
+  it('keeps streaming a cancelled run that outlasts the grace, when cancel could only signal its wrapper, until it is killed', async () => {
     const t = await makeTestApp();
-    // Stops 11 s after SIGTERM: past any fixed settle window; the wrapper branch of cancel sends no SIGKILL.
+    // Would stop 11 s after SIGTERM: past the 5 s grace, so the SIGKILL ends it first.
     const slow = SLOW_STOP.replace('1000);', '11000);');
     const run = t.runner.start({ actionId: 'test.slowstop', label: 'slow stop', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: ['-e', slow], cwd: PACKAGE_ROOT } });
     try {
@@ -97,8 +97,8 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
         }
       });
       const lines = events.filter((e) => e.type === 'line').map((e) => (e.data as { line: string }).line);
-      expect(lines).toEqual(['ready', 'stopping', 'stopped']);
-      expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'cancelled', exitCode: 3, signal: null } });
+      expect(lines).toEqual(['ready', 'stopping']);
+      expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'cancelled', exitCode: null, signal: 'SIGKILL' } });
     } finally {
       const deadline = Date.now() + 20_000;
       while (!t.runner.store.readExit(run.id) && Date.now() < deadline) await wait(50);
@@ -130,6 +130,26 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
       const events = await readRunStream(t, meta.id, 5_000);
       expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'cancelled', exitCode: null, signal: 'SIGTERM' } });
     } finally {
+      await t.close();
+    }
+  }, 30_000);
+
+  it('ends the stream with what is on disk when settling an untracked cancelled run fails, and the server keeps serving', async () => {
+    const t = await makeTestApp();
+    const meta = t.runner.store.create({ actionId: 'test.orphan', label: 'orphan', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [], cwd: PACKAGE_ROOT } });
+    t.runner.store.write({ ...meta, status: 'cancelled', startedAt: new Date().toISOString() });
+    fs.writeFileSync(path.join(t.runner.store.dirOf(meta.id), 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: new Date().toISOString() }));
+    const write = vi.spyOn(t.runner.store, 'write').mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+    try {
+      const events = await readRunStream(t, meta.id, 5_000);
+      expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'cancelled', exitCode: null, signal: null } });
+      write.mockRestore();
+      const health = await t.app.inject({ method: 'GET', url: `/api/runs/${meta.id}`, headers: t.authed });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      write.mockRestore();
       await t.close();
     }
   }, 30_000);

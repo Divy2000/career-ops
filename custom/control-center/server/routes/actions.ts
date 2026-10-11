@@ -130,6 +130,15 @@ function streamRun(runner: Runner, id: string, afterSeq: number, reply: FastifyR
     if (closed) return;
     reply.raw.write(`${idValue !== undefined ? `id: ${idValue}\n` : ''}event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
   };
+  // Settling an untracked cancelled run writes to disk: a failure ends the stream with what is there, never the server.
+  const settling = (runId: string): boolean => {
+    try {
+      return runner.ending(runId);
+    } catch (err) {
+      reply.log.error({ err, runId }, 'could not settle a cancelled run; its stream ends with what is on disk');
+      return false;
+    }
+  };
   const pull = () => {
     const { lines, offset: next } = runner.store.readRaw(id, seq, offset);
     offset = next;
@@ -140,7 +149,7 @@ function streamRun(runner: Runner, id: string, afterSeq: number, reply: FastifyR
     const seen = runner.store.read(id);
     if (!seen || seen.status === 'running' || seen.status === 'queued') return;
     // Cancel marks a run cancelled before its command exits: keep tailing its shutdown output until it has really ended.
-    if (seen.endedAt === null && runner.ending(id)) return;
+    if (seen.endedAt === null && settling(id)) return;
     // Settling it may have just recorded its end.
     const meta = runner.store.read(id) ?? seen;
     const tail = runner.store.readRaw(id, seq, offset);

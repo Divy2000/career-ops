@@ -763,6 +763,20 @@ export class Runner {
           /* gone */
         }
       }
+      // A command that ignores SIGTERM is killed once the grace ends, but only one provably started before its wrapper
+      // recorded it: a reused PID, or one whose start cannot be read, is never signalled.
+      const killTimer = setTimeout(() => {
+        if (this.store.readExit(id)) return;
+        const recorded = this.store.readWrapper(id) as { childPid: number; startedAt?: unknown } | null;
+        const recordedAt = Date.parse(String(recorded?.startedAt));
+        if (!recorded?.childPid || !Number.isFinite(recordedAt) || typeof this.startRecordedBy(recorded.childPid, recordedAt) !== 'number') return;
+        try {
+          process.kill(-recorded.childPid, 'SIGKILL');
+        } catch {
+          /* gone */
+        }
+      }, 5000);
+      killTimer.unref();
     }
     return marked;
   }
