@@ -273,6 +273,154 @@ test('a dirty tree or a non-main branch is never pulled', () => {
   }
 });
 
+// The daily job's lock under the default data root (the checkout), as run-daily.sh takes it, and a probe the stubs run.
+const dailyLock = (D) => path.join(D, 'data', 'immigration', '.run-daily.lockf');
+const probeEnv = (D) => ({ FAKE_LOCK_PROBE: path.join(INSTALL_DIR, 'tests', 'stubs', 'lock-probe'), FAKE_LOCK_PROBE_FILE: dailyLock(D) });
+/** A running daily job: holds the lock (in its own process group) once `startAfter` exists, then touches `ready`. */
+function holdDailyLock(w, D, { startAfter = null } = {}) {
+  const ready = path.join(w.T, 'holder-ready');
+  const hold = `/usr/bin/lockf -k -t 0 "${dailyLock(D)}" /bin/sh -c 'touch "${ready}"; sleep 60'`;
+  const wait = startAfter ? `while [ ! -f "${startAfter}" ]; do sleep 0.05; done; ` : '';
+  const holder = spawn('/bin/sh', ['-c', `${wait}${hold}`], { stdio: 'ignore', detached: true });
+  const waitReady = () => {
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(ready) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
+    assert.ok(fs.existsSync(ready), 'the holder never took the lock');
+  };
+  const stop = () => { try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ } };
+  return { ready, waitReady, stop };
+}
+
+test('a re-run while the daily job holds its lock waits briefly, then stops before pulling or installing anything (R18-scripts-b-L1-01)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
+  const job = holdDailyLock(w, D);
+  try {
+    job.waitReady();
+    const r = w.run(args(), { env: { CAREER_OPS_INSTALL_DAILY_WAIT: '1' } });
+    assert.equal(r.status, 1, r.out);
+    assert.ok(!w.log().some((l) => l.includes('pull') || l.startsWith('npm ')), w.log().join('\n'));
+    assert.match(r.out, /error: the daily job is running right now \(it holds .*\.run-daily\.lockf\), so the checkout and its dependencies were left as they are\. Re-run this script once it finishes\./);
+  } finally {
+    job.stop();
+  }
+});
+
+test('a re-run holds the daily job\'s lock, naming itself in .live-update.pid, through the pull, the installs and the launchd reinstall, and lets it go after (R18-scripts-b-L1-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/immigration/logs/.keep': '' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], { env: probeEnv(D) });
+  assert.equal(r.status, 0, r.out);
+  const probes = w.log().filter((l) => l.startsWith('lock-probe'));
+  assert.deepEqual(probes, [
+    'lock-probe held named: git pull',
+    'lock-probe held named: npm install --no-package-lock',
+    'lock-probe held named: npm --prefix custom/control-center ci',
+    'lock-probe held named: launchd-install',
+    'lock-probe free unnamed: npm --prefix custom/control-center run preflight',
+  ], w.log().join('\n'));
+  assert.equal(spawnSync('/usr/bin/lockf', ['-k', '-t', '0', dailyLock(D), '/usr/bin/true']).status, 0, 'the lock was not released');
+  assert.ok(!exists(D, 'data', 'immigration', '.live-update.pid'));
+});
+
+test('a daily job that starts after the dependency step and outlasts the wait leaves the launchd job as it was, with a pending action (R18-scripts-b-L1-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/immigration/logs/.keep': '' } });
+  const signal = path.join(w.T, 'deps-done');
+  const job = holdDailyLock(w, D, { startAfter: signal });
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], {
+      env: { CAREER_OPS_INSTALL_DAILY_WAIT: '1', FAKE_DOCTOR_SIGNAL: signal, FAKE_DOCTOR_WAIT_FOR: job.ready },
+    });
+    assert.equal(r.status, 3, r.out);
+    assert.deepEqual(w.calls('launchd-install'), [], r.out);
+    assert.ok(w.log().some((l) => l.includes('pull --ff-only')), w.log().join('\n'));
+    assert.match(r.out, /The daily job is running right now, so it was left as it was\. Once it finishes, run: bash '.*custom\/launchd\/install\.sh' --jobs daily$/m);
+  } finally {
+    job.stop();
+  }
+});
+
+test('--core-only on macOS still waits for the daily job an earlier full install scheduled, and stops before pulling (R18-scripts-b-L1-01 review)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
+  const job = holdDailyLock(w, D);
+  try {
+    job.waitReady();
+    const r = w.run(args('--core-only'), { env: { CAREER_OPS_INSTALL_DAILY_WAIT: '1' } });
+    assert.equal(r.status, 1, r.out);
+    assert.ok(!w.log().some((l) => l.includes('pull') || l.startsWith('npm ')), w.log().join('\n'));
+    assert.match(r.out, /error: the daily job is running right now/);
+  } finally {
+    job.stop();
+  }
+});
+
+test('a re-run also waits on the lock of the data root the installed daily job runs on, when this run resolves another (R18-scripts-b-L1-01 review)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D);
+  // An earlier install with CAREER_OPS_ROOT exported baked that root into the job; this shell does not set it.
+  const jobRoot = path.join(w.T, 'job-data');
+  fs.mkdirSync(path.join(jobRoot, 'data', 'immigration', 'logs'), { recursive: true });
+  const agents = path.join(w.home, 'Library', 'LaunchAgents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${jobRoot}</string></dict>
+  <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
+</dict>
+</plist>
+`);
+  const job = holdDailyLock(w, jobRoot);
+  try {
+    job.waitReady();
+    const r = w.run(args(), { env: { CAREER_OPS_INSTALL_DAILY_WAIT: '1' } });
+    assert.equal(r.status, 1, r.out);
+    assert.ok(!w.log().some((l) => l.includes('pull') || l.startsWith('npm ')), w.log().join('\n'));
+    assert.ok(r.out.includes(`error: the daily job is running right now (it holds ${dailyLock(jobRoot)})`), r.out);
+  } finally {
+    job.stop();
+  }
+});
+
+test('a daily lock the installer cannot open stops it before the checkout step, showing lockf\'s own error (R18-scripts-b-L1-01 review)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'data/immigration/.run-daily.lockf': '' } });
+  fs.chmodSync(dailyLock(D), 0o000);
+  try {
+    const r = w.run(args());
+    assert.equal(r.status, 1, r.out);
+    assert.ok(!w.log().some((l) => l.includes('pull') || l.startsWith('npm ')), w.log().join('\n'));
+    assert.match(r.out, /lockf: cannot open .*\.run-daily\.lockf: Permission denied\n(.*\n)*error: could not take the daily job's lock .*\.run-daily\.lockf \(see the lockf error above\)/);
+  } finally {
+    fs.chmodSync(dailyLock(D), 0o644);
+  }
+});
+
+test('a daily lock that cannot be opened at the launchd step leaves the job as it was and says why, not that the launchd install failed (R18-scripts-b-L1-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/immigration/logs/.keep': '' } });
+  const signal = path.join(w.T, 'deps-done');
+  const ready = path.join(w.T, 'locked-out');
+  const blocker = spawn('/bin/sh', ['-c', `while [ ! -f "${signal}" ]; do sleep 0.05; done; chmod 000 "${dailyLock(D)}"; touch "${ready}"`], { stdio: 'ignore', detached: true });
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-h1b-index', '--onboard', 'none'], {
+      env: { FAKE_DOCTOR_SIGNAL: signal, FAKE_DOCTOR_WAIT_FOR: ready },
+    });
+    assert.equal(r.status, 3, r.out);
+    assert.deepEqual(w.calls('launchd-install'), [], r.out);
+    assert.match(r.out, /lockf: cannot open .*\.run-daily\.lockf: Permission denied/);
+    assert.match(r.out, /Could not take the daily job's lock .*\.run-daily\.lockf \(see the lockf error above\), so the launchd job was left as it was\. Fix that, then run: bash '.*custom\/launchd\/install\.sh' --jobs daily$/m);
+    assert.doesNotMatch(r.out, /The launchd install failed/);
+  } finally {
+    try { process.kill(-blocker.pid, 'SIGKILL'); } catch { /* already gone */ }
+    if (fs.existsSync(dailyLock(D))) fs.chmodSync(dailyLock(D), 0o644);
+  }
+});
+
 test('an origin that is not the fork is refused with exit 1', () => {
   const { w, D, args } = fresh();
   w.makeCheckout(D, { origin: 'https://github.com/career-ops-hq/career-ops.git' });

@@ -39,6 +39,7 @@ case "${1:-}" in
     if [ "${2:-}" = --error-unmatch ]; then [ -f "$dir/.git/lock-tracked" ]; exit $?; fi
     exit 0
     ;;
-  fetch|pull|checkout) exit 0 ;;
+  pull) [ -z "${FAKE_LOCK_PROBE:-}" ] || "$FAKE_LOCK_PROBE" "git pull"; exit 0 ;;
+  fetch|checkout) exit 0 ;;
 esac
 exit 0

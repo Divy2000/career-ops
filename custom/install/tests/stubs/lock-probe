@@ -1,0 +1,8 @@
+#!/bin/bash
+# Test helper, not a stub on PATH: the git, npm and launchd stubs call it (FAKE_LOCK_PROBE names it) to record whether
+# the daily job's lock (FAKE_LOCK_PROBE_FILE) is held while they run, and whether .live-update.pid beside it names a
+# live process, as run-daily.sh reads it.
+if /usr/bin/lockf -k -t 0 "$FAKE_LOCK_PROBE_FILE" /usr/bin/true 2>/dev/null; then held=free; else held=held; fi
+pid="$(cat "$(dirname "$FAKE_LOCK_PROBE_FILE")/.live-update.pid" 2>/dev/null)"
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then named=named; else named=unnamed; fi
+echo "lock-probe $held $named: $*" >> "$STUB_LOG"

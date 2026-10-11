@@ -84,6 +84,13 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.STUB_LOG, 'doctor ' + args.join(' ') + '\\n');
 // A file the run's later state depends on going away mid-install (a Control Center that stops, say).
 if (process.env.FAKE_DOCTOR_REMOVE) fs.rmSync(process.env.FAKE_DOCTOR_REMOVE, { force: true });
+// A daily job that starts once the dependency step is over: the step after it (--init-templates) signals, then waits
+// for the test's holder to take the lock.
+if (process.env.FAKE_DOCTOR_SIGNAL && args.includes('--init-templates')) {
+  fs.writeFileSync(process.env.FAKE_DOCTOR_SIGNAL, '');
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(process.env.FAKE_DOCTOR_WAIT_FOR) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+}
 const root = getCareerOpsRoot();
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES = ${JSON.stringify(TEMPLATES)};
@@ -129,7 +136,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 fs.mkdirSync(path.join(root, 'data', 'h1b'), { recursive: true });
 fs.writeFileSync(path.join(root, 'data', 'h1b', 'index.ndjson.gz'), 'x');
 `);
-  put(path.join(dir, 'custom/launchd/install.sh'), '#!/bin/bash\necho "launchd-install $*" >> "$STUB_LOG"\nexit "${FAKE_LAUNCHD_EXIT:-0}"\n', 0o755);
+  put(path.join(dir, 'custom/launchd/install.sh'), '#!/bin/bash\necho "launchd-install $*" >> "$STUB_LOG"\n[ -z "${FAKE_LOCK_PROBE:-}" ] || "$FAKE_LOCK_PROBE" "launchd-install"\nexit "${FAKE_LAUNCHD_EXIT:-0}"\n', 0o755);
   put(path.join(dir, 'custom/control-center/bin/cc'), '#!/bin/sh\necho "cc $*" >> "$STUB_LOG"\n', 0o755);
   put(path.join(dir, 'custom/control-center/package.json'), '{"name":"fake-cc"}\n');
 }
