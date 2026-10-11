@@ -105,6 +105,21 @@ export function readOrNull(file: string): string | null {
 
 const aside = (file: string, why: string) => `${file}.${why}-${process.pid}-${crypto.randomUUID()}`;
 
+/** What link(2) answers on a filesystem without hard links: macOS exFAT/FAT say ENOTSUP, Linux vfat says EPERM. */
+const NO_HARD_LINKS = new Set(['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EPERM']);
+
+/**
+ * The lock needs link(2): it is the only way to make a file appear whole and only if none is there. Without it there
+ * is no lock as safe, so a data root on such a volume is refused with what to do instead of a bare errno.
+ */
+function noHardLinksError(dataRoot: string, err: NodeJS.ErrnoException): Error {
+  return new Error(
+    `The data root ${dataRoot} is on a filesystem that does not allow hard links (${err.code}), such as exFAT, FAT32 or some network shares. ` +
+      'The Control Center needs them for the lock that keeps one instance per data root. Move the data root to a local APFS, HFS+ or ext4 volume ' +
+      `and point CAREER_OPS_ROOT (or the .career-ops-data marker) at it, then start again. (${err.message})`,
+  );
+}
+
 /** Creates `file` holding `text`, whole, or returns false when a lock is already there. */
 export function createWhole(file: string, text: string): boolean {
   const tmp = aside(file, 'new');
@@ -155,8 +170,18 @@ export function acquireInstanceLock(dataRoot: string, me: { pid: number; port: n
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const own = startTimeOf(me.pid);
   const text = JSON.stringify({ pid: me.pid, start: typeof own === 'number' ? own : null, port: me.port, nonce: crypto.randomUUID() } satisfies LockHolder & { nonce: string });
+  const created = () => {
+    try {
+      return createWhole(file, text);
+    } catch (err) {
+      // Only link(2)'s answer: an EPERM writing the temp file is a permission problem, not the filesystem's.
+      const e = err as NodeJS.ErrnoException;
+      if (e.syscall === 'link' && NO_HARD_LINKS.has(e.code ?? '')) throw noHardLinksError(dataRoot, e);
+      throw err;
+    }
+  };
   for (let attempt = 0; attempt < 5; attempt++) {
-    if (createWhole(file, text)) {
+    if (created()) {
       return {
         ok: true,
         // A quick look first, so an instance whose lock was displaced never even briefly moves the current one.

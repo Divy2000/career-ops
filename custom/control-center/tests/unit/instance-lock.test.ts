@@ -23,6 +23,36 @@ describe('supervisor instance lock (one Control Center per data root)', () => {
     expect(acquireInstanceLock(root, { pid: 200, port: 4401 }, running).ok).toBe(true);
   });
 
+  describe('on a data root whose filesystem has no hard links (exFAT, FAT, some SMB shares: link(2) fails ENOTSUP) (R19-supervisor-L1-02)', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('startup fails with a message naming the data root, the filesystem limit and what to do, and leaves no temp file', () => {
+      vi.spyOn(fs, 'linkSync').mockImplementation((from, to) => {
+        throw Object.assign(new Error(`ENOTSUP: operation not supported on socket, link '${String(from)}' -> '${String(to)}'`), { code: 'ENOTSUP', syscall: 'link' });
+      });
+      const root = tempDir('cc-lock-');
+      let err: Error | null = null;
+      try {
+        acquireInstanceLock(root, { pid: 100, port: 4400 }, procs({ 100: 1791194400 }));
+      } catch (e) {
+        err = e as Error;
+      }
+      expect(err?.message).toContain(root);
+      expect(err?.message).toMatch(/hard links/);
+      expect(err?.message).toMatch(/exFAT/);
+      expect(err?.message).toMatch(/CAREER_OPS_ROOT/);
+      expect(err?.message).toMatch(/ENOTSUP/);
+      expect(fs.readdirSync(path.dirname(instanceLockPath(root)))).toEqual([]);
+    });
+
+    it('a permission error writing the lock (macOS privacy protection, an immutable folder) is reported as itself, not as a filesystem limit', () => {
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+        throw Object.assign(new Error('EPERM: operation not permitted, open'), { code: 'EPERM', syscall: 'open' });
+      });
+      expect(() => acquireInstanceLock(tempDir('cc-lock-'), { pid: 100, port: 4400 }, procs({ 100: 1791194400 }))).toThrow(/^EPERM: operation not permitted, open$/);
+    });
+  });
+
   it('a lock left by an instance that is gone is replaced: its PID is not running, or now belongs to a process started later', () => {
     for (const later of [procs({ 200: 1791198000 }), procs({ 100: 1791277200, 200: 1791198000 })]) {
       const root = tempDir('cc-lock-');
