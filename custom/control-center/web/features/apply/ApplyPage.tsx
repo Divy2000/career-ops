@@ -433,7 +433,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
         ) : (
           // Another mount's reply or Fill to this draft is in flight: a second one would be refused beside it, and the
           // refusal would let go of the first one's start mark. Always wrapped, so holding it does not remount the panel.
-          <fieldset disabled={remembered.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          <fieldset disabled={remembered.waiting} className="turn-hold">
             <SessionPanel
               key={remembered.panelKey}
               sessionId={sessionId}

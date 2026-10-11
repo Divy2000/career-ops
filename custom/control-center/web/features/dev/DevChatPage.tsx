@@ -358,7 +358,7 @@ export function DevChatPage() {
               </p>
             </div>
           ) : (
-            <fieldset disabled={markedElsewhere} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <fieldset disabled={markedElsewhere} className="turn-hold">
               {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
               <SessionPanel key={`devchat-${panel.key}`} mode="devchat" title="Dev Chat" sessionId={sessionId} placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} onStarting={onStarting} onStartFailed={onStartFailed} marksTurnStarts blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
             </fieldset>

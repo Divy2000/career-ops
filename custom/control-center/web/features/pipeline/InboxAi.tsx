@@ -249,7 +249,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
             )}
             {/* Always wrapped, so holding the reply back does not remount the panel and drop what it shows. Another mount's reply
                 in flight holds it too: a second one would be refused, and the refusal would let go of its start mark. */}
-            <fieldset disabled={replyHeld || process.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <fieldset disabled={replyHeld || process.waiting} className="turn-hold">
               <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} marksTurnStarts mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
             </fieldset>
           </>

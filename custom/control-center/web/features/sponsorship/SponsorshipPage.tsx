@@ -87,7 +87,7 @@ export function SponsorshipPage() {
       </div>
       <Message message={message} />
       {pass.shown && (
-        <fieldset disabled={pass.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <fieldset disabled={pass.waiting} className="turn-hold">
           {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
           <SessionPanel
             key={pass.panelKey}

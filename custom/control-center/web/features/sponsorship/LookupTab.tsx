@@ -98,7 +98,7 @@ export function SponsorCheckLauncher({ company }: { company: string }) {
         </div>
       </div>
       {check.shown && (
-        <fieldset disabled={check.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <fieldset disabled={check.waiting} className="turn-hold">
           {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
           <SessionPanel
             key={check.panelKey}
