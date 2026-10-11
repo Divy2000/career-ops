@@ -387,6 +387,25 @@ describe('Runner', () => {
     expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', exitCode: 143 });
   });
 
+  it('a run another server cancelled that has not exited yet still holds its resources and blocks a second run of its action (R18-srv-core-L3-01 review)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      // Cancelled by the other server after this one reconciled; its wrapper is still stopping the command.
+      const started = processStartTime(sleeper.pid!);
+      const theirs = runner.store.create({ ...req(['0'], { resources: ['pipeline'] }) });
+      runner.store.write({ ...theirs, status: 'cancelled', startedAt: new Date().toISOString(), wrapperPid: sleeper.pid!, wrapperStartedAt: typeof started === 'number' ? started : null });
+      const other = runner.start(req(['0'], { actionId: 'test.other', resources: ['pipeline'] }));
+      expect(runner.store.read(other.id)?.status).toBe('queued');
+      expect(runner.startUnlessPending(req(['0'], { resources: ['pipeline'] }))).toMatchObject({ pending: { id: theirs.id } });
+      runner.cancel(other.id);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
   it('a live wrapper is kept when ps says "no such process" but the PID still answers (they disagree): judged by liveness alone (seed review)', async () => {
     const root = tmpRoot();
     const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });

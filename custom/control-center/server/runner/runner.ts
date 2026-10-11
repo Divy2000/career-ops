@@ -90,6 +90,11 @@ const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2
 const runPs = (pid: number): string =>
   execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } });
 
+/** A run whose command may still be running: running, or cancelled (marked so at once) before its end was recorded. */
+function unended(meta: RunMeta): boolean {
+  return meta.status === 'running' || (meta.status === 'cancelled' && meta.endedAt === null);
+}
+
 /**
  * When a process started, so a later check can tell a reused PID apart (PIDs are reused, after a reboot especially;
  * start times are not). ps prints the start in the caller's TZ and locale, so it runs pinned (LC_ALL=C, TZ=UTC) and the
@@ -369,8 +374,7 @@ export class Runner {
       this.adopt(meta);
       return;
     }
-    const unsettled = meta.status === 'running' || (meta.status === 'cancelled' && meta.endedAt === null);
-    if (!unsettled || this.active.has(meta.id)) return;
+    if (!unended(meta) || this.active.has(meta.id)) return;
     const exit = this.store.readExit(meta.id);
     const wrapper = this.identity(meta.wrapperPid, meta.wrapperStartedAt);
     if (exit) {
@@ -475,7 +479,7 @@ export class Runner {
    */
   private holders(): RunMeta[] {
     const runs = new Map<string, RunMeta>();
-    for (const m of this.store.list()) if (m.status === 'running' && !this.endedUntracked(m)) runs.set(m.id, m);
+    for (const m of this.store.list()) if (unended(m) && !this.endedUntracked(m)) runs.set(m.id, m);
     for (const { meta } of this.active.values()) runs.set(meta.id, meta);
     return [...runs.values()];
   }
@@ -804,10 +808,10 @@ export class Runner {
     // a second click starts a second paid job. It is settled as at server start first (adopted, tracked, or finalized or
     // lost when its wrapper is gone), so a dead server's run never blocks the action for good.
     for (const m of this.store.list()) {
-      if (m.actionId !== actionId || tracked.has(m.id) || (m.status !== 'queued' && m.status !== 'running')) continue;
+      if (m.actionId !== actionId || tracked.has(m.id) || (m.status !== 'queued' && !unended(m))) continue;
       this.reconcileRun(m);
       const now = this.store.read(m.id);
-      if (now?.status === 'queued' || now?.status === 'running') pending.push(now);
+      if (now && (now.status === 'queued' || unended(now))) pending.push(now);
     }
     return pending;
   }
