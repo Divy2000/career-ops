@@ -130,6 +130,24 @@ test('a stale claim is taken over: its session is gone or final, its daily job p
   assert.deepEqual(tryClaim(r, { owner: 'session:s-taker', batch: null }), { ok: true });
 });
 
+test('a SIGKILLed daily job, whose dead pid .run-daily.pid still names, loses its claim even when ps cannot run (R21-tests-custom-L2-01)', () => {
+  const r = root();
+  // A pid that ran and has ended: the job killed before its EXIT trap removed .run-daily.pid.
+  const dead = spawnSync('/usr/bin/true').pid;
+  assert.throws(() => process.kill(dead, 0), { code: 'ESRCH' });
+  daily(r, dead);
+  plant(r, { owner: `daily:${dead}`, batch: null, at: new Date().toISOString() });
+  // Without ps, only the liveness check can tell the job is gone.
+  const savedPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.deepEqual(tryClaim(r, { owner: 'session:s-taker', batch: null }), { ok: true });
+  } finally {
+    process.env.PATH = savedPath;
+  }
+  assert.equal(readClaim(r).owner, 'session:s-taker');
+});
+
 test('a cancelled session keeps the claim until its Claude run has ended (SW8-server-01 review)', () => {
   const r = root();
   const runDir = path.join(r, 'data', 'control-center', 'runs', 'run-1');
