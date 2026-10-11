@@ -8,11 +8,11 @@ import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-/** The source text a mutant replaces: its location is 1-based lines and 0-based columns, end exclusive. */
+/** The source text a mutant replaces: Stryker's report schema makes lines and columns 1-based, end exclusive. */
 function original(source, { start, end }) {
   const lines = source.split('\n');
-  if (start.line === end.line) return lines[start.line - 1].slice(start.column, end.column);
-  return [lines[start.line - 1].slice(start.column), ...lines.slice(start.line, end.line - 1), lines[end.line - 1].slice(0, end.column)].join('\n');
+  if (start.line === end.line) return lines[start.line - 1].slice(start.column - 1, end.column - 1);
+  return [lines[start.line - 1].slice(start.column - 1), ...lines.slice(start.line, end.line - 1), lines[end.line - 1].slice(0, end.column - 1)].join('\n');
 }
 
 const oneLine = (s) => s.replace(/\s+/g, ' ').trim();

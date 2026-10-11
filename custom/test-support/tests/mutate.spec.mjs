@@ -30,13 +30,13 @@ test('survivors prints one line per surviving mutant, file:line | mutator | orig
       'lib.mjs': {
         source: 'const a = 1;\nif (a > 0) {\n  run();\n}\n',
         mutants: [
-          mutant('2', 'Survived', 'BlockStatement', { line: 2, column: 11 }, { line: 4, column: 1 }, '{}'),
-          mutant('1', 'Survived', 'EqualityOperator', { line: 2, column: 4 }, { line: 2, column: 9 }, 'a >= 0'),
-          mutant('3', 'Killed', 'BooleanLiteral', { line: 1, column: 10 }, { line: 1, column: 11 }, '0'),
-          mutant('4', 'NoCoverage', 'StringLiteral', { line: 1, column: 0 }, { line: 1, column: 5 }, '""'),
+          mutant('2', 'Survived', 'BlockStatement', { line: 2, column: 12 }, { line: 4, column: 2 }, '{}'),
+          mutant('1', 'Survived', 'EqualityOperator', { line: 2, column: 5 }, { line: 2, column: 10 }, 'a >= 0'),
+          mutant('3', 'Killed', 'BooleanLiteral', { line: 1, column: 11 }, { line: 1, column: 12 }, '0'),
+          mutant('4', 'NoCoverage', 'StringLiteral', { line: 1, column: 1 }, { line: 1, column: 6 }, '""'),
         ],
       },
-      'a.mjs': { source: 'x || y\n', mutants: [mutant('5', 'Survived', 'LogicalOperator', { line: 1, column: 0 }, { line: 1, column: 6 }, 'x && y')] },
+      'a.mjs': { source: 'x || y\n', mutants: [mutant('5', 'Survived', 'LogicalOperator', { line: 1, column: 1 }, { line: 1, column: 7 }, 'x && y')] },
     },
   };
   const r = node(survivors, [writeReport(report)]);
@@ -48,8 +48,21 @@ test('survivors prints one line per surviving mutant, file:line | mutator | orig
   ]);
 });
 
+test('survivors reads Stryker 1-based columns and prints exactly the source text each mutant replaced', () => {
+  const report = {
+    projectRoot: path.join(repo, 'custom/immigration'),
+    files: { 'lib.mjs': { source: "if (typeof x !== 'string') {}\n", mutants: [mutant('1', 'Survived', 'StringLiteral', { line: 1, column: 18 }, { line: 1, column: 26 }, '""'), mutant('2', 'Survived', 'ConditionalExpression', { line: 1, column: 5 }, { line: 1, column: 26 }, 'true')] } },
+  };
+  const r = node(survivors, [writeReport(report)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trimEnd().split('\n'), [
+    "custom/immigration/lib.mjs:1 | ConditionalExpression | typeof x !== 'string' -> true",
+    'custom/immigration/lib.mjs:1 | StringLiteral | \'string\' -> ""',
+  ]);
+});
+
 test('survivors reads several reports in one call', () => {
-  const one = (root, file) => ({ projectRoot: path.join(repo, root), files: { [file]: { source: 'a\n', mutants: [mutant('1', 'Survived', 'StringLiteral', { line: 1, column: 0 }, { line: 1, column: 1 }, 'b')] } } });
+  const one = (root, file) => ({ projectRoot: path.join(repo, root), files: { [file]: { source: 'a\n', mutants: [mutant('1', 'Survived', 'StringLiteral', { line: 1, column: 1 }, { line: 1, column: 2 }, 'b')] } } });
   const r = node(survivors, [writeReport(one('custom/control-center', 'server/x.ts')), writeReport(one('custom/pipeline', 'lib.mjs'))]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(r.stdout.trimEnd().split('\n'), ['custom/control-center/server/x.ts:1 | StringLiteral | a -> b', 'custom/pipeline/lib.mjs:1 | StringLiteral | a -> b']);
