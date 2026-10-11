@@ -21,7 +21,7 @@ import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapsho
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
-import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
+import { ackPolicyPass, donePolicyBatches, dropPolicyBatch, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { beginTakingReportNums, unrecordedFor } from '../actions/registry.js';
 
 export type TokenReader = () => Promise<string>;
@@ -453,7 +453,24 @@ export class SessionManager {
 
   delete(id: string): boolean {
     if (this.active.has(id) || this.sending.has(id)) throw new BusyError(`session ${id} is still running`);
-    return this.store.delete(id);
+    const batch = this.store.read(id)?.policyBatch ?? null;
+    const deleted = this.store.delete(id);
+    if (deleted && batch !== null) this.dropUnheldPolicyBatch(batch);
+    return deleted;
+  }
+
+  /**
+   * Removes a policy pass batch no session can acknowledge any more. One a session still holds (a pass that ended in
+   * error or was cancelled can be continued by a reply; a fork interrupted mid hand-over leaves it with both), one
+   * being acknowledged, or one recorded done stays.
+   */
+  dropUnheldPolicyBatch(batch: string): void {
+    if (this.policyAcksInFlight.has(batch) || this.store.list().some((m) => m.policyBatch === batch)) return;
+    try {
+      dropPolicyBatch(this.cfg.dataRoot, batch);
+    } catch (err) {
+      console.warn(`[sessions] could not remove policy pass batch ${batch}: ${(err as Error).message}`);
+    }
   }
 
   /**

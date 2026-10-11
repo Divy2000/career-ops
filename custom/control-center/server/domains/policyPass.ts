@@ -140,6 +140,16 @@ export function forgetDonePolicyBatch(dataRoot: string, batch: string): void {
   fs.rmSync(path.join(dataRoot, batch + DONE_MARK), { force: true });
 }
 
+/**
+ * Removes the batch of a pass that can no longer end done (its start failed, or its session was deleted), so failed
+ * passes leave no batch behind; nothing else reads a batch that was never recorded done. One recorded done stays for
+ * its ack.
+ */
+export function dropPolicyBatch(dataRoot: string, batch: string): void {
+  if (fs.existsSync(path.join(dataRoot, batch + DONE_MARK))) return;
+  fs.rmSync(path.join(dataRoot, batch), { force: true });
+}
+
 /** The batches (relative to the data root) of done passes whose ack has not landed yet. */
 export function donePolicyBatches(dataRoot: string): string[] {
   let names: string[];
