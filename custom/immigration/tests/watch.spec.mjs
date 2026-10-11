@@ -19,19 +19,27 @@ const NEAR_MIDNIGHT = [
   { zone: 'Asia/Kolkata', at: '2026-10-06T19:30:00Z' },
 ];
 
+/** Noon of the local day `ms` falls on in `zone` (an hour off on a daylight-saving change day, still mid-day). */
+function noonIn(zone, ms) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(ms).map((p) => [p.type, Number(p.value)]));
+  return ms - ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000 + DAY_MS / 2;
+}
+
 /**
  * A data root and a fetch preload that answers both official sources offline from feeds.json, which a test rewrites
  * between runs. The Federal Register answers every search term with the same documents, as it does for a rule that
  * matches several of them. Items are dated the world's now, never a fixed day: watch.mjs only reads the last 14 days,
- * so a fixed date would age out of the window. `daysAhead` moves watch.mjs's clock (and that now) into the future.
+ * so a fixed date would age out of the window. watch.mjs's clock starts at `at`, or else at noon of today in `zone`
+ * moved `daysAhead` days on, and runs from there: never from the real clock, so local midnight cannot pass between
+ * computing the expected day here and watch.mjs dating its run.
  */
 function watchWorld({ daysAhead = 0, zone = ZONE, at = null } = {}) {
   const root = tempDir('imm-watch-');
   const feeds = path.join(root, 'feeds.json');
   const preload = path.join(root, 'feeds.mjs');
-  const offset = at ? Date.parse(at) - Date.now() : daysAhead * DAY_MS;
-  const now = new Date(Date.now() + offset);
-  const clock = offset ? `const RealDate = Date;\nglobalThis.Date = class extends RealDate {\n  constructor(...a) { super(...(a.length ? a : [RealDate.now() + ${offset}])); }\n  static now() { return RealDate.now() + ${offset}; }\n};\n` : '';
+  const start = at ? Date.parse(at) : noonIn(zone, Date.now()) + daysAhead * DAY_MS;
+  const now = new Date(start);
+  const clock = `const RealDate = Date;\nconst t0 = RealDate.now();\nglobalThis.Date = class extends RealDate {\n  constructor(...a) { super(...(a.length ? a : [${start} + RealDate.now() - t0])); }\n  static now() { return ${start} + RealDate.now() - t0; }\n};\n`;
   fs.writeFileSync(preload, `import fs from 'node:fs';\n${clock}globalThis.fetch = async (url) => {\n  const f = JSON.parse(fs.readFileSync(${JSON.stringify(feeds)}, 'utf8'));\n  const u = String(url);\n  if (u.includes('federalregister')) {\n    if (f.frStatus) return new Response('unavailable', { status: f.frStatus });\n    if (f.frPages) {\n      const page = Number(new URL(u).searchParams.get('page') ?? 0);\n      const next = f.frRepeat ? u : page + 1 < f.frPages.length ? \`https://www.federalregister.gov/api/v1/documents.json?page=\${page + 1}\` : null;\n      return new Response(JSON.stringify({ results: f.frPages[page], next_page_url: next }), { status: 200 });\n    }\n    return new Response(JSON.stringify({ results: f.fr }), { status: 200 });\n  }\n  if (f.rssStatus) return new Response('unavailable', { status: f.rssStatus });\n  return new Response(\`<rss><channel>\${f.rss.join('')}</channel></rss>\`, { status: 200 });\n};\n`);
   const imm = path.join(root, 'data', 'immigration');
   const runRaw = (...args) => spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1', TZ: zone }, encoding: 'utf8', timeout: 60_000 });
