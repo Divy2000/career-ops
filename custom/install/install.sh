@@ -884,10 +884,26 @@ fi
 
 # ---------------------------------------------------------------- H-1B index
 
-# same_file_path <a> <b>: whether both name one file, however spelled (./, //, symlinked folders), even before it exists.
+# lexical_path <absolute-path>: the path with empty, . and .. parts folded, without touching the filesystem.
+lexical_path() {
+  local part parts out=()
+  IFS=/ read -ra parts <<< "$1"
+  for part in ${parts[@]+"${parts[@]}"}; do
+    case "$part" in
+      '' | .) ;;
+      ..) if [ "${#out[@]}" -gt 0 ]; then unset 'out[${#out[@]}-1]'; fi ;;
+      *) out+=("$part") ;;
+    esac
+  done
+  if [ "${#out[@]}" -eq 0 ]; then printf '/'; else printf '/%s' "${out[@]}"; fi
+}
+
+# same_file_path <a> <b>: whether two absolute paths name one file, however spelled (./, //, symlinked folders), even
+# before it exists.
 same_file_path() {
   local da db
   [ "$1" = "$2" ] || [ "$1" -ef "$2" ] && return 0
+  [ "$(lexical_path "$1")" = "$(lexical_path "$2")" ] && return 0
   da="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" && db="$(cd "$(dirname "$2")" 2>/dev/null && pwd -P)" &&
     [ "$da/${1##*/}" = "$db/${2##*/}" ]
 }

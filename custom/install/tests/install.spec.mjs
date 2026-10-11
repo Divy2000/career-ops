@@ -929,6 +929,15 @@ for (const spelling of ['data/h1b/index.ndjson.gz', './data//h1b/index.ndjson.gz
   });
 }
 
+test('an H1B_INDEX_PATH spelling the default index on a checkout with no data/h1b folder yet leaves nothing pending (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: './data//h1b/../h1b/index.ndjson.gz' } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+  assert.equal(w.calls('h1b-install').length, 1, r.out);
+});
+
 test('a blank H1B_INDEX_PATH is the plugin\'s misconfiguration, not the default index: a pending action, nothing downloaded (R18-scripts-b-L2-01)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/index.ndjson.gz': 'x' } });
