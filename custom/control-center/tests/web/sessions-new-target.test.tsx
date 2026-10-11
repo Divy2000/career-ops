@@ -84,6 +84,11 @@ describe('Sessions > New session: a URL target the server refuses', () => {
     expect(button('Start session')!.matches(':disabled')).toBe(true);
   });
 
+  it('given an upper-case scheme carrying credentials, when it is typed, then it is read as a URL and held back, not sent as a company', async () => {
+    await openNewSession('HTTPS://user:secret@jobs.example.com/1');
+    expect(button('Start session')!.matches(':disabled')).toBe(true);
+  });
+
   it('given a plain posting URL, when it is typed, then there is no warning and Start session sends it as the url target', async () => {
     await openNewSession('https://jobs.example.com/1');
     expect([...document.querySelectorAll('[role="alert"]')].some((a) => a.textContent?.includes('plain http(s) job posting URL'))).toBe(false);

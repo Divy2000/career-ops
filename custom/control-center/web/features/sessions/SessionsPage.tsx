@@ -144,7 +144,7 @@ export function targetFor(value: string, mode?: string): SessionMeta['target'] {
   if (!v) return { type: 'none', value: null };
   if (mode === 'projects-ingest') return { type: 'text', value: v };
   if (/^\d+$/.test(v)) return { type: 'app', value: v };
-  if (/^https?:\/\//.test(v)) return { type: 'url', value: v };
+  if (/^https?:\/\//i.test(v)) return { type: 'url', value: v };
   return { type: 'company', value: v };
 }
 

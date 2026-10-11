@@ -59,6 +59,7 @@ describe('targetFor (Sessions > New session, command palette)', () => {
     expect(targetFor('3')).toEqual({ type: 'app', value: '3' });
     expect(targetFor('https://jobs.example.com/1')).toEqual({ type: 'url', value: 'https://jobs.example.com/1' });
     expect(targetFor('Acme')).toEqual({ type: 'company', value: 'Acme' });
+    expect(targetFor('HTTPS://jobs.example.com/1')).toEqual({ type: 'url', value: 'HTTPS://jobs.example.com/1' });
     expect(targetFor(' projects/router.pdf ', 'projects-ingest')).toEqual({ type: 'text', value: 'projects/router.pdf' });
     expect(targetFor('', 'projects-ingest')).toEqual({ type: 'none', value: null });
   });
