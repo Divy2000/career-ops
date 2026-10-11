@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp } from '../helpers/app.js';
@@ -71,6 +71,23 @@ describe('a session whose reserved report number was collected and claimed again
       expect((await call(app, 'DELETE', `/api/sessions/${id}`)).statusCode).toBe(200);
       expect(fs.existsSync(sentinelPath(app, n))).toBe(false);
     } finally {
+      await app.close();
+    }
+  });
+
+  it('given an ended session credited the report that holds its number and whose sentinel is gone, when the user deletes it, then nothing claims the number was lost', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      app.sessions.store.setReportNum(meta.id, 73);
+      app.sessions.store.setCreditedReport(meta.id, { num: 73, file: '073-acme-2026-10-11.md' });
+
+      expect(await app.sessions.delete(meta.id)).toBe(true);
+      expect(warn.mock.calls.flat().join('\n')).not.toMatch(/already lost/);
+    } finally {
+      warn.mockRestore();
       await app.close();
     }
   });

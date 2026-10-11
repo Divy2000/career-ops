@@ -471,7 +471,8 @@ export class SessionManager {
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
     // Decided before the delete removes the record of when the session got the number.
-    const owned = num !== null && this.ownsReservation(meta!, num);
+    // A credited report holds the number, so no other reservation can have claimed it.
+    const owned = num !== null && (meta?.creditedReport?.num === num || this.ownsReservation(meta!, num));
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
     let deleted: boolean;
