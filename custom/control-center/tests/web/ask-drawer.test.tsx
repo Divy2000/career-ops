@@ -471,6 +471,13 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
     expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-apply' } }]);
   });
 
+  it('opens a live pdf session whose row was named with leading zeros or spaces, as the server reads it', async () => {
+    listed = [{ id: 's-zero', mode: 'pdf', status: 'running', target: { type: 'app', value: ' 02' } }];
+    await run();
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-zero' } }]);
+  });
+
   it('starts nothing when the sessions list cannot be read at run time (R19-shared-comp-L1-01)', async () => {
     // Only the sessions read fails; the drawer's other reads answer as before.
     const answer = vi.mocked(fetch).getMockImplementation()!;

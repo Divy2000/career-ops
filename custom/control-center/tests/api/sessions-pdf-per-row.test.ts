@@ -91,6 +91,18 @@ describe('a reply to or fork of a tailored CV session while another for its row 
     });
   }
 
+  it('a fork of one waiting for the user and its source both still take a reply once paused', async () => {
+    await withApp(async (app) => {
+      const source = pdfSession(app, '12', 'awaiting_user');
+      const fork = app.sessions.store.create({ mode: 'pdf', policyClass: source.policyClass, target: source.target, model: null, forkedFrom: source.id });
+      app.sessions.store.setStatus(fork.id, 'awaiting_user');
+      expect((await turn(app, fork.id, 'turns')).statusCode).toBe(202);
+      await quiet(app);
+      app.sessions.store.setStatus(fork.id, 'awaiting_user');
+      expect((await turn(app, source.id, 'turns')).statusCode).toBe(202);
+    });
+  });
+
   it('a reply to the one waiting for the user goes on: it is the live session', async () => {
     await withApp(async (app) => {
       const paused = pdfSession(app, '12', 'awaiting_user');

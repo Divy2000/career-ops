@@ -204,9 +204,16 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     // " 12" and "012" name row 12 too.
     return /^\d+$/.test(row) ? String(Number(row)) : row;
   };
-  /** Null when a tailored CV for the row may run beside the live sessions other than `own`, else the 409 reason naming one. */
-  const tailoredCvHolds = (row: string, own: string | null = null): string | null => {
-    const live = liveOrStarting().find((m) => m.id !== own && tailoredCvRow(m.mode, m.target) === row);
+  /**
+   * Null when a tailored CV for the row may run, else the 409 reason naming the live session in the way. `own` is the
+   * session a reply carries on or a fork copies: a session of its fork lineage paused for a reply does not hold it back
+   * (as with Process inbox), and a reply's own session never does.
+   */
+  const tailoredCvHolds = (row: string, own: { meta: SessionMeta; kind: 'reply' | 'fork' } | null = null): string | null => {
+    const ownRoot = own ? runRoot(own.meta) : null;
+    const live = liveOrStarting().find(
+      (m) => tailoredCvRow(m.mode, m.target) === row && !(own?.kind === 'reply' && m.id === own.meta.id) && !(m.status === 'awaiting_user' && runRoot(m) === ownRoot),
+    );
     return live ? `session ${live.id} is already generating the tailored CV for tracker row #${row}. Open it instead.` : null;
   };
   /** The 409 reason a reply or fork is refused with when it would carry on Process inbox or an evaluation over the same pending rows, or null. */
@@ -215,8 +222,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!meta) return null;
     if (isProcessInbox(meta.mode)) return evaluationsHold(meta);
     const cvRow = tailoredCvRow(meta.mode, meta.target);
-    // A reply carries its own session on, as does a fork of one paused for the reply; a fork of a queued or running one runs beside it.
-    if (cvRow) return tailoredCvHolds(cvRow, kind === 'reply' || meta.status === 'awaiting_user' ? meta.id : null);
+    if (cvRow) return tailoredCvHolds(cvRow, { meta, kind });
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
