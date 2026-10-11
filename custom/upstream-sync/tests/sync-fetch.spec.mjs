@@ -1226,6 +1226,18 @@ test('a daily job and Control Center of another checkout neither hold up the liv
   }
 });
 
+test('the live update locks the installed daily job\'s data root before that job\'s first run there, so the first run cannot start mid-update (R20-scripts-b review)', () => {
+  const w = liveWorld({ depsChange: true });
+  const jobRoot = path.join(w.base, 'new-data');
+  mkdirSync(jobRoot);
+  installDailyPlist(w, jobRoot);
+  try {
+    const res = w.update({ wait: 1 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.ok(existsSync(path.join(jobRoot, 'data', 'immigration', '.run-daily.lockf')), 'the daily lock of the new root was never taken');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('a daily job installed on the sync\'s own data root, spelled through a symlink, is locked once, not waited on by the update itself (R20-scripts-b-L1-01)', () => {
   const w = liveWorld({ depsChange: true });
   const alias = path.join(w.base, 'data-alias');
