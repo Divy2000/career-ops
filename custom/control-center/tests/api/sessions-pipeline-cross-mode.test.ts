@@ -292,3 +292,37 @@ describe('a Process inbox start while a reply to a finished evaluation of a pend
     }, app);
   });
 });
+
+describe('a second Process inbox run while one is live', () => {
+  it('a start is refused with 409 naming the live run, and nothing starts', async () => {
+    await withApp(async (app) => {
+      const pipe = livePipeline(app);
+      const res = await call(app, '/api/sessions', { mode: 'pipeline', prompt: 'Process the pending pipeline rows' });
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(pipe.id);
+      expect(count(app, 'pipeline')).toBe(1);
+    });
+  });
+
+  for (const route of ['turns', 'fork'] as const) {
+    it(`POST /${route} of another, finished run is refused with 409 naming the live run, and nothing starts`, async () => {
+      await withApp(async (app) => {
+        const old = livePipeline(app, 'done');
+        const pipe = livePipeline(app);
+        const res = await call(app, `/api/sessions/${old.id}/${route}`, { prompt: 'carry on' });
+        expect(res.statusCode).toBe(409);
+        expect((res.json() as { error: string }).error).toContain(pipe.id);
+        expect(count(app, 'pipeline')).toBe(2);
+        expect(app.sessions.read(old.id)!.turns).toHaveLength(0);
+      });
+    });
+  }
+
+  it('a fork of the run waiting for the reply carries that run on, so it is not refused over it', async () => {
+    await withApp(async (app) => {
+      const waiting = livePipeline(app, 'awaiting_user');
+      const res = await call(app, `/api/sessions/${waiting.id}/fork`, { prompt: 'carry on' });
+      expect(res.statusCode).toBe(202);
+    });
+  });
+});

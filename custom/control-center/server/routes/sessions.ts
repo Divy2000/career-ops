@@ -166,10 +166,16 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const held = urls.find((u) => pending.has(u));
     return held ? `Process inbox (session ${pipe.id}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
   };
-  /** Null when a Process inbox turn may run, else the 409 reason: an evaluation of a pending row is live or starting. */
-  const evaluationsHold = (): string | null => {
+  /**
+   * Null when a Process inbox turn may run, else the 409 reason: another Process inbox run, or an evaluation of a pending
+   * row, is live or starting. `own` is the run a reply or fork carries on.
+   */
+  const evaluationsHold = (own?: string): string | null => {
+    const sessions = liveOrStarting();
+    const other = sessions.find((m) => isProcessInbox(m.mode) && m.id !== own);
+    if (other) return `Process inbox (session ${other.id}) is already processing the pending Inbox rows, and a second run would evaluate them again. Try again once it ends.`;
     const pending = pendingInboxUrls();
-    const live = liveOrStarting().find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
+    const live = sessions.find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
     if (live) return `session ${live.id} is evaluating the pending Inbox row ${live.target.value}, and Process inbox would evaluate it a second time. Try again once it ends.`;
     const evaluationModes = listLaunchableModeIds().filter(isReportGated);
     for (const url of pending) {
@@ -181,7 +187,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   const turnHeld = (id: string): string | null => {
     const meta = manager.read(id);
     if (!meta) return null;
-    if (isProcessInbox(meta.mode)) return evaluationsHold();
+    if (isProcessInbox(meta.mode)) return evaluationsHold(meta.id);
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
