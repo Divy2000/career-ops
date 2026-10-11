@@ -68,7 +68,7 @@ describe('POST /api/projects', () => {
     expect(read()).toMatch(/\n---\n\n## Chess Engine -- https:\/\/example\.org\/chess\nTags: rust\n- Wrote a chess engine in Rust\.\n$/);
   });
 
-  it('while an import holds the article-digest.md lock, answers 409 busy with retry-after and writes nothing, then saves once it is free (R24-scripts-a-L1-01)', async () => {
+  it('while an import holds the article-digest.md lock, answers 503 busy (not the 409 an ETag conflict gets) with retry-after and writes nothing, then saves once it is free (R24-scripts-a-L1-01)', async () => {
     const { acquirePipelineLock } = await importCore<{ acquirePipelineLock: (p: string, o?: { timeoutMs?: number }) => Promise<{ release(): void }> }>(t.cfg.codeRoot, 'pipeline-lock.mjs');
     const before = await current();
     const text = read();
@@ -78,8 +78,9 @@ describe('POST /api/projects', () => {
     let released = false;
     try {
       const busy = await send('POST', '/api/projects', entry, before.etag);
-      expect(busy.statusCode, busy.body).toBe(409);
+      expect(busy.statusCode, busy.body).toBe(503);
       expect(busy.headers['retry-after']).toBe('1');
+      expect(busy.json().errors).toEqual([busy.json().error]);
       expect(read()).toBe(text);
       lock.release();
       released = true;

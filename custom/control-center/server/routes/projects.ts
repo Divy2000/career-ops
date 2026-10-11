@@ -113,7 +113,8 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   /**
    * Apply an edit to the current text; 404/422/409 as the edit, the validation or the ETag decide. The read and the
    * write hold article-digest.md's lock, the one custom/projects/import.mjs --write holds from its read to its publish,
-   * so a save never lands inside an import's window; a lock held too long is a 409 busy the client retries.
+   * so a save never lands inside an import's window. A lock held too long is a 503 busy with retry-after: the client
+   * reads 409 as an ETag conflict and would wrongly report the file as changed on disk.
    */
   async function save(req: FastifyRequest, reply: FastifyReply, edit: (l: ProjectsLib, text: string) => string | { notFound: string }, id?: string) {
     const l = await lib();
@@ -121,7 +122,10 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     try {
       return await withPipelineLock(path.join(cfg.dataRoot, 'article-digest.md'), () => saveLocked(req, reply, l, edit, id), { timeoutMs: 5000, retryMs: 50 });
     } catch (err) {
-      if ((err as Error).name === 'LockTimeoutError') return reply.code(409).header('retry-after', '1').send({ error: 'the projects library is busy (an import is writing it), try again in a moment' });
+      if ((err as Error).name === 'LockTimeoutError') {
+        const busy = 'the projects library is busy (an import is writing it), try again in a moment';
+        return reply.code(503).header('retry-after', '1').send({ error: busy, errors: [busy] });
+      }
       throw err;
     }
   }
