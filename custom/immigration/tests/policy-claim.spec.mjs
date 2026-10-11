@@ -226,7 +226,7 @@ test('a recover guard left by a claimant killed while breaking a stale lock does
   fs.mkdirSync(lock);
   fs.mkdirSync(`${lock}.recover`);
   const lockAge = new Date(Date.now() - 60_000);
-  const guardAge = new Date(Date.now() - 5_000);
+  const guardAge = new Date(Date.now() - 8_000);
   fs.utimesSync(lock, lockAge, lockAge);
   fs.utimesSync(`${lock}.recover`, guardAge, guardAge);
   assert.deepEqual(tryClaim(r, { owner: 'session:s-1', batch: null }), { ok: true });
@@ -252,6 +252,23 @@ test('a claimant whose lock was broken and taken by another while it held it lea
     fs.readFileSync = read;
   }
   assert.equal(fs.existsSync(lock), true, 'the other claimant\'s lock was removed');
+});
+
+test('a claimant that cannot mark the lock it took removes it, so the next claim is not blocked (R19-scripts-a-L1-02 review 2)', () => {
+  const r = root();
+  const lock = `${claimFile(r)}.lock`;
+  const write = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (file === path.join(lock, 'owner')) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    return write(file, ...rest);
+  };
+  try {
+    assert.throws(() => tryClaim(r, { owner: 'session:s-1', batch: null }), /ENOSPC/);
+  } finally {
+    fs.writeFileSync = write;
+  }
+  assert.equal(fs.existsSync(lock), false, 'the lock was left behind');
+  assert.deepEqual(tryClaim(r, { owner: 'session:s-1', batch: null }), { ok: true });
 });
 
 test('a fork takes the claim from the paused session it forks, never from another live owner', () => {

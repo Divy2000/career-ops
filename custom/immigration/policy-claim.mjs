@@ -20,7 +20,7 @@ const STARTING_MS = 2 * 60_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
 // The recover guard lives for a stat and an rm, so one older than this was left by a claimant killed while breaking.
-const GUARD_STALE_MS = 2_000;
+const GUARD_STALE_MS = 5_000;
 
 export const claimFile = (dataRoot) => path.join(dataRoot, IMM, '.policy-pass.claim');
 
@@ -166,8 +166,10 @@ function breakStale(lock) {
   const judged = statOrNull(lock);
   if (!judged || !isStale(judged)) return false;
   const guard = `${lock}.recover`;
+  let mine;
   try {
     fs.mkdirSync(guard);
+    mine = statOrNull(guard);
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;
     // A guard left by a claimant killed while breaking would block recovery for good, so an old one is removed, once
@@ -181,10 +183,14 @@ function breakStale(lock) {
   try {
     const now = statOrNull(lock);
     if (!now || !isStale(now) || !sameLockDirectory(judged, now)) return false;
+    // A claimant paused past GUARD_STALE_MS has had its guard taken over; it then decides nothing.
+    const guardNow = statOrNull(guard);
+    if (!mine || !guardNow || !sameLockDirectory(mine, guardNow)) return false;
     fs.rmSync(lock, { recursive: true, force: true });
     return true;
   } finally {
-    fs.rmSync(guard, { recursive: true, force: true });
+    const guardNow = statOrNull(guard);
+    if (mine && guardNow && sameLockDirectory(mine, guardNow)) fs.rmSync(guard, { recursive: true, force: true });
   }
 }
 
@@ -208,15 +214,20 @@ function locked(dataRoot, fn) {
   // claimant's, even at the same inode (a file system that reuses inodes at once), and only this token proves it is not.
   const token = randomUUID();
   const owner = path.join(lock, 'owner');
-  fs.writeFileSync(owner, token);
+  try {
+    fs.writeFileSync(owner, token);
+  } catch (err) {
+    fs.rmSync(lock, { recursive: true, force: true });
+    throw err;
+  }
   try {
     return fn();
   } finally {
     let held = null;
     try {
       held = fs.readFileSync(owner, 'utf8');
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
+    } catch {
+      // Unreadable proves nothing about who holds it: it is left to age out rather than fail fn's own outcome.
     }
     if (held === token) fs.rmSync(lock, { recursive: true, force: true });
   }
