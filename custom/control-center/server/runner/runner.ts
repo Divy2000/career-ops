@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
-import { RunStore, runsDir, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
+import { CANCEL_FILE, RunStore, runsDir, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
 import { createWhole, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS } from '../../supervisor/instance-lock.js';
 import { childEnv } from '../system/child-env.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
@@ -660,8 +660,11 @@ export class Runner {
   }
 
   private finalize(meta: RunMeta, exit: { code: number | null; signal: string | null; endedAt: string }): void {
-    let status: RunMeta['status'] = meta.status === 'cancelled' || exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL' ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
+    // Only a run someone stopped reads cancelled: one marked so, or ended by a signal after its cancel file told it to stop.
+    const stopped = meta.status === 'cancelled' || (exit.signal !== null && fs.existsSync(path.join(this.store.dirOf(meta.id), CANCEL_FILE)));
+    let status: RunMeta['status'] = stopped ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
     let error = meta.error;
+    if (!stopped && exit.signal) error = `killed by ${exit.signal}`;
     const meaning = meta.exitMeaning;
     if (status !== 'cancelled' && meaning && exit.code === meaning.code && !(meaning.onlyWithoutStderr && this.store.readRaw(meta.id).lines.some((l) => l.stream === 'stderr'))) {
       status = meaning.status;

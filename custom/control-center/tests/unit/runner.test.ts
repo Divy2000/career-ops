@@ -215,6 +215,18 @@ describe('Runner', () => {
     expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('got SIGTERM');
   });
 
+  it('a run whose command is killed by a signal nobody sent through cancel ends failed with the signal, not cancelled (R18-srv-core-L3-02)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '20000']));
+    await until(() => Boolean(runner.store.read(meta.id)?.childPid) && runner.store.readRaw(meta.id).lines.length >= 3);
+    const childPid = runner.store.read(meta.id)!.childPid!;
+    // An external kill (memory pressure, a terminal kill): the run is still marked running when its command dies.
+    process.kill(-childPid, 'SIGKILL');
+    await until(() => Boolean(runner.store.read(meta.id)?.endedAt));
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'failed', signal: 'SIGKILL', error: expect.stringMatching(/SIGKILL/) });
+  });
+
   it('a cancel that lands while the wrapper is still starting ends the run cancelled, with an exit record and no command left running', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
     runners.push(runner);
