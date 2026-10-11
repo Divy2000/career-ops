@@ -1370,6 +1370,19 @@ test('a live update that cannot take the daily lock for a reason other than a ti
   }
 });
 
+test('a live update killed after it took the lock, with nothing printed, fails the run naming its exit, not blaming the lock (R22-scripts-b-L1-01)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  const r = spawnSync('bash', ['-c', `update_live_checkout() { return 143; }\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\nDATA=/d\nMERGE_OID=abc123\n${block}\necho continued`], { encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stdout);
+  const problem = r.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+  assert.match(problem, /^!!! the live checkout update exited 143 without saying why/, problem);
+  assert.match(problem, /the fork main is at abc123 but the live checkout was not updated/);
+  assert.doesNotMatch(problem, /could not take/);
+});
+
 const KEYCHAIN_LOCKED = 'echo "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2; exit 36';
 
 test('a Keychain item that does not exist (security exit 44) stops the sync with the setup-token advice (R22-scripts-b-L3-01)', () => {

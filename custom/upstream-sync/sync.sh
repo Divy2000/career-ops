@@ -247,8 +247,16 @@ if [ -z "$BLOCKERS" ]; then
   # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
   LIVE_RC=$?
-  # lockf failing for a reason other than the wait (a lock it cannot create) says why on stderr, the log, only.
-  [ -n "$LIVE_UPDATE" ] || LIVE_UPDATE="could not take the daily job's lock $DATA/data/immigration/.run-daily.lockf or the installed daily job's (exit $LIVE_RC; lockf's reason is in the lines above); the fork main is at $MERGE_OID but the live checkout was not updated"
+  # lockf failing for a reason other than the wait (a lock it cannot create, one of its sysexits 64-78) says why on
+  # stderr, the log, only; so does an update killed or broken after it took the lock.
+  if [ -z "$LIVE_UPDATE" ]; then
+    if [ "$LIVE_RC" -ge 64 ] && [ "$LIVE_RC" -le 78 ]; then
+      LIVE_UPDATE="could not take the daily job's lock $DATA/data/immigration/.run-daily.lockf or the installed daily job's (lockf exit $LIVE_RC; its reason is in the lines above)"
+    else
+      LIVE_UPDATE="the live checkout update exited $LIVE_RC without saying why (see the lines above)"
+    fi
+    LIVE_UPDATE="$LIVE_UPDATE; the fork main is at $MERGE_OID but the live checkout was not updated"
+  fi
   case $LIVE_RC in
     # A running Control Center keeps its old dependencies (update_live_checkout says so after the first "; ").
     0)
