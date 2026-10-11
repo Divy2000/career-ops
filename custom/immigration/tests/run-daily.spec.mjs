@@ -628,7 +628,8 @@ jobTest('a scheduled run that finds the update holding the lock an instant befor
   const polls = path.join(w.T, 'polls');
   // The update names its pid during the last sleep of the polling window: the run must still see it (a check after
   // the last sleep). A sleep on PATH ahead of /bin counts the window's 0.05 s polls and writes the marker as the last
-  // one starts, so the timing is exact rather than a guess at when the window opens.
+  // one starts, so the timing is exact rather than a guess at when the window opens. The holder keeps the lock until a
+  // second after the marker appears, however late the run reaches its last poll.
   fs.writeFileSync(path.join(w.T, 'bin', 'sleep'), `#!/bin/bash
 if [ "$1" = 0.05 ]; then
   n=$(( $(cat "${polls}" 2>/dev/null || echo 0) + 1 )); echo "$n" > "${polls}"
@@ -636,12 +637,13 @@ if [ "$1" = 0.05 ]; then
 fi
 exec /bin/sleep "$@"
 `, { mode: 0o755 });
-  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(imm, '.run-daily.lockf'), '/bin/sh', '-c', `echo $$ > "$1"; /bin/sleep 3; rm -f "$2"`, 'holder', holderPid, marker], { stdio: 'ignore', detached: true });
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(imm, '.run-daily.lockf'), '/bin/sh', '-c', `echo $$ > "$1"; for _ in $(seq 600); do [ -e "$2" ] && break; /bin/sleep 0.05; done; /bin/sleep 1; rm -f "$2"`, 'holder', holderPid, marker], { stdio: 'ignore', detached: true });
   try {
     for (let i = 0; i < 200 && !fs.existsSync(holderPid); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.ok(fs.existsSync(holderPid), 'the update never took the lock');
     const r = w.run();
-    assert.equal(readFileSync(polls, 'utf8'), '24\n', 'the run did not poll the whole window through the sleep on PATH');
+    // run-daily.sh puts Homebrew's bin folders ahead of this one: a sleep there would bypass the counting one.
+    assert.equal(fs.existsSync(polls) ? readFileSync(polls, 'utf8') : '', '24\n', 'the run did not poll the whole window through the counting sleep (is there a sleep in /opt/homebrew/bin or /usr/local/bin?)');
     assert.equal(r.status, 0, r.log + r.stderr);
     assert.match(r.steps, /scan\.mjs/);
     assert.equal(fs.existsSync(path.join(imm, 'logs', 'skipped.log')), false);
