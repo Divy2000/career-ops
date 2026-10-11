@@ -674,6 +674,28 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     expect(document.activeElement).toBe(labelled('Kind'));
   });
 
+  it('given a field the library stores normalized, when the save that sent it finishes mid-edit, then the form shows the stored value and a later conflict does not name that field', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks   kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')!.value).toBe('Tracks kites.');
+    const entries = files['/api/projects']!.entries as Array<{ id: string; bullets: string[] }>;
+    await changeOnDisk('/api/projects', { etag: 'e3', entries: entries.map((e) => (e.id === 'kite-tracker' ? { ...e, bullets: ['Tracks kites.', 'Added elsewhere.'] } : e)) });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save project')!);
+    await until(() => /changed on disk since it was loaded/.test(alerts()), 'the conflict message');
+    expect(alerts()).not.toMatch(/changed both here and on disk/);
+    expect(labelled<HTMLTextAreaElement>('Bullet 2')!.value).toBe('Added elsewhere.');
+    expect(labelled<HTMLInputElement>('Dates')!.value).toBe('2024');
+  });
+
   it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {
     const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
     await mount(createElement(ProjectsLibrary));

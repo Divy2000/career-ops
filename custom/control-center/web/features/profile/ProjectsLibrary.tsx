@@ -88,7 +88,9 @@ function onSaved(e: Editing, sent: ProjectDraft, saved: { etag: string; id?: str
   if (!list || list.etag !== saved.etag) return next;
   const now = pinned.posted ? list.entries.find((x) => x.id === saved.id) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
   if (!now) return next;
-  return { ...next, id: now.id, base: draftFromEntry(now), tagline: now.tagline, source: now.source, origin: { ids: list.entries.map((x) => x.id), index: list.entries.indexOf(now), bullets: now.bullets } };
+  // Fields untouched since the save take the stored (normalized) value, so the draft differs from its base only where the user typed.
+  const stored = draftFromEntry(now);
+  return { ...next, id: now.id, draft: rebaseDraft(sent, e.draft, stored).draft, base: stored, tagline: now.tagline, source: now.source, origin: { ids: list.entries.map((x) => x.id), index: list.entries.indexOf(now), bullets: now.bullets } };
 }
 
 export function ProjectsLibrary() {
