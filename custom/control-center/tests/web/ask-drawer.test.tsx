@@ -249,6 +249,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(item.textContent).toContain('at most 300 characters');
     expect(posts).toEqual([]);
   });
+
+  it('a setStatus note over 500 characters fails before asking, matching the server limit (R19-shared-comp-L2-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 3, state: 'Applied', note: 'x'.repeat(501) } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('at most 500 characters');
+    expect(posts).toEqual([]);
+  });
 });
 
 describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25)', () => {
