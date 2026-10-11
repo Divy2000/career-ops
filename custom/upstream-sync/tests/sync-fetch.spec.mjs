@@ -960,12 +960,22 @@ test('a stale Control Center lock naming a reused PID of another user is not tre
 
 // The supervisor rejects a lock without an integer port (parseHolder). It leaves a malformed lock younger than
 // UNREADABLE_LOCK_GRACE_MS (5 s) alone, refusing to start, and replaces an older one, live PID or not.
+// The lock's age is its mtime against the reading node's Date.now, so both are pinned: the update runs a fetch and
+// a merge before it reads the lock, which under load takes longer than the grace.
+const LOCK_CLOCK_MS = Date.UTC(2026, 0, 1);
 function writeControlCenterLock(w, text, ageMs) {
   const lock = path.join(w.base, 'data', 'data', 'control-center', 'supervisor.lock');
   mkdirSync(path.dirname(lock), { recursive: true });
   writeFileSync(lock, text);
-  const at = new Date(Date.now() - ageMs);
+  const at = new Date(LOCK_CLOCK_MS - ageMs);
   utimesSync(lock, at, at);
+}
+
+// A prefix for w.update that pins Date.now in every node the update starts to LOCK_CLOCK_MS.
+function pinLockClock(w) {
+  const preload = path.join(w.base, 'pin-clock.mjs');
+  writeFileSync(preload, `Date.now = () => ${LOCK_CLOCK_MS};\n`);
+  return `export NODE_OPTIONS="--import=${preload}"; `;
 }
 
 test('a malformed Control Center lock past its grace is not treated as running, so npm ci still runs (R18-scripts-b-review-02)', () => {
@@ -973,7 +983,7 @@ test('a malformed Control Center lock past its grace is not treated as running, 
   const child = spawn('sleep', ['30'], { stdio: 'ignore' });
   writeControlCenterLock(w, JSON.stringify({ pid: child.pid, start: null }), 60000);
   try {
-    const res = w.update();
+    const res = w.update({ prefix: pinLockClock(w) });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(w.npm(), /^--prefix custom\/control-center ci\n$/, 'npm ci must run when the lock has no port');
   } finally {
@@ -984,9 +994,9 @@ test('a malformed Control Center lock past its grace is not treated as running, 
 
 test('a malformed Control Center lock within its grace is treated as running, as the supervisor does (R18-scripts-b-review-02)', () => {
   const w = liveWorld({ ccChange: true });
-  writeControlCenterLock(w, '{"pid":', 0);
+  writeControlCenterLock(w, '{"pid":', 1000);
   try {
-    const res = w.update();
+    const res = w.update({ prefix: pinLockClock(w) });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.equal(w.npm(), '', 'npm ci must not run while a malformed lock is within its grace');
     assert.match(res.stdout, /Control Center is running/);
