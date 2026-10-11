@@ -919,6 +919,16 @@ describe('guard hook', () => {
     const lines = fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { path: string });
     expect(lines.at(-1)!.path).toBe('reports/002-new.md');
   });
+
+  it('given files.ndjson ends in a torn line (a hook killed mid-append), when the next write is recorded, then its record starts a line of its own', () => {
+    const log = path.join(sessionDir, 'files.ndjson');
+    fs.appendFileSync(log, '{"path":"reports/torn.md","ab');
+    const r = hookRun(sessionDir, policy, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '004-after-torn.md') }, tool_response: {}, cwd: realRoot });
+    expect(r.status).toBe(0);
+    const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    expect(lines.at(-2)).toBe('{"path":"reports/torn.md","ab');
+    expect((JSON.parse(lines.at(-1)!) as { path: string }).path).toBe('reports/004-after-torn.md');
+  });
 });
 
 describe('guard hook: read confinement', () => {
