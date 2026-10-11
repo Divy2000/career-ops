@@ -35,13 +35,24 @@ export const WATCH_TARGETS: readonly string[] = [
   ]),
 ];
 
-export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300): FSWatcher {
+/**
+ * `trackerPaths` are absolute spellings of the tracker path-resolver.mjs resolves (CAREER_OPS_TRACKER first): its
+ * lexical path and its realpath. Each one and the status log set-status.mjs appends beside it are tracker files
+ * wherever they sit, and are watched even where the data root's ignore rules would hide them.
+ */
+export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300, trackerPaths: readonly string[] = []): FSWatcher {
   const targets = WATCH_TARGETS.map((t) => path.join(dataRoot, t));
-  const watcher = chokidar.watch(targets, {
+  const trackerFiles = [...new Set(trackerPaths.flatMap((p) => [p, path.join(path.dirname(p), 'status-log.tsv')]))];
+  // chokidar watches a missing file through its folder, so the folder must pass the ignore rules too.
+  const trackerDirs = new Set(trackerFiles.map((f) => path.dirname(f)));
+  const watcher = chokidar.watch([...targets, ...trackerFiles], {
     ignoreInitial: true,
     // Judged inside the data root: the root itself may sit under a folder named control-center or node_modules.
     ignored: (p: string) => {
-      const rel = path.relative(dataRoot, p).split(path.sep);
+      const relPath = path.relative(dataRoot, p);
+      const rel = relPath.split(path.sep);
+      // Outside the root only a tracker file is watched, or its folder while the file does not exist yet.
+      if (rel[0] === '..' || path.isAbsolute(relPath) || trackerFiles.includes(p) || trackerDirs.has(p)) return false;
       return rel.includes('node_modules') || (rel[0] === 'data' && rel[1] === 'control-center');
     },
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
@@ -49,7 +60,7 @@ export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300):
   const pending = new Map<Domain, { paths: Set<string>; timer: NodeJS.Timeout }>();
   const onChange = (file: string) => {
     const rel = path.relative(dataRoot, file);
-    const domain = domainFor(rel);
+    const domain = trackerFiles.includes(file) ? 'tracker' : domainFor(rel);
     if (!domain) return;
     const entry = pending.get(domain);
     if (entry) {

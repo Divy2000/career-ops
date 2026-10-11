@@ -6,6 +6,7 @@ import { PACKAGE_ROOT, type ServerConfig } from './config.js';
 import { systemRoutes } from './routes/system.js';
 import { readRoutes } from './routes/read.js';
 import { actionRoutes } from './routes/actions.js';
+import { importCore } from './core/adapter.js';
 import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
@@ -118,7 +119,16 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings, daily });
 
   if (cfg.watch) {
-    const watcher = startWatcher(cfg.dataRoot, bus);
+    const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+    // Relative to the code root, the cwd the tracker scripts run in; set-status.mjs writes its status log beside the realpath.
+    const tracker = path.resolve(cfg.codeRoot, rawTrackerPath(cfg.dataRoot));
+    let real = tracker;
+    try {
+      real = fs.realpathSync(tracker);
+    } catch {
+      // Not created yet (or unresolvable): watched at its lexical path, where the tracker scripts will write it.
+    }
+    const watcher = startWatcher(cfg.dataRoot, bus, undefined, [tracker, real]);
     closers.push(() => watcher.close());
   }
 
