@@ -128,6 +128,42 @@ export async function ackPolicyPass(exec: Exec, codeRoot: string, dataRoot: stri
 }
 
 /**
+ * A pass that ended done leaves `<batch>.done` beside its batch until the ack lands, so an ack that failed is tried
+ * again later whatever became of the session (a later turn, a delete, a restart).
+ */
+const DONE_MARK = '.done';
+
+export function recordDonePolicyBatch(dataRoot: string, batch: string): void {
+  fs.writeFileSync(path.join(dataRoot, batch + DONE_MARK), `${new Date().toISOString()}\n`);
+}
+
+export function forgetDonePolicyBatch(dataRoot: string, batch: string): void {
+  fs.rmSync(path.join(dataRoot, batch + DONE_MARK), { force: true });
+}
+
+/** The batches (relative to the data root) of done passes whose ack has not landed yet. */
+export function donePolicyBatches(dataRoot: string): string[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(path.join(dataRoot, IMM, 'batches'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  return names.filter((n) => n.endsWith(DONE_MARK)).map((n) => path.join(IMM, 'batches', n.slice(0, -DONE_MARK.length)));
+}
+
+/** The day a batch's pass was prepared (its watch JSON `date`), or null when the batch cannot be read. */
+export function policyBatchDay(dataRoot: string, batch: string): string | null {
+  try {
+    const date = (JSON.parse(fs.readFileSync(path.join(dataRoot, batch), 'utf8')) as { date?: unknown } | null)?.date;
+    return typeof date === 'string' ? date : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * One AI policy pass at a time, across this app and the scheduled daily job (custom/immigration/policy-claim.mjs): a
  * pass holds data/immigration/.policy-pass.claim from its start until its session ends (done, error, cancelled) or is
  * deleted and its Claude run has exited; a session paused for a reply keeps it.

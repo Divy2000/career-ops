@@ -9,6 +9,7 @@ import type { RunMeta } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { SessionManager } from '../../server/claude/manager.js';
+import { donePolicyBatches } from '../../server/domains/policyPass.js';
 
 let t: TestApp;
 // A turn that cannot read the Claude token fails before it spawns (a locked Keychain).
@@ -413,25 +414,22 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
   const ACK_BUSY = { code: 1, stdout: '', stderr: 'pending.json.lock is held by another writer' };
   let ackFails = true;
   let failedAcks = 0;
-  // While set, an ack waits on it (and says it started through ackStarted).
-  let ackGate: Promise<void> | null = null;
-  let ackStarted = 0;
   let app: TestApp;
   // Every --ack fails while ackFails is set; anything else runs for real.
   const exec: Exec = async (cmd, args, opts) => {
-    if (args.includes('--ack') && ackGate) {
-      ackStarted += 1;
-      await ackGate;
-    }
     if (!(ackFails && args.includes('--ack'))) return execNoShell(cmd, args, opts);
     failedAcks += 1;
     return ACK_BUSY;
   };
-  const pending = () => JSON.parse(fs.readFileSync(path.join(app.cfg.dataRoot, 'data', 'immigration', 'pending.json'), 'utf8')) as Array<{ id: string }>;
+  const immFile = (name: string) => path.join(app.cfg.dataRoot, 'data', 'immigration', name);
+  const pending = () => JSON.parse(fs.readFileSync(immFile('pending.json'), 'utf8')) as Array<{ id: string }>;
+  const lastPass = () => (fs.existsSync(immFile('seen.json')) ? (JSON.parse(fs.readFileSync(immFile('seen.json'), 'utf8')) as { last_pass?: string }).last_pass : undefined);
   const until = async (fn: () => boolean, what: string) => {
     for (let i = 0; i < 600 && !fn(); i++) await wait(25);
     if (!fn()) throw new Error(`timed out waiting for ${what}`);
   };
+  /** A new server over the same data root, as after a restart. */
+  const restart = (opts: { policyAckRetryMs?: number } = {}) => new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec, ...opts });
 
   beforeAll(async () => {
     app = await makeTestApp({}, { exec, readToken: async () => FAKE_TOKEN });
@@ -443,7 +441,7 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
   /** Runs one pass over [item(n)] that ends done while every ack fails; returns its session id and batch. */
   async function failedAckPass(n: number): Promise<{ id: string; batch: string }> {
     ackFails = true;
-    fs.writeFileSync(path.join(app.cfg.dataRoot, 'data', 'immigration', 'pending.json'), JSON.stringify([item(n)]));
+    fs.writeFileSync(immFile('pending.json'), JSON.stringify([item(n)]));
     const res = await withScenario({ events: [INIT, result('Pass done.')] }, () => app.app.inject({ method: 'POST', url: '/api/sessions', headers: app.authedWrite, payload: { mode: 'immigration-policy', prompt: 'Run the daily immigration policy pass.' } }));
     expect(res.statusCode, res.body).toBe(202);
     const id = res.json().id as string;
@@ -454,70 +452,81 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
     return { id, batch };
   }
 
-  it('given every ack attempt fails, when the pass ends done, then the session keeps its batch for a later ack and the items stay queued', async () => {
-    const { id, batch } = await failedAckPass(21);
-    expect(app.sessions.read(id)!.policyBatch).toBe(batch);
+  it('given every ack attempt fails, when the pass ends done, then its batch is recorded for a later ack and the items stay queued', async () => {
+    const { batch } = await failedAckPass(21);
+    expect(donePolicyBatches(app.cfg.dataRoot)).toContain(batch);
     expect(pending().map((i) => i.id)).toEqual([item(21).id]);
   });
 
-  it('given a batch left unacknowledged, when the server starts again, then it acknowledges it and lets the batch go', async () => {
-    const { id } = await failedAckPass(22);
+  it('given a batch left unacknowledged, when the server starts again, then it acknowledges it and forgets it', async () => {
+    const { batch } = await failedAckPass(22);
     ackFails = false;
-    // A new server over the same data root, as after a restart.
-    const restarted = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec });
+    const restarted = restart();
     try {
       restarted.reconcile();
-      // The batch is let go of while its ack runs, so the queue is what says the ack landed.
-      await until(() => pending().length === 0, 'the leftover ack');
-      await until(() => (app.sessions.read(id)!.policyBatch ?? null) === null, 'the batch to be let go of');
+      await until(() => pending().length === 0 && !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the leftover ack');
     } finally {
       restarted.close();
     }
   });
 
-  it('given a session deleted while the leftover acks run, when its turn comes, then the others are still acknowledged and nothing throws', async () => {
-    const kept = await failedAckPass(24);
-    const gone = await failedAckPass(25);
-    fs.writeFileSync(path.join(app.cfg.dataRoot, 'data', 'immigration', 'pending.json'), JSON.stringify([item(24), item(25)]));
+  it('given a later reply on the pass that ends in error, when the leftover acks run, then the done turn\'s batch is still acknowledged', async () => {
+    const { id, batch } = await failedAckPass(23);
+    const later = await withScenario({ events: [INIT, result('the follow-up broke', true)] }, () => app.app.inject({ method: 'POST', url: `/api/sessions/${id}/turns`, headers: app.authedWrite, payload: { prompt: 'Go on.' } }));
+    expect(later.statusCode, later.body).toBe(202);
+    await until(() => app.sessions.read(id)?.status === 'error', 'the follow-up to end in error');
     ackFails = false;
-    let open!: () => void;
-    ackGate = new Promise((resolve) => (open = resolve));
-    const rejections: unknown[] = [];
-    const onRejection = (err: unknown) => rejections.push(err);
-    process.on('unhandledRejection', onRejection);
-    const restarted = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec });
+    const restarted = restart();
     try {
-      const before = ackStarted;
       restarted.reconcile();
-      await until(() => ackStarted > before, 'the first leftover ack to start');
-      // Whichever session the loop has not reached yet goes away under it.
-      const waiting = (app.sessions.read(kept.id)!.policyBatch ?? null) === null ? gone : kept;
-      expect(app.sessions.delete(waiting.id)).toBe(true);
-      ackGate = null;
-      open();
-      await until(() => pending().length === 1, 'the remaining ack');
-      await wait(200);
-      expect(rejections).toEqual([]);
+      await until(() => pending().length === 0 && !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the leftover ack');
     } finally {
-      ackGate = null;
-      open();
-      process.off('unhandledRejection', onRejection);
+      restarted.close();
+    }
+  });
+
+  it('given a session deleted after its ack failed, when the leftover acks run, then its batch is still acknowledged', async () => {
+    const { id, batch } = await failedAckPass(24);
+    expect(app.sessions.delete(id)).toBe(true);
+    ackFails = false;
+    const restarted = restart();
+    try {
+      restarted.reconcile();
+      await until(() => pending().length === 0 && !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the leftover ack');
+    } finally {
+      restarted.close();
+    }
+  });
+
+  it('given a leftover batch from an earlier day, when the leftover acks run, then it is not acknowledged, so the news window stays at the last pass', async () => {
+    const { batch } = await failedAckPass(25);
+    const before = lastPass();
+    // watch.mjs --ack stamps last_pass with the day the ack lands: a late ack would skip the news since the pass ran.
+    const file = path.join(app.cfg.dataRoot, batch);
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), date: '2020-01-01' }));
+    ackFails = false;
+    const restarted = restart();
+    try {
+      restarted.reconcile();
+      await until(() => !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the stale batch to be let go of');
+      expect(pending().map((i) => i.id)).toEqual([item(25).id]);
+      expect(lastPass()).toBe(before);
+    } finally {
       restarted.close();
     }
   });
 
   it('given a leftover ack that fails too, when the retry delay passes, then it is tried again until it lands', async () => {
-    const { id } = await failedAckPass(23);
-    const retrying = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec, policyAckRetryMs: 50 });
+    const { batch } = await failedAckPass(26);
+    const retrying = restart({ policyAckRetryMs: 50 });
     try {
       const before = failedAcks;
       retrying.reconcile();
       // Two rounds of failed attempts: the leftover ack, then at least one retry.
       await until(() => failedAcks >= before + 6, 'the leftover ack to fail and be retried');
-      expect(app.sessions.read(id)!.policyBatch).toBeTruthy();
+      expect(donePolicyBatches(app.cfg.dataRoot)).toContain(batch);
       ackFails = false;
-      await until(() => pending().length === 0, 'the retried ack');
-      await until(() => (app.sessions.read(id)!.policyBatch ?? null) === null, 'the batch to be let go of');
+      await until(() => pending().length === 0 && !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the retried ack');
     } finally {
       retrying.close();
     }

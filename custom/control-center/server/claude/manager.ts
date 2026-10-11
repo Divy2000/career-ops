@@ -21,7 +21,8 @@ import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapsho
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
-import { ackPolicyPass } from '../domains/policyPass.js';
+import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchDay, recordDonePolicyBatch } from '../domains/policyPass.js';
+import { localDate } from '../../shared/local-date.js';
 
 export type TokenReader = () => Promise<string>;
 
@@ -126,6 +127,7 @@ export class SessionManager {
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
   private policyAckTimer: NodeJS.Timeout | null = null;
   private policyAckDelay: number;
+  private policyAcksInFlight = new Set<string>();
   private closed = false;
 
   constructor(
@@ -389,48 +391,45 @@ export class SessionManager {
 
   /**
    * Acknowledges the batches of passes that ended done but whose ack failed: until it lands their items stay queued, and
-   * the next pass would send them to Claude again. A batch still failing is kept and tried again later.
+   * the next pass would send them to Claude again. A batch still failing is kept and tried again later. One from an
+   * earlier day is let go of unacknowledged: watch.mjs --ack stamps last_pass with the day it runs, so a late ack would
+   * move the next pass's news window past days no pass searched, which is worse than seeing the items twice.
    */
   private async ackLeftoverPolicyBatches(): Promise<void> {
+    const today = localDate(new Date());
     let failed = false;
-    for (const listed of this.store.list()) {
-      // Read again: an earlier ack's await may have let a reply start, a fork move the batch or a delete remove it.
-      const meta = this.read(listed.id);
-      const batch = meta?.policyBatch ?? null;
-      if (!meta || batch === null || meta.status !== 'done' || this.active.has(meta.id) || this.sending.has(meta.id)) continue;
-      // Claimed before the await, as finalize claims it.
-      try {
-        this.store.setPolicyBatch(meta.id, null);
-      } catch {
-        continue; // deleted since the read
+    for (const batch of donePolicyBatches(this.cfg.dataRoot)) {
+      if (this.policyAcksInFlight.has(batch)) continue;
+      if (policyBatchDay(this.cfg.dataRoot, batch) !== today) {
+        console.warn(`[sessions] policy pass batch ${batch} is from an earlier day: its items stay queued for the next pass`);
+        forgetDonePolicyBatch(this.cfg.dataRoot, batch);
+        continue;
       }
-      const ack = await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch);
-      if (!ack.ok) {
-        this.keepPolicyBatch(meta.id, batch);
-        failed = true;
-      }
+      if (!(await this.ackDonePolicyBatch(batch)).ok) failed = true;
     }
     if (failed) this.retryPolicyAcks();
     else this.policyAckDelay = this.deps.policyAckRetryMs ?? POLICY_ACK_RETRY_MS;
   }
 
-  /** Runs the leftover acks in the background; a sessions folder it cannot read is logged and tried again later. */
+  /** Acknowledges a done pass's batch and forgets it once the ack lands; a failure leaves it recorded and arms a retry. */
+  private async ackDonePolicyBatch(batch: string): Promise<{ ok: boolean; text: string }> {
+    this.policyAcksInFlight.add(batch);
+    try {
+      const ack = await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch);
+      if (ack.ok) forgetDonePolicyBatch(this.cfg.dataRoot, batch);
+      else this.retryPolicyAcks();
+      return ack;
+    } finally {
+      this.policyAcksInFlight.delete(batch);
+    }
+  }
+
+  /** Runs the leftover acks in the background; a batches folder it cannot read is logged and tried again later. */
   private runLeftoverPolicyAcks(): void {
     this.ackLeftoverPolicyBatches().catch((err: unknown) => {
       console.error(`[sessions] policy-pass acks: ${(err as Error).stack ?? String(err)}`);
       this.retryPolicyAcks();
     });
-  }
-
-  /** Gives a session back the batch its failed ack let go of, unless the session is gone or holds another batch now. */
-  private keepPolicyBatch(id: string, batch: string): void {
-    const meta = this.read(id);
-    if (!meta || (meta.policyBatch ?? null) !== null) return;
-    try {
-      this.store.setPolicyBatch(id, batch);
-    } catch {
-      /* deleted since the read: nothing is left to acknowledge for */
-    }
   }
 
   private retryPolicyAcks(): void {
@@ -803,14 +802,14 @@ export class SessionManager {
     // Only a pass that ends done acknowledges the items it was given; any other outcome leaves them queued for the next run.
     const batch = meta.policyBatch ?? null;
     if (batch !== null && outcome.status === 'done') {
-      // Claimed before the await, as the report number is; a failed ack gives it back for a later one.
+      // Claimed before the await, as the report number is; recorded first, so an ack that fails is tried again later.
       this.store.setPolicyBatch(id, null);
-      const ack = await ackPolicyPass(this.deps.exec, this.cfg.codeRoot, this.cfg.dataRoot, batch);
-      reason += `; ${ack.text}`;
-      if (!ack.ok) {
-        this.keepPolicyBatch(id, batch);
-        this.retryPolicyAcks();
+      try {
+        recordDonePolicyBatch(this.cfg.dataRoot, batch);
+      } catch (err) {
+        console.error(`[sessions] could not record policy pass batch ${batch} for a later ack: ${(err as Error).message}`);
       }
+      reason += `; ${(await this.ackDonePolicyBatch(batch)).text}`;
     }
     // A completed evaluation of a pipeline URL leaves Pending, as pipeline mode moves it (modes/pipeline.md, Workflow 2f).
     // So does one of a saved JD (Evaluate JD on a local:jds/ row), whose text target is the row's reference.
