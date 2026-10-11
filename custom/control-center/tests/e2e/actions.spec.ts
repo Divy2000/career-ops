@@ -176,15 +176,42 @@ test.describe('Today: shortlist and decisions act on the row', () => {
     await page.goto(`/auth?t=${E2E_TOKEN}`);
     // The session itself is stubbed: a real oferta run here would merge a tracker row and reserve a report number other specs count on.
     let sent: unknown = null;
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    // The route answers 202 with the new session's SessionMeta, and the session page then reads that session back.
+    const now = new Date().toISOString();
+    const meta = {
+      id: 's-today-evaluate',
+      claudeSessionId: '44444444-4444-4444-8444-444444444444',
+      mode: 'oferta',
+      policyClass: 'evaluate',
+      target: { type: 'url', value: 'https://jobs.example.com/acme/123' },
+      model: null,
+      status: 'queued',
+      createdAt: now,
+      updatedAt: now,
+      turns: [],
+      totals: { costUsd: 0, tokens: 0 },
+      filesChanged: [],
+      forkedFrom: null,
+      error: null,
+      reportNum: null,
+      lastReason: null,
+      policyVersion: 2,
+    };
     await page.route('**/api/sessions', async (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
       sent = route.request().postDataJSON();
-      await route.fulfill({ status: 201, json: { id: 's-today-evaluate', mode: 'oferta', status: 'queued', turns: [] } });
+      await route.fulfill({ status: 202, json: meta });
     });
+    await page.route('**/api/sessions/s-today-evaluate', (route) => (route.request().method() === 'GET' ? route.fulfill({ status: 200, json: { meta, events: [] } }) : route.fallback()));
     await page.goto('/');
     const row = page.getByRole('row', { name: /Acme Robotics/ });
     await row.getByRole('button', { name: 'Evaluate' }).click();
     await expect(page).toHaveURL(/\/sessions\/s-today-evaluate$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'oferta s-today-evaluate' })).toBeVisible();
+    await expect(page.getByText('https://jobs.example.com/acme/123', { exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
     expect(sent).toMatchObject({ mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/acme/123' }, prompt: 'Evaluate this job posting following the mode file: https://jobs.example.com/acme/123' });
   });
 
