@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const GUARD_HOOK_PATH = path.join(here, 'guard-hook.mjs');
+// Preloaded into every child the app starts (server/system/child-env.ts): rendered HTML reads no local file but itself.
+export const LOCAL_FILE_GUARD_PATH = path.join(here, 'local-file-guard.mjs');
 const CONTRACT_FILE = path.join(here, '..', 'core', 'contract.json');
 
 /** The leading x.y.z (with an optional -tag) of `claude --version` output. */

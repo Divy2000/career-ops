@@ -108,6 +108,10 @@ describe('mode registry', () => {
     expect(getModePolicy('master-profile')?.scripts).not.toContain('custom/cv/render-pdf.mjs');
   });
 
+  it('latex and latex-tex sessions may run the sandboxed compile wrapper their modes are redirected to (generate-latex.mjs compiles are refused)', () => {
+    for (const mode of ['latex', 'latex-tex']) expect(getModePolicy(mode)?.bashPrefixes, mode).toContainEqual(['node', 'custom/cv/compile-latex.mjs']);
+  });
+
   it('the documents class grants the JD file its modes write: pdf.md\'s jds/{slug}.md, which the projects house rule ranks for pdf, text, latex and cover (SW3-libs-01)', () => {
     expect(fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'modes', 'pdf.md'), 'utf8')).toContain('write the JD to `jds/{slug}.md` first');
     const houseRule = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'install', 'templates', '_custom-projects.md'), 'utf8');

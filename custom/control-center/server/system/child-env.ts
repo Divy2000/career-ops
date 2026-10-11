@@ -4,6 +4,9 @@
 // and a child that can read them can drive the local API. Variables a caller
 // passes explicitly (the guard hook's CC_POLICY_FILE and friends, a session's own token) are kept. Claude and
 // Anthropic credentials exported in the shell are dropped as well (see isCredential).
+import { pathToFileURL } from 'node:url';
+import { LOCAL_FILE_GUARD_PATH } from '../claude/confinement.mjs';
+
 /**
  * Claude and Anthropic credentials a shell may export (claude setup-token suggests exporting the OAuth token). No child
  * needs an inherited copy: a session sets its own token and an empty API key in `extra`, and run-daily.sh reads the
@@ -44,8 +47,22 @@ const PINNED_TO_DATA_ROOT = {
   CAREER_OPS_ARTICLE_DIGEST: '',
 };
 
+/**
+ * Preloaded into every Node child (and, through a session's environment, every script a session runs): a page Playwright
+ * renders from a file:// URL loads no other local file, so session-written HTML cannot frame ~/.ssh/id_rsa into a PDF
+ * (server/claude/local-file-guard.mjs).
+ */
+const LOCAL_FILE_GUARD_FLAG = `--import=${pathToFileURL(LOCAL_FILE_GUARD_PATH).href}`;
+
+function withLocalFileGuard(nodeOptions: string | undefined): string {
+  const given = (nodeOptions ?? '').trim();
+  if (given.split(/\s+/).includes(LOCAL_FILE_GUARD_FLAG)) return given;
+  return given ? `${given} ${LOCAL_FILE_GUARD_FLAG}` : LOCAL_FILE_GUARD_FLAG;
+}
+
 export function childEnv(extra: NodeJS.ProcessEnv = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(base)) if (!k.startsWith('CC_') && !isCredential(k)) out[k] = v;
-  return { ...out, ...PINNED_TO_DATA_ROOT, ...extra };
+  const env: NodeJS.ProcessEnv = { ...out, ...PINNED_TO_DATA_ROOT, ...extra };
+  return { ...env, NODE_OPTIONS: withLocalFileGuard(env.NODE_OPTIONS) };
 }

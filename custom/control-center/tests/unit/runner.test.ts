@@ -837,7 +837,8 @@ describe('Runner', () => {
     const env = childEnv({}, base);
     // The data-file paths are always set, empty, so a script writes the data root's files (R12-srv-core-L2-03, R17-srv-core-X-01, R21-srv-core-L2-01).
     const pinned = ['CAREER_OPS_ADDITIONS', 'CAREER_OPS_ARTICLE_DIGEST', 'CAREER_OPS_BATCH_STATE', 'CAREER_OPS_CV', 'CAREER_OPS_DOCUMENTS_DIR', 'CAREER_OPS_FOLLOWUPS', 'CAREER_OPS_INTAKE_STATE', 'CAREER_OPS_JDS', 'CAREER_OPS_PIPELINE', 'CAREER_OPS_PORTALS', 'CAREER_OPS_PROFILE', 'CAREER_OPS_REPLY_CANDIDATES', 'CAREER_OPS_REPORTS', 'CAREER_OPS_REPORTS_DIR', 'CAREER_OPS_SCAN_HISTORY'];
-    expect(Object.keys(env).sort()).toEqual([...pinned, 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // NODE_OPTIONS preloads the local file guard for rendered HTML (local-file-guard.test.ts).
+    expect(Object.keys(env).sort()).toEqual([...pinned, 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'NODE_OPTIONS', 'PATH']);
     // A session's own credentials, passed explicitly, still reach it.
     expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
   });

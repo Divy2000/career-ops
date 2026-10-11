@@ -6,6 +6,7 @@ export function spellings(p: string): string[];
 export function buildReadDenyRules(roots: string[], guardRoot?: string): string[];
 export function assertRootsConfinable(codeRoot: string, dataRoot: string, home: string): void;
 export const GUARD_HOOK_PATH: string;
+export const LOCAL_FILE_GUARD_PATH: string;
 export const ALWAYS_DENIED_WRITES: string[];
 export function trackerDenyGlobs(dataRoot: string, codeRoot?: string, env?: NodeJS.ProcessEnv): string[];
 export function shellQuote(s: string): string;
