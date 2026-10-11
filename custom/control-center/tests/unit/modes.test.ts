@@ -6,6 +6,9 @@ import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listLaunchableModeIds, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
 import { AGENT_SPAWNING_SCRIPTS, matches } from '../../server/claude/guard-policy.mjs';
 import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
+import { checkWrite } from '../../server/claude/guard-policy.mjs';
+import { writePolicyFile } from '../../server/claude/invocation.js';
+import { tempDir } from '../helpers/tmp.js';
 
 describe('mode registry', () => {
   it('the frozen snapshot matches the modes/ tree (a mode appeared, vanished or changed its script references)', () => {
@@ -199,3 +202,21 @@ function importGraph(script: string): string[] {
   }
   return [...seen];
 }
+
+describe('evaluation sessions record the desired ask (R20-claude-L2-01)', () => {
+  it('given modes/oferta.md section 3, when an oferta, auto-pipeline or localized oferta session appends the desired line, then the guard lets it write data/salary-observations.tsv', () => {
+    expect(fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'modes', 'oferta.md'), 'utf8')).toContain('append one `desired` line (source `user`) to `data/salary-observations.tsv`');
+    const root = fs.realpathSync(tempDir('cc-salary-obs-'));
+    for (const mode of ['oferta', 'auto-pipeline', 'de/angebot']) {
+      const policy = getModePolicy(mode)!;
+      expect(policy.policyClass, mode).toBe('evaluate');
+      const pf = writePolicyFile(path.join(root, 'guard', mode.replace('/', '-')), { codeRoot: root, dataRoot: root, policy, deny: [...ALWAYS_DENIED_WRITES] });
+      const written = JSON.parse(fs.readFileSync(pf.file, 'utf8')) as Parameters<typeof checkWrite>[0];
+      expect(checkWrite(written, 'Edit', path.join(root, 'data', 'salary-observations.tsv')), mode).toBeNull();
+    }
+  });
+
+  it('given an evaluate-class mode that never asks for a number, when it writes the observations log, then it is refused', () => {
+    expect(matches('data/salary-observations.tsv', getModePolicy('triage')!.writeGlobs)).toBe(false);
+  });
+});

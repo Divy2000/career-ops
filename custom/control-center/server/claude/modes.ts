@@ -251,6 +251,10 @@ export function writeGlobsByRoot(globs: readonly string[]): { data: string[]; co
  * scan-history row, a private posting's JD under jds/), which discover, the other scan-class mode, does not.
  */
 const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
+  // modes/oferta.md section 3: a desired number the user states for this application is appended to the observations
+  // log; auto-pipeline runs the oferta evaluation, and a localized oferta resolves to oferta here.
+  oferta: ['data/salary-observations.tsv'],
+  'auto-pipeline': ['data/salary-observations.tsv'],
   pipeline: ['data/pipeline.md', 'data/discard.log'],
   scan: ['data/pipeline.md', 'data/scan-history.tsv', 'jds/*.md'],
   // modes/titles.md: portals.yml's title_filter is the only file the mode writes (after the user confirms the diff).
