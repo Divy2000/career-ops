@@ -1855,6 +1855,23 @@ describe('r18 manager fixes', () => {
     }
   });
 
+  it('cancel that finds the exit on disk before the runner recorded it leaves the completed turn for finalize (R18-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      const run = app.runner.store.create({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT }, params: { sessionId: meta.id, turn: 1 } });
+      app.runner.store.write({ ...run, status: 'running', endedAt: null });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      // The wrapper wrote its clean exit, but the runner's poll has not copied it into the run record yet.
+      fs.writeFileSync(path.join(app.runner.store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+      expect(app.runner.store.read(run.id)!.status).toBe('running');
+      expect(app.sessions.cancel(meta.id).status).toBe('running');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('runEnded waits for a recorded exit, not a non-running status (R18-claude-L1-03)', async () => {
     const app = await freshApp();
     const runEnded = (app.sessions as unknown as { runEnded: (id: string) => Promise<boolean> }).runEnded.bind(app.sessions);
