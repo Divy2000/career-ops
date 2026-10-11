@@ -445,7 +445,8 @@ jobTest('a stale policy-pass claim (its session is gone) is taken over, the pass
 
 /**
  * Holds run-daily's lock as another daily run does. Its own process group, so stop() kills lockf and its sleep together
- * (a signal to lockf alone leaves the sleep running for a minute); stop() fails the spec if either outlives it.
+ * (a signal to lockf alone leaves the sleep running for a minute). stop() returns whichever of them outlived it, for the
+ * spec to assert after its finally, so a leak never hides the spec's own failure.
  */
 async function lockHolder(imm) {
   const lock = path.join(imm, '.run-daily.lockf');
@@ -472,7 +473,7 @@ async function lockHolder(imm) {
       kill();
       const tree = [holder.pid, ...children];
       for (let i = 0; i < 200 && tree.some(alive); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
-      assert.deepEqual(tree.filter(alive), [], 'the lock holder leaves no process running');
+      return tree.filter(alive);
     },
   };
 }
@@ -482,6 +483,7 @@ jobTest('a run that starts while another holds the lock is skipped: a dated line
   const imm = path.join(w.data, 'data', 'immigration');
   fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
   const holder = await lockHolder(imm);
+  let left;
   try {
     const r = w.run();
     assert.equal(r.status, 0, r.log);
@@ -489,8 +491,9 @@ jobTest('a run that starts while another holds the lock is skipped: a dated line
     assert.equal(r.steps, '');
     assert.equal(r.log, '', 'no dated run log is started');
   } finally {
-    await holder.stop();
+    left = await holder.stop();
   }
+  assert.deepEqual(left, [], 'the lock holder leaves no process running');
 });
 
 jobTest('a run the Control Center started (CC_RUN_DAILY_SKIP_EXIT) that finds the lock held says it was skipped and exits with that code (SW4-server-01)', async () => {
@@ -498,6 +501,7 @@ jobTest('a run the Control Center started (CC_RUN_DAILY_SKIP_EXIT) that finds th
   const imm = path.join(w.data, 'data', 'immigration');
   fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
   const holder = await lockHolder(imm);
+  let left;
   try {
     const r = w.run({ CC_RUN_DAILY_SKIP_EXIT: '75' });
     assert.equal(r.status, 75, r.stderr);
@@ -505,8 +509,9 @@ jobTest('a run the Control Center started (CC_RUN_DAILY_SKIP_EXIT) that finds th
     assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /another run-daily holds the lock; skipped$/m);
     assert.equal(r.steps, '');
   } finally {
-    await holder.stop();
+    left = await holder.stop();
   }
+  assert.deepEqual(left, [], 'the lock holder leaves no process running');
 });
 
 /** Holds run-daily's lock the way the weekly sync's live-checkout update does: it names its pid in .live-update.pid. */
@@ -572,6 +577,7 @@ jobTest('a .live-update.pid left by an update that is gone does not make a run w
   // A pid no process has: the update that wrote it was killed before it could remove it.
   fs.writeFileSync(path.join(imm, '.live-update.pid'), '999999\n');
   const holder = await lockHolder(imm);
+  let left;
   try {
     const started = Date.now();
     const r = w.run();
@@ -580,8 +586,9 @@ jobTest('a .live-update.pid left by an update that is gone does not make a run w
     assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /another run-daily holds the lock; skipped$/m);
     assert.equal(r.steps, '');
   } finally {
-    await holder.stop();
+    left = await holder.stop();
   }
+  assert.deepEqual(left, [], 'the lock holder leaves no process running');
 });
 
 jobTest('with no working node, the job stops with a clear reason instead of running against an empty data root (SW2-tests-12)', () => {
