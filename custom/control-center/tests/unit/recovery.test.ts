@@ -609,6 +609,67 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(queuedStatus(empty)).toBe('lost');
   });
 
+  it('a cancelled session whose cancelled turn\'s command is still in the kill grace cannot have an earlier turn reverted, with or without a server, as /api/dev/revert refuses while the session is active (R19-supervisor-L3-01)', () => {
+    const live = { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid), childPid: process.pid, childStartedAt: processStartTime(process.pid) };
+    /** Turn 1 finished and was finalized; turn 2 was cancelled and its run has not recorded its end. */
+    const cancelledMidTurn = () => {
+      const t = stalled((dir) => {
+        runMeta(dir, { status: 'done', params: { sessionId: 's1', turn: 1 } });
+        fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
+      });
+      fs.writeFileSync(path.join(t.turnDir, 'after.json'), JSON.stringify({ files: { [t.file]: sha('broken by the turn\n') } }));
+      const sessionsDir = path.join(path.dirname(t.runsDir), 'sessions');
+      fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'cancelled', createdAt: 't', turns: [{ n: 1, runId: 'r20261006000000-abcdef' }, { n: 2, runId: 'r20261006000001-abcdef' }] }));
+      const second = path.join(t.runsDir, 'r20261006000001-abcdef');
+      fs.mkdirSync(second);
+      runMeta(second, { status: 'cancelled', endedAt: null, params: { sessionId: 's1', turn: 2 }, ...live });
+      return { ...t, second };
+    };
+    for (const serverRunning of [true, false]) {
+      const t = cancelledMidTurn();
+      expect(t.revert(serverRunning)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('broken by the turn\n');
+      // Once the cancelled run records its exit, the earlier turn reverts.
+      fs.writeFileSync(path.join(t.second, 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: 't' }));
+      expect(t.revert(serverRunning)).toMatchObject({ status: 200, text: 'notes.md: restored' });
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('before\n');
+    }
+  });
+
+  it('a finished session with a queued run left by a server that died before it recorded the turn: with no server the revert goes ahead and the run is marked lost; with one it is refused, and a start begun is never cancelled from here (R19-supervisor-L3-01 review)', () => {
+    const request = JSON.stringify({ env: {}, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
+    const finishedWithQueued = (begun: boolean) => {
+      const t = stalled((dir) => {
+        runMeta(dir, { status: 'done', params: { sessionId: 's1', turn: 1 } });
+        fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
+      });
+      fs.writeFileSync(path.join(t.turnDir, 'after.json'), JSON.stringify({ files: { [t.file]: sha('broken by the turn\n') } }));
+      const sessionsDir = path.join(path.dirname(t.runsDir), 'sessions');
+      fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1, runId: 'r20261006000000-abcdef' }] }));
+      const queued = path.join(t.runsDir, 'r20261006000001-abcdef');
+      fs.mkdirSync(queued);
+      runMeta(queued, { status: 'queued', params: { sessionId: 's1', turn: 2 } });
+      fs.writeFileSync(path.join(queued, 'request.json'), request);
+      if (begun) {
+        fs.writeFileSync(path.join(queued, 'starting'), '');
+        const past = new Date(Date.now() - 60_000);
+        fs.utimesSync(path.join(queued, 'starting'), past, past);
+      }
+      return { ...t, queued, status: () => JSON.parse(fs.readFileSync(path.join(queued, 'meta.json'), 'utf8')).status };
+    };
+    const down = finishedWithQueued(false);
+    expect(down.revert(false)).toMatchObject({ status: 200, text: 'notes.md: restored' });
+    expect(down.status()).toBe('lost');
+    const up = finishedWithQueued(false);
+    expect(up.revert(true)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    expect(up.status()).toBe('queued');
+    expect(fs.readFileSync(up.file, 'utf8')).toBe('broken by the turn\n');
+    // A live server settles a start it began itself: the revert check leaves no cancel file for its wrapper to read.
+    const starting = finishedWithQueued(true);
+    expect(starting.revert(true).status).toBe(409);
+    expect(fs.existsSync(path.join(starting.queued, 'cancel'))).toBe(false);
+  });
+
   it('a run still going is never reverted under it, nor one that cannot be shown to have ended, nor any while a server runs', () => {
     const alive = stalled((dir) => runMeta(dir, { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid) }));
     expect(alive.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });

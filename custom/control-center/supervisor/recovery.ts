@@ -425,6 +425,8 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
   if (run.status === 'queued' && !fs.existsSync(path.join(dir, 'wrapper.json'))) {
     const begun = fs.statSync(path.join(dir, 'starting'), { throwIfNoEntry: false })?.mtimeMs;
     if (begun === undefined || Date.now() - begun <= STARTING_GRACE_MS) return false;
+    // A running server settles the start itself (it may be its own wrapper, only slow under load): never cancel it from here.
+    if (serverRunning) return false;
     try {
       fs.writeFileSync(path.join(dir, 'cancel'), new Date().toISOString());
     } catch {
@@ -516,7 +518,7 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
   const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
   if (!meta || !Number.isInteger(opts.turn) || !(Array.isArray(meta.turns) && meta.turns.some((t) => t.n === opts.turn))) return { status: 404, text: 'unknown session or turn' };
   const sessionDir = guardSessionDir(opts.guardRoot, meta.id);
-  let markLost = false;
+  let markLost: boolean;
   if (meta.status === 'running' || meta.status === 'queued') {
     // A running server tracks and finalizes the session itself. With none (it cannot start), a session left running by
     // a supervisor that stopped mid-turn stays so until a server reconciles it, so once its run has ended the turn is
@@ -529,6 +531,13 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     markLost = true;
     const offset = turnOffset(sessionDir, last.n);
     if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
+  } else if (!sessionRunsEnded(opts.ctx.dataRoot, meta.id, processStartTime, opts.serverRunning !== false)) {
+    // A cancel marks the session at once, but its run's command may still write in the kill grace: the server keeps the
+    // session active (manager.isActive, which /api/dev/revert checks) until that run records its end.
+    return { status: 409, text: 'the session is still running (one of its runs has not ended); wait for it to finish before reverting' };
+  } else {
+    // A server that died between starting a turn's run and recording the turn leaves the run queued under a finished session.
+    markLost = opts.serverRunning === false;
   }
   try {
     let plans: RevertPlan[];
