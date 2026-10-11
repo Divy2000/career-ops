@@ -442,12 +442,17 @@ const doneMarks = (imm) => (fs.existsSync(path.join(imm, 'batches')) ? fs.readdi
 jobTest('a failed ack after a successful pass is tried again in the same run, so a passing lock wait does not leave the items queued (R20-scripts-a-L1-01)', () => {
   const w = dailyWorld();
   failingAckWatch(w);
-  const r = w.run({ FAKE_ACK_FAILS: '1' });
+  // The retry waits before it tries again (the lock may still be busy): a sleep handed over as CC_SLEEP_BIN notes how long.
+  const waits = path.join(w.T, 'waits');
+  const recordingSleep = path.join(w.T, 'recording-sleep');
+  fs.writeFileSync(recordingSleep, `#!/bin/bash\necho "$1" >> "${waits}"\nexec /bin/sleep "$@"\n`, { mode: 0o755 });
+  const r = w.run({ FAKE_ACK_FAILS: '1', CC_SLEEP_BIN: recordingSleep });
   assert.equal(r.status, 0, r.log);
   assert.equal(r.calls.length, 1, r.log);
   const acks = ackedBatches(r.steps);
   assert.equal(acks.length, 2, r.steps);
   assert.equal(acks[0], acks[1], 'the retry acknowledges the same batch');
+  assert.equal(fs.existsSync(waits) ? readFileSync(waits, 'utf8') : '', '1\n', 'the retry waits a second before trying the ack again');
   assert.deepEqual(doneMarks(r.imm), [], 'an ack that landed leaves no .done marker');
 });
 
@@ -627,10 +632,15 @@ jobTest('a scheduled run that finds the update holding the lock an instant befor
   const holderPid = path.join(w.T, 'holder.pid');
   const polls = path.join(w.T, 'polls');
   // The update names its pid during the last sleep of the polling window: the run must still see it (a check after
-  // the last sleep). A sleep on PATH ahead of /bin counts the window's 0.05 s polls and writes the marker as the last
-  // one starts, so the timing is exact rather than a guess at when the window opens. The holder keeps the lock until a
-  // second after the marker appears, however late the run reaches its last poll.
-  fs.writeFileSync(path.join(w.T, 'bin', 'sleep'), `#!/bin/bash
+  // the last sleep). A sleep handed to the run as CC_SLEEP_BIN counts the window's 0.05 s polls and writes the marker as
+  // the last one starts, so the timing is exact rather than a guess at when the window opens. The holder keeps the lock
+  // until a second after the marker appears, however late the run reaches its last poll.
+  const countingSleep = path.join(w.T, 'counting-sleep');
+  // A plain sleep in a folder run-daily.sh puts ahead of the caller's PATH, as a host with a sleep in /opt/homebrew/bin
+  // or /usr/local/bin has one: the run must still poll through the sleep it was handed, not whichever PATH finds first.
+  fs.mkdirSync(path.join(w.home, '.local', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(w.home, '.local', 'bin', 'sleep'), '#!/bin/bash\nexec /bin/sleep "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(countingSleep, `#!/bin/bash
 if [ "$1" = 0.05 ]; then
   n=$(( $(cat "${polls}" 2>/dev/null || echo 0) + 1 )); echo "$n" > "${polls}"
   [ "$n" = 24 ] && cp "${holderPid}" "${marker}.tmp" && mv "${marker}.tmp" "${marker}"
@@ -641,9 +651,8 @@ exec /bin/sleep "$@"
   try {
     for (let i = 0; i < 200 && !fs.existsSync(holderPid); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.ok(fs.existsSync(holderPid), 'the update never took the lock');
-    const r = w.run();
-    // run-daily.sh puts Homebrew's bin folders ahead of this one: a sleep there would bypass the counting one.
-    assert.equal(fs.existsSync(polls) ? readFileSync(polls, 'utf8') : '', '24\n', 'the run did not poll the whole window through the counting sleep (is there a sleep in /opt/homebrew/bin or /usr/local/bin?)');
+    const r = w.run({ CC_SLEEP_BIN: countingSleep });
+    assert.equal(fs.existsSync(polls) ? readFileSync(polls, 'utf8') : '', '24\n', 'the run did not poll the whole window through CC_SLEEP_BIN');
     assert.equal(r.status, 0, r.log + r.stderr);
     assert.match(r.steps, /scan\.mjs/);
     assert.equal(fs.existsSync(path.join(imm, 'logs', 'skipped.log')), false);
