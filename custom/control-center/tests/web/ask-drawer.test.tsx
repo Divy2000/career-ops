@@ -709,6 +709,25 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.dataset.proposalState).toBe('done');
   });
 
+  it('given one pending row with a credential-bearing URL, evaluates the clean postings and says how many rows were left out (FU-askdrawer-creds)', async () => {
+    rows.push(row('https://user:secret@jobs.acme.example/9', 'Acme'));
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+    expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address');
+  });
+
+  it('given every pending row at the company has an unsendable URL, starts nothing and says why, without asking (FU-askdrawer-creds)', async () => {
+    rows.push(row('https://user:secret@jobs.initech.example/1', 'Initech'), row('ftp://jobs.initech.example/2', 'Initech'));
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('2 rows have a URL that is not a plain http(s) posting address');
+  });
+
   it('with no pending posting at that company, starts nothing and says so, without asking', async () => {
     await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;

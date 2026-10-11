@@ -13,6 +13,7 @@ import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@share
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
+import { postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
@@ -69,13 +70,17 @@ function askAction(name: string): (typeof ASK_ACTIONS)[string] | null {
  * Evaluate visible it leaves out saved-JD rows (`local:jds/`, evaluated through Evaluate JD) and rows flagged as needing a JD.
  * The advisor may name the company as pipeline.md writes it (`Acme \[Labs\]`) or as the Inbox shows it (`Acme [Labs]`).
  */
-async function pendingUrlsAt(company: string): Promise<string[]> {
+async function pendingUrlsAt(company: string): Promise<{ urls: string[]; leftOut: string | null }> {
   const pipeline = await apiGet<PipelineRead>('/api/pipeline');
   const names = new Set([company.toLowerCase(), unescapeMarkdownCell(company).toLowerCase()]);
-  const urls = [...new Set((pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && names.has(r.company.trim().toLowerCase())).map((r) => r.url))];
-  if (urls.length === 0) throw new Error(`No pending Inbox posting at ${company}.`);
+  const evaluable = (pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && names.has(r.company.trim().toLowerCase()));
+  // The fan-out refuses a whole body over one URL that is not a plain posting address, so such a row is left out and counted.
+  const unsendable = evaluable.filter((r) => postingUrl(r.url) !== r.url).length;
+  const leftOut = unsendable === 0 ? null : `${unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials or another scheme) and is left out.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials or another scheme) and are left out.`} Fix it in data/pipeline.md.`;
+  const urls = [...new Set(evaluable.filter((r) => postingUrl(r.url) === r.url).map((r) => r.url))];
+  if (urls.length === 0) throw new Error(leftOut ? `No pending Inbox posting at ${company} can be evaluated. ${leftOut}` : `No pending Inbox posting at ${company}.`);
   if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
-  return urls;
+  return { urls, leftOut };
 }
 
 /** Whether a posting is a pending Inbox row, which a running Process inbox session is evaluating. */
@@ -184,6 +189,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
     const company = String(p.params.company ?? '').trim();
     let companyUrls: string[] = [];
+    let companyLeftOut: string | null = null;
     try {
       if (await processInboxOwns(p)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
@@ -195,7 +201,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     }
     if (p.action === 'evaluateCompany') {
       try {
-        companyUrls = (await pendingUrlsAt(company)).filter((u) => !activeFor(u));
+        const pending = await pendingUrlsAt(company);
+        companyLeftOut = pending.leftOut;
+        companyUrls = pending.urls.filter((u) => !activeFor(u));
         if (companyUrls.length === 0) {
           update(p.id, { state: 'failed', note: `Every pending Inbox posting at ${company} is already being evaluated.` });
           return;
@@ -215,9 +223,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     };
     const question =
       p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
-        ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.`, confirmLabel: 'Start them', focusCancel: true }
+        ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.${companyLeftOut ? ` ${companyLeftOut}` : ''}`, confirmLabel: 'Start them', focusCancel: true }
         : p.action === 'evaluateCompany'
-          ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens). Continue?`, confirmLabel: 'Do it', danger: true }
+          ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens).${companyLeftOut ? ` ${companyLeftOut}` : ''} Continue?`, confirmLabel: 'Do it', danger: true }
           : p.action === 'setStatus'
             ? { title: 'The advisor proposes a write', body: `Set ${nameRow(p.params)} to ${String(p.params.state ?? '')}${p.params.note ? `, writing the note "${String(p.params.note)}" into its Notes cell` : ''}. Continue?`, confirmLabel: 'Do it', danger: true }
             : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
@@ -266,10 +274,14 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           const outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
           // A posting that did not start stays pending in the Inbox; the note names it, and the page stays to say why.
           if (outcome.failedUrls.length > 0) {
-            update(p.id, { state: 'failed', note: `${outcome.text}. Not started: ${outcome.failedUrls.join(', ')}` });
+            update(p.id, { state: 'failed', note: `${outcome.text}. Not started: ${outcome.failedUrls.join(', ')}${companyLeftOut ? ` ${companyLeftOut}` : ''}` });
             return;
           }
           await router.navigate({ to: '/sessions' });
+          if (companyLeftOut) {
+            update(p.id, { state: 'done', note: companyLeftOut });
+            return;
+          }
           break;
         }
         case 'research': {
