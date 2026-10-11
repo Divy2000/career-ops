@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, urlListFilesIn, writeTarget } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, narrowGrepInput, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, urlListFilesIn, writeTarget } from './guard-policy.mjs';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -71,6 +71,10 @@ async function main() {
   if (tool === 'Glob' || tool === 'Grep') {
     const reason = checkSearch(policy, tool, input, cwd);
     if (reason) deny(reason);
+    if (tool === 'Grep') {
+      const updatedInput = narrowGrepInput(input, policy.readDeny);
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput } }));
+    }
     process.exit(0);
   }
 

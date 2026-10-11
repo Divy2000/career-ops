@@ -31,6 +31,8 @@ export function locateRead(policy: ReadPolicy, target: string): { rel: string; a
 export function unresolvedPathReason(target: string, label: string): string | null;
 export function checkRead(policy: ReadPolicy, input: { file_path?: unknown }, cwd?: string, label?: string): string | null;
 export function checkSearch(policy: ReadPolicy, tool: string, input: Record<string, unknown>, cwd?: string): string | null;
+export function grepSecretExcludes(readDeny: readonly string[]): string[];
+export function narrowGrepInput<T extends Record<string, unknown>>(input: T, readDeny: readonly string[]): T & { glob: string };
 export function isPublicAddress(ip: string): boolean;
 export function checkUrlLiteral(raw: string, label?: string): string | null;
 export const DNS_BUDGET_MS: number;
