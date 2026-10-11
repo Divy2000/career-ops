@@ -9,6 +9,7 @@ import { DataState, Empty, TableScroll } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
+import { plainPostingUrl } from '@shared/posting-url';
 import { formatLocalMinute } from '../../lib/time';
 import { forgetDevSession } from '../../lib/devchatSession';
 
@@ -27,6 +28,9 @@ export function SessionsPage() {
   const [newMode, setNewMode] = useState('oferta');
   const [targetValue, setTargetValue] = useState('');
   const [open, setOpen] = useState(false);
+  const target = targetFor(targetValue, newMode);
+  // The session route refuses a url target that is not a plain posting URL; said here, before a start is sent.
+  const badUrl = target.type === 'url' && !plainPostingUrl(target.value);
   const rows = (sessions.data ?? []).filter((s) => (!filter.mode || s.mode === filter.mode) && (!filter.status || s.status === filter.status));
   return (
     <section aria-labelledby="page-title">
@@ -55,7 +59,15 @@ export function SessionsPage() {
               <input aria-label="New session target" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder={newMode === 'projects-ingest' ? 'projects/my-project.pdf' : 'optional'} />
             </label>
           </div>
-          <SessionPanel key={newMode} mode={newMode} target={targetFor(targetValue, newMode)} placeholder="What should this session do?" />
+          {badUrl && (
+            <p role="alert" className="danger-text">
+              Not a plain http(s) job posting URL: remove spaces and credentials, or enter a company name or row number instead.
+            </p>
+          )}
+          {/* Always wrapped, so a target being fixed does not remount the panel and drop the typed prompt. */}
+          <fieldset disabled={badUrl} className="turn-hold">
+            <SessionPanel key={newMode} mode={newMode} target={target} placeholder="What should this session do?" />
+          </fieldset>
         </div>
       )}
       <div className="toolbar row gap">
