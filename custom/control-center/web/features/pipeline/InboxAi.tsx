@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useNavigate, useRouter, type AnyRouter } from '@tanstack/react-router';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { fanOut, useSessions } from '../../lib/sessions';
 import { usePipeline } from '../../lib/queries';
 import { evaluatingTargets } from './evaluating';
+import { localJdPath } from '@shared/local-jd';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
+import type { SessionMeta } from '@shared/api';
 
 /**
  * Process inbox runs pipeline mode over data/pipeline.md, whose liveness sweep puts every pending row in the file it
@@ -18,6 +21,60 @@ import { useRememberedSession } from '../../lib/useRememberedSession';
  */
 // A session waiting for the user's reply still owns the rows it works on: answering it carries on.
 const LIVE = new Set(['queued', 'running', 'awaiting_user']);
+
+/** The live Process inbox (pipeline) session the server lists, other than `except`: it owns the pending rows. */
+export const livePipelineId = (sessions: SessionMeta[] | undefined, except: string | null = null): string | null =>
+  (sessions ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== except)?.id ?? null;
+
+// Pipeline > Batch fan-outs in flight: their sessions are in no list yet. Kept in memory for as long as the request
+// runs (reserving the report numbers and starting up to BATCH_MAX_URLS sessions can take a while), and a reload, which
+// drops the request's answer, drops the count with it.
+let batchFanOuts = 0;
+const batchListeners = new Set<() => void>();
+export function markBatchStarting(on: boolean): void {
+  batchFanOuts = Math.max(0, batchFanOuts + (on ? 1 : -1));
+  for (const fn of [...batchListeners]) fn();
+}
+// A sessions read that never answers (a restarting server) gives up after this long rather than holding the pipeline
+// buttons for good.
+const SESSIONS_READ_LIMIT_MS = 10_000;
+export async function withinSessionsReadLimit<T>(read: Promise<T>): Promise<{ done: true; value: T } | { done: false }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<{ done: false }>((resolve) => (timer = setTimeout(() => resolve({ done: false }), SESSIONS_READ_LIMIT_MS)));
+  try {
+    return await Promise.race([read.then((value) => ({ done: true as const, value })), limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+// A fan-out's mark goes once the sessions list has its sessions, so a page left meanwhile does not read an older list.
+export async function endBatchStarting(queryClient: QueryClient): Promise<void> {
+  try {
+    await withinSessionsReadLimit(queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined));
+  } finally {
+    markBatchStarting(false);
+  }
+}
+const subscribeBatch = (fn: () => void) => {
+  batchListeners.add(fn);
+  return () => void batchListeners.delete(fn);
+};
+export const useBatchStarting = () => useSyncExternalStore(subscribeBatch, () => batchFanOuts > 0);
+
+/**
+ * Watches, while a start is in flight, whether the user leaves the Inbox (another page or tab, even if they come back):
+ * only a start whose user never left moves them to its session. A filter change is not leaving, nor is the Inbox being
+ * shown again (a refreshed list or Retry after an error remounts it while the user stays).
+ */
+export function watchLeavingInbox(router: AnyRouter): { left: () => boolean; stop: () => void } {
+  const where = (l: { pathname: string; search: unknown }) => `${l.pathname}?${(l.search as { tab?: string }).tab ?? 'inbox'}`;
+  const inbox = where(router.state.location);
+  let left = false;
+  const stop = router.subscribe('onBeforeNavigate', (e) => {
+    if (where(e.toLocation) !== inbox) left = true;
+  });
+  return { left: () => left, stop };
+}
 
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
@@ -29,7 +86,9 @@ export const PROCESS_INBOX_PROMPT =
  */
 export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking = false, uncheckable = false }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void; checking?: boolean; uncheckable?: boolean }) {
   const navigate = useNavigate();
+  const router = useRouter();
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
   // The pipeline session is paid and edits data/pipeline.md: the last one is re-attached when the page comes back, and
   // while it is starting, queued or running the button shows it instead of closing it, so a second one cannot start.
   const process = useRememberedSession('cc.pipeline.process');
@@ -78,7 +137,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   // Process inbox evaluates every pending row, and an evaluation started for one of them would evaluate, report and
   // bill it a second time: while either runs, the other does not start.
   const sessions = useSessions();
-  const livePipeline = (sessions.data ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== letGo)?.id ?? null;
+  const livePipeline = livePipelineId(sessions.data, letGo);
   const pipelineLive = process.busy || startingHere || livePipeline !== null;
   // The remembered session is this browser tab's only: a live one started in another tab (or before this tab was
   // reopened) is re-attached, so the button shows it instead of a start form for a second run.
@@ -86,9 +145,11 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   useEffect(() => {
     if (livePipeline !== null && processId === null && !process.waiting) attachProcess(livePipeline);
   }, [livePipeline, processId, process.waiting, attachProcess]);
+  const batchStarting = useBatchStarting();
   const pipeline = usePipeline();
   const beingEvaluated = evaluatingTargets(sessions.data);
-  const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
+  // Process inbox leaves saved-JD rows out, so their evaluations (Evaluate JD) do not hold it back.
+  const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && localJdPath(r.url) === null && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
   // One fan-out takes at most BATCH_MAX_URLS. Splitting a bigger set into several requests would leave a partial start
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
   const unique = [...new Set(urls)];
@@ -102,32 +163,45 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     if (unique.length === 0 || tooMany || asking.current) return;
     asking.current = true;
     setBusy(true);
+    let marked = false;
+    const leaving = watchLeavingInbox(router);
     try {
       if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
+      // Counted like a Batch fan-out, so the Batch tab waits for it too once this tab is left.
+      markBatchStarting(true);
+      marked = true;
       const r = await fanOut('oferta', unique);
       const outcome = fanoutOutcome(r);
       setNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
       // A session that did not start is reported here; the Sessions page would hide why.
-      if (outcome.failedUrls.length === 0) await navigate({ to: '/sessions' });
+      if (outcome.failedUrls.length === 0 && !leaving.left()) await navigate({ to: '/sessions' });
     } catch (err) {
       setNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {
       // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
       onFanOut?.();
+      leaving.stop();
+      if (marked) await endBatchStarting(queryClient);
       asking.current = false;
       setBusy(false);
     }
   };
+  // Rows being evaluated (or about to be) that Process inbox would evaluate again: no start, reply or fork until they end.
+  const heldBack = busy || batchStarting || pendingEvaluating > 0;
+  const heldBackText = `${busy ? 'Evaluations of the visible rows are starting' : batchStarting ? 'Evaluations started from Pipeline are still starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again.`;
+  // A finished run's panel keeps its reply and Fork, which carry the run on over the pending rows.
+  const replyHeld = process.shown && !process.busy && heldBack;
   return (
     <div className="stack">
       <div className="toolbar" aria-label="Inbox AI actions">
         <button type="button" onClick={() => setOpen((o) => (process.busy ? true : !o))} aria-expanded={open}>
           Process inbox <Pill tone="warn">Uses tokens</Pill>
         </button>
-        <button type="button" disabled={busy || checking || pipelineLive || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
+        <button type="button" disabled={busy || batchStarting || checking || pipelineLive || unique.length === 0 || tooMany} onClick={() => void evaluateAll()} title={!tooMany && unique.length > FANOUT_CONFIRM_ABOVE ? 'Asks for confirmation above 3 sessions' : undefined}>
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {pipelineLive && <span className="muted small">Process inbox is processing the pending rows, so Evaluate visible is off until it ends.</span>}
+        {batchStarting && !busy && <span className="muted small">Evaluations started from Pipeline are still starting, so Evaluate visible is off until they have.</span>}
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
         {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
         {savedJds > 0 && (
@@ -162,12 +236,22 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           <p role="alert" className="danger-text small">
             Could not check for a running Process inbox, so it cannot start until the sessions list loads.
           </p>
-        ) : !process.shown && (busy || pendingEvaluating > 0) ? (
+        ) : !process.shown && heldBack ? (
           <p role="status" className="muted small">
-            {busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again. It can start once they finish.
+            {heldBackText} It can start once they finish.
           </p>
         ) : (
-          <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+          <>
+            {replyHeld && (
+              <p role="status" className="muted small">
+                {heldBackText} Replying to this run can wait until they finish.
+              </p>
+            )}
+            {/* Always wrapped, so holding the reply back does not remount the panel and drop what it shows. */}
+            <fieldset disabled={replyHeld} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+            </fieldset>
+          </>
         ))}
     </div>
   );

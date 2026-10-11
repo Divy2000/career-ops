@@ -12,6 +12,8 @@ const navigations = vi.hoisted(() => [] as unknown[]);
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useNavigate: () => async (to: unknown) => void navigations.push(to),
+  // The Inbox stays where it is for the whole start: no navigation off it.
+  useRouter: () => ({ state: { location: { pathname: '/pipeline', search: { tab: 'inbox' } } }, subscribe: () => () => undefined }),
 }));
 
 let host: HTMLElement;

@@ -20,7 +20,9 @@ function json(status: number, body: unknown) {
 }
 
 const navigated: unknown[] = [];
-vi.mock('@tanstack/react-router', async (importOriginal) => ({ ...(await importOriginal<object>()), useNavigate: () => async (to: unknown) => void navigated.push(to) }));
+// The Inbox stays where it is for the whole start: no navigation off it.
+const router = { state: { location: { pathname: '/pipeline', search: { tab: 'inbox' } } }, subscribe: () => () => undefined };
+vi.mock('@tanstack/react-router', async (importOriginal) => ({ ...(await importOriginal<object>()), useNavigate: () => async (to: unknown) => void navigated.push(to), useRouter: () => router }));
 
 async function mount(component: 'BatchTab' | { inboxUrls: string[] } = 'BatchTab') {
   sent = [];
@@ -35,7 +37,8 @@ async function mount(component: 'BatchTab' | { inboxUrls: string[] } = 'BatchTab
       fetchHook?.(url);
       if (url === '/api/sessions/fanout' && method === 'POST') return json(fanoutResponse.status, fanoutResponse.body);
       if (url === '/api/actions') return json(200, []);
-      if (url === '/api/sessions' && method === 'GET' && listed) return json(200, listed);
+      // Batch evaluate waits for the sessions list (no Process inbox live) before it starts anything.
+      if (url === '/api/sessions' && method === 'GET') return json(200, listed ?? []);
       return json(404, { error: 'not stubbed' });
     }),
   );

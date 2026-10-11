@@ -1,12 +1,12 @@
 import { useRef, useMemo, useState } from 'react';
-import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { getRouteApi, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useShortlist } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
-import { InboxAi } from './InboxAi';
+import { InboxAi, watchLeavingInbox } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
 import { localJdPath } from '@shared/local-jd';
@@ -260,9 +260,12 @@ function Inbox() {
                       {!r.done ? (
                         <div className="row gap">
                           {localJdPath(r.url) !== null && <EvaluateJd reference={r.url} label={r.company || r.url} running={evaluating.has(r.url)} checking={sessionsLoading} />}
-                          <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
-                            Skip
-                          </button>
+                          {/* The skip endpoint leaves Processed sections alone, so an unchecked row there has no Skip. */}
+                          {r.section !== 'done' && (
+                            <button type="button" aria-label={`Skip ${r.company || r.url}`} onClick={() => void skip(r.url, true)}>
+                              Skip
+                            </button>
+                          )}
                         </div>
                       ) : r.section !== 'done' ? (
                         <button type="button" aria-label={`Restore ${r.company || r.url}`} onClick={() => void restore(r.url, r.company || r.url)}>
@@ -284,6 +287,7 @@ function Inbox() {
 /** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
 function EvaluateJd({ reference, label, running, checking }: { reference: string; label: string; running: boolean; checking: boolean }) {
   const navigate = useNavigate();
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const go = async () => {
@@ -291,12 +295,15 @@ function EvaluateJd({ reference, label, running, checking }: { reference: string
     if (jd === null) return;
     setBusy(true);
     setError(null);
+    // The Inbox, not this row's button, which a filter or a refreshed list can take away while the user stays.
+    const leaving = watchLeavingInbox(router);
     try {
       const m = await startSavedJdSession(reference, jd);
-      await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (!leaving.left()) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(`Could not start the evaluation: ${describeError(err)}`);
     } finally {
+      leaving.stop();
       setBusy(false);
     }
   };
