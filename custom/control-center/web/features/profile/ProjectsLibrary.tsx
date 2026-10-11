@@ -286,17 +286,17 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
     const form = formRef.current;
     const held = heldFocus?.token === mine ? heldFocus : null;
     heldFocus = null;
-    const field = held ? form?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${CSS.escape(held.label)}"]`) : null;
+    const field = held ? form?.querySelector<HTMLElement>(`[aria-label="${CSS.escape(held.label)}"]`) : null;
     if (held && field && (document.activeElement === null || document.activeElement === document.body)) {
       field.focus();
-      if (held.start !== null && held.end !== null) field.setSelectionRange(held.start, held.end);
+      if ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) && held.start !== null && held.end !== null) field.setSelectionRange(held.start, held.end);
     }
     return () => {
       const active = document.activeElement;
       const name = active?.getAttribute('aria-label');
-      if (form && name && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && form.contains(active)) {
-        heldFocus = { token: mine, label: name, start: active.selectionStart, end: active.selectionEnd };
-      }
+      if (!form || !name || !(active instanceof HTMLElement) || active === form || !form.contains(active)) return;
+      const text = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+      heldFocus = { token: mine, label: name, start: text ? active.selectionStart : null, end: text ? active.selectionEnd : null };
     };
   }, [mine]);
 

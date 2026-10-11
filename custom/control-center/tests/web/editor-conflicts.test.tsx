@@ -658,6 +658,22 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     expect([focused.selectionStart, focused.selectionEnd]).toEqual([2, 2]);
   });
 
+  it('given the Kind menu focused while a new project saves, when the form moves into the list, then the menu keeps the focus', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await act(async () => labelled<HTMLSelectElement>('Kind')!.focus());
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(document.querySelector('.project-row--editing')).not.toBeNull();
+    expect(document.activeElement).toBe(labelled('Kind'));
+  });
+
   it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {
     const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
     await mount(createElement(ProjectsLibrary));
