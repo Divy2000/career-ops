@@ -1166,6 +1166,31 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   assert.match(r.out, /claude .*Read custom\/install\/ONBOARDING\.md and follow it/);
 });
 
+test('--onboard headless confines the tool set itself, so the user\'s own Claude settings (allow rules, hooks) cannot add Bash, network or live writes (R20-scripts-b-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_DRAFTS: '1' } });
+  const argv = w.claudeArgv();
+  assert.ok(argv, r.out);
+  const flag = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
+  // --restricted loads no user, project or local settings file, so their allow rules and hooks do not apply.
+  assert.ok(argv.includes('--restricted'), argv.join(' '));
+  assert.deepEqual(flag('--tools')?.split(','), ['Read', 'Glob', 'Grep', 'Edit', 'Write']);
+  const denied = flag('--disallowedTools')?.split(',') ?? [];
+  for (const t of ['Bash', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'NotebookEdit', 'PowerShell']) assert.ok(denied.includes(t), `${t} not disallowed: ${denied}`);
+  const settings = JSON.parse(flag('--settings') ?? 'null');
+  assert.equal(settings?.disableAllHooks, true);
+});
+
+test('--onboard headless with a Claude Code that predates --restricted never hands it the token (R20-scripts-b-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.288' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.289 or later/);
+});
+
 test('--onboard headless moves an earlier run\'s drafts aside, so only this run\'s drafts are listed and resumed (R15-scripts-b-L1-03)', () => {
   const { w, D } = fresh({ keychain: true });
   const data = path.join(w.T, 'mydata');
@@ -1190,7 +1215,7 @@ test('--onboard headless with a Claude Code too old to scrub hook and tool child
     const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: version } });
     assert.equal(r.status, 3, r.out);
     assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, `${version}: claude -p ran\n${r.out}`);
-    assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.288 or later/, version);
+    assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.289 or later/, version);
     assert.match(r.out, /claude update/, version);
   }
 });
@@ -1357,6 +1382,74 @@ test('a re-run with the Control Center already running skips its npm ci and does
   }
 });
 
+test('a re-run that moves the data root with --data-root still sees the Control Center running on the old root: no npm ci under it, no second instance (R20-scripts-b-L1-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--data-root', path.join(w.T, 'co-data'), '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+/** The daily job's plist as launchd/install.sh writes it for <checkout>, logging under <jobRoot>, plus a live Control Center lock there. */
+function controlCenterOnJobRoot(w, checkout) {
+  const jobRoot = path.join(w.T, 'job-data');
+  const agents = path.join(w.home, 'Library', 'LaunchAgents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${checkout}</string>
+  <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
+</dict>
+</plist>
+`);
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  return child;
+}
+
+test('a re-run sees the Control Center running on the data root the installed daily job names, when this run resolves another (R20-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = controlCenterOnJobRoot(w, D);
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a Control Center running on the data root of a daily job another checkout installed does not stop this checkout\'s npm ci or start (R20-scripts-b review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const other = path.join(w.T, 'other-checkout');
+  fs.mkdirSync(other);
+  const child = controlCenterOnJobRoot(w, other);
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), r.out);
+    assert.equal(w.calls('cc').length, 1, r.out);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
 test('a stale Control Center lock whose PID was reused is reinstalled, not skipped (R17-scripts-b-L1-02)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
@@ -1471,6 +1564,19 @@ test('a Control Center lock that is a dangling symlink is treated as running (R1
   assert.equal(r.status, 0, r.out);
   assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run');
   assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+});
+
+// Only this run's own root is one the supervisor would start on; on the root the data moved away from, a lock that
+// names no live process is just left over.
+test('a dangling Control Center lock on the root --data-root moves away from is not running: npm ci runs and the Control Center starts (R20-scripts-b review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  const r = w.run(['--dir', D, '--data-root', path.join(w.T, 'co-data'), '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), r.out);
+  assert.equal(w.calls('cc').length, 1, r.out);
 });
 
 test('a failing doctor is reported as a pending action, not hidden', () => {

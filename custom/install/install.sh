@@ -14,8 +14,9 @@ UPSTREAM_URL="https://github.com/career-ops-hq/career-ops.git"
 NODE_RANGE="^22.22.2 || ^24.15.0 || >=26.0.0"
 NODE_SUPPORTED="22.22.2+, 24.15+ or 26+"
 KEYCHAIN_SERVICE="career-ops-claude-token"
-# The first Claude Code that honors CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (the Control Center's contract.json records it).
-CLAUDE_SCRUB_MIN="2.1.288"
+# Headless onboarding needs CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (2.1.288) and --restricted, first probed by the
+# Control Center on 2.1.289.
+CLAUDE_HEADLESS_MIN="2.1.289"
 # The terminal the installer talks to. Overridable so tests can feed answers from a file.
 TTY_DEV="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"
 
@@ -333,16 +334,32 @@ trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[
 # node_modules, so a re-run must not reinstall under a running instance (its
 # blue/green reload would race the deletion), and the finish must not start a
 # second instance that would refuse the lock.
+# A Control Center from this checkout may run on another data root than this run's: the checkout itself (before
+# --data-root moves the data out) or the root the installed daily job names. It is running if any of them is, where
+# on those other roots only a lock naming a live process counts: the supervisor will not start there.
 cc_running() {
-  local lock="$DATA/data/control-center/supervisor.lock"
+  local root seen=" $DATA "
+  if cc_lock_live "$DATA/data/control-center/supervisor.lock"; then return 0; fi
+  while IFS= read -r root; do
+    case "$seen" in *" $root "*) continue ;; esac
+    seen="$seen$root "
+    if cc_lock_live "$root/data/control-center/supervisor.lock" other; then return 0; fi
+  done < <(printf '%s\n' "$DIR"; installed_job_root own)
+  return 1
+}
+
+cc_lock_live() {
   node -e '
 const fs = require("fs");
 const { execFileSync } = require("child_process");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+// "other": a root this run would not start the Control Center on, where only a live process counts as running.
+const other = process.argv[2] === "other";
 let text;
 try { text = fs.readFileSync(process.argv[1], "utf8"); }
 catch (e) {
+  if (other) process.exit(1);
   // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
   // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
   let entry = e.code !== "ENOENT";
@@ -361,6 +378,7 @@ try {
 // the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
 // as running, and replaces an older one, so that does not.
 if (!pid) {
+  if (other) process.exit(1);
   let young = false;
   try { young = Date.now() - fs.statSync(process.argv[1]).mtimeMs < 5000; } catch { /* gone: not running */ }
   process.exit(young ? 0 : 1);
@@ -381,7 +399,22 @@ try {
 // Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
 // With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
 process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
-' "$lock"
+' "$1" "${2:-}"
+}
+
+# The data root the installed daily job writes its launchd logs under (<root>/data/immigration/logs), which differs
+# from this run's when that install had CAREER_OPS_ROOT exported or this run moves the data root with --data-root.
+# Prints nothing without an installed job or plutil. With "own", also nothing when that job runs from another checkout
+# (its WorkingDirectory): the label is per user, and another checkout's Control Center never shares this one's files.
+installed_job_root() {
+  local plist="$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" out wd
+  if [ "${1:-}" = own ]; then
+    wd="$(plutil -extract WorkingDirectory raw -o - "$plist" 2>/dev/null || true)"
+    if [ -z "$wd" ] || ! [ "$wd" -ef "$DIR" ]; then return 0; fi
+  fi
+  # The || stays inside $(...), where the ERR trap would see it.
+  out="$(plutil -extract StandardOutPath raw -o - "$plist" 2>/dev/null || true)"
+  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/data/immigration/logs/launchd.out.log}" ;; esac
 }
 
 # The daily job's lock: run-daily.sh holds <data root>/data/immigration/.run-daily.lockf for its whole run. A re-run
@@ -395,15 +428,12 @@ DAILY_LOCKFS=()
 # The lock that daily_lock_take could not take, for the caller's message.
 DAILY_LOCK_FAILED=""
 
-# The lock folders a daily job may be running under: this run's data root, and the one the installed job writes its
-# launchd logs under (<root>/data/immigration/logs), which differs when that install had CAREER_OPS_ROOT exported or
-# this run moves the data root with --data-root.
+# The lock folders a daily job may be running under: this run's data root, and the installed job's.
 daily_lock_dirs() {
-  local out
+  local root
   printf '%s\n' "$DATA/data/immigration"
-  # No installed job, or no plutil, is no second folder. The || stays inside $(...), where the ERR trap would see it.
-  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null || true)"
-  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/logs/launchd.out.log}" ;; esac
+  root="$(installed_job_root)"
+  if [ -n "$root" ]; then printf '%s\n' "$root/data/immigration"; fi
 }
 
 # daily_lock_take: returns 0 holding every daily lock, skipping a folder no job has run in yet (run-daily.sh creates
@@ -1041,9 +1071,10 @@ else
       elif [ "$KEYCHAIN_OK" = 0 ]; then
         say "  Headless onboarding needs the Keychain item $KEYCHAIN_SERVICE."
         pending "Store the Keychain token, then re-run with --onboard headless. Without it, run: cd $QDIR && claude $(shell_quote "$prompt")"
-      elif ! claude_version="$("$CLAUDE_BIN" --version 2>/dev/null)" || ! lib version-ge "${claude_version%% *}" "$CLAUDE_SCRUB_MIN"; then
-        # Older builds ignore CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, so hook and tool children would inherit the token.
-        say "  Headless onboarding needs Claude Code $CLAUDE_SCRUB_MIN or later, which keeps the token out of hooks and tools (found: ${claude_version:-unknown})."
+      elif ! claude_version="$("$CLAUDE_BIN" --version 2>/dev/null)" || ! lib version-ge "${claude_version%% *}" "$CLAUDE_HEADLESS_MIN"; then
+        # Older builds ignore CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, so hook and tool children would inherit the token,
+        # or lack --restricted, so the user's own settings (allow rules, hooks) would widen the session.
+        say "  Headless onboarding needs Claude Code $CLAUDE_HEADLESS_MIN or later, which keeps the token out of hooks and tools and confines the session (found: ${claude_version:-unknown})."
         pending "Update Claude Code (claude update), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
         # Drafts from an earlier run would be listed as this run's and picked up by "Resume from drafts": they hold
@@ -1067,9 +1098,13 @@ else
         # The token lives only in the child's environment; it is never echoed, logged or placed on a command line.
         # As in the Control Center's sessions, SUBPROCESS_ENV_SCRUB keeps it out of hook and tool children, and
         # --strict-mcp-config starts none of the user's or the project's MCP servers, which would inherit it.
+        # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
+        # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w)" ANTHROPIC_API_KEY="" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 \
-          "$CLAUDE_BIN" -p "$hprompt" --effort medium --permission-mode dontAsk --strict-mcp-config --add-dir "$draft" ${extra_dirs[@]+"${extra_dirs[@]}"} \
+          "$CLAUDE_BIN" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
+          --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
+          --permission-mode dontAsk --strict-mcp-config --add-dir "$draft" ${extra_dirs[@]+"${extra_dirs[@]}"} \
           --allowedTools Read Glob Grep "Edit(/$draft/**)" --max-turns 40 --output-format text); then
           say "  Drafts written:"
           for f in "$draft"/*; do

@@ -93,8 +93,8 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 if ! TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
   fail "Keychain item career-ops-claude-token not found"
 fi
-# The binary that gets the token, checked before anything is replaced; the same floor install.sh's headless onboarding
-# uses (CLAUDE_SCRUB_MIN).
+# The binary that gets the token, checked before anything is replaced: the first build that keeps the token out of
+# hooks and tools (install.sh's headless onboarding also needs --restricted, so its CLAUDE_HEADLESS_MIN is higher).
 CLAUDE_BIN="$(sync_claude_bin 2.1.288)" || fail "$CLAUDE_BIN"
 
 git worktree remove --force "$WT" >/dev/null 2>&1

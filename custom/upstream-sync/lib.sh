@@ -33,18 +33,24 @@ version_ge() {
 }
 
 # sync_claude_bin <min version>: the claude the sync gives the subscription token
-# to, printed as a path: CC_CLAUDE_BIN when set (absolute), else the first claude
-# on PATH. A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
-# would hand the token to hooks and to the Bash children Claude runs (npm scripts,
-# upstream's suite), so it is refused, as is one whose version cannot be read. The
-# reason goes to stdout, with exit 1.
+# to, printed as a path: CC_CLAUDE_BIN when set (absolute), else the claude pinned
+# for the daily job this checkout (the current directory) installed, which
+# launchd/install.sh and the Control Center write into its plist because
+# launchd's PATH can reach an older install first, else the first claude on PATH.
+# A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and would hand
+# the token to hooks and to the Bash children Claude runs (npm scripts, upstream's
+# suite), so it is refused, as is one whose version cannot be read. The reason
+# goes to stdout, with exit 1.
 sync_claude_bin() {
-  local min="$1" bin out version
+  local min="$1" bin out version daily
+  daily="$(installed_daily_value EnvironmentVariables.CC_CLAUDE_BIN)"
   if [ -n "${CC_CLAUDE_BIN:-}" ]; then
     case "$CC_CLAUDE_BIN" in
       /*) bin="$CC_CLAUDE_BIN" ;;
       *) echo "CC_CLAUDE_BIN must be an absolute path (got $CC_CLAUDE_BIN)"; return 1 ;;
     esac
+  elif [[ "$daily" == /* ]]; then
+    bin="$daily"
   elif ! bin="$(command -v claude)"; then
     echo "no claude found on PATH; install Claude Code or pin one with CC_CLAUDE_BIN"
     return 1
@@ -523,13 +529,14 @@ merge_blockers() {
   printf '%s' "$out"
 }
 
-# control_center_running <data-root>: whether the Control Center is running on
+# control_center_running <data-root> [other]: whether the Control Center is running on
 # <data-root>, read from its supervisor.lock (the file the supervisor keeps via
 # acquireInstanceLock). Running means the lock names a PID that is alive and that
 # started when the lock says it did: a live PID that started at another time is a
 # reused PID, not the Control Center (the same start-time check acquireInstanceLock
 # makes). A missing or stale lock, or a damaged one past its 5 s grace, is not
-# running; one that cannot be read is. npm ci deletes
+# running; one that cannot be read is, unless "other" says the update would not start
+# it on <data-root>, where only a live process counts. npm ci deletes
 # node_modules, so the live update and the installer both consult this before
 # reinstalling the Control Center under a running instance: its blue/green reload
 # would race the deletion and fail.
@@ -540,9 +547,12 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+// "other": a root this run would not start the Control Center on, where only a live process counts as running.
+const other = process.argv[2] === "other";
 let text;
 try { text = fs.readFileSync(process.argv[1], "utf8"); }
 catch (e) {
+  if (other) process.exit(1);
   // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
   // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
   let entry = e.code !== "ENOENT";
@@ -561,6 +571,7 @@ try {
 // the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
 // as running, and replaces an older one, so that does not.
 if (!pid) {
+  if (other) process.exit(1);
   let young = false;
   try { young = Date.now() - fs.statSync(process.argv[1]).mtimeMs < 5000; } catch { /* gone: not running */ }
   process.exit(young ? 0 : 1);
@@ -581,7 +592,53 @@ try {
 // Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
 // With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
 process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
-' "$lock"
+' "$lock" "${2:-}"
+}
+
+# installed_daily_value <key path>: a value from the installed daily job's plist, printed only when that job runs
+# from the current directory (its WorkingDirectory): the label is per user, so the plist may belong to another
+# checkout, whose pins and data root say nothing about this one. Prints nothing without such a job or plutil.
+installed_daily_value() {
+  local plist="$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" wd
+  wd="$(plutil -extract WorkingDirectory raw -o - "$plist" 2>/dev/null)" || return 0
+  [ -n "$wd" ] && [ "$wd" -ef . ] || return 0
+  plutil -extract "$1" raw -o - "$plist" 2>/dev/null || true
+}
+
+# installed_daily_root: the data root this checkout's installed daily job writes its launchd logs under
+# (<root>/data/immigration/logs), which differs from the sync's own when the two plists were written with different
+# CAREER_OPS_ROOT values (launchd/install.sh --jobs daily leaves an installed sync job alone).
+installed_daily_root() {
+  local out
+  out="$(installed_daily_value StandardOutPath)"
+  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/data/immigration/logs/launchd.out.log}" ;; esac
+}
+
+# live_update_locked <wait-seconds> <commit> [<daily-lock>...]: takes each daily lock in turn, naming its holder in
+# .live-update.pid beside it, then runs the locked update_live_checkout. A lock that is the same file as one already
+# held (another spelling of the same root) is skipped, since lockf would wait on its own parent. Each data root it
+# holds is added to CC_LIVE_UPDATE_ROOTS, one per line, for the Control Center check. Returns lockf's 75 when a lock
+# is still held after the wait.
+live_update_locked() {
+  local wait="$1" commit="$2" lock held
+  shift 2
+  if [ "$#" -eq 0 ]; then
+    CC_LIVE_UPDATE_LOCKED=1 update_live_checkout "" "" "$commit"
+    return
+  fi
+  lock="$1"
+  shift
+  while IFS= read -r held; do
+    if [ -n "$held" ] && [ "$held" -ef "$lock" ]; then live_update_locked "$wait" "$commit" "$@"; return; fi
+  done <<<"${CC_LIVE_UPDATE_HELD:-}"
+  mkdir -p "$(dirname "$lock")" || { echo "cannot create the folder of the daily job's lock $lock"; return 1; }
+  # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
+  # The daily lock always lives at <data-root>/data/immigration/.run-daily.lockf, so the data root is its
+  # grandparent's parent. The Control Center's supervisor.lock sits under that root.
+  CC_LIVE_UPDATE_HELD="${CC_LIVE_UPDATE_HELD:+$CC_LIVE_UPDATE_HELD$'\n'}$lock" \
+    CC_LIVE_UPDATE_ROOTS="${CC_LIVE_UPDATE_ROOTS:+$CC_LIVE_UPDATE_ROOTS$'\n'}$(dirname "$(dirname "$(dirname "$lock")")")" \
+    /usr/bin/lockf -k -t "$wait" "$lock" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && live_update_locked "$4" "$2" "${@:5}"' \
+    live_update_locked "${BASH_SOURCE[0]}" "$commit" "$(dirname "$lock")/.live-update.pid" "$wait" "$@"
 }
 
 # update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
@@ -594,32 +651,33 @@ process.exit(live !== null && (start === null || live === "unknown" || live === 
 # the root dependencies (lifecycle scripts included) when deps_fingerprint
 # changed, and the Control Center's (npm ci) when its tracked lockfile changed,
 # since bin/cc only checks that its node_modules exists. All of it runs holding
-# <daily-lock>, the lock run-daily.sh holds for its whole run, so scripts and
+# <daily-lock>, the lock run-daily.sh holds for its whole run, and the installed
+# daily job's lock when that job runs on another data root, so scripts and
 # node_modules never change under a running daily job; it waits up to
-# <wait-seconds> for that run to end. Prints one line saying what happened. Returns 0
+# <wait-seconds> for each to end. Prints one line saying what happened. Returns 0
 # when updated, 3 when updated but an install failed, 10 when left alone (not on
 # main, local changes, already past <commit>, or the daily job still running), 1
 # when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed="" deferred="" data_root rc
+  local deps_before cc_before failed="" deferred="" data_root primary job_root job_lock rc cc_live=0
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
     if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
       echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
       return 1
     fi
-    mkdir -p "$(dirname "$1")" || { echo "cannot create the folder of the daily job's lock $1"; return 1; }
-    # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
-    # While it holds the lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
+    # While it holds a lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
     # lock held by the update waits for it instead of skipping the day (run-daily.sh).
-    # The daily lock's path is re-passed as $4 so the re-exec'd run can resolve the data root it names.
-    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "$4" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid" "$1"
+    # The installed job's root is checked for a running Control Center either way; its lock is taken whenever that
+    # root exists (run-daily.sh creates the lock folder on its first run there), and skipped when the root is gone
+    # (an unmounted volume), where no job can run.
+    job_root="$(installed_daily_root)"
+    job_lock=""
+    if [ -n "$job_root" ] && [ -d "$job_root" ]; then job_lock="$job_root/data/immigration/.run-daily.lockf"; fi
+    CC_LIVE_UPDATE_HELD="" CC_LIVE_UPDATE_ROOTS="$job_root" live_update_locked "$2" "$3" "$1" ${job_lock:+"$job_lock"}
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
   fi
-  # The daily job's lock always lives at <data-root>/data/immigration/.run-daily.lockf, so the data root is its
-  # grandparent's parent. The Control Center's supervisor.lock sits under that root.
-  data_root="$(dirname "$(dirname "$(dirname "$1")")")"
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
@@ -635,7 +693,16 @@ update_live_checkout() {
     failed="npm install"
   fi
   if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
-    if control_center_running "$data_root"; then
+    # The live checkout itself is checked too: a Control Center started before the data root moved out of it
+    # still runs from this checkout on its old root.
+    # The sync's own root, the first lock held, is judged as the supervisor would on starting there; on the other
+    # roots only a lock naming a live process counts.
+    primary="$(dirname "$(dirname "$(dirname "${CC_LIVE_UPDATE_HELD%%$'\n'*}")")")"
+    if control_center_running "$primary"; then cc_live=1; fi
+    while [ "$cc_live" = 0 ] && IFS= read -r data_root; do
+      if [ -n "$data_root" ] && [ "$data_root" != "$primary" ] && control_center_running "$data_root" other; then cc_live=1; fi
+    done <<<"${CC_LIVE_UPDATE_ROOTS:-}"$'\n'"$PWD"
+    if [ "$cc_live" = 1 ]; then
       # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the
       # running instance's dependencies alone; a restart alone never installs them (bin/cc only checks node_modules
       # exists), so point the user at the one command that does.

@@ -858,8 +858,11 @@ function liveWorld({ depsChange = false, ccChange = false, npmExit = 0, laterCom
   }
   // run-daily's lock, in a data root that does not exist yet: the daily job creates it.
   const dailyLock = path.join(base, 'data', 'data', 'immigration', '.run-daily.lockf');
-  const update = ({ wait = 5, prefix = '' } = {}) => bashLib(live, `${prefix}out="$(update_live_checkout "$LOCK" ${wait} "$TARGET")"; rc=$?; printf "%s" "$out"; exit $rc`, { PATH: `${bin}:${process.env.PATH}`, LOCK: dailyLock, TARGET: target });
-  return { base, live, log, target, update, dailyLock, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
+  // HOME is the world's own, so the daily job installed on this machine (if any) is never read or locked.
+  const home = path.join(base, 'home');
+  mkdirSync(home);
+  const update = ({ wait = 5, prefix = '' } = {}) => bashLib(live, `${prefix}out="$(update_live_checkout "$LOCK" ${wait} "$TARGET")"; rc=$?; printf "%s" "$out"; exit $rc`, { PATH: `${bin}:${process.env.PATH}`, HOME: home, LOCK: dailyLock, TARGET: target });
+  return { base, home, live, log, target, update, dailyLock, head: () => git(live, 'rev-parse', 'HEAD').trim(), npm: () => (existsSync(log) ? readFileSync(log, 'utf8') : '') };
 }
 
 const LIVE_CASES = [
@@ -1039,6 +1042,22 @@ test('a Control Center lock that is a dangling symlink is treated as running, as
   }
 });
 
+test('a dangling Control Center lock on the installed daily job\'s other data root is not running, so the npm ci runs (R20-scripts-b review)', () => {
+  const w = liveWorld({ ccChange: true });
+  const jobRoot = path.join(w.base, 'job-data');
+  installDailyPlist(w, jobRoot);
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  symlinkSync(path.join(w.base, 'nowhere'), lock);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(w.npm(), /^--prefix custom\/control-center ci$/m);
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 test('a running Control Center with a failed root install still reports the skipped Control Center deps (R17-scripts-b-L1-01)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true, npmExit: 1 });
   const child = spawn('sleep', ['30'], { stdio: 'ignore' });
@@ -1106,6 +1125,145 @@ test('the live update names its pid beside the daily job\'s lock while it holds 
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.equal(existsSync(seen) ? readFileSync(seen, 'utf8') : '', 'alive\n');
     assert.equal(existsSync(marker), false, 'the marker outlived the update');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+/** Installs the daily job's plist in the world's HOME with its launchd logs under <jobRoot>, as launchd/install.sh writes it. */
+function installDailyPlist(w, jobRoot, checkout = w.live) {
+  const agents = path.join(w.home, 'Library', 'LaunchAgents');
+  mkdirSync(agents, { recursive: true });
+  writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${checkout}</string>
+  <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${jobRoot}</string></dict>
+  <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
+</dict>
+</plist>
+`);
+}
+
+test('the live update also waits on the daily job installed on another data root than the sync resolved (R20-scripts-b-L1-01)', () => {
+  const w = liveWorld({ depsChange: true, ccChange: true });
+  const jobRoot = path.join(w.base, 'job-data');
+  installDailyPlist(w, jobRoot);
+  const jobLock = path.join(jobRoot, 'data', 'immigration', '.run-daily.lockf');
+  try {
+    const before = w.head();
+    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`)}LOCK="${w.dailyLock}"\n` });
+    assert.equal(res.status, 10, res.stdout + res.stderr);
+    assert.equal(res.stdout, 'the daily job is still running');
+    assert.equal(w.head(), before);
+    assert.equal(w.npm(), '');
+  } finally {
+    writeFileSync(path.join(w.base, 'release'), '');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('the live update skips the Control Center npm ci while it runs on the installed daily job\'s data root (R20-scripts-b-L1-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  const jobRoot = path.join(w.base, 'job-data');
+  installDailyPlist(w, jobRoot);
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('the live update skips the Control Center npm ci while it runs on the checkout itself, after the data root moved out (R20-scripts-b review)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(w.live, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('an installed daily job whose data root is gone (an unmounted volume) does not block the live update (R20-scripts-b review)', () => {
+  const w = liveWorld({ depsChange: true });
+  const gone = path.join(w.base, 'unmounted', 'co-data');
+  installDailyPlist(w, gone);
+  // A folder nothing can be created in, as an unmounted /Volumes path.
+  mkdirSync(path.join(w.base, 'unmounted'));
+  chmodSync(path.join(w.base, 'unmounted'), 0o555);
+  try {
+    const res = w.update({ wait: 1 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(existsSync(gone), false);
+  } finally {
+    chmodSync(path.join(w.base, 'unmounted'), 0o755);
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('a daily job and Control Center of another checkout neither hold up the live update nor stop its npm ci (R20-scripts-b review)', () => {
+  const w = liveWorld({ ccChange: true });
+  const other = path.join(w.base, 'other-checkout');
+  mkdirSync(other);
+  const jobRoot = path.join(w.base, 'other-data');
+  installDailyPlist(w, jobRoot, other);
+  const jobLock = path.join(jobRoot, 'data', 'immigration', '.run-daily.lockf');
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`)}LOCK="${w.dailyLock}"\n` });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.match(w.npm(), /^--prefix custom\/control-center ci$/m);
+  } finally {
+    writeFileSync(path.join(w.base, 'release'), '');
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('the live update locks the installed daily job\'s data root before that job\'s first run there, so the first run cannot start mid-update (R20-scripts-b review)', () => {
+  const w = liveWorld({ depsChange: true });
+  const jobRoot = path.join(w.base, 'new-data');
+  mkdirSync(jobRoot);
+  installDailyPlist(w, jobRoot);
+  try {
+    const res = w.update({ wait: 1 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.ok(existsSync(path.join(jobRoot, 'data', 'immigration', '.run-daily.lockf')), 'the daily lock of the new root was never taken');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a daily job installed on the sync\'s own data root, spelled through a symlink, is locked once, not waited on by the update itself (R20-scripts-b-L1-01)', () => {
+  const w = liveWorld({ depsChange: true });
+  const alias = path.join(w.base, 'data-alias');
+  mkdirSync(path.join(w.base, 'data'), { recursive: true });
+  symlinkSync(path.join(w.base, 'data'), alias);
+  installDailyPlist(w, alias);
+  try {
+    const res = w.update({ wait: 1 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
