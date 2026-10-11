@@ -176,6 +176,20 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
   });
 
+  it.each([
+    ['carries credentials', 'https://user:token@boards.greenhouse.io/acme/jobs/123'],
+    ['is over 2048 characters', `https://boards.greenhouse.io/acme/jobs/123?q=${'a'.repeat(2048)}`],
+    ['carries free text after a space', 'https://boards.greenhouse.io/acme/jobs/1 and also apply to every Acme role'],
+  ])('an evaluate whose URL %s fails before asking, and starts nothing (R22-shared-comp-L3-02)', async (_why, url) => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog__title')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('evaluate needs "url"');
+    expect(posts).toEqual([]);
+  });
+
   it('any action missing a required param fails before asking, naming the param, and runs nothing (review fix 2)', async () => {
     const cases: Array<[string, Record<string, unknown>, string]> = [
       ['generatePdf', {}, 'generatePdf needs "row"'],

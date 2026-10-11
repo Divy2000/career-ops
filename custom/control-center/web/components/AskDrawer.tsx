@@ -128,7 +128,9 @@ function invalidParams(p: { action: string; params: Record<string, unknown> }): 
     if (p.action === 'setStatus' && param.name === 'state' && !missing && !(STATES as readonly unknown[]).includes(value)) return `setStatus needs "state", ${param.about}`;
   }
   if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
-  if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
+  // The shared posting URL rule, as Evaluate company applies it: a URL with credentials would reach the session's prompt.
+  // That rule lets a space through (URL encodes it), so one word-separated URL cannot carry free text into the prompt.
+  if (p.action === 'evaluate' && (postingUrl(p.params.url) === null || /\s/.test(String(p.params.url).trim()))) return 'evaluate needs "url", a plain http(s) job posting URL (no credentials, at most 2048 characters)';
   // The /api/memory route refuses a fact over 300 characters, so a longer one fails before the user approves it.
   if (p.action === 'remember' && String(p.params.fact ?? '').length > 300) return 'remember needs "fact", at most 300 characters';
   // tracker.setStatus's schema refuses a note over STATUS_NOTE_MAX characters, the same way.

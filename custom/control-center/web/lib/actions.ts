@@ -61,37 +61,46 @@ export function actionOutputText(result: unknown, stderr?: string): string | nul
   return text || null;
 }
 
+export type RunMessage = { tone: 'ok' | 'danger'; text: string };
+export type RunResult = { message: RunMessage; output: string | null };
+
 /** Runs a registry action; sync actions resolve with the result, async ones with a run id. Feedback goes to a toast and to the page message. */
 export function useRunAction() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
+  const [message, setMessage] = useState<RunMessage | null>(null);
   const [output, setOutput] = useState<string | null>(null);
-  /** opts.confirmed: the user confirmed the action's dialog; an action marked confirm runs only with it. */
-  const run = async (id: string, params: Record<string, unknown> = {}, okText?: string, opts: { confirmed?: boolean } = {}): Promise<ActionOutcome | null> => {
+  /**
+   * opts.confirmed: the user confirmed the action's dialog; an action marked confirm runs only with it.
+   * opts.onSettled: this run's own message and output, for a caller with several runs in flight at once, where the
+   * shared message and output belong to whichever run wrote last.
+   */
+  const run = async (id: string, params: Record<string, unknown> = {}, okText?: string, opts: { confirmed?: boolean; onSettled?: (r: RunResult) => void } = {}): Promise<ActionOutcome | null> => {
     setBusy(id);
     setMessage(null);
     setOutput(null);
+    const settle = (m: RunMessage, o: string | null) => {
+      setMessage(m);
+      setOutput(o);
+      opts.onSettled?.({ message: m, output: o });
+    };
     try {
       const out = await apiSend<ActionOutcome>('POST', `/api/actions/${id}`, opts.confirmed ? { params, confirmed: true } : { params });
       if ('findings' in out && out.findings) {
-        setMessage({ tone: 'danger', text: out.findings });
-        setOutput(actionOutputText(out.result, out.stderr));
+        settle({ tone: 'danger', text: out.findings }, actionOutputText(out.result, out.stderr));
         toast.warning(out.findings);
         await qc.invalidateQueries({ queryKey: ['runs'] });
         return out;
       }
       const text = okText ?? ('runId' in out ? `Started run ${out.runId}` : 'Done');
-      setMessage({ tone: 'ok', text });
-      if ('result' in out) setOutput(actionOutputText(out.result, out.stderr));
+      settle({ tone: 'ok', text }, 'result' in out ? actionOutputText(out.result, out.stderr) : null);
       toast.success(text);
       await qc.invalidateQueries({ queryKey: ['runs'] });
       return out;
     } catch (err) {
       const text = `Could not run ${id}: ${describeError(err)}`;
-      setMessage({ tone: 'danger', text });
       const body = (err as ApiError)?.body as { result?: unknown; stderr?: string } | null | undefined;
-      setOutput(body && typeof body === 'object' ? actionOutputText(body.result, body.stderr) : null);
+      settle({ tone: 'danger', text }, body && typeof body === 'object' ? actionOutputText(body.result, body.stderr) : null);
       toast.error(text);
       return null;
     } finally {
