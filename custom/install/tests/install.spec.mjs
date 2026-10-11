@@ -1382,6 +1382,52 @@ test('a re-run with the Control Center already running skips its npm ci and does
   }
 });
 
+test('a re-run that moves the data root with --data-root still sees the Control Center running on the old root: no npm ci under it, no second instance (R20-scripts-b-L1-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--data-root', path.join(w.T, 'co-data'), '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a re-run sees the Control Center running on the data root the installed daily job names, when this run resolves another (R20-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const jobRoot = path.join(w.T, 'job-data');
+  const agents = path.join(w.home, 'Library', 'LaunchAgents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
+</dict>
+</plist>
+`);
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
 test('a stale Control Center lock whose PID was reused is reinstalled, not skipped (R17-scripts-b-L1-02)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });

@@ -334,8 +334,19 @@ trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[
 # node_modules, so a re-run must not reinstall under a running instance (its
 # blue/green reload would race the deletion), and the finish must not start a
 # second instance that would refuse the lock.
+# A Control Center from this checkout may run on another data root than this run's: the checkout itself (before
+# --data-root moves the data out) or the root the installed daily job names. It is running if any of them is.
 cc_running() {
-  local lock="$DATA/data/control-center/supervisor.lock"
+  local root seen=" "
+  while IFS= read -r root; do
+    case "$seen" in *" $root "*) continue ;; esac
+    seen="$seen$root "
+    if cc_lock_live "$root/data/control-center/supervisor.lock"; then return 0; fi
+  done < <(printf '%s\n%s\n' "$DATA" "$DIR"; installed_job_root)
+  return 1
+}
+
+cc_lock_live() {
   node -e '
 const fs = require("fs");
 const { execFileSync } = require("child_process");
@@ -382,7 +393,17 @@ try {
 // Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
 // With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
 process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
-' "$lock"
+' "$1"
+}
+
+# The data root the installed daily job writes its launchd logs under (<root>/data/immigration/logs), which differs
+# from this run's when that install had CAREER_OPS_ROOT exported or this run moves the data root with --data-root.
+# Prints nothing without an installed job or plutil.
+installed_job_root() {
+  local out
+  # The || stays inside $(...), where the ERR trap would see it.
+  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null || true)"
+  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/data/immigration/logs/launchd.out.log}" ;; esac
 }
 
 # The daily job's lock: run-daily.sh holds <data root>/data/immigration/.run-daily.lockf for its whole run. A re-run
@@ -396,15 +417,12 @@ DAILY_LOCKFS=()
 # The lock that daily_lock_take could not take, for the caller's message.
 DAILY_LOCK_FAILED=""
 
-# The lock folders a daily job may be running under: this run's data root, and the one the installed job writes its
-# launchd logs under (<root>/data/immigration/logs), which differs when that install had CAREER_OPS_ROOT exported or
-# this run moves the data root with --data-root.
+# The lock folders a daily job may be running under: this run's data root, and the installed job's.
 daily_lock_dirs() {
-  local out
+  local root
   printf '%s\n' "$DATA/data/immigration"
-  # No installed job, or no plutil, is no second folder. The || stays inside $(...), where the ERR trap would see it.
-  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null || true)"
-  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/logs/launchd.out.log}" ;; esac
+  root="$(installed_job_root)"
+  if [ -n "$root" ]; then printf '%s\n' "$root/data/immigration"; fi
 }
 
 # daily_lock_take: returns 0 holding every daily lock, skipping a folder no job has run in yet (run-daily.sh creates
