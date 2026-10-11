@@ -239,6 +239,8 @@ export function SessionPanel(props: SessionPanelProps) {
         setSessionId(m.id);
         props.onSessionId?.(m.id);
       } else if (marks) {
+        // The session is going again before its stream says so: the host must not read the old turn's end meanwhile.
+        props.onStatus?.(m.status, null);
         props.onSessionId?.(m.id);
       }
       // A 202 can carry a turn that failed before it ran: nothing was started.

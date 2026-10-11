@@ -99,6 +99,8 @@ describe('a reply or fork of a finished Process inbox run', () => {
       await act(async () => answer!(json(202, label === 'Fork' ? meta('pipe-2', 'queued') : { ...DONE, status: 'queued' })));
       await until(() => !startMarked(), 'the start mark to clear once the server answered');
       if (label === 'Fork') expect(sessionStorage.getItem('cc.pipeline.process')).toBe('pipe-2');
+      // The run is going now, though neither its stream nor the sessions list has said so yet.
+      expect(evaluate().disabled).toBe(true);
     });
 
     it(`given ${label} refused, the start mark is cleared and Evaluate visible comes back`, async () => {
