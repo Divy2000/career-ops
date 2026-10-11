@@ -570,7 +570,7 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
   it.each([
     ['is not JSON', '{not json', 29],
     ['holds an item watch.mjs --ack cannot read', JSON.stringify({ date: '2020-01-01', new_items: [null] }), 30],
-  ])('given a leftover batch that %s, when the leftover acks run, then it is let go of unacknowledged and its items stay queued', async (_what, text, n) => {
+  ])('given a leftover batch that %s, when the leftover acks run, then it is let go of unacknowledged, removed from disk, and its items stay queued', async (_what, text, n) => {
     const { batch } = await failedAckPass(n);
     fs.writeFileSync(path.join(app.cfg.dataRoot, batch), text);
     ackFails = false;
@@ -578,6 +578,8 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
     try {
       restarted.reconcile();
       await until(() => !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the unreadable batch to be let go of');
+      // Nothing can ever ack it, so nothing uses it: it goes with its marker rather than staying on disk forever.
+      expect(fs.existsSync(path.join(app.cfg.dataRoot, batch))).toBe(false);
       expect(pending().map((i) => i.id)).toEqual([item(n).id]);
     } finally {
       restarted.close();

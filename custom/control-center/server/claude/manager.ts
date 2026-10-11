@@ -21,7 +21,7 @@ import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapsho
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
-import { ackPolicyPass, donePolicyBatches, dropPolicyBatch, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
+import { ackPolicyPass, donePolicyBatches, dropPolicyBatch, dropUnreadablePolicyBatch, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { beginTakingReportNums, unrecordedFor } from '../actions/registry.js';
 
 export type TokenReader = () => Promise<string>;
@@ -516,15 +516,15 @@ export class SessionManager {
   /**
    * Acknowledges the batches of passes that ended done but whose ack failed: until it lands their items stay queued, and
    * the next pass would send them to Claude again, whatever the batch's age. A batch still failing is kept and tried
-   * again later; one that cannot be read is let go of unacknowledged (policyBatchReadable).
+   * again later; one that cannot be read is let go of unacknowledged and removed (policyBatchReadable).
    */
   private async ackLeftoverPolicyBatches(): Promise<void> {
     let failed = false;
     for (const batch of donePolicyBatches(this.cfg.dataRoot)) {
       if (this.policyAcksInFlight.has(batch)) continue;
       if (!policyBatchReadable(this.cfg.dataRoot, batch)) {
-        console.warn(`[sessions] policy pass batch ${batch} cannot be read: its items stay queued for the next pass`);
-        forgetDonePolicyBatch(this.cfg.dataRoot, batch);
+        console.warn(`[sessions] policy pass batch ${batch} cannot be read: it is removed and its items stay queued for the next pass`);
+        dropUnreadablePolicyBatch(this.cfg.dataRoot, batch);
         continue;
       }
       if (!(await this.ackDonePolicyBatch(batch)).ok) failed = true;
