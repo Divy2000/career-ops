@@ -952,6 +952,8 @@ elif [ -f "$H1B_INDEX" ]; then
 elif [ "$DRY_RUN" = 1 ]; then
   dry "enable the h1b-sponsor plugin and download the index (about 8 MiB from github.com)"
 elif [ "$PROMPT_OK" = 1 ] && ! ask "Enable the h1b-sponsor plugin and download the H-1B index (about 8 MiB from github.com)?" y; then
+  # Declined like --no-h1b-index, so the daily job's index is left unmentioned too.
+  H1B_DAILY_NOTE=""
   say "  skipped; install later: $H1B_CMD"
 elif (cd "$DIR" && run_logged node plugins.mjs enable h1b-sponsor --confirm) && (cd "$DIR" && run_logged node plugins/h1b-sponsor/install-h1b-index.mjs); then
   say "  H-1B index installed"

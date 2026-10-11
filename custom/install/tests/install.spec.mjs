@@ -963,6 +963,15 @@ test('an H1B_INDEX_PATH other than the default raises no daily-job note when thi
   }
 });
 
+test('declining the H-1B index on a terminal raises no daily-job note, as --no-h1b-index does not (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-start', '--onboard', 'none'], { tty: 'y\nn\ny\n', env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+  assert.equal(w.calls('launchd-install').length, 1, r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
 test('an H1B_INDEX_PATH through the target of a dangling data/h1b symlink names the default index (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
