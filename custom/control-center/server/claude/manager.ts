@@ -219,7 +219,8 @@ export class SessionManager {
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
       const resume = this.hasConversation(meta) || forkPending;
-      const unclaim = resume ? () => {} : this.claimReplay(meta);
+      // A resumed evaluation that still owes its report evaluates the posting again, as a replayed request does.
+      const unclaim = !resume || owesReport(meta) ? this.claimReplay(meta) : () => {};
       try {
         return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
       } finally {
@@ -252,8 +253,15 @@ export class SessionManager {
           unclaim();
         }
       }
-      const forked = this.store.fork(id);
-      return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+      // A copy of an evaluation that still owes its report writes one of its own: refused beside any live evaluation of
+      // the posting, the source included while it waits for the user.
+      const unclaim = owesReport(src) ? this.claimReplay(src, null) : () => {};
+      try {
+        const forked = this.store.fork(id);
+        return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+      } finally {
+        unclaim();
+      }
     } finally {
       this.sending.delete(id);
     }
@@ -1034,6 +1042,11 @@ const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awai
  */
 function evaluationClass(mode: string): string {
   return isReportGated(mode) ? '\0report' : mode;
+}
+
+/** An evaluation that has not been credited its report yet: its next turn, or a copy's, still writes one. */
+function owesReport(meta: SessionMeta): boolean {
+  return isReportGated(meta.mode) && meta.creditedReport === undefined;
 }
 
 /** The dedupe key of a posting a session evaluates: its URL, or the saved JD a local:jds/ text target names (as finalize keys it). */
