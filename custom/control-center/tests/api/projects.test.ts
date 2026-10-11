@@ -4,6 +4,7 @@ import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { makePdf } from '../helpers/pdf.js';
 import { installPdftotextStub } from '../helpers/pdftotext-stub.js';
+import { importCore } from '../../server/core/adapter.js';
 
 let t: TestApp;
 beforeEach(async () => {
@@ -65,6 +66,32 @@ describe('POST /api/projects', () => {
     expect(res.json().etag).toMatch(/^[0-9a-f]{64}$/);
     expect(res.json().etag).not.toBe(before.etag);
     expect(read()).toMatch(/\n---\n\n## Chess Engine -- https:\/\/example\.org\/chess\nTags: rust\n- Wrote a chess engine in Rust\.\n$/);
+  });
+
+  it('while an import holds the article-digest.md lock, answers 503 busy (not the 409 an ETag conflict gets) with retry-after and writes nothing, then saves once it is free (R24-scripts-a-L1-01)', async () => {
+    const { acquirePipelineLock } = await importCore<{ acquirePipelineLock: (p: string, o?: { timeoutMs?: number }) => Promise<{ release(): void }> }>(t.cfg.codeRoot, 'pipeline-lock.mjs');
+    const before = await current();
+    const text = read();
+    const prior = process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+    process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = '300';
+    const lock = await acquirePipelineLock(file(), { timeoutMs: 60_000 });
+    let released = false;
+    try {
+      const busy = await send('POST', '/api/projects', entry, before.etag);
+      expect(busy.statusCode, busy.body).toBe(503);
+      expect(busy.headers['retry-after']).toBe('1');
+      expect(busy.json().errors).toEqual([busy.json().error]);
+      expect(read()).toBe(text);
+      lock.release();
+      released = true;
+      const free = await send('POST', '/api/projects', entry, before.etag);
+      expect(free.statusCode, free.body).toBe(200);
+      expect(read()).toContain('## Chess Engine');
+    } finally {
+      if (!released) lock.release();
+      if (prior === undefined) delete process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+      else process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = prior;
+    }
   });
 
   it('gives 422 and writes nothing for an entry with no bullets or a duplicate title', async () => {

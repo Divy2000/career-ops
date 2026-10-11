@@ -6,12 +6,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { cliScriptPath } from '../core/adapter.js';
+import { cliScriptPath, importCore } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
 import { readUserFile, writeUserFile } from './files.js';
 import { documentsPath, extractSourceText, projectsLib, type ProjectsLib, type ProjectsRead } from '../domains/projects.js';
+
+type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>, o?: { timeoutMs?: number; retryMs?: number }) => Promise<T> };
 
 const LINE = z.string().max(2000).regex(/^[^\r\n]*$/, 'one line');
 const entrySchema = z.object({
@@ -108,9 +110,27 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return { path: file.path, kind: file.kind, etag: file.etag, entries, validation: l.validateLibrary(file.text) };
   }
 
-  /** Apply an edit to the current text; 404/422/409 as the edit, the validation or the ETag decide. */
+  /**
+   * Apply an edit to the current text; 404/422/409 as the edit, the validation or the ETag decide. The read and the
+   * write hold article-digest.md's lock, the one custom/projects/import.mjs --write holds from its read to its publish,
+   * so a save never lands inside an import's window. A lock held too long is a 503 busy with retry-after: the client
+   * reads 409 as an ETag conflict and would wrongly report the file as changed on disk.
+   */
   async function save(req: FastifyRequest, reply: FastifyReply, edit: (l: ProjectsLib, text: string) => string | { notFound: string }, id?: string) {
     const l = await lib();
+    const { withPipelineLock } = await importCore<PipelineLock>(cfg.codeRoot, 'pipeline-lock.mjs');
+    try {
+      return await withPipelineLock(path.join(cfg.dataRoot, 'article-digest.md'), () => saveLocked(req, reply, l, edit, id), { timeoutMs: 5000, retryMs: 50 });
+    } catch (err) {
+      if ((err as Error).name === 'LockTimeoutError') {
+        const busy = 'the projects library is busy (an import is writing it), try again in a moment';
+        return reply.code(503).header('retry-after', '1').send({ error: busy, errors: [busy] });
+      }
+      throw err;
+    }
+  }
+
+  function saveLocked(req: FastifyRequest, reply: FastifyReply, l: ProjectsLib, edit: (l: ProjectsLib, text: string) => string | { notFound: string }, id?: string) {
     const current = readUserFile(cfg.dataRoot, 'articleDigest');
     let next: string | { notFound: string };
     try {
