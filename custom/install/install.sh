@@ -1248,6 +1248,9 @@ else
         fi
       elif keychain_read_token; [ "$KEYCHAIN_RC" != 0 ]; then
         # Read before the earlier drafts are moved aside: a refused run leaves them where "Resume from drafts" looks.
+        # The token the daily job and the Control Center would read is not usable either, so they wait as step 7 makes them.
+        KEYCHAIN_OK=0
+        if [ "$KEYCHAIN_RC" != 44 ]; then KEYCHAIN_UNREADABLE=1; fi
         say "  $(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run with --onboard headless")"
         say "  Headless onboarding did not run."
         pending "Fix the Keychain item as described above, then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"

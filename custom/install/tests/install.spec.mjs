@@ -1487,6 +1487,19 @@ test('--onboard headless whose Keychain read fails leaves an earlier run\'s draf
   assert.doesNotMatch(r.out, /Moved the drafts/);
 });
 
+test('a token the headless read finds empty or cannot read keeps the daily job and the Control Center off, as step 7 would (R23-scripts-b-L2-01 review)', () => {
+  for (const [env, why] of [[{ FAKE_SECURITY_TOKEN: ' ' }, /The Keychain item is missing, so the job would fail every morning/], [{ FAKE_SECURITY_READ_EXIT: '36' }, /The Keychain item could not be read, so the job would fail every morning/]]) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: READY_FILES });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-h1b-index', '--onboard', 'headless'], { env });
+    assert.equal(r.status, 3, r.out);
+    assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+    assert.match(r.out, why);
+    assert.equal(w.calls('launchd-install').length, 0, r.out);
+    assert.equal(w.calls('cc').length, 0, r.out);
+  }
+});
+
 test('an empty CC_KEYCHAIN_TIMEOUT means the default, as the daily job and the weekly sync read it', () => {
   const { w, D } = fresh({ keychain: true });
   const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CC_KEYCHAIN_TIMEOUT: '' } });
