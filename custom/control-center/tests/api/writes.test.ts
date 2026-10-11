@@ -3,11 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { importCore } from '../../server/core/adapter.js';
-import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import type { Exec } from '../../server/routes/system.js';
 import { pipelineAddBatches, type ScanPostingInput } from '../../shared/pipeline-add.js';
 import { dailyPidfile } from '../../server/system/daily.js';
+import { findAction } from '../../server/actions/registry.js';
 
 let t: TestApp;
 let jobRunning = false;
@@ -445,6 +446,25 @@ describe('documents for a row whose number differs from its report', () => {
   });
 
   const rerender = (params: Record<string, unknown>) => d.app.inject({ method: 'POST', url: '/api/actions/docs.renderPdf', headers: d.authedWrite, payload: { params: { html: 'output/acme-robotics-cv.html', pdf: 'output/acme-robotics-cv.pdf', format: 'letter', ...params } } });
+
+  it('queues a re-render and a cover letter render behind a running re-render, so their pdf-index.tsv rewrites never overlap (R23-feat-c-L1-01)', async () => {
+    // A stand-in for a re-render still in Playwright: it holds what docs.renderPdf holds until cancelled.
+    const running = d.runner.start({ actionId: 'docs.renderPdf', label: 'Re-render PDF from HTML', cost: 'free', resources: findAction('docs.renderPdf')!.resources, claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    const queued: string[] = [];
+    try {
+      const again = await rerender({ row: 1, report: 1 });
+      expect(again.statusCode, again.body).toBe(202);
+      queued.push(again.json().runId);
+      const cover = await d.app.inject({ method: 'POST', url: '/api/actions/docs.coverPdf', headers: d.authedWrite, payload: { params: { payloadPath: 'output/acme-robotics-cover.json' } } });
+      expect(cover.statusCode, cover.body).toBe(202);
+      queued.push(cover.json().runId);
+      expect(d.runner.queuedIds()).toEqual(expect.arrayContaining(queued));
+    } finally {
+      for (const id of queued) d.runner.cancel(id);
+      d.runner.cancel(running.id);
+      for (let i = 0; i < 200 && !d.runner.store.readExit(running.id); i++) await new Promise((r) => setTimeout(r, 50));
+    }
+  });
 
   it('refuses a re-render filed under a report the row is not linked to', async () => {
     const res = await rerender({ row: 9, report: 9 });

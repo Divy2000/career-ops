@@ -20,7 +20,7 @@ import { writeTmpInput } from './tmp-inputs.js';
 import { replyWatchRefused } from '../domains/replyCandidates.js';
 import { SessionStore, sessionsDir } from '../claude/sessions.js';
 
-export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
+export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | 'pdf-index' | `immigration:${string}`;
 
 export interface ActionContext {
   codeRoot: string;
@@ -471,7 +471,8 @@ export const ACTIONS: ActionDef[] = [
     id: 'docs.renderPdf',
     label: 'Re-render PDF from HTML',
     cost: 'free',
-    resources: [],
+    // generate-pdf.mjs rewrites pdf-index.tsv without a lock, so this and docs.coverPdf share a resource: two at once would drop one's row.
+    resources: ['pdf-index'],
     claude: false,
     sync: false,
     // generate-pdf.mjs files the PDF in pdf-index.tsv under --report, so it must be the row's report, never the row number.
@@ -498,7 +499,7 @@ export const ACTIONS: ActionDef[] = [
     build: (p, ctx) => node(ctx, 'rankProjects', [tmpFile(ctx, 'md', p.text), '--json']),
     exitMap: { 1: 422 },
   }),
-  define({ id: 'docs.coverPdf', label: 'Render cover letter PDF', cost: 'free', resources: [], claude: false, sync: false, params: z.object({ payloadPath: relOutput }), build: (p, ctx) => node(ctx, 'generateCoverLetter', ['--payload', path.join(ctx.dataRoot, p.payloadPath)]) }),
+  define({ id: 'docs.coverPdf', label: 'Render cover letter PDF', cost: 'free', resources: ['pdf-index'], claude: false, sync: false, params: z.object({ payloadPath: relOutput }), build: (p, ctx) => node(ctx, 'generateCoverLetter', ['--payload', path.join(ctx.dataRoot, p.payloadPath)]) }),
   define({
     id: 'docs.archivePosting',
     label: 'Archive posting',
