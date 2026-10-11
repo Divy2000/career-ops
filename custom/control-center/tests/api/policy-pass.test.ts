@@ -7,6 +7,8 @@ import path from 'node:path';
 import { FAKE_TOKEN, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/app.js';
 import type { RunMeta } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
+import { execNoShell, type Exec } from '../../server/routes/system.js';
+import { SessionManager } from '../../server/claude/manager.js';
 
 let t: TestApp;
 // A turn that cannot read the Claude token fails before it spawns (a locked Keychain).
@@ -404,5 +406,120 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     fs.rmSync(claimFile());
     expect((await delOnceStopped(started[0]!.id)).statusCode).toBe(200);
     expect((await del(a.id)).statusCode).toBe(200);
+  });
+});
+
+describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
+  const ACK_BUSY = { code: 1, stdout: '', stderr: 'pending.json.lock is held by another writer' };
+  let ackFails = true;
+  let failedAcks = 0;
+  // While set, an ack waits on it (and says it started through ackStarted).
+  let ackGate: Promise<void> | null = null;
+  let ackStarted = 0;
+  let app: TestApp;
+  // Every --ack fails while ackFails is set; anything else runs for real.
+  const exec: Exec = async (cmd, args, opts) => {
+    if (args.includes('--ack') && ackGate) {
+      ackStarted += 1;
+      await ackGate;
+    }
+    if (!(ackFails && args.includes('--ack'))) return execNoShell(cmd, args, opts);
+    failedAcks += 1;
+    return ACK_BUSY;
+  };
+  const pending = () => JSON.parse(fs.readFileSync(path.join(app.cfg.dataRoot, 'data', 'immigration', 'pending.json'), 'utf8')) as Array<{ id: string }>;
+  const until = async (fn: () => boolean, what: string) => {
+    for (let i = 0; i < 600 && !fn(); i++) await wait(25);
+    if (!fn()) throw new Error(`timed out waiting for ${what}`);
+  };
+
+  beforeAll(async () => {
+    app = await makeTestApp({}, { exec, readToken: async () => FAKE_TOKEN });
+  });
+  afterAll(async () => {
+    await app.close();
+  });
+
+  /** Runs one pass over [item(n)] that ends done while every ack fails; returns its session id and batch. */
+  async function failedAckPass(n: number): Promise<{ id: string; batch: string }> {
+    ackFails = true;
+    fs.writeFileSync(path.join(app.cfg.dataRoot, 'data', 'immigration', 'pending.json'), JSON.stringify([item(n)]));
+    const res = await withScenario({ events: [INIT, result('Pass done.')] }, () => app.app.inject({ method: 'POST', url: '/api/sessions', headers: app.authedWrite, payload: { mode: 'immigration-policy', prompt: 'Run the daily immigration policy pass.' } }));
+    expect(res.statusCode, res.body).toBe(202);
+    const id = res.json().id as string;
+    const batch = app.sessions.read(id)!.policyBatch!;
+    expect(batch).toBeTruthy();
+    await until(() => app.sessions.read(id)?.status === 'done' && app.sessions.read(id)!.turns.at(-1)?.endedAt !== undefined, 'the pass to end done');
+    expect(app.sessions.read(id)!.lastReason).toContain('could not acknowledge the policy items it was given');
+    return { id, batch };
+  }
+
+  it('given every ack attempt fails, when the pass ends done, then the session keeps its batch for a later ack and the items stay queued', async () => {
+    const { id, batch } = await failedAckPass(21);
+    expect(app.sessions.read(id)!.policyBatch).toBe(batch);
+    expect(pending().map((i) => i.id)).toEqual([item(21).id]);
+  });
+
+  it('given a batch left unacknowledged, when the server starts again, then it acknowledges it and lets the batch go', async () => {
+    const { id } = await failedAckPass(22);
+    ackFails = false;
+    // A new server over the same data root, as after a restart.
+    const restarted = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec });
+    try {
+      restarted.reconcile();
+      // The batch is let go of while its ack runs, so the queue is what says the ack landed.
+      await until(() => pending().length === 0, 'the leftover ack');
+      await until(() => (app.sessions.read(id)!.policyBatch ?? null) === null, 'the batch to be let go of');
+    } finally {
+      restarted.close();
+    }
+  });
+
+  it('given a session deleted while the leftover acks run, when its turn comes, then the others are still acknowledged and nothing throws', async () => {
+    const kept = await failedAckPass(24);
+    const gone = await failedAckPass(25);
+    fs.writeFileSync(path.join(app.cfg.dataRoot, 'data', 'immigration', 'pending.json'), JSON.stringify([item(24), item(25)]));
+    ackFails = false;
+    let open!: () => void;
+    ackGate = new Promise((resolve) => (open = resolve));
+    const rejections: unknown[] = [];
+    const onRejection = (err: unknown) => rejections.push(err);
+    process.on('unhandledRejection', onRejection);
+    const restarted = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec });
+    try {
+      const before = ackStarted;
+      restarted.reconcile();
+      await until(() => ackStarted > before, 'the first leftover ack to start');
+      // Whichever session the loop has not reached yet goes away under it.
+      const waiting = (app.sessions.read(kept.id)!.policyBatch ?? null) === null ? gone : kept;
+      expect(app.sessions.delete(waiting.id)).toBe(true);
+      ackGate = null;
+      open();
+      await until(() => pending().length === 1, 'the remaining ack');
+      await wait(200);
+      expect(rejections).toEqual([]);
+    } finally {
+      ackGate = null;
+      open();
+      process.off('unhandledRejection', onRejection);
+      restarted.close();
+    }
+  });
+
+  it('given a leftover ack that fails too, when the retry delay passes, then it is tried again until it lands', async () => {
+    const { id } = await failedAckPass(23);
+    const retrying = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec, policyAckRetryMs: 50 });
+    try {
+      const before = failedAcks;
+      retrying.reconcile();
+      // Two rounds of failed attempts: the leftover ack, then at least one retry.
+      await until(() => failedAcks >= before + 6, 'the leftover ack to fail and be retried');
+      expect(app.sessions.read(id)!.policyBatch).toBeTruthy();
+      ackFails = false;
+      await until(() => pending().length === 0, 'the retried ack');
+      await until(() => (app.sessions.read(id)!.policyBatch ?? null) === null, 'the batch to be let go of');
+    } finally {
+      retrying.close();
+    }
   });
 });
