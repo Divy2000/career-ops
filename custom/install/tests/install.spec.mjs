@@ -1760,6 +1760,11 @@ test('a data root that is the home directory, a folder containing it, or / is re
     // Through a folder that does not exist yet: resolved as the kernel will once step 5 creates it (R19-scripts-b-L3-01).
     ['--data-root ~/new/..', (w) => ({ args: ['--data-root', `${w.home}/new/..`] })],
     ['--data-root ~/new/deeper/../..', (w) => ({ args: ['--data-root', `${w.home}/new/deeper/../..`] })],
+    ['--data-root ~/a/link/.. where link dangles to ~/q', (w) => {
+      fs.mkdirSync(path.join(w.home, 'a'), { recursive: true });
+      fs.symlinkSync(path.join(w.home, 'q'), path.join(w.home, 'a', 'link'));
+      return { args: ['--data-root', `${w.home}/a/link/..`] };
+    }],
     ['CAREER_OPS_ROOT=$HOME', (w) => ({ args: [], env: { CAREER_OPS_ROOT: w.home } })],
     ['CAREER_OPS_DATA_DIR=$HOME', (w) => ({ args: [], env: { CAREER_OPS_DATA_DIR: w.home } })],
   ];

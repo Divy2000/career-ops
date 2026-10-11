@@ -136,9 +136,6 @@ fda_place() {
   esac
 }
 
-# The confinement refuses a data root that is the filesystem root or is (or contains) the home directory: a session
-# could read every file under it (assertRootsConfinable in custom/control-center/server/claude/confinement.mjs). Both
-# paths are resolved the way it resolves them (fs.realpathSync.native, which also fixes the letter case on a
 # lexical_path <absolute-path>: the path with empty, . and .. parts folded, without touching the filesystem.
 lexical_path() {
   local part parts out=()
@@ -153,8 +150,31 @@ lexical_path() {
   if [ "${#out[@]}" -eq 0 ]; then printf '/'; else printf '/%s' "${out[@]}"; fi
 }
 
-# case-insensitive volume), with pwd -P when node is not there yet. A root that does not exist yet is resolved as it
-# will be once created: its deepest existing folder resolved, the rest folded, so ~/new/.. is home. Exits 1.
+# physical_path <absolute-path> [depth]: the path as the kernel would resolve it, even before it exists: its deepest
+# existing folder with symlinks resolved (a dangling one followed to its target), then the rest folded lexically.
+physical_path() {
+  local head tail="" target depth="${2:-0}"
+  head="$(dirname "$1")"
+  while [ ! -d "$head" ]; do
+    # Bounded, so a dangling symlink loop ends.
+    if [ -L "$head" ] && [ "$depth" -lt 40 ]; then
+      target="$(readlink "$head")"
+      case "$target" in /*) ;; *) target="$(dirname "$head")/$target" ;; esac
+      physical_path "$target$tail/${1##*/}" $((depth + 1))
+      return
+    fi
+    tail="/${head##*/}$tail"
+    head="$(dirname "$head")"
+  done
+  lexical_path "$(cd -P "$head" && pwd -P)$tail/${1##*/}"
+}
+
+# The confinement refuses a data root that is the filesystem root or is (or contains) the home directory: a session
+# could read every file under it (assertRootsConfinable in custom/control-center/server/claude/confinement.mjs). Both
+# paths are resolved the way it resolves them (fs.realpathSync.native, which also fixes the letter case on a
+# case-insensitive volume), with pwd -P when node is not there yet. A root that does not exist yet is resolved as the
+# kernel will once it is created (physical_path, so ~/new/.. is home), then its deepest existing folder as above.
+# Exits 1.
 real_path() {
   if command -v node >/dev/null 2>&1 &&
     node -e 'process.stdout.write(require("fs").realpathSync.native(process.argv[1]))' "$1" 2>/dev/null; then
@@ -164,7 +184,8 @@ real_path() {
     (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
     return
   fi
-  local head="$1" tail=""
+  local head tail=""
+  head="$(physical_path "$1")"
   while [ ! -d "$head" ]; do
     tail="/${head##*/}$tail"
     head="$(dirname "$head")"
@@ -911,25 +932,6 @@ else
 fi
 
 # ---------------------------------------------------------------- H-1B index
-
-# physical_path <absolute-path> [depth]: the path as the kernel would resolve it, even before it exists: its deepest
-# existing folder with symlinks resolved (a dangling one followed to its target), then the rest folded lexically.
-physical_path() {
-  local head tail="" target depth="${2:-0}"
-  head="$(dirname "$1")"
-  while [ ! -d "$head" ]; do
-    # Bounded, so a dangling symlink loop ends.
-    if [ -L "$head" ] && [ "$depth" -lt 40 ]; then
-      target="$(readlink "$head")"
-      case "$target" in /*) ;; *) target="$(dirname "$head")/$target" ;; esac
-      physical_path "$target$tail/${1##*/}" $((depth + 1))
-      return
-    fi
-    tail="/${head##*/}$tail"
-    head="$(dirname "$head")"
-  done
-  lexical_path "$(cd -P "$head" && pwd -P)$tail/${1##*/}"
-}
 
 # same_file_path <a> <b>: whether two absolute paths name one file, however spelled (./, //, .., symlinked folders).
 same_file_path() {
