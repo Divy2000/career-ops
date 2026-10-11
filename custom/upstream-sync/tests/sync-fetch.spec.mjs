@@ -1082,25 +1082,45 @@ function holdDailyLock(w, body) {
   const ready = path.join(w.base, 'holder-ready');
   return `mkdir -p "$(dirname "$LOCK")"
 /usr/bin/lockf -k -t 0 "$LOCK" /bin/sh -c 'touch "$1"; ${body}' holder "${ready}" >/dev/null 2>&1 &
+echo $! > "${w.base}/holder.pid"
 for _ in $(seq 400); do [ -e "${ready}" ] && break; sleep 0.05; done
 [ -e "${ready}" ] || { echo "the daily job never took its lock"; exit 99; }
 `;
 }
 
+/** The command line `holdDailyLock` waits on until `release` appears in the world; the holder outlives the update. */
+const untilReleased = (w) => `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`;
+
+/**
+ * Lets a holder started with `untilReleased` go and waits for it to exit, before the world (and its `release`) is
+ * removed. Returns the holder's pid if it is still running, so the spec can assert it left nothing behind.
+ */
+function releaseDailyLock(w) {
+  const pidFile = path.join(w.base, 'holder.pid');
+  writeFileSync(path.join(w.base, 'release'), '');
+  if (!existsSync(pidFile)) return [];
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 40 && alive(); i++) spawnSync('sleep', ['0.05']);
+  return alive() ? [pid] : [];
+}
+
 test('a daily job holding its lock for longer than the wait leaves the live checkout alone, reinstalls nothing, and says why (R11-scripts-b-L1-03)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true });
+  let left;
   try {
     const before = w.head();
     // The daily job, mid-run: it holds run-daily.sh's lock until the update has returned.
-    const res = w.update({ wait: 1, prefix: holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`) });
+    const res = w.update({ wait: 1, prefix: holdDailyLock(w, untilReleased(w)) });
     assert.equal(res.status, 10, res.stdout + res.stderr);
     assert.equal(res.stdout, 'the daily job is still running');
     assert.equal(w.head(), before);
     assert.equal(w.npm(), '');
   } finally {
-    writeFileSync(path.join(w.base, 'release'), '');
+    left = releaseDailyLock(w);
     rmSync(w.base, { recursive: true, force: true });
   }
+  assert.deepEqual(left, [], 'the daily-lock holder was still running after its release');
 });
 
 test('a daily job that finishes within the wait is waited for, then the live checkout is updated (R11-scripts-b-L1-03)', () => {
@@ -1150,17 +1170,19 @@ test('the live update also waits on the daily job installed on another data root
   const jobRoot = path.join(w.base, 'job-data');
   installDailyPlist(w, jobRoot);
   const jobLock = path.join(jobRoot, 'data', 'immigration', '.run-daily.lockf');
+  let left;
   try {
     const before = w.head();
-    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`)}LOCK="${w.dailyLock}"\n` });
+    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, untilReleased(w))}LOCK="${w.dailyLock}"\n` });
     assert.equal(res.status, 10, res.stdout + res.stderr);
     assert.equal(res.stdout, 'the daily job is still running');
     assert.equal(w.head(), before);
     assert.equal(w.npm(), '');
   } finally {
-    writeFileSync(path.join(w.base, 'release'), '');
+    left = releaseDailyLock(w);
     rmSync(w.base, { recursive: true, force: true });
   }
+  assert.deepEqual(left, [], 'the daily-lock holder was still running after its release');
 });
 
 test('the live update skips the Control Center npm ci while it runs on the installed daily job\'s data root (R20-scripts-b-L1-01)', () => {
@@ -1230,16 +1252,18 @@ test('a daily job and Control Center of another checkout neither hold up the liv
   const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
   mkdirSync(path.dirname(lock), { recursive: true });
   writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  let left;
   try {
-    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`)}LOCK="${w.dailyLock}"\n` });
+    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, untilReleased(w))}LOCK="${w.dailyLock}"\n` });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.equal(w.head(), w.target);
     assert.match(w.npm(), /^--prefix custom\/control-center ci$/m);
   } finally {
-    writeFileSync(path.join(w.base, 'release'), '');
+    left = releaseDailyLock(w);
     child.kill('SIGKILL');
     rmSync(w.base, { recursive: true, force: true });
   }
+  assert.deepEqual(left, [], 'the daily-lock holder was still running after its release');
 });
 
 test('the live update locks the installed daily job\'s data root before that job\'s first run there, so the first run cannot start mid-update (R20-scripts-b review)', () => {
