@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
@@ -11,9 +11,13 @@ export function DangerZone({ n }: { n: number }) {
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const router = useRouter();
   const call = async (dryRun: boolean) => {
     setBusy(true);
     setError(null);
+    // The delete waits on the tracker lock, so it can answer after the user left this row's page: only a user still on
+    // it (on any tab) is moved off the deleted row.
+    const page = router.state.location.pathname;
     try {
       // "Confirm delete" is the user's confirmation, which the real delete must carry; the dry run needs none.
       const r = await apiSend<{ result: unknown; stderr?: string }>('POST', '/api/actions/tracker.delete', dryRun ? { params: { n, dryRun } } : { params: { n, dryRun }, confirmed: true });
@@ -24,7 +28,7 @@ export function DangerZone({ n }: { n: number }) {
         // leave, then refresh the tracker lists.
         qc.removeQueries({ queryKey: ['tracker', 'row', String(n)] });
         qc.removeQueries({ queryKey: ['tracker', 'documents', n] });
-        await navigate({ to: '/tracker' });
+        if (router.state.location.pathname === page) await navigate({ to: '/tracker' });
         await qc.invalidateQueries({ queryKey: ['tracker'] });
       }
     } catch (err) {
