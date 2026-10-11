@@ -57,4 +57,32 @@ describe('preflight Keychain probe', () => {
     expect(r.errors.join('\n')).toContain('timed out');
     expect(r.errors.join('\n')).toContain('security unlock-keychain');
   });
+
+  it('given a `security` that is not on PATH, says the command is missing instead of a locked keychain', async () => {
+    vi.stubEnv('PATH', tempDir('cc-no-security-'));
+    const r = await runWithKeychain();
+    expect(r.code).toBe(1);
+    expect(r.output).not.toContain(KEYCHAIN_HELP);
+    expect(r.output).not.toContain('unlock-keychain');
+    expect(r.output).toContain('`security` command was not found');
+  });
+
+  it('given an item that holds an empty password, prints the setup-token instructions as a session would', async () => {
+    fakeSecurity(0, '');
+    const r = await runWithKeychain();
+    expect(r.code).toBe(1);
+    expect(r.output).toContain(KEYCHAIN_HELP);
+  });
+
+  it('given a real `security` that never answers, the probe times out and says to unlock the keychain', async () => {
+    const dir = tempDir('cc-slow-security-');
+    fakeBin(dir, 'security', 'setTimeout(() => {}, 30_000);');
+    vi.stubEnv('PATH', `${dir}${path.delimiter}${process.env.PATH ?? ''}`);
+    const claude = fakeBin(tempDir('cc-pfcli-'), 'claude', "console.log('0.0.0-fake');");
+    const r = await preflight({ ...host(), claudeBin: claude, nodeVersion: 'v26.0.0', env: { NODE_ENV: 'test', CC_SKIP_KEYCHAIN: '0' }, keychainTimeoutMs: 300 });
+    expect(r.ok).toBe(false);
+    expect(r.errors).not.toContain(KEYCHAIN_HELP);
+    expect(r.errors.join('\n')).toContain('timed out');
+    expect(r.errors.join('\n')).toContain('security unlock-keychain');
+  });
 });

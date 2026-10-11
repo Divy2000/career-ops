@@ -57,6 +57,8 @@ export interface PreflightInput {
   env: NodeJS.ProcessEnv;
   /** Injected runner: an exit code, or the code and stdout (`claude --version` needs its output), plus stderr and a timeout when known. */
   exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string; stderr?: string; timedOut?: boolean }>;
+  /** Limit for the Keychain read; an unanswered unlock dialog holds it until then. */
+  keychainTimeoutMs?: number;
   /** Per-attempt limit for `claude --version`; a cold first start can self-update before it answers. */
   claudeTimeoutMs?: number;
   /** Every claude binary found on this machine; more than one is a warning, since the first is pinned for the server. */
@@ -89,9 +91,22 @@ export interface PreflightResult {
 const SECURITY_ITEM_NOT_FOUND = 44;
 const KEYCHAIN_TIMEOUT_MS = 8000;
 
-/** Any other failure (locked keychain, no UI to prompt, a timeout) leaves a stored token that is fine. */
-function keychainUnreadable(r: { code: number; stderr?: string; timedOut?: boolean }): string {
-  const why = r.timedOut ? `security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s` : `security failed (exit ${r.code}${r.stderr?.trim() ? `: ${r.stderr.trim().slice(-200)}` : ''})`;
+type KeychainRead = { code: number; stdout?: string; stderr?: string; timedOut?: boolean };
+
+/**
+ * Absent (exit 44) or empty, which sessions refuse the same way (server/claude/manager.ts), asks for a new token. Any
+ * other failure (a locked keychain, no UI to prompt, a timeout) leaves a stored token that is fine.
+ */
+function keychainProblem(r: KeychainRead, timeoutMs: number): string | null {
+  if (r.timedOut) return keychainUnreadable(`security timed out after ${timeoutMs / 1000}s`);
+  if (r.code === 127) return 'Could not read Keychain item "career-ops-claude-token": the `security` command was not found on PATH (it ships with macOS in /usr/bin).';
+  if (r.code === SECURITY_ITEM_NOT_FOUND) return KEYCHAIN_HELP;
+  if (r.code !== 0) return keychainUnreadable(`security failed (exit ${r.code}${r.stderr?.trim() ? `: ${r.stderr.trim().slice(-200)}` : ''})`);
+  // An injected runner that returns only a code has no stdout to check.
+  return r.stdout !== undefined && !r.stdout.trim() ? KEYCHAIN_HELP : null;
+}
+
+function keychainUnreadable(why: string): string {
   return `Could not read Keychain item "career-ops-claude-token": ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
 }
 
@@ -115,8 +130,8 @@ function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   });
 }
 
-async function exitCode(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
-  const r = await probe(cmd, args, KEYCHAIN_TIMEOUT_MS);
+async function exitCode(cmd: string, args: string[], timeoutMs = KEYCHAIN_TIMEOUT_MS): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+  const r = await probe(cmd, args, timeoutMs);
   return { code: r.enoent ? 127 : r.code, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut };
 }
 
@@ -303,7 +318,8 @@ export function testHost(env: NodeJS.ProcessEnv): Pick<PreflightInput, 'platform
 }
 
 export async function preflight(input: PreflightInput): Promise<PreflightResult> {
-  const exec = input.exec ?? exitCode;
+  const keychainTimeoutMs = input.keychainTimeoutMs ?? KEYCHAIN_TIMEOUT_MS;
+  const exec = input.exec ?? ((cmd: string, args: string[]) => exitCode(cmd, args, keychainTimeoutMs));
   const errors: string[] = [];
   const warnings: string[] = [];
   if (!nodeSupported(input.nodeVersion, NODE_RANGE)) {
@@ -318,9 +334,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
   const skipKeychain = input.env.NODE_ENV === 'test' && input.env.CC_SKIP_KEYCHAIN !== '0';
   if (!skipKeychain) {
     const out = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w']);
-    const r: { code: number; stderr?: string; timedOut?: boolean } = typeof out === 'number' ? { code: out } : out;
-    if (r.code === SECURITY_ITEM_NOT_FOUND && !r.timedOut) errors.push(KEYCHAIN_HELP);
-    else if (r.code !== 0 || r.timedOut) errors.push(keychainUnreadable(r));
+    const problem = keychainProblem(typeof out === 'number' ? { code: out } : out, keychainTimeoutMs);
+    if (problem) errors.push(problem);
   }
   errors.push(...(await managedSettingsProblems(input.managedSettings)));
   const others = (input.claudeCandidates ?? []).filter((c) => c !== input.claudeBin);
