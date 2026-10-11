@@ -166,3 +166,37 @@ describe('a tailored CV start naming the row with spaces or leading zeros', () =
     });
   }
 });
+
+describe('a tailored CV start while a fork waits on its cancelled source to finish (R20-srv-core-L1-01)', () => {
+  it('given a pdf session for row 12 cancelled while its run still stops, when it is forked and a second pdf for row 12 starts during the wait, then the start is refused with 409 and only the fork runs', async () => {
+    // A CLI that ignores SIGTERM and sleeps in short steps, so the cancelled turn stays finishing until the runner's SIGKILL.
+    const scenario = path.join(tempDir('cc-scenario-'), 'scenario.json');
+    const delta = { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'before ' } } };
+    fs.writeFileSync(scenario, JSON.stringify({ events: [{ __ignoreSigterm: true }, { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] }, delta, ...Array.from({ length: 200 }, () => ({ __sleep: 100 }))] }));
+    process.env.FAKE_CLAUDE_SCENARIO = scenario;
+    try {
+      await withApp(async (app) => {
+        const started = await startPdf(app, '12');
+        expect(started.statusCode, started.body).toBe(202);
+        const { id } = started.json() as { id: string };
+        const streamed = async () => ((await app.app.inject({ method: 'GET', url: `/api/sessions/${id}`, headers: app.authed })).json() as { events: Array<{ event: { type: string } }> }).events.some((e) => e.event.type === 'text.delta');
+        for (let i = 0; i < 300 && !(await streamed()); i++) await new Promise((r) => setTimeout(r, 50));
+        expect(await streamed()).toBe(true);
+        expect((await app.app.inject({ method: 'POST', url: `/api/sessions/${id}/cancel`, headers: { ...app.authedWrite, 'content-type': 'application/json' } })).statusCode).toBe(200);
+        expect(app.sessions.read(id)!.status).toBe('cancelled');
+        const forkSpy = vi.spyOn(app.sessions, 'fork');
+        const fork = app.app.inject({ method: 'POST', url: `/api/sessions/${id}/fork`, headers: app.authedWrite, payload: { prompt: 'carry on' } });
+        await vi.waitFor(() => expect(forkSpy).toHaveBeenCalledTimes(1));
+        // The run is still stopping, so the fork is still waiting on it.
+        expect(app.sessions.read(id)!.turns.at(-1)!.endedAt).toBeFalsy();
+        const second = await startPdf(app, '12');
+        expect(second.statusCode, second.body).toBe(409);
+        expect((second.json() as { error: string }).error).toContain(id);
+        expect((await fork).statusCode).toBe(202);
+        expect(pdfCount(app)).toBe(2);
+      });
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCENARIO;
+    }
+  }, 40_000);
+});
