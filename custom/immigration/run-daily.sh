@@ -311,28 +311,23 @@ ack_done_batch() {
 }
 
 # Acknowledges the batches of earlier done passes whose ack failed, before a new pass: until they are acknowledged
-# their items are still queued, and a new pass would send them to Claude again. One from before the news window is
-# let go of unacknowledged (policyBatchAckable in the Control Center), its items queued for this pass. An ack records
-# the batch's own day as last_pass, not the day it lands, so a late one skips no news. A leftover still failing fails
-# the step.
+# their items are still queued, and a new pass would send them to Claude again. Every one is acknowledged whatever its
+# age: an ack records the batch's own day as last_pass and never moves it back, so a late one skips no news. One that
+# cannot be read (policyBatchReadable in the Control Center) is let go of unacknowledged, its items queued for this
+# pass. A leftover still failing fails the step.
 ack_leftover_batches() {
   local done batch
   for done in "$IMM"/batches/*.done; do
     [ -e "$done" ] || continue
     batch="${done%.done}"
-    if ! BATCH="$batch" TODAY="$TODAY" node --input-type=module -e '
-import fs from "node:fs";
-import path from "node:path";
-const { newsSince } = await import(path.resolve("custom/immigration/lib.mjs"));
-const { BATCH, TODAY } = process.env;
-let day = null;
+    if ! BATCH="$batch" node -e '
+let items;
 try {
-  const date = JSON.parse(fs.readFileSync(BATCH, "utf8"))?.date;
-  if (typeof date === "string") day = date;
+  items = JSON.parse(require("fs").readFileSync(process.env.BATCH, "utf8"))?.new_items;
 } catch {}
-process.exit(day !== null && day <= TODAY && newsSince({ lastPass: TODAY, today: TODAY }) <= day ? 0 : 1);
+process.exit(Array.isArray(items) ? 0 : 1);
 '; then
-      echo "policy pass batch $batch is older than the news window: its items stay queued for this pass"
+      echo "policy pass batch $batch cannot be read: its items stay queued for this pass"
       rm -f "$done"
       continue
     fi

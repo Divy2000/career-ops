@@ -153,24 +153,18 @@ export function donePolicyBatches(dataRoot: string): string[] {
   return names.filter((n) => n.endsWith(DONE_MARK)).map((n) => path.join(IMM, 'batches', n.slice(0, -DONE_MARK.length)));
 }
 
-/** The day a batch's pass was prepared (its watch JSON `date`), or null when the batch cannot be read. */
-function policyBatchDay(dataRoot: string, batch: string): string | null {
-  try {
-    const date = (JSON.parse(fs.readFileSync(path.join(dataRoot, batch), 'utf8')) as { date?: unknown } | null)?.date;
-    return typeof date === 'string' ? date : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Whether a done pass's batch may still be acknowledged today: only one from within newsSince's window. watch.mjs
- * --ack records the batch's own day as last_pass (never the day the ack lands, and never moving it back), so a late ack
- * skips no news; an older batch is let go of unacknowledged, its items queued for the next pass.
+ * Whether a done pass's batch can be acknowledged: watch.mjs --ack reads its new_items. Its age does not matter, since
+ * the ack records the batch's own day as last_pass and never moves it back, so a late ack skips no news. One that
+ * cannot be read is let go of unacknowledged, its items queued for the next pass.
  */
-export function policyBatchAckable(dataRoot: string, batch: string, today: string): boolean {
-  const day = policyBatchDay(dataRoot, batch);
-  return day !== null && day <= today && newsSince({ lastPass: today, today }) <= day;
+export function policyBatchReadable(dataRoot: string, batch: string): boolean {
+  try {
+    const items = (JSON.parse(fs.readFileSync(path.join(dataRoot, batch), 'utf8')) as { new_items?: unknown } | null)?.new_items;
+    return Array.isArray(items);
+  } catch {
+    return false;
+  }
 }
 
 /**
