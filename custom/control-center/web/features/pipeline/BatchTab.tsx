@@ -8,23 +8,11 @@ import { apiGet } from '../../lib/api';
 import type { SessionMeta } from '@shared/api';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
+import { plainPostingUrl } from '@shared/posting-url';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
 import { endBatchStarting, livePipelineId, markBatchStarting, useBatchStarting, withinSessionsReadLimit } from './InboxAi';
-
-// Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
-// server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
-// and fetch path, which cannot read it, and a URL carrying credentials would put them in the session's prompt.
-const postingLike = (s: string): boolean => {
-  if (s.length > 2048) return false;
-  try {
-    const u = new URL(s);
-    return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname) && !u.username && !u.password;
-  } catch {
-    return false;
-  }
-};
 
 /** The URLs of oferta sessions the server lists now and did not list in `before`: what a fan-out that failed part way did start. */
 async function startedSince(urls: string[], before: Set<string>): Promise<Set<string>> {
@@ -44,7 +32,9 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const [message, setMessage] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const list = [...new Set(urls.split(/\s+/).filter(Boolean))];
   const tooMany = list.length > BATCH_MAX_URLS;
-  const refused = list.filter((u) => !postingLike(u));
+  // Only what the fan-out route takes (plainPostingUrl): a saved JD (local:jds/) or another scheme would start a paid session
+  // on the liveness and fetch path, which cannot read it, and a URL carrying credentials would put them in the prompt.
+  const refused = list.filter((u) => !plainPostingUrl(u));
   // Process inbox evaluates every pending row, so an evaluation of one of them beside it would evaluate, report and bill
   // it a second time: Batch is off while one is starting or live, and until the sessions list tells there is none.
   const sessions = useSessions();
