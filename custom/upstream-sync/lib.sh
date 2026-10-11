@@ -529,13 +529,14 @@ merge_blockers() {
   printf '%s' "$out"
 }
 
-# control_center_running <data-root>: whether the Control Center is running on
+# control_center_running <data-root> [other]: whether the Control Center is running on
 # <data-root>, read from its supervisor.lock (the file the supervisor keeps via
 # acquireInstanceLock). Running means the lock names a PID that is alive and that
 # started when the lock says it did: a live PID that started at another time is a
 # reused PID, not the Control Center (the same start-time check acquireInstanceLock
 # makes). A missing or stale lock, or a damaged one past its 5 s grace, is not
-# running; one that cannot be read is. npm ci deletes
+# running; one that cannot be read is, unless "other" says the update would not start
+# it on <data-root>, where only a live process counts. npm ci deletes
 # node_modules, so the live update and the installer both consult this before
 # reinstalling the Control Center under a running instance: its blue/green reload
 # would race the deletion and fail.
@@ -546,9 +547,12 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+// "other": a root this run would not start the Control Center on, where only a live process counts as running.
+const other = process.argv[2] === "other";
 let text;
 try { text = fs.readFileSync(process.argv[1], "utf8"); }
 catch (e) {
+  if (other) process.exit(1);
   // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
   // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
   let entry = e.code !== "ENOENT";
@@ -567,6 +571,7 @@ try {
 // the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
 // as running, and replaces an older one, so that does not.
 if (!pid) {
+  if (other) process.exit(1);
   let young = false;
   try { young = Date.now() - fs.statSync(process.argv[1]).mtimeMs < 5000; } catch { /* gone: not running */ }
   process.exit(young ? 0 : 1);
@@ -587,7 +592,7 @@ try {
 // Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
 // With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
 process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
-' "$lock"
+' "$lock" "${2:-}"
 }
 
 # installed_daily_value <key path>: a value from the installed daily job's plist, printed only when that job runs
@@ -654,7 +659,7 @@ live_update_locked() {
 # main, local changes, already past <commit>, or the daily job still running), 1
 # when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed="" deferred="" data_root job_root job_lock rc cc_live=0
+  local deps_before cc_before failed="" deferred="" data_root primary job_root job_lock rc cc_live=0
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
     if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
       echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
@@ -690,8 +695,12 @@ update_live_checkout() {
   if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
     # The live checkout itself is checked too: a Control Center started before the data root moved out of it
     # still runs from this checkout on its old root.
-    while IFS= read -r data_root; do
-      if [ -n "$data_root" ] && control_center_running "$data_root"; then cc_live=1; break; fi
+    # The sync's own root, the first lock held, is judged as the supervisor would on starting there; on the other
+    # roots only a lock naming a live process counts.
+    primary="$(dirname "$(dirname "$(dirname "${CC_LIVE_UPDATE_HELD%%$'\n'*}")")")"
+    if control_center_running "$primary"; then cc_live=1; fi
+    while [ "$cc_live" = 0 ] && IFS= read -r data_root; do
+      if [ -n "$data_root" ] && [ "$data_root" != "$primary" ] && control_center_running "$data_root" other; then cc_live=1; fi
     done <<<"${CC_LIVE_UPDATE_ROOTS:-}"$'\n'"$PWD"
     if [ "$cc_live" = 1 ]; then
       # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the

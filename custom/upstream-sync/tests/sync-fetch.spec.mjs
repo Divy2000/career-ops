@@ -1042,6 +1042,22 @@ test('a Control Center lock that is a dangling symlink is treated as running, as
   }
 });
 
+test('a dangling Control Center lock on the installed daily job\'s other data root is not running, so the npm ci runs (R20-scripts-b review)', () => {
+  const w = liveWorld({ ccChange: true });
+  const jobRoot = path.join(w.base, 'job-data');
+  installDailyPlist(w, jobRoot);
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  symlinkSync(path.join(w.base, 'nowhere'), lock);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(w.npm(), /^--prefix custom\/control-center ci$/m);
+  } finally {
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 test('a running Control Center with a failed root install still reports the skipped Control Center deps (R17-scripts-b-L1-01)', () => {
   const w = liveWorld({ depsChange: true, ccChange: true, npmExit: 1 });
   const child = spawn('sleep', ['30'], { stdio: 'ignore' });
