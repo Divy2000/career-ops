@@ -180,11 +180,14 @@ export function unrecordedFor(dataRoot: string): UnrecordedReservations {
   return entry;
 }
 
-/** Marks a reservation as being taken, once no release is running (a forced release removes whatever sentinel it finds). */
+/**
+ * Marks a reservation as being taken and waits until no release is running (a forced release removes whatever
+ * sentinel it finds). Marked before the wait, so a release asked for meanwhile is refused instead of passing it.
+ */
 export async function beginTakingReportNums(dataRoot: string): Promise<UnrecordedReservations> {
   const entry = unrecordedFor(dataRoot);
-  while (entry.releasing.size > 0) await Promise.all(entry.releasing);
   entry.taking += 1;
+  while (entry.releasing.size > 0) await Promise.all(entry.releasing);
   return entry;
 }
 

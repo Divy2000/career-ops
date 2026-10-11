@@ -143,4 +143,37 @@ describe('Release report numbers while a session is about to record its number (
       await app.close();
     }
   });
+
+  it('given a Batch evaluate waiting for a running release, when another release is asked for, then it is refused so the evaluate is not kept waiting', async () => {
+    let unblock!: () => void;
+    const held = new Promise<void>((r) => (unblock = r));
+    let releases = 0;
+    // The first release subprocess is held, so the Batch evaluate waits behind it.
+    const exec: Exec = async (bin, args, opts) => {
+      if (args.includes('--release')) {
+        releases += 1;
+        if (releases === 1) await held;
+      }
+      return execNoShell(bin, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    process.env.FAKE_CLAUDE_SCENARIO = scenarioFile();
+    try {
+      const first = release(app, 40);
+      await until(() => releases === 1, 'the first release to run');
+      const fanning = call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/fu-e'] });
+      await wait(300);
+      const second = await release(app, 41);
+      expect(second.statusCode, second.body).toBe(409);
+      unblock();
+      expect((await first).statusCode).toBe(200);
+      const fan = (await fanning).json() as { sessions: Meta[]; reserved: number[] };
+      expect(fan.reserved).toHaveLength(1);
+      await settleOn(app, fan.sessions[0]!.id);
+    } finally {
+      unblock();
+      delete process.env.FAKE_CLAUDE_SCENARIO;
+      await app.close();
+    }
+  });
 });
