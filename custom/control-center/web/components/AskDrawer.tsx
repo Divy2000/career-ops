@@ -25,9 +25,12 @@ export interface Proposal {
   note: string | null;
 }
 
-/** The tracker row a proposal names (row, or the older n), or a plain note that it names none. */
+/** The tracker row a proposal names (row, or the older n), trimmed: blank when it names none. */
+const rowParam = (p: Record<string, unknown>): string => String(p.row ?? p.n ?? '').trim();
+
+/** The tracker row a proposal names, or a plain note that it names none. */
 const rowOf = (p: Record<string, unknown>): string => {
-  const n = String(p.row ?? p.n ?? '').trim();
+  const n = rowParam(p);
   return n ? `row #${n}` : '(no row given)';
 };
 
@@ -69,6 +72,14 @@ async function pendingUrlsAt(company: string): Promise<string[]> {
   if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
   return urls;
 }
+
+/** Whether a posting is a pending Inbox row, which a running Process inbox session is evaluating. */
+async function isPendingInboxRow(url: string): Promise<boolean> {
+  const pipeline = await apiGet<PipelineRead>('/api/pipeline');
+  return pipeline.kind === 'ok' && pipeline.rows.some((r) => !r.done && r.url === url);
+}
+
+const PROCESS_INBOX_RUNNING = 'Process inbox is evaluating the pending rows: an evaluation started now would evaluate, report and bill them a second time. Try again once it ends.';
 
 export function useAskHotkey(toggle: () => void): void {
   useEffect(() => {
@@ -136,6 +147,19 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
 
   const update = (id: number, patch: Partial<Proposal>) => setProposals((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
+  /**
+   * Whether a running Process inbox session already evaluates what an evaluate or evaluateCompany would: every pending
+   * row, so a second evaluation would run, report and bill it twice. Read fresh, not from the 5 s poll, since Process
+   * inbox can start in the gap (or while the confirm is open).
+   */
+  const processInboxOwns = async (p: Proposal): Promise<boolean> => {
+    if (p.action !== 'evaluate' && p.action !== 'evaluateCompany') return false;
+    // Its own request: the shared query would join a poll sent before the run started, or be cancelled by a start.
+    const list = await apiGet<SessionMeta[]>('/api/sessions');
+    if (!list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
+    return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
+  };
+
   // The hidden button lags the click by a render, and confirms queue: a second click before it would ask twice.
   const started = useRef(new Set<number>());
   const run = async (p: Proposal) => {
@@ -153,6 +177,15 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
     const company = String(p.params.company ?? '').trim();
     let companyUrls: string[] = [];
+    try {
+      if (await processInboxOwns(p)) {
+        update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
+        return;
+      }
+    } catch (err) {
+      update(p.id, { state: 'failed', note: describeError(err) });
+      return;
+    }
     if (p.action === 'evaluateCompany') {
       try {
         companyUrls = (await pendingUrlsAt(company)).filter((u) => !activeFor(u));
@@ -168,7 +201,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     // A row named by number only is easy to confuse with another application: the setStatus confirm names it by
     // company and role, and shows the note it appends to the Notes cell (which can re-link reports).
     const nameRow = (p: Record<string, unknown>): string => {
-      const n = String(p.row ?? p.n ?? '').trim();
+      const n = rowParam(p);
       const num = Number(n);
       const row = Number.isInteger(num) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === num) : undefined;
       return row ? `row #${n} (${row.company}${row.role ? ` - ${row.role}` : ''})` : `row #${n}`;
@@ -186,6 +219,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       return;
     }
     try {
+      if (await processInboxOwns(p)) {
+        update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
+        return;
+      }
       switch (p.action) {
         case 'navigate': {
           await router.navigate({ to: String(p.params.to).trim() as '/' });
@@ -200,7 +237,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await router.navigate({ to: '/discover', search: { tab: 'network' } });
           break;
         case 'apply':
-          await router.navigate({ to: '/apply/$n', params: { n: String(p.params.row ?? p.params.n ?? '') } });
+          await router.navigate({ to: '/apply/$n', params: { n: rowParam(p.params) } });
           break;
         case 'evaluate': {
           const url = String(p.params.url).trim();
@@ -238,7 +275,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'generatePdf': {
-          const n = String(p.params.row ?? p.params.n ?? '');
+          const n = rowParam(p.params);
           // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled.
           const live = sessions.data?.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.value === n);
           if (live) {
@@ -272,7 +309,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'setStatus':
-          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row ?? p.params.n), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
+          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(rowParam(p.params)), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
           await qc.invalidateQueries({ queryKey: ['tracker'] });
           break;
         case 'remember': {

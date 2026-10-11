@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Command } from 'cmdk';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useNavigate } from '@tanstack/react-router';
@@ -188,11 +188,25 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
   const [error, setError] = useState<string | null>(null);
   // Each click starts a paid session, so the button waits for the first start to answer.
   const [busy, setBusy] = useState(false);
+  // The palette can launch another mode over this one mid-start (Cmd+K stays live): this dialog is then gone, and its
+  // late answer must not close the new dialog or navigate away, so it only reports in a toast.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => void (mounted.current = false);
+  }, []);
   const start = async () => {
     setBusy(true);
+    // The palette's Go to stays live over this dialog: a start answered after the user moved on does not pull them back.
+    const startedOn = window.location.pathname;
     try {
       setError(null);
       const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
+      if (!mounted.current) {
+        if (meta.status === 'error') toast.error(`The ${mode} session failed to start: ${meta.error ?? 'unknown error'}`);
+        else toast.success(`Started ${mode} session`);
+        return;
+      }
       // A 202 can carry a session that failed before its turn ran (no approved CLI, no token): say why and stay for a retry.
       if (meta.status === 'error') {
         setError(meta.error ?? 'session failed to start');
@@ -200,15 +214,17 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
       }
       toast.success(`Started ${mode} session`);
       onClose();
-      await navigate({ to: '/sessions/$id', params: { id: meta.id } });
+      if (window.location.pathname === startedOn) await navigate({ to: '/sessions/$id', params: { id: meta.id } });
     } catch (err) {
-      setError(describeError(err));
+      if (mounted.current) setError(describeError(err));
+      else toast.error(`The ${mode} session failed to start: ${describeError(err)}`);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
   return (
-    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+    // The start cannot be called back once sent, so closing waits for its answer instead of letting it land on another screen.
+    <Dialog.Root open onOpenChange={(o) => !o && !busy && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog__overlay" />
         <Dialog.Content className="dialog" aria-describedby={undefined}>
@@ -227,7 +243,7 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
             </p>
           )}
           <div className="row gap dialog__actions">
-            <button type="button" onClick={onClose}>
+            <button type="button" disabled={busy} onClick={onClose}>
               Cancel
             </button>
             <button type="button" className="button--primary" disabled={busy || !prompt.trim()} onClick={() => void start()}>
@@ -326,7 +342,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </Command.Group>
         </Command.List>
       </Command.Dialog>
-      {launch && <ModeLaunchDialog mode={launch} onClose={() => setLaunch(null)} />}
+      {launch && <ModeLaunchDialog key={launch} mode={launch} onClose={() => setLaunch(null)} />}
       {outputOf && output !== null && <ActionOutputDialog label={outputOf} text={output} onClose={() => setOutputOf(null)} />}
       {withParams && <ActionParamsDialog action={withParams} error={message?.tone === 'danger' ? message.text : null} onClose={() => setWithParams(null)} onRun={(p) => execute(withParams, p, true)} />}
     </>

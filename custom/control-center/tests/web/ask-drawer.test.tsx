@@ -453,6 +453,28 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
     expect(item.textContent).toContain('already starting');
   });
 
+  it('a row with surrounding whitespace opens the live pdf session for that row (R18-shared-comp-L2-01)', async () => {
+    listed = [{ id: 's-pdf', mode: 'pdf', status: 'running', target: { type: 'app', value: '2' } }];
+    await remountDrawer();
+    await run(' 2 ');
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-pdf' } }]);
+  });
+
+  it('apply with a row with surrounding whitespace opens that row\'s Apply page (R18-shared-comp-L2-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'apply', params: { row: ' 12 ' } }, 1));
+    await act(async () => bodyButton('Run')!.click());
+    expect(navigations).toEqual([{ to: '/apply/$n', params: { n: '12' } }]);
+  });
+
+  it('a row with surrounding whitespace honors the row\'s starting mark (R18-shared-comp-L2-01)', async () => {
+    sessionStorage.setItem('cc.pdf.2:starting', String(Date.now()));
+    await remountDrawer();
+    const item = await run(' 2');
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
   it('starts after an orphaned starting mark has expired, so a reload mid-start does not block the row forever', async () => {
     sessionStorage.setItem('cc.pdf.2:starting', String(Date.now() - 16_000));
     await remountDrawer();
@@ -603,5 +625,116 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');
     expect(item.textContent).toContain('No pending Inbox posting at Initech');
+  });
+});
+
+describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-comp-L3-01)', () => {
+  let posts: Array<{ url: string; body: unknown }>;
+  let listed: Array<Record<string, unknown>>;
+  const row = (url: string, company: string) => ({ url, company, role: 'Engineer', location: null, compensation: null, done: false, section: 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });
+  const PIPELINE = { id: 's-pipeline', mode: 'pipeline', status: 'running', target: { type: 'none', value: '' } };
+  beforeEach(async () => {
+    posts = [];
+    listed = [PIPELINE];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          return url === '/api/sessions/fanout' ? json({ sessions: [{ id: 's1' }], reserved: [50] }, 202) : json({ id: 's-new', mode: 'oferta', status: 'queued', target: { type: 'url', value: 'x' } }, 202);
+        }
+        if (url === '/api/pipeline') return json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows: [row('https://jobs.acme.example/1', 'Acme')] });
+        if (url === '/api/sessions') return json(listed);
+        return json([]);
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const propose = async (action: string, params: Record<string, unknown>) => {
+    await act(async () => emitEnvelope!('act', { action, params }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    return item;
+  };
+
+  it('given Process inbox is running, an evaluateCompany fails before asking and starts nothing', async () => {
+    const item = await propose('evaluateCompany', { company: 'Acme' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+  });
+
+  it('given Process inbox is running, an evaluate of a pending Inbox row fails before asking and starts nothing', async () => {
+    const item = await propose('evaluate', { url: 'https://jobs.acme.example/1' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+  });
+
+  it('given Process inbox is running, an evaluate of a posting not in the Inbox still runs', async () => {
+    const item = await propose('evaluate', { url: 'https://jobs.globex.example/9' });
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts.map((p) => p.url)).toEqual(['/api/sessions']);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('given Process inbox started after the last sessions poll, an evaluateCompany still fails before asking', async () => {
+    listed = [];
+    await remountDrawer();
+    listed = [PIPELINE];
+    const item = await propose('evaluateCompany', { company: 'Acme' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
+  it('given Process inbox starts while the confirm is open, Do it starts nothing', async () => {
+    listed = [];
+    await remountDrawer();
+    for (const [action, params] of [['evaluateCompany', { company: 'Acme' }], ['evaluate', { url: 'https://jobs.acme.example/1' }]] as const) {
+      listed = [];
+      const item = await propose(action, params);
+      listed = [PIPELINE];
+      await act(async () => bodyButton('Do it')!.click());
+      expect(posts).toEqual([]);
+      expect(item.dataset.proposalState).toBe('failed');
+      expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+      await remountDrawer();
+    }
+  });
+
+  it('given a sessions poll sent before Process inbox started is still in flight, the check does not reuse its answer', async () => {
+    let releasePoll: (() => void) | null = null;
+    const fetchMock = vi.mocked(fetch);
+    const passThrough = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url, init) => {
+      if (String(url) === '/api/sessions' && init?.method !== 'POST' && releasePoll === null) {
+        const stale = new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Promise<Response>((r) => (releasePoll = () => r(stale)));
+      }
+      return passThrough(url, init);
+    });
+    await remountDrawer();
+    expect(releasePoll).not.toBeNull();
+    const item = await propose('evaluateCompany', { company: 'Acme' });
+    await act(async () => releasePoll!());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
+  it('given the Process inbox run has ended, an evaluateCompany runs', async () => {
+    listed = [{ ...PIPELINE, status: 'done' }];
+    await remountDrawer();
+    const item = await propose('evaluateCompany', { company: 'Acme' });
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts.map((p) => p.url)).toEqual(['/api/sessions/fanout']);
+    expect(item.dataset.proposalState).toBe('done');
   });
 });
