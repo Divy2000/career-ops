@@ -91,15 +91,17 @@ export function CadenceTab() {
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['followups'] }), qc.invalidateQueries({ queryKey: ['tracker'] })]);
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored. Each action has
   // its own guard, released once its write answered (the refresh runs on its own), so another action is not blocked.
-  const pinning = useRef(false);
+  // The pin guard is per row: a pin in flight on one row must not swallow a pin click on another.
+  const pinning = useRef(new Set<number>());
   const removing = useRef(false);
   const pin = async (...args: Parameters<typeof pinAsked>) => {
-    if (pinning.current) return;
-    pinning.current = true;
+    const [appNum] = args;
+    if (pinning.current.has(appNum)) return;
+    pinning.current.add(appNum);
     try {
       await pinAsked(...args);
     } finally {
-      pinning.current = false;
+      pinning.current.delete(appNum);
     }
   };
   const pinAsked = async (appNum: number, date: string | null) => {
