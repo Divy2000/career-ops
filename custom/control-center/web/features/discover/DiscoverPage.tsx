@@ -237,16 +237,10 @@ const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: '
 
 // The filters the remembered run used, kept beside its id: a re-attached results card must sit under the form it ran.
 const NETWORK_FILTERS_KEY = 'cc.discover.networkScan.params';
-function readRunFilters(): NetworkFilters {
-  if (networkRun.read() === null) return DEFAULT_FILTERS;
-  let v: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(sessionStorage.getItem(NETWORK_FILTERS_KEY) ?? 'null');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return DEFAULT_FILTERS;
-    v = parsed as Record<string, unknown>;
-  } catch {
-    return DEFAULT_FILTERS;
-  }
+/** A stored or server-side filter record, field by field: a malformed field takes its default. */
+function filtersFrom(raw: unknown): NetworkFilters | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const v = raw as Record<string, unknown>;
   const text = (x: unknown, fallback: string) => (typeof x === 'string' ? x : fallback);
   const ats = Array.isArray(v.ats) && v.ats.length > 0 && new Set(v.ats).size === v.ats.length && v.ats.every((a) => (NETWORK_SCAN_SOURCES as readonly unknown[]).includes(a)) ? (v.ats as NetworkScanSource[]) : DEFAULT_FILTERS.ats;
   return {
@@ -257,6 +251,21 @@ function readRunFilters(): NetworkFilters {
     ats,
     limit: DEPTHS.find((d) => d === v.limit) ?? DEFAULT_FILTERS.limit,
   };
+}
+function readRunFilters(): NetworkFilters | null {
+  if (networkRun.read() === null) return null;
+  try {
+    return filtersFrom(JSON.parse(sessionStorage.getItem(NETWORK_FILTERS_KEY) ?? 'null'));
+  } catch {
+    return null;
+  }
+}
+/** The scan.network params the server ran a run with, in the form's terms (lists back to comma-separated text). */
+function filtersFromRunParams(params: unknown): NetworkFilters | null {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
+  const p = params as Record<string, unknown>;
+  const list = (x: unknown) => (Array.isArray(x) && x.every((s) => typeof s === 'string') ? x.join(', ') : undefined);
+  return filtersFrom({ roles: list(p.roles), exclude: list(p.exclude), locations: list(p.locationAllow), sinceDays: p.sinceDays, ats: p.ats, limit: p.limit });
 }
 function writeRunFilters(filters: NetworkFilters | null): void {
   try {
@@ -271,7 +280,8 @@ export function NetworkScan() {
   const actions = useActions();
   const qc = useQueryClient();
   const { run, busy, message, setMessage } = useRunAction();
-  const [initial] = useState(readRunFilters);
+  const [stored] = useState(readRunFilters);
+  const initial = stored ?? DEFAULT_FILTERS;
   const [roles, setRoles] = useState(initial.roles);
   const [exclude, setExclude] = useState(initial.exclude);
   const [locations, setLocations] = useState(initial.locations);
@@ -284,6 +294,33 @@ export function NetworkScan() {
     networkRun.write(id);
     setRunIdState(id);
   };
+  // A run remembered without its filters (an older page started it) takes them from the run itself, unless the form
+  // was edited or submitted first.
+  const edited = useRef(false);
+  const [initialRunId] = useState(runId);
+  useEffect(() => {
+    if (stored || !initialRunId) return;
+    let disposed = false;
+    apiGet<{ meta?: { params?: unknown } }>(`/api/runs/${initialRunId}`).then(
+      (r) => {
+        const f = filtersFromRunParams(r.meta?.params);
+        if (disposed || edited.current || !f) return;
+        writeRunFilters(f);
+        setRoles(f.roles);
+        setExclude(f.exclude);
+        setLocations(f.locations);
+        setSinceDays(f.sinceDays);
+        setAts(f.ats);
+        setLimit(f.limit);
+      },
+      () => {
+        // the run's own stream reports a run the server no longer has; the form keeps its defaults
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [stored, initialRunId]);
   const [filter, setFilter] = useState('');
   const { lines, status } = useRunLines(runId);
   // Nothing to follow: the results card goes, and the run is not re-attached next time.
@@ -299,6 +336,8 @@ export function NetworkScan() {
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const start = () => {
     if (running) return;
+    // The form now belongs to this run: a late answer about the older run must not overwrite it.
+    edited.current = true;
     const filters: NetworkFilters = { roles, exclude, locations, sinceDays, ats, limit };
     void run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
       if (out && 'runId' in out) setRunId(out.runId, filters);
@@ -340,6 +379,7 @@ export function NetworkScan() {
       <form
         className="card stack"
         aria-label="Network scan filters"
+        onChange={() => (edited.current = true)}
         onSubmit={(e) => {
           e.preventDefault();
           start();

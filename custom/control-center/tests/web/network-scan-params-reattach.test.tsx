@@ -31,17 +31,22 @@ class FakeEventSource {
 let host: HTMLElement;
 let root: Root;
 let sent: Array<Record<string, unknown>>;
+/** What GET /api/runs/r1 answers: the run's meta with the params the server ran it with. */
+let runMeta: unknown;
+let newRunId: string;
 
 beforeEach(async () => {
   FakeEventSource.all = [];
   sessionStorage.clear();
   sent = [];
+  runMeta = {};
+  newRunId = 'r1';
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/actions/scan.network') sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      const body = url === '/api/actions/scan.network' ? { runId: 'r1' } : url === '/api/actions' ? [] : {};
+      const body = url === '/api/actions/scan.network' ? { runId: newRunId } : url === '/api/actions' ? [] : url === '/api/runs/r1' ? runMeta : {};
       return new Response(JSON.stringify(body), { status: url === '/api/actions/scan.network' ? 202 : 200, headers: { 'content-type': 'application/json' } });
     }),
   );
@@ -122,5 +127,60 @@ describe('Network scan: coming back to a remembered run', () => {
     expect(field<HTMLInputElement>('Roles (comma separated)').value).toBe('sre');
     expect(checkbox('greenhouse').checked).toBe(true);
     expect(checkbox('lever').checked).toBe(true);
+  });
+
+  it('a run remembered without its filters (left by an older page) shows the filters the server ran it with', async () => {
+    await act(async () => root.unmount());
+    sessionStorage.setItem('cc.discover.networkScan', 'r1');
+    runMeta = { meta: { id: 'r1', status: 'done', params: { roles: ['staff data engineer', 'ml'], exclude: [], locationAllow: ['Berlin'], block: [], sinceDays: 30, ats: ['ashby'], limit: 500 } }, lines: [] };
+    await mount();
+    await until(() => field<HTMLInputElement>('Roles (comma separated)').value === 'staff data engineer, ml', 'the run filters from the server');
+    expect(field<HTMLInputElement>('Exclude keywords').value).toBe('');
+    expect(field<HTMLInputElement>('Allowed locations').value).toBe('Berlin');
+    expect(field<HTMLSelectElement>('Posted window').value).toBe('30');
+    expect(field<HTMLSelectElement>('Scan depth').value).toBe('500');
+    expect(checkbox('ashby').checked).toBe(true);
+    expect(checkbox('greenhouse').checked).toBe(false);
+  });
+
+  it('an edit made before the server answers is kept', async () => {
+    await act(async () => root.unmount());
+    sessionStorage.setItem('cc.discover.networkScan', 'r1');
+    let answer!: () => void;
+    const gate = new Promise<void>((r) => (answer = r));
+    runMeta = { meta: { id: 'r1', status: 'done', params: { roles: ['from server'], exclude: [], locationAllow: [], block: [], sinceDays: 30, ats: ['ashby'], limit: 500 } }, lines: [] };
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url === '/api/runs/r1') await gate;
+      return realFetch(url, init);
+    });
+    await mount();
+    await act(async () => setValue(field('Roles (comma separated)'), 'typed by me'));
+    await act(async () => answer());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(field<HTMLInputElement>('Roles (comma separated)').value).toBe('typed by me');
+  });
+
+  it('a scan started before the server answers keeps its own filters, not the older run\'s', async () => {
+    await act(async () => root.unmount());
+    sessionStorage.setItem('cc.discover.networkScan', 'r1');
+    newRunId = 'r2';
+    let answer!: () => void;
+    const gate = new Promise<void>((r) => (answer = r));
+    runMeta = { meta: { id: 'r1', status: 'done', params: { roles: ['from server'], exclude: [], locationAllow: [], block: [], sinceDays: 30, ats: ['ashby'], limit: 500 } }, lines: [] };
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url === '/api/runs/r1') await gate;
+      return realFetch(url, init);
+    });
+    await mount();
+    const old = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events'), 'the remembered run stream');
+    await act(async () => old.emit('run.done', { status: 'done' }));
+    await act(async () => host.querySelector<HTMLFormElement>('form[aria-label="Network scan filters"]')!.requestSubmit());
+    await until(() => FakeEventSource.all.some((s) => s.url === '/api/runs/r2/events'), 'the new run stream');
+    await act(async () => answer());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(field<HTMLInputElement>('Roles (comma separated)').value).toBe('backend, platform');
+    expect(JSON.parse(sessionStorage.getItem('cc.discover.networkScan.params')!)).toMatchObject({ roles: 'backend, platform', limit: 100 });
   });
 });
