@@ -1346,7 +1346,7 @@ test('a live update that cannot take the daily lock for a reason other than a ti
   const w = liveWorld();
   const lines = readFileSync(SYNC, 'utf8').split('\n');
   // From the stderr capture set up just before the update, through the outcome.
-  const from = lines.findIndex((l) => l.startsWith('  LIVE_ERR="$(mktemp '));
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
   const to = lines.findIndex((l, i) => i > from && l === '  esac');
   const block = lines.slice(from, to + 1).join('\n');
   // The lock's folder exists but cannot be written, so lockf cannot create the lock file and exits 73 (EX_CANTCREAT).
@@ -1355,7 +1355,10 @@ test('a live update that cannot take the daily lock for a reason other than a ti
   chmodSync(imm, 0o555);
   try {
     const before = w.head();
-    const res = bashLib(w.live, `notify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; notify "$1 (log: x)"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${path.join(w.base, 'bin')}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target });
+    // As in sync.sh, stderr goes to the day log.
+    const log = path.join(w.base, 'day.log');
+    writeFileSync(log, '!!! an earlier line\nlockf: from an earlier run of the day\n');
+    const res = bashLib(w.live, `exec 2>>"$LOG"\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; notify "$1 (log: x)"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${path.join(w.base, 'bin')}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target, LOG: log });
     assert.equal(res.status, 1, res.stdout + res.stderr);
     assert.doesNotMatch(res.stdout, /continued/);
     const problem = res.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
@@ -1365,8 +1368,8 @@ test('a live update that cannot take the daily lock for a reason other than a ti
     assert.match(problem, /lockf: cannot open .*Permission denied/);
     assert.ok(problem.includes(w.target), problem);
     assert.match(problem, /not updated/);
-    // lockf's own line still reaches stderr, the log.
-    assert.match(res.stderr, /lockf: cannot open /);
+    assert.doesNotMatch(problem, /earlier run/);
+    assert.match(readFileSync(log, 'utf8'), /^lockf: cannot open /m);
     assert.equal(w.head(), before);
   } finally {
     chmodSync(imm, 0o755);
@@ -1377,14 +1380,16 @@ test('a live update that cannot take the daily lock for a reason other than a ti
 test('a live update killed while it holds the daily lock is reported as killed, not as a lock it could not take (R22-scripts-b-L1-01)', () => {
   const w = liveWorld();
   const lines = readFileSync(SYNC, 'utf8').split('\n');
-  const from = lines.findIndex((l) => l.startsWith('  LIVE_ERR="$(mktemp '));
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
   const to = lines.findIndex((l, i) => i > from && l === '  esac');
   const block = lines.slice(from, to + 1).join('\n');
   // git, first run inside the locked section, kills the shell lockf runs; lockf then exits 70 and prints nothing.
   const killer = path.join(w.base, 'killer');
   stub(killer, 'git', 'p=$PPID\nwhile [ "${p:-1}" -gt 1 ]; do\n  if ps -o args= -p "$p" | grep -q "live_update_locked \\"\\$4\\""; then kill -KILL "$p"; exit 1; fi\n  p="$(ps -o ppid= -p "$p" | tr -d " ")"\ndone\nexit 1');
   try {
-    const res = bashLib(w.live, `notify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${killer}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target });
+    const log = path.join(w.base, 'day.log');
+    writeFileSync(log, 'lockf: from an earlier run of the day\n');
+    const res = bashLib(w.live, `exec 2>>"$LOG"\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${killer}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target, LOG: log });
     assert.equal(res.status, 1, res.stdout + res.stderr);
     const problem = res.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
     assert.match(problem, /^!!! the live checkout update exited 70 without saying why/, problem + res.stderr);
@@ -1404,6 +1409,22 @@ test('a live update killed after it took the lock, with nothing printed, fails t
   assert.match(problem, /^!!! the live checkout update exited 143 without saying why/, problem);
   assert.match(problem, /the fork main is at abc123 but the live checkout was not updated/);
   assert.doesNotMatch(problem, /could not take/);
+});
+
+test('a live update whose lockf ran out of wait is not reported as a lock it could not take, though lockf said already locked (R22-scripts-b-L1-01)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-live-'));
+  const log = path.join(dir, 'day.log');
+  writeFileSync(log, '');
+  try {
+    const r = spawnSync('bash', ['-c', `exec 2>>"$LOG"\nupdate_live_checkout() { echo "lockf: $1: already locked" >&2; return 75; }\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\nDATA=/d\nMERGE_OID=abc123\n${block}\necho continued`], { encoding: 'utf8', env: { PATH: process.env.PATH, LOG: log } });
+    const problem = r.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    assert.match(problem, /^!!! the live checkout update exited 75 without saying why/, r.stdout);
+    assert.doesNotMatch(problem, /could not take/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 const KEYCHAIN_LOCKED = 'echo "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2; exit 36';
