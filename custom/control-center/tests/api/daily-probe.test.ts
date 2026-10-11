@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, testConfig, type TestApp } from '../helpers/app.js';
@@ -159,7 +159,16 @@ describe('the daily job probe on real processes', () => {
 
 describe('a daily run with no done line', () => {
   const pad = (n: number) => String(n).padStart(2, '0');
-  const now = new Date();
+  // The server reads its local calendar date per request, so the clock is pinned to local noon: a run that crosses
+  // midnight would otherwise see a different today than the one these logs were named for.
+  const now = new Date(2026, 9, 5, 12, 0);
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   // The server's local calendar date: only today's log can belong to a job that runs now.
   const TODAY = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   const before = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
