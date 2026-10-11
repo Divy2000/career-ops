@@ -11,7 +11,7 @@ import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
-import { endBatchStarting, livePipelineId, markBatchStarting, useBatchStarting } from './InboxAi';
+import { endBatchStarting, livePipelineId, markBatchStarting, useBatchStarting, withinSessionsReadLimit } from './InboxAi';
 
 // Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
 // server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
@@ -103,7 +103,12 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const launch = async () => {
     // A Process inbox can start while the confirm is open: the sessions list is read again before anything starts. It is
     // also the list from before the start, so a failure part way can tell which sessions it started.
-    const now = await sessions.refetch();
+    const read = await withinSessionsReadLimit(sessions.refetch());
+    if (!read.done) {
+      setMessage({ tone: 'danger', text: 'Could not check for a running Process inbox, so no evaluation was started. Try again.' });
+      return;
+    }
+    const now = read.value;
     if (now.isError || !now.data || livePipelineId(now.data) !== null) return;
     // One that reported its id after that read began is in no list yet. An id the read before the confirm already
     // found unlisted is a session the server no longer has.

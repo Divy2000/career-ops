@@ -35,16 +35,23 @@ export function markBatchStarting(on: boolean): void {
   batchFanOuts = Math.max(0, batchFanOuts + (on ? 1 : -1));
   for (const fn of [...batchListeners]) fn();
 }
-// A fan-out's mark goes once the sessions list has its sessions, so a page left meanwhile does not read an older list;
-// a read that never answers (a restarting server) gives up after this long rather than holding the others for good.
-const SESSIONS_REREAD_LIMIT_MS = 10_000;
-export async function endBatchStarting(queryClient: QueryClient): Promise<void> {
+// A sessions read that never answers (a restarting server) gives up after this long rather than holding the pipeline
+// buttons for good.
+const SESSIONS_READ_LIMIT_MS = 10_000;
+export async function withinSessionsReadLimit<T>(read: Promise<T>): Promise<{ done: true; value: T } | { done: false }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const limit = new Promise<void>((resolve) => (timer = setTimeout(resolve, SESSIONS_REREAD_LIMIT_MS)));
+  const limit = new Promise<{ done: false }>((resolve) => (timer = setTimeout(() => resolve({ done: false }), SESSIONS_READ_LIMIT_MS)));
   try {
-    await Promise.race([queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined), limit]);
+    return await Promise.race([read.then((value) => ({ done: true as const, value })), limit]);
   } finally {
     clearTimeout(timer);
+  }
+}
+// A fan-out's mark goes once the sessions list has its sessions, so a page left meanwhile does not read an older list.
+export async function endBatchStarting(queryClient: QueryClient): Promise<void> {
+  try {
+    await withinSessionsReadLimit(queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined));
+  } finally {
     markBatchStarting(false);
   }
 }

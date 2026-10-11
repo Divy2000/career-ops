@@ -168,6 +168,31 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     expect(posts).toEqual([]);
   });
 
+  it('given a sessions read after the confirm that never answers, Batch evaluate gives up in time, says so and holds nothing', async () => {
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    const startThem = await until(() => button('Start them'), 'the confirm');
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (input === '/api/sessions' && !init?.method ? new Promise<Response>(() => undefined) : inner(input as string, init)));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => startThem.click());
+      await act(async () => vi.advanceTimersByTime(60_000));
+      await until(() => host.textContent?.includes('Could not check for a running Process inbox'), 'the message');
+      expect(posts).toEqual([]);
+      // The list read that ends the hold does not answer either, and gives up the same way.
+      await act(async () => vi.advanceTimersByTime(60_000));
+      await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
+      await until(() => button('Evaluate visible (2)'), 'the Inbox tab');
+      await settle();
+      expect(host.textContent).not.toContain('Evaluations started from Pipeline are still starting');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // The Process inbox panel reported its id, but the sessions list read so far predates it: a later read is held.
   const heldSecondList = () => {
     const inner = vi.mocked(fetch).getMockImplementation()!;
