@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { apiGet } from '../../lib/api';
@@ -134,7 +134,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const rememberSessionId = remembered.panel.onSessionId;
   const onSessionId = useCallback(
     (sid: string) => {
-      if (typedUrl !== null) writeTypedUrl(sid, typedUrl);
+      if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
       rememberSessionId(sid);
     },
     [typedUrl, rememberSessionId],
@@ -143,7 +143,9 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
   // back its posting URL, which it carries as its target. One started from a typed URL already shows it.
   const attached = useSessionStream(n === null && typedUrl === null && storedUrl === null ? sessionId : null).meta?.target;
-  const url = typedUrl ?? storedUrl ?? (attached?.type === 'url' && attached.value ? attached.value : postingUrl);
+  // A link pasted from an email often carries a space or newline; the server refuses it untrimmed, so every use trims.
+  const shownUrl = typedUrl ?? storedUrl ?? (attached?.type === 'url' && attached.value ? attached.value : postingUrl);
+  const url = useMemo(() => shownUrl.trim(), [shownUrl]);
   const [fields, setFields] = useState<AnswerField[] | null>(null);
   const [drafted, setDrafted] = useState<AnswerField[] | null>(null);
   const edited = fields !== null && JSON.stringify(fields) !== JSON.stringify(drafted);
@@ -305,7 +307,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
           <div className="card">
             <h2>Posting</h2>
             <label>
-              URL <input aria-label="Posting URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." disabled={Boolean(sessionId)} />
+              URL <input aria-label="Posting URL" value={shownUrl} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." disabled={Boolean(sessionId)} />
             </label>
             {docs.isError && (
               <p role="alert" className="danger-text">
