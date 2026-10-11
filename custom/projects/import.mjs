@@ -9,8 +9,8 @@
 // --write creates article-digest.md and refuses when it already exists unless
 // --merge is given; --merge appends only projects whose title is not there yet.
 
-import { readFile, writeFile, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, renameSync, linkSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   parseLibrary,
@@ -96,11 +96,14 @@ async function main() {
 
 async function importInto({ entries, blocks, wholeText, write, merge }) {
   const exists = existsSync(TARGET);
+  // The library as this run read it (null: none yet), which the publish checks is still what is on disk.
+  let base = null;
   let kept = entries.map((_, i) => i);
   let next;
   let printed;
   if (exists && merge) {
     const current = await readFile(TARGET, 'utf8');
+    base = current;
     const have = new Set(parseLibrary(current).entries.map((e) => titleKey(e.title)));
     kept = kept.filter((i) => !have.has(titleKey(entries[i].title)));
     for (const e of entries.filter((_, i) => !kept.includes(i))) {
@@ -138,8 +141,31 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
   }
   const tmp = `${TARGET}.tmp-${process.pid}`;
   await writeFile(tmp, next);
-  await rename(tmp, TARGET);
+  publish(tmp, base);
   process.stdout.write(`wrote ${plural(kept.length)} to ${TARGET}\n`);
+}
+
+// The lock keeps other imports out, but the Control Center writes article-digest.md without it (an ETag check and an
+// atomic rename). So the replacement goes in only if the library is still the one this run read, checked and
+// published with no await in between: a fresh library is hard-linked into place, which fails if one appeared.
+function publish(tmp, base) {
+  try {
+    if (base === null) {
+      try {
+        linkSync(tmp, TARGET);
+      } catch (err) {
+        if (err.code === 'EEXIST') throw new Error(`article-digest.md was created while importing (the Control Center may have saved a project); nothing written, rerun with --merge`);
+        throw err;
+      }
+      return;
+    }
+    if ((existsSync(TARGET) ? readFileSync(TARGET, 'utf8') : null) !== base) {
+      throw new Error(`article-digest.md changed while importing (the Control Center may have saved a project); nothing written, rerun to merge into the current library`);
+    }
+    renameSync(tmp, TARGET);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 main().catch((err) => {

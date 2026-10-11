@@ -141,3 +141,62 @@ test('given a fresh data root, when two --write imports race, then one writes th
   const titles = parseLibrary(fs.readFileSync(path.join(root, 'article-digest.md'), 'utf8')).entries.map((e) => e.title);
   assert.deepEqual(titles, ['Alpha Service']);
 });
+
+/** Starts an import held just before it publishes; resolves its exit code and stderr once released. */
+function heldImport(root, args) {
+  const { preload, held, release } = harness(root);
+  const child = spawn(process.execPath, ['--import', preload, IMPORT, ...args], {
+    cwd: root,
+    env: rootEnv(root, { IMPORT_HOLD: JSON.stringify({ held, release }) }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr += d; });
+  const exit = new Promise((resolve) => child.on('exit', (code) => resolve({ code, stderr })));
+  return { held, release, exit, kill: () => child.kill() };
+}
+
+test('given a --write --merge import that has read the library, when the Control Center saves a project before the import publishes, then the import is refused and the saved project stays (R24-scripts-a-L1-01)', async () => {
+  const root = tempDir('projects-import-app-race-');
+  fs.writeFileSync(path.join(root, 'article-digest.md'), serializeLibrary([{ title: 'Existing Tool', bullets: ['Already here.'] }]));
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const run = heldImport(root, [a, '--write', '--merge']);
+  let result;
+  try {
+    await waitFor(run.held, 20_000);
+    appWrite(root, [{ title: 'Existing Tool', bullets: ['Already here.'] }, { title: 'App Project', bullets: ['Saved in the app.'] }]);
+    fs.writeFileSync(run.release, '');
+    result = await run.exit;
+  } finally {
+    fs.writeFileSync(run.release, '');
+    run.kill();
+  }
+  assert.equal(result.code, 1, result.stderr);
+  assert.match(result.stderr, /article-digest\.md changed while importing/);
+  const titles = parseLibrary(fs.readFileSync(path.join(root, 'article-digest.md'), 'utf8')).entries.map((e) => e.title);
+  assert.deepEqual(titles, ['Existing Tool', 'App Project']);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), [], 'the refused import left its temp file behind');
+});
+
+test('given a fresh data root, when the Control Center creates the library while a --write import is about to publish, then the import is refused and does not overwrite it (R24-scripts-a-L1-01)', async () => {
+  const root = tempDir('projects-import-app-race-');
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const run = heldImport(root, [a, '--write']);
+  let result;
+  try {
+    await waitFor(run.held, 20_000);
+    appWrite(root, [{ title: 'App Project', bullets: ['Saved in the app.'] }]);
+    fs.writeFileSync(run.release, '');
+    result = await run.exit;
+  } finally {
+    fs.writeFileSync(run.release, '');
+    run.kill();
+  }
+  assert.equal(result.code, 1, result.stderr);
+  assert.match(result.stderr, /article-digest\.md was created while importing/);
+  const titles = parseLibrary(fs.readFileSync(path.join(root, 'article-digest.md'), 'utf8')).entries.map((e) => e.title);
+  assert.deepEqual(titles, ['App Project']);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), [], 'the refused import left its temp file behind');
+});
