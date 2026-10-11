@@ -87,6 +87,7 @@ drop_pass_batch() {
 cleanup() {
   [ -z "$SETTINGS_DIR" ] || rm -rf "$SETTINGS_DIR"
   [ -z "$SHIM_DIR" ] || rm -rf "$SHIM_DIR"
+  [ -z "${KEYCHAIN_ERR:-}" ] || rm -f "$KEYCHAIN_ERR"
   drop_pass_batch
   # Last: while the pid file is there the run counts as alive.
   rm -f "$PIDFILE"
@@ -119,10 +120,26 @@ for var in $(compgen -e); do
   esac
 done
 unset var
-if ! CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
+# Only an absent (exit 44, errSecItemNotFound) or empty token asks for a new one, as the Control Center reads it
+# (server/claude/manager.ts): any other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine.
+if ! command -v security >/dev/null 2>&1; then
+  echo "!!! Could not read Keychain item 'career-ops-claude-token': the security command was not found on PATH (it ships with macOS in /usr/bin)."
+  exit 1
+fi
+KEYCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/run-daily-keychain.XXXXXX")"
+keychain_rc=0
+CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$KEYCHAIN_ERR")" || keychain_rc=$?
+keychain_err="$(tail -c 200 "$KEYCHAIN_ERR" | tr '\n' ' ' | sed 's/ *$//')"
+rm -f "$KEYCHAIN_ERR"
+if [ "$keychain_rc" -eq 44 ] || { [ "$keychain_rc" -eq 0 ] && [ -z "$CC_OAUTH_TOKEN" ]; }; then
   echo "!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
   exit 1
 fi
+if [ "$keychain_rc" -ne 0 ]; then
+  echo "!!! Could not read Keychain item 'career-ops-claude-token': security failed (exit $keychain_rc${keychain_err:+: $keychain_err}). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry."
+  exit 1
+fi
+unset keychain_rc keychain_err
 FAILED=0
 
 step() {
