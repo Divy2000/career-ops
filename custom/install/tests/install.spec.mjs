@@ -907,6 +907,57 @@ test('answering n to the token question skips the flow and leaves a pending acti
   assert.ok(!w.calls('claude').some((l) => l.includes('setup-token')));
 });
 
+// Only exit 44 (errSecItemNotFound) means the item is missing, as the Control Center, the daily job and the weekly
+// sync read it: a locked or denied keychain still holds a token that works, so no new one is minted or stored over it
+// (R23-tests-custom-L2-01, R23-tests-custom-L3-01).
+function lockedKeychainRun(env, opts = {}) {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-h1b-index', '--onboard', 'none', ...(opts.tty ? [] : ['--non-interactive'])], { env, ...opts });
+  assert.equal(r.status, 3, r.out);
+  assert.doesNotMatch(r.out, /is missing/);
+  assert.doesNotMatch(r.out, /unexpected failure/);
+  assert.ok(!w.calls('claude').some((l) => l.includes('setup-token')), 'no new token is minted');
+  assert.ok(!w.calls('security').some((l) => l.startsWith('security add-generic-password')), 'the stored token is not replaced');
+  assert.equal(w.calls('cc').length, 0, 'the Control Center is not started on an unreadable token');
+  assert.equal(w.calls('launchd-install').length, 0, 'the daily job is not installed on an unreadable token');
+  return { w, r };
+}
+
+test('a locked Keychain (exit 36) is reported as unreadable with how to unlock it, never as a missing token (R23-tests-custom-L3-01)', () => {
+  const { r } = lockedKeychainRun({ FAKE_SECURITY_FIND_EXIT: '36' });
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security failed \(exit 36: security: SecKeychainSearchCopyNext: User interaction is not allowed\.\)\. The login keychain is probably locked or cannot prompt \(for example over SSH or before login\)\. Unlock it with: security unlock-keychain, then re-run the installer\./);
+  assert.match(r.out, /The Keychain item could not be read, so the job would fail every morning; not installing it yet\./);
+  assert.match(r.out, /Control Center preflight skipped until the Keychain item can be read/);
+});
+
+test('on a terminal a locked Keychain (exit 36) never offers claude setup-token or overwrites the stored token (R23-tests-custom-L2-01)', () => {
+  const { r } = lockedKeychainRun({ FAKE_SECURITY_FIND_EXIT: '36' }, { tty: 'y\ny\ny\ny\n' });
+  assert.doesNotMatch(r.out, /Create it now with claude setup-token/);
+  assert.match(r.out, /security unlock-keychain, then re-run the installer\./);
+});
+
+test('a Keychain item whose access is denied (exit 51) is reported as denied, never as missing (R23-tests-custom-L3-01)', () => {
+  const { r } = lockedKeychainRun({ FAKE_SECURITY_FIND_EXIT: '51' });
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security failed \(exit 51[^)]*\)\. Access to it was denied: answer Always Allow when the Keychain prompt appears, or add \/usr\/bin\/security to the item's access control in Keychain Access, then re-run the installer\./);
+});
+
+test('a Keychain check that waits on an unanswered unlock prompt gives up after CC_KEYCHAIN_TIMEOUT seconds and says so (R23-tests-custom-L3-01)', () => {
+  const started = Date.now();
+  const { r } = lockedKeychainRun({ FAKE_SECURITY_HANG: '30', CC_KEYCHAIN_TIMEOUT: '1' });
+  assert.ok(Date.now() - started < 25_000, `the install waited ${Date.now() - started} ms for the Keychain`);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security did not answer within 1 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run the installer\./);
+});
+
+test('--onboard headless on a locked Keychain says it could not be read, not that the item is missing, and claude is not called (R23-tests-custom-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_SECURITY_FIND_EXIT: '36' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.claudeArgv(), null);
+  assert.match(r.out, /Headless onboarding needs to read the Keychain item career-ops-claude-token, which could not be read \(see step 7\)\./);
+  assert.doesNotMatch(r.out, /Store the Keychain token/);
+});
+
 // ---------------------------------------------------------------- plan confirmation
 
 test('on a terminal the plan is confirmed first; n aborts with exit 1 and nothing changes', () => {
@@ -1369,6 +1420,109 @@ test('--onboard headless without the Keychain item is a pending action (exit 3) 
   assert.equal(r.status, 3);
   assert.equal(w.claudeArgv(), null);
   assert.match(r.out, /Keychain/);
+});
+
+// The Keychain token as headless onboarding reads it: trimmed, and with the security exit code checked, as the
+// Control Center, the daily job and the weekly sync read the same item (R23-scripts-b-L2-01, R23-scripts-b-L3-01).
+function headlessRun(env) {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env });
+  const ran = w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env'));
+  assert.doesNotMatch(r.out, /unexpected failure/, 'a refused Keychain read is not a crash');
+  return { w, r, ran };
+}
+
+test('--onboard headless hands claude the Keychain token trimmed, as the Control Center and the daily job read it (R23-scripts-b-L2-01)', () => {
+  const { w, r } = headlessRun({ FAKE_SECURITY_TOKEN: ` ${SECRET} \r` });
+  assert.ok(w.log().includes(`claude-token-len ${SECRET.length}`), `${w.log().join('\n')}\n${r.out}`);
+  assert.ok(!r.out.includes(SECRET));
+});
+
+test('--onboard headless with a Keychain item it cannot read (locked, exit 36) never starts claude and says to unlock it (R23-scripts-b-L3-01)', () => {
+  const { r, ran } = headlessRun({ FAKE_SECURITY_READ_EXIT: '36' });
+  assert.equal(ran, false, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security failed \(exit 36: security: SecKeychainSearchCopyNext: User interaction is not allowed\.\)\. The login keychain is probably locked or cannot prompt \(for example over SSH or before login\)\. Unlock it with: security unlock-keychain, then re-run with --onboard headless\./);
+  assert.doesNotMatch(r.out, /did not finish cleanly/);
+  assert.doesNotMatch(r.out, /not found/);
+});
+
+test('--onboard headless with access to the Keychain item denied (exit 51) never starts claude and says how to allow it (R23-scripts-b-L3-01)', () => {
+  const { r, ran } = headlessRun({ FAKE_SECURITY_READ_EXIT: '51' });
+  assert.equal(ran, false, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security failed \(exit 51[^)]*\)\. Access to it was denied: answer Always Allow when the Keychain prompt appears, or add \/usr\/bin\/security to the item's access control in Keychain Access, then re-run with --onboard headless\./);
+});
+
+test('--onboard headless whose Keychain read finds no item (exit 44) or only whitespace never starts claude and says to store the token (R23-scripts-b-L2-01)', () => {
+  for (const env of [{ FAKE_SECURITY_READ_EXIT: '44' }, { FAKE_SECURITY_TOKEN: ' \t ' }]) {
+    const { r, ran } = headlessRun(env);
+    assert.equal(ran, false, r.out);
+    assert.equal(r.status, 3, r.out);
+    assert.match(r.out, /Keychain item career-ops-claude-token not found\. Run: claude setup-token, then security add-generic-password -U -a "\$USER" -s career-ops-claude-token -w/);
+    assert.doesNotMatch(r.out, /Could not read/);
+  }
+});
+
+test('--onboard headless gives a Keychain read that waits on an unanswered unlock prompt CC_KEYCHAIN_TIMEOUT seconds, then refuses (R23-scripts-b-L3-01)', () => {
+  const { r, ran } = headlessRun({ FAKE_SECURITY_READ_HANG: '30', CC_KEYCHAIN_TIMEOUT: '1' });
+  assert.equal(ran, false, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security did not answer within 1 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run with --onboard headless\./);
+});
+
+test('--onboard headless whose Keychain read fails leaves an earlier run\'s drafts where Resume from drafts reads them (R23-scripts-b-L3-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const draft = path.join(data, 'data', 'install', 'onboarding-draft');
+  fs.mkdirSync(draft, { recursive: true });
+  fs.writeFileSync(path.join(draft, 'article-digest.md'), '# from an earlier run\n');
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_SECURITY_READ_EXIT: '36' } });
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token/);
+  assert.equal(fs.readFileSync(path.join(draft, 'article-digest.md'), 'utf8'), '# from an earlier run\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(draft)).filter((n) => n.startsWith('onboarding-draft.prev-')), []);
+  assert.doesNotMatch(r.out, /Moved the drafts/);
+});
+
+test('a token the headless read finds empty or cannot read keeps the daily job and the Control Center off, as step 7 would (R23-scripts-b-L2-01 review)', () => {
+  for (const [env, why] of [[{ FAKE_SECURITY_TOKEN: ' ' }, /The Keychain item is missing, so the job would fail every morning/], [{ FAKE_SECURITY_READ_EXIT: '36' }, /The Keychain item could not be read, so the job would fail every morning/]]) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: READY_FILES });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-h1b-index', '--onboard', 'headless'], { env });
+    assert.equal(r.status, 3, r.out);
+    assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+    assert.match(r.out, why);
+    assert.equal(w.calls('launchd-install').length, 0, r.out);
+    assert.equal(w.calls('cc').length, 0, r.out);
+  }
+});
+
+test('an empty CC_KEYCHAIN_TIMEOUT means the default, as the daily job and the weekly sync read it', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CC_KEYCHAIN_TIMEOUT: '' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /Keychain item career-ops-claude-token exists \(not read\)/);
+});
+
+test('a core-only install never reads the Keychain, so a stray CC_KEYCHAIN_TIMEOUT does not stop it', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', '--core-only', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_UNAME: 'Linux', CC_KEYCHAIN_TIMEOUT: 'abc' } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /CC_KEYCHAIN_TIMEOUT/);
+});
+
+test('a CC_KEYCHAIN_TIMEOUT that is not 1 to 3600 whole seconds is a usage error before anything changes', () => {
+  for (const value of ['0', 'abc', '3601', '1.5']) {
+    const { w, D } = fresh({ keychain: true });
+    const before = w.snapshot();
+    const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CC_KEYCHAIN_TIMEOUT: value } });
+    assert.equal(r.status, 2, `${value}: ${r.out}`);
+    assert.match(r.out, new RegExp(`CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '${value.replace('.', '\\.')}'\\.`));
+    assert.deepEqual(w.snapshot(), before, value);
+  }
 });
 
 // ---------------------------------------------------------------- launchd, health, start

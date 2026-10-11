@@ -358,9 +358,84 @@ find_claude() {
   return 1
 }
 
-keychain_present() { security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; }
+# keychain_check: looks the item up without reading the secret, bounded as every Keychain read is, and sets
+# KEYCHAIN_RC (0 present, 44 missing, anything else unreadable) and KEYCHAIN_WHY (the tail of security's stderr).
+keychain_check() {
+  local err rc=0
+  KEYCHAIN_WHY=""
+  err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || err=""
+  bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>"${err:-/dev/null}" || rc=$?
+  if [ -n "$err" ]; then
+    KEYCHAIN_WHY="$(tail -c 200 "$err" | tr '\n' ' ' | sed 's/ *$//')"
+    rm -f "$err"
+  fi
+  KEYCHAIN_RC=$rc
+}
 
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
+
+# bounded <seconds> <command...>: runs the command and kills it when the alarm fires, exiting 124 as timeout(1) does
+# (stock macOS has none), the daily job's and the weekly sync's Keychain wait. The command stays in this process group.
+bounded() {
+  /usr/bin/perl -MPOSIX=WNOHANG -e '
+    my $limit = shift;
+    my $pid = fork;
+    die "cannot start $ARGV[0]: $!\n" unless defined $pid;
+    if ($pid == 0) {
+      exec { $ARGV[0] } @ARGV;
+      print STDERR "$ARGV[0]: $!\n";
+      exit($!{ENOENT} ? 127 : 126);
+    }
+    sub status { ($? & 127) ? 128 + ($? & 127) : $? >> 8 }
+    # The alarm can land just after the main waitpid reaped the command: only one still running is a timeout.
+    $SIG{ALRM} = sub {
+      my $reaped = $?;
+      my $r = waitpid $pid, WNOHANG;
+      if ($r == 0) { kill "KILL", $pid; waitpid $pid, 0; exit 124 }
+      exit status() if $r == $pid;
+      $? = $reaped;
+    };
+    alarm $limit;
+    waitpid $pid, 0;
+    alarm 0;
+    exit status();
+  ' "$@"
+}
+
+# keychain_read_token: reads the secret as the Control Center, the daily job and the weekly sync read it (bounded,
+# trimmed) and sets KEYCHAIN_TOKEN, KEYCHAIN_RC (an empty token counts as 44, missing) and KEYCHAIN_WHY.
+keychain_read_token() {
+  local err rc=0
+  KEYCHAIN_WHY=""
+  err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || err=""
+  # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
+  KEYCHAIN_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${err:-/dev/null}" || exit "$?")" || rc=$?
+  KEYCHAIN_TOKEN="$(trim "$KEYCHAIN_TOKEN")"
+  if [ -n "$err" ]; then
+    KEYCHAIN_WHY="$(tail -c 200 "$err" | tr '\n' ' ' | sed 's/ *$//')"
+    rm -f "$err"
+  fi
+  if [ "$rc" = 0 ] && [ -z "$KEYCHAIN_TOKEN" ]; then rc=44; fi
+  if [ "$rc" != 0 ]; then KEYCHAIN_TOKEN=""; fi
+  KEYCHAIN_RC=$rc
+}
+
+# keychain_problem <exit> <stderr> <retry>: why a Keychain read that failed did, worded as the weekly sync words it.
+# Only exit 44 (errSecItemNotFound) means the item is missing; any other failure leaves a stored token that is fine.
+keychain_problem() {
+  local why="${2:+: $2}" read="Could not read Keychain item $KEYCHAIN_SERVICE"
+  case "$1" in
+    44) printf '%s' "Keychain item $KEYCHAIN_SERVICE not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s $KEYCHAIN_SERVICE -w" ;;
+    124) printf '%s' "$read: security did not answer within $KEYCHAIN_TIMEOUT s. The login keychain is probably locked and waiting at an unlock prompt nobody answered. Unlock it with: security unlock-keychain, then $3." ;;
+    127) printf '%s' "$read: the security command was not found on PATH (it ships with macOS in /usr/bin)." ;;
+    126) printf '%s' "$read: the security command could not be run (exit 126$why); check that /usr/bin/security is the one first on PATH." ;;
+    # errSecAuthFailed: Deny at the Keychain prompt, or the item's access control refuses security.
+    51) printf '%s' "$read: security failed (exit 51$why). Access to it was denied: answer Always Allow when the Keychain prompt appears, or add /usr/bin/security to the item's access control in Keychain Access, then $3." ;;
+    # errSecInteractionNotAllowed: locked, with no way to prompt.
+    36) printf '%s' "$read: security failed (exit 36$why). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then $3." ;;
+    *) printf '%s' "$read: security failed (exit $1$why)." ;;
+  esac
+}
 
 # Whether the Control Center is already running on this data root, read from its
 # supervisor.lock (the file the supervisor keeps via acquireInstanceLock). Running
@@ -670,6 +745,13 @@ elif [ "$CORE_ONLY" = 1 ]; then
 else
   die 1 "$OS is not supported for the full install. These parts need macOS: the Keychain token store, the launchd jobs and the Control Center (it uses /usr/bin/lockf). Re-run with --core-only for the clone, dependencies, user layer and onboarding."
 fi
+# Seconds a Keychain read may wait (default 60), as in the daily job and the weekly sync: a locked login keychain can
+# make security wait on an unlock dialog nobody answers. perl's alarm wraps at 2^32, so the wait is capped at 3600.
+# Checked only where the Keychain is read, before anything changes.
+KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
+if [ "$MAC_FEATURES" = 1 ] && { ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$KEYCHAIN_TIMEOUT" -gt 3600 ]; }; then
+  usage_error "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '$KEYCHAIN_TIMEOUT'."
+fi
 
 # ---------------------------------------------------------------- prerequisites
 
@@ -971,33 +1053,53 @@ fi
 
 step "7/11 Claude token (Keychain)"
 KEYCHAIN_OK=0
+# Only exit 44 (errSecItemNotFound) means the item is missing, as the Control Center, the daily job and the weekly sync
+# read it: a locked or denied keychain still holds a token that works, so no new one is minted or stored over it.
+KEYCHAIN_UNREADABLE=0
 if [ "$MAC_FEATURES" = 0 ]; then
   say "  skipped (core-only)"
-elif keychain_present; then
-  KEYCHAIN_OK=1
-  say "  Keychain item $KEYCHAIN_SERVICE exists (not read)"
-elif [ "$DRY_RUN" = 1 ]; then
-  dry "ask you to create the Keychain item $KEYCHAIN_SERVICE with claude setup-token (the token never passes through this script)"
 else
-  token_help="Store the Claude token yourself, in your own terminal: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s $KEYCHAIN_SERVICE -w (paste the token at the hidden prompt, then clear your scrollback)."
-  if [ -z "$CLAUDE_BIN" ]; then
-    say "  Keychain item $KEYCHAIN_SERVICE is missing and Claude Code is not installed yet."
-    pending "$token_help"
-  elif [ "$TTY_OK" = 0 ]; then
-    say "  Keychain item $KEYCHAIN_SERVICE is missing and there is no terminal to create it with."
-    pending "$token_help"
-  elif [ "$PROMPT_OK" = 1 ] && ! ask "Keychain item $KEYCHAIN_SERVICE is missing. Create it now with claude setup-token (uses your Claude subscription)?" y; then
-    pending "$token_help"
+  keychain_check
+  if [ "$KEYCHAIN_RC" = 0 ]; then
+    KEYCHAIN_OK=1
+    say "  Keychain item $KEYCHAIN_SERVICE exists (not read)"
+  elif [ "$KEYCHAIN_RC" != 44 ]; then
+    KEYCHAIN_UNREADABLE=1
+    say "  $(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run the installer")"
+    pending "$(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run the installer")"
+  elif [ "$DRY_RUN" = 1 ]; then
+    dry "ask you to create the Keychain item $KEYCHAIN_SERVICE with claude setup-token (the token never passes through this script)"
   else
-    say "  Running claude setup-token. Copy the token it prints; it is shown on your terminal only, not by this script."
-    if "$CLAUDE_BIN" setup-token <&3 >&4 2>&4; then
-      say "  Now paste the token at the hidden Keychain prompt (macOS asks twice)."
-      security add-generic-password -U -a "${USER:-$(id -un)}" -s "$KEYCHAIN_SERVICE" -w <&3 >&4 2>&4 || true
-      say "  Clear your terminal scrollback now (Cmd+K) so the token is not left on screen."
+    token_help="Store the Claude token yourself, in your own terminal: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s $KEYCHAIN_SERVICE -w (paste the token at the hidden prompt, then clear your scrollback)."
+    if [ -z "$CLAUDE_BIN" ]; then
+      say "  Keychain item $KEYCHAIN_SERVICE is missing and Claude Code is not installed yet."
+      pending "$token_help"
+    elif [ "$TTY_OK" = 0 ]; then
+      say "  Keychain item $KEYCHAIN_SERVICE is missing and there is no terminal to create it with."
+      pending "$token_help"
+    elif [ "$PROMPT_OK" = 1 ] && ! ask "Keychain item $KEYCHAIN_SERVICE is missing. Create it now with claude setup-token (uses your Claude subscription)?" y; then
+      pending "$token_help"
     else
-      warn "  claude setup-token did not finish."
+      say "  Running claude setup-token. Copy the token it prints; it is shown on your terminal only, not by this script."
+      if "$CLAUDE_BIN" setup-token <&3 >&4 2>&4; then
+        say "  Now paste the token at the hidden Keychain prompt (macOS asks twice)."
+        security add-generic-password -U -a "${USER:-$(id -un)}" -s "$KEYCHAIN_SERVICE" -w <&3 >&4 2>&4 || true
+        say "  Clear your terminal scrollback now (Cmd+K) so the token is not left on screen."
+      else
+        warn "  claude setup-token did not finish."
+      fi
+      keychain_check
+      if [ "$KEYCHAIN_RC" = 0 ]; then
+        KEYCHAIN_OK=1
+        say "  Keychain item stored."
+      elif [ "$KEYCHAIN_RC" != 44 ]; then
+        KEYCHAIN_UNREADABLE=1
+        say "  $(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run the installer")"
+        pending "$(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run the installer")"
+      else
+        pending "$token_help"
+      fi
     fi
-    if keychain_present; then KEYCHAIN_OK=1; say "  Keychain item stored."; else pending "$token_help"; fi
   fi
 fi
 
@@ -1107,6 +1209,9 @@ else
       headless_ready=0
       if [ -z "$CLAUDE_BIN" ]; then
         pending "Install Claude Code, then re-run with --onboard headless (or run the interactive command)."
+      elif [ "$KEYCHAIN_UNREADABLE" = 1 ]; then
+        say "  Headless onboarding needs to read the Keychain item $KEYCHAIN_SERVICE, which could not be read (see step 7)."
+        pending "Make the Keychain item readable (see step 7), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       elif [ "$KEYCHAIN_OK" = 0 ]; then
         say "  Headless onboarding needs the Keychain item $KEYCHAIN_SERVICE."
         pending "Store the Keychain token, then re-run with --onboard headless. Without it, run: cd $QDIR && claude $(shell_quote "$prompt")"
@@ -1141,6 +1246,14 @@ else
           say "  Headless onboarding could not read the approved Claude Code versions or the installed one: $gate_found"
           pending "Fix the problem above (a checkout without the Control Center contract is fixed by re-running the installer), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
         fi
+      elif keychain_read_token; [ "$KEYCHAIN_RC" != 0 ]; then
+        # Read before the earlier drafts are moved aside: a refused run leaves them where "Resume from drafts" looks.
+        # The token the daily job and the Control Center would read is not usable either, so they wait as step 7 makes them.
+        KEYCHAIN_OK=0
+        if [ "$KEYCHAIN_RC" != 44 ]; then KEYCHAIN_UNREADABLE=1; fi
+        say "  $(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run with --onboard headless")"
+        say "  Headless onboarding did not run."
+        pending "Fix the Keychain item as described above, then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
         # Drafts from an earlier run would be listed as this run's and picked up by "Resume from drafts": they hold
         # personal data, so they are moved aside, not deleted.
@@ -1168,7 +1281,10 @@ else
       if [ "$headless_ready" = 1 ] && [ "$recheck_identity" != "$gate_identity" ]; then
         say "  Claude Code changed while onboarding was being prepared (approved: $gate_identity; now: ${recheck_identity:--}); nothing was run."
         pending "Re-run with --onboard headless once Claude Code has finished updating. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
-      elif [ "$headless_ready" = 1 ]; then
+        headless_ready=0
+        KEYCHAIN_TOKEN=""
+      fi
+      if [ "$headless_ready" = 1 ]; then
         say "  Running a restricted headless Claude (reads your documents, writes drafts only to $draft). This uses your Claude subscription."
         # The token lives only in the child's environment; it is never echoed, logged or placed on a command line.
         # As in the Control Center's sessions, SUBPROCESS_ENV_SCRUB keeps it out of hook and tool children, and
@@ -1176,7 +1292,7 @@ else
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
-        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w)" ANTHROPIC_API_KEY="" \
+        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
           "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
@@ -1189,6 +1305,7 @@ else
         else
           warn "  The headless run did not finish cleanly; review any drafts in $draft."
         fi
+        KEYCHAIN_TOKEN=""
         say "  Review the drafts, then finish interactively (nothing live was written):"
         say "    cd $QDIR && claude $(shell_quote 'Read custom/install/ONBOARDING.md and follow it.')"
       fi
@@ -1211,6 +1328,9 @@ else
   if [ "${state_line%%$'\t'*}" != ready ]; then
     say "  Onboarding is not finished (still needed: ${state_line#*$'\t'}); not installing the job yet."
     pending "Finish onboarding, then install the daily job: $DAILY_CMD"
+  elif [ "$KEYCHAIN_UNREADABLE" = 1 ]; then
+    say "  The Keychain item could not be read, so the job would fail every morning; not installing it yet."
+    pending "Make the Keychain item readable (see step 7), then install the daily job: $DAILY_CMD"
   elif [ "$KEYCHAIN_OK" = 0 ]; then
     say "  The Keychain item is missing, so the job would fail every morning; not installing it yet."
     pending "Store the Keychain token, then install the daily job: $DAILY_CMD"
@@ -1280,6 +1400,8 @@ else
       PREFLIGHT_FAILED=1
       pending "The Control Center preflight failed; run: npm --prefix $(shell_quote "$DIR/custom/control-center") run preflight, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")"
     fi
+  elif [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_UNREADABLE" = 1 ]; then
+    say "  Control Center preflight skipped until the Keychain item can be read"
   elif [ "$MAC_FEATURES" = 1 ]; then
     say "  Control Center preflight skipped until the Keychain item exists"
   fi

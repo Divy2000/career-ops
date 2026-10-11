@@ -1,10 +1,28 @@
 #!/bin/bash
 # Test stub: the real Keychain is never touched. Presence is the file $STUB_KEYCHAIN.
+# With the item present: FAKE_SECURITY_FIND_EXIT fails every lookup with that exit (a locked or denied keychain),
+# FAKE_SECURITY_READ_EXIT fails only the secret reads (-w), FAKE_SECURITY_TOKEN replaces the stored secret, and
+# FAKE_SECURITY_HANG (every lookup) or FAKE_SECURITY_READ_HANG (secret reads only) becomes a sleep of that many seconds,
+# one process as security is, waiting as security does at an unlock prompt nobody answers.
 echo "security $*" >> "$STUB_LOG"
 case "${1:-}" in
   find-generic-password)
     [ -f "$STUB_KEYCHAIN" ] || exit 44
-    case " $* " in *" -w "*) echo "FAKE-SECRET-123" ;; esac
+    if [ -n "${FAKE_SECURITY_HANG:-}" ]; then exec /bin/sleep "$FAKE_SECURITY_HANG"; fi
+    if [ -n "${FAKE_SECURITY_FIND_EXIT:-}" ]; then
+      echo "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2
+      exit "$FAKE_SECURITY_FIND_EXIT"
+    fi
+    case " $* " in
+      *" -w "*)
+        if [ -n "${FAKE_SECURITY_READ_HANG:-}" ]; then exec /bin/sleep "$FAKE_SECURITY_READ_HANG"; fi
+        if [ -n "${FAKE_SECURITY_READ_EXIT:-}" ]; then
+          echo "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2
+          exit "$FAKE_SECURITY_READ_EXIT"
+        fi
+        printf '%s\n' "${FAKE_SECURITY_TOKEN-FAKE-SECRET-123}"
+        ;;
+    esac
     ;;
   add-generic-password)
     cat >/dev/null 2>&1 || true

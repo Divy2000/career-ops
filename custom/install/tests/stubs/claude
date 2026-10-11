@@ -14,6 +14,8 @@ esac
 if [ "${1:-}" = "-p" ]; then
   echo "claude-bin $0 DISABLE_AUTOUPDATER=${DISABLE_AUTOUPDATER-}" >> "$STUB_LOG"
   echo "claude-env TOKEN_SET=${CLAUDE_CODE_OAUTH_TOKEN:+1} API_KEY_EMPTY=$([ -z "${ANTHROPIC_API_KEY-x}" ] && echo 1) SUBPROCESS_ENV_SCRUB=${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB-}" >> "$STUB_LOG"
+  # The token's length only, never its value: the installer must pass it trimmed.
+  echo "claude-token-len ${#CLAUDE_CODE_OAUTH_TOKEN}" >> "$STUB_LOG"
   prev=""
   for a in "$@"; do
     if [ "$prev" = "--add-dir" ] && [ -z "${draft:-}" ]; then draft="$a"; fi
