@@ -1566,6 +1566,19 @@ test('a Control Center lock that is a dangling symlink is treated as running (R1
   assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
 });
 
+// Only this run's own root is one the supervisor would start on; on the root the data moved away from, a lock that
+// names no live process is just left over.
+test('a dangling Control Center lock on the root --data-root moves away from is not running: npm ci runs and the Control Center starts (R20-scripts-b review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  const r = w.run(['--dir', D, '--data-root', path.join(w.T, 'co-data'), '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+  assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), r.out);
+  assert.equal(w.calls('cc').length, 1, r.out);
+});
+
 test('a failing doctor is reported as a pending action, not hidden', () => {
   const { w, D, args } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });

@@ -335,14 +335,16 @@ trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[
 # blue/green reload would race the deletion), and the finish must not start a
 # second instance that would refuse the lock.
 # A Control Center from this checkout may run on another data root than this run's: the checkout itself (before
-# --data-root moves the data out) or the root the installed daily job names. It is running if any of them is.
+# --data-root moves the data out) or the root the installed daily job names. It is running if any of them is, where
+# on those other roots only a lock naming a live process counts: the supervisor will not start there.
 cc_running() {
-  local root seen=" "
+  local root seen=" $DATA "
+  if cc_lock_live "$DATA/data/control-center/supervisor.lock"; then return 0; fi
   while IFS= read -r root; do
     case "$seen" in *" $root "*) continue ;; esac
     seen="$seen$root "
-    if cc_lock_live "$root/data/control-center/supervisor.lock"; then return 0; fi
-  done < <(printf '%s\n%s\n' "$DATA" "$DIR"; installed_job_root own)
+    if cc_lock_live "$root/data/control-center/supervisor.lock" other; then return 0; fi
+  done < <(printf '%s\n' "$DIR"; installed_job_root own)
   return 1
 }
 
@@ -352,9 +354,12 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+// "other": a root this run would not start the Control Center on, where only a live process counts as running.
+const other = process.argv[2] === "other";
 let text;
 try { text = fs.readFileSync(process.argv[1], "utf8"); }
 catch (e) {
+  if (other) process.exit(1);
   // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
   // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
   let entry = e.code !== "ENOENT";
@@ -373,6 +378,7 @@ try {
 // the supervisor leaves one younger than UNREADABLE_LOCK_GRACE_MS (5 s) alone and refuses to start, so that counts
 // as running, and replaces an older one, so that does not.
 if (!pid) {
+  if (other) process.exit(1);
   let young = false;
   try { young = Date.now() - fs.statSync(process.argv[1]).mtimeMs < 5000; } catch { /* gone: not running */ }
   process.exit(young ? 0 : 1);
@@ -393,7 +399,7 @@ try {
 // Running unless the PID is gone, or runs a process that started at another time than the lock says (a reused PID).
 // With no start recorded, or one that cannot be read, the PID alone decides, as acquireInstanceLock does.
 process.exit(live !== null && (start === null || live === "unknown" || live === start) ? 0 : 1);
-' "$1"
+' "$1" "${2:-}"
 }
 
 # The data root the installed daily job writes its launchd logs under (<root>/data/immigration/logs), which differs
