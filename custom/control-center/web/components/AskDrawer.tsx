@@ -13,6 +13,7 @@ import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@share
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
+import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { useTracker } from '../lib/queries';
@@ -66,10 +67,12 @@ function askAction(name: string): (typeof ASK_ACTIONS)[string] | null {
  * The company's pending Inbox postings, one evaluation each by URL as Evaluate visible does: only a URL-targeted evaluation
  * moves its row to Processed once the report is written, so a company-targeted session left them all pending. Like
  * Evaluate visible it leaves out saved-JD rows (`local:jds/`, evaluated through Evaluate JD) and rows flagged as needing a JD.
+ * The advisor may name the company as pipeline.md writes it (`Acme \[Labs\]`) or as the Inbox shows it (`Acme [Labs]`).
  */
 async function pendingUrlsAt(company: string): Promise<string[]> {
   const pipeline = await apiGet<PipelineRead>('/api/pipeline');
-  const urls = [...new Set((pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && r.company.trim().toLowerCase() === company.toLowerCase()).map((r) => r.url))];
+  const names = new Set([company.toLowerCase(), unescapeMarkdownCell(company).toLowerCase()]);
+  const urls = [...new Set((pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && names.has(r.company.trim().toLowerCase())).map((r) => r.url))];
   if (urls.length === 0) throw new Error(`No pending Inbox posting at ${company}.`);
   if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
   return urls;

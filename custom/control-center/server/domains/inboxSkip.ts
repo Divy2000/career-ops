@@ -2,8 +2,9 @@
 // data/pipeline.md by posting URL (or a saved JD's local:jds/ reference). Either is a matcher, never a path.
 import { localJdPath } from '../../shared/local-jd.js';
 import { postingUrl } from '../../shared/posting-url.js';
+import { unescapeMarkdownCell } from '../../shared/markdown-cell.js';
 
-export { postingUrl };
+export { postingUrl, unescapeMarkdownCell };
 
 // `[!]` is a row pipeline mode could not fetch (it waits for the JD text): open, so a skip checks it off too.
 const CHECKBOX_LINE = /^(\s*-\s*)\[([ xX!])\](.*)$/;
@@ -68,11 +69,6 @@ export function pipelineSection(title: string): 'pending' | 'done' | 'other' {
  */
 export function unescapeMarkdownUrl(cell: string): string {
   return unescapeMarkdownCell(cell);
-}
-
-/** A pipeline.md or shortlist.md text cell as written: scan.mjs and rank-pipeline.mjs escape \\, [ and ] in company, title, location and rank reason too (sanitizeMarkdownField). */
-export function unescapeMarkdownCell(cell: string): string {
-  return cell.replace(/\\([\\[\]])/g, '$1');
 }
 
 /** The key a scan-history URL has in pipeline.md once unescaped: | is written as %7C there. */

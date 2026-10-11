@@ -695,6 +695,20 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(navigations).toEqual([]);
   });
 
+  it('given the advisor names the company as the pipeline writes it (markdown-escaped), evaluates its postings (R21-shared-comp-L2-01)', async () => {
+    rows.push(row('https://jobs.acmelabs.example/1', 'Acme [Labs]'), row('https://jobs.acmelabs.example/2', 'Acme [Labs]'));
+    const item = await runProposal('Acme \\[Labs\\]');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acmelabs.example/1', 'https://jobs.acmelabs.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('given the advisor names the company in its plain spelling, evaluates its postings too (R21-shared-comp-L2-01)', async () => {
+    rows.push(row('https://jobs.acmelabs.example/1', 'Acme [Labs]'));
+    const item = await runProposal('Acme [Labs]');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acmelabs.example/1'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
   it('with no pending posting at that company, starts nothing and says so, without asking', async () => {
     await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
