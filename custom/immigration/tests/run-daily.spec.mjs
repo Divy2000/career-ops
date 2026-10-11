@@ -486,21 +486,42 @@ jobTest('an ack that keeps failing leaves a .done marker, and the next run ackno
   assert.deepEqual(doneMarks(third.imm), []);
 });
 
-jobTest('a leftover done batch from before the news window is let go unacknowledged, and the pass runs (R20-scripts-a-L1-01)', () => {
+jobTest('a leftover done batch from an old day is acknowledged before the new pass runs, whatever its age (r22 follow-up)', () => {
   const w = dailyWorld();
   failingAckWatch(w);
   const batches = path.join(w.data, 'data', 'immigration', 'batches');
   fs.mkdirSync(batches, { recursive: true });
   const old = path.join(batches, '20200101T000000-1.json');
-  fs.writeFileSync(old, JSON.stringify({ date: '2020-01-01', new_items: [] }));
+  fs.writeFileSync(old, JSON.stringify({ date: '2020-01-01', new_items: [{ id: 'old' }] }));
   fs.writeFileSync(`${old}.done`, '2020-01-01T00:00:00Z\n');
   const r = w.run();
   assert.equal(r.status, 0, r.log);
-  assert.equal(ackedBatches(r.steps).includes(old), false, r.steps);
-  assert.match(r.log, /older than the news window/);
+  const steps = r.steps.trim().split('\n').filter((l) => l.startsWith('watch'));
+  assert.equal(steps[0], `watch --ack ${old}`, r.steps);
   assert.deepEqual(doneMarks(r.imm), []);
   assert.equal(r.calls.length, 1, r.log);
 });
+
+for (const [what, text] of [
+  ['is not JSON', '{not json'],
+  ['holds an item watch.mjs --ack cannot read', JSON.stringify({ date: '2020-01-01', new_items: [null] })],
+]) {
+  jobTest(`a leftover done batch that ${what} is let go unacknowledged, and the pass runs (r22 follow-up)`, () => {
+    const w = dailyWorld();
+    failingAckWatch(w);
+    const batches = path.join(w.data, 'data', 'immigration', 'batches');
+    fs.mkdirSync(batches, { recursive: true });
+    const garbled = path.join(batches, '20200101T000000-2.json');
+    fs.writeFileSync(garbled, text);
+    fs.writeFileSync(`${garbled}.done`, '2020-01-01T00:00:00Z\n');
+    const r = w.run();
+    assert.equal(r.status, 0, r.log);
+    assert.equal(ackedBatches(r.steps).includes(garbled), false, r.steps);
+    assert.match(r.log, /cannot be read/);
+    assert.deepEqual(doneMarks(r.imm), []);
+    assert.equal(r.calls.length, 1, r.log);
+  });
+}
 
 jobTest('the policy pass is skipped with its reason while a Control Center session holds the policy-pass claim; the other steps still run (SW8-server-01 review)', () => {
   const w = dailyWorld();

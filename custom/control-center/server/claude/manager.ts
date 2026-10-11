@@ -21,8 +21,7 @@ import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapsho
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
-import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchAckable, recordDonePolicyBatch } from '../domains/policyPass.js';
-import { localDate } from '../../shared/local-date.js';
+import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { beginTakingReportNums, unrecordedFor } from '../actions/registry.js';
 
 export type TokenReader = () => Promise<string>;
@@ -483,16 +482,15 @@ export class SessionManager {
 
   /**
    * Acknowledges the batches of passes that ended done but whose ack failed: until it lands their items stay queued, and
-   * the next pass would send them to Claude again. A batch still failing is kept and tried again later; one from before
-   * the news window is let go of unacknowledged (policyBatchAckable).
+   * the next pass would send them to Claude again, whatever the batch's age. A batch still failing is kept and tried
+   * again later; one that cannot be read is let go of unacknowledged (policyBatchReadable).
    */
   private async ackLeftoverPolicyBatches(): Promise<void> {
-    const today = localDate(new Date());
     let failed = false;
     for (const batch of donePolicyBatches(this.cfg.dataRoot)) {
       if (this.policyAcksInFlight.has(batch)) continue;
-      if (!policyBatchAckable(this.cfg.dataRoot, batch, today)) {
-        console.warn(`[sessions] policy pass batch ${batch} is older than the news window: its items stay queued for the next pass`);
+      if (!policyBatchReadable(this.cfg.dataRoot, batch)) {
+        console.warn(`[sessions] policy pass batch ${batch} cannot be read: its items stay queued for the next pass`);
         forgetDonePolicyBatch(this.cfg.dataRoot, batch);
         continue;
       }
