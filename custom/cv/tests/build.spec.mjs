@@ -210,6 +210,23 @@ test('given a top-level heading after the Projects section, when checked, then t
   assert.match(checkPayload({ projects: [{ name: 'Secret Tool', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors.join('\n'), /"Secret Tool" is in neither/);
 });
 
+test('given two Projects sections, when the first one\'s last entry has no link, then the next section\'s links are not its own (R25-scripts-a-L2-01)', () => {
+  const cv = '## Projects\n### Alpha\n- Built alpha.\n## Open Source Projects\n- **Beta** - https://github.com/me/beta\n';
+  const r = checkPayload({ projects: [{ name: 'Alpha', url: 'https://github.com/me/beta', bullets: ['x'] }] }, { cvText: cv, libraryText: null });
+  assert.match(r.errors.join('\n'), /project "Alpha" has link https:\/\/github\.com\/me\/beta but cv\.md has no link for it; a link cannot be invented/);
+  assert.deepEqual(checkPayload({ projects: [{ name: 'Beta', url: 'https://github.com/me/beta', bullets: ['x'] }] }, { cvText: cv, libraryText: null }).errors, []);
+});
+
+test('given a project linked to the next Projects section\'s link, when built, then it fails and no HTML is written (R25-scripts-a-L2-01)', () => {
+  const fixture = loadFixture();
+  const cv = cvMarkdownFor(fixture).replace('\n## Education', '### Alpha\n- Built alpha.\n## Open Source Projects\n- **Beta** - https://github.com/me/beta\n\n## Education');
+  const root = dataRoot({ cv });
+  const r = build(root, { ...fixture, projects: [{ name: 'Alpha', url: 'https://github.com/me/beta', bullets: ['Built alpha.'] }] });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /project "Alpha" has link https:\/\/github\.com\/me\/beta but cv\.md has no link for it/);
+  assert.equal(r.html, null);
+});
+
 test('given a project named after a job title in cv.md, when built, then it fails and no HTML is written (R11-scripts-a-L3-02)', () => {
   const fixture = loadFixture();
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });

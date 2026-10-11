@@ -491,6 +491,16 @@ export function findCvProject(cvText, title) {
   return null;
 }
 
+// findCvBlock limited to cv.md's Projects sections, each searched alone so an entry's raw lines (and the links in
+// them) end with its section, with `line`/`endLine` still 1-based lines of cv.md.
+export function findCvProjectBlock(cvText, title) {
+  for (const body of projectSectionBodies(cvText)) {
+    const found = findCvBlock(body.map((l) => l.text).join('\n'), title);
+    if (found) return { line: body[found.line - 1].index + 1, endLine: body[found.endLine - 1].index + 1, raw: found.raw };
+  }
+  return null;
+}
+
 // The entry named `title` in cv.md: a `##`-`######` heading whose name (text
 // before the separator) matches, with its body up to the next heading, or a
 // `**Title**` list item with its indented continuation lines. Returns the raw
