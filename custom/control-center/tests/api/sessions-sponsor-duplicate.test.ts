@@ -168,6 +168,22 @@ describe('a fork of a sponsorship check is held by a live check of its company',
     }
   });
 
+  it('given a fork of a check of Acme that never got its own conversation and another live check of Acme, when the user replies to the fork, then it is refused with 409 since the reply forks the source again', async () => {
+    const app = await freshApp();
+    try {
+      const src = withConversation(app, 'Acme', 'done');
+      const copy = app.sessions.store.create({ mode: 'sponsorship-check', policyClass: 'sponsorship-check', target: company('Acme'), model: null, forkedFrom: src.id, forkPending: true });
+      app.sessions.store.setStatus(copy.id, 'error');
+      const live = liveSession(app, 'sponsorship-check', 'Acme', 'running');
+      const res = await reply(app, copy.id);
+      expect(res.statusCode, res.body).toBe(409);
+      expect((res.json() as { error: string }).error).toBe(`session ${live.id} is already running a sponsorship check for Acme`);
+    } finally {
+      await quiet(app);
+      await app.close();
+    }
+  });
+
   it('given a check of Acme waiting for the user, when the user replies to it, then the reply is not refused as a duplicate', async () => {
     const app = await freshApp();
     try {

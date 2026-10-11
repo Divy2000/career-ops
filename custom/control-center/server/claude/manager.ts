@@ -240,8 +240,9 @@ export class SessionManager {
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
       const resume = this.hasConversation(meta) || forkPending;
-      // A resumed evaluation that still owes its report evaluates the posting again, as a replayed request does.
-      const unclaim = !resume || owesReport(meta) ? this.claimReplay(meta) : () => {};
+      // A resumed evaluation that still owes its report evaluates the posting again, as a replayed request does, and a
+      // sponsorship check that forks its source again is a fresh copy writing its company's files.
+      const unclaim = !resume || owesReport(meta) || (forkPending && meta.mode === 'sponsorship-check') ? this.claimReplay(meta) : () => {};
       try {
         return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
       } finally {
