@@ -164,6 +164,29 @@ const HOSTS: Host[] = [
     // New search lets go of the search and offers the start form for another one.
     canStartAnother: () => buttonLike(/^New search$/) !== undefined,
   },
+  {
+    name: 'Pipeline > Inbox > Process inbox',
+    mode: 'pipeline',
+    async open() {
+      const { InboxAi } = await import('@web/features/pipeline/InboxAi');
+      const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+      const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
+      const pipeline = createRoute({ getParentRoute: () => rootRoute, path: '/pipeline', component: () => createElement(InboxAi, { urls: ['https://jobs.example.com/1'] }) });
+      const router = createRouter({ routeTree: rootRoute.addChildren([pipeline]), history: createMemoryHistory({ initialEntries: ['/pipeline'] }) });
+      await mount(createElement(RouterProvider, { router }));
+      await until(() => buttonLike(/^Process inbox/), 'the Process inbox button');
+      // A remembered run opens the panel by itself; otherwise the button opens it.
+      if (!lastPanel('pipeline')) await act(async () => buttonLike(/^Process inbox/)!.click());
+      await until(() => lastPanel('pipeline'), 'the Process inbox panel');
+    },
+    leave: unmount,
+    // The run starts from its panel's own form.
+    async begin() {
+      await act(async () => lastPanel('pipeline')!.onStarting!());
+    },
+    // New run lets go of the finished run and offers the start form for another one.
+    canStartAnother: () => buttonLike(/^New run$/) !== undefined,
+  },
 ];
 
 const lastPanel = (mode: string) => panels.filter((p) => p.mode === mode).pop();
@@ -180,6 +203,7 @@ beforeEach(() => {
       if (url === '/api/tracker/7') return json(200, detail());
       if (url === '/api/pipeline') return json(200, { kind: 'ok', path: 'data/pipeline.md', rows: [], etag: 'e' });
       if (url === '/api/tracker') return json(200, { kind: 'ok', rows: [] });
+      if (url === '/api/sessions') return json(200, []);
       return json(404, { error: 'not stubbed' });
     }),
   );
