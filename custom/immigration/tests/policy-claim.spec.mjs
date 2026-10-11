@@ -185,6 +185,92 @@ test('many processes claiming at once: exactly one gets it', async () => {
   }
 });
 
+test('many processes finding a crashed claimant\'s stale lock at once: exactly one breaks it and gets the claim (R19-scripts-a-L1-02)', async () => {
+  for (let round = 0; round < 5; round++) {
+    const r = root();
+    // A claimant killed inside the lock left it behind, long enough ago to be broken.
+    const lock = `${claimFile(r)}.lock`;
+    fs.mkdirSync(lock);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const go = path.join(r, 'go');
+    // Every claimant waits for the same instant, so they all judge the old lock stale in the same poll, and each is
+    // descheduled for a moment between that verdict and its removal of the lock, the window in which another claimant
+    // can break the same lock and take a new one.
+    const code = `const fs = (await import('node:fs')).default; const rm = fs.rmSync; fs.rmSync = (p, o) => { if (String(p).endsWith('.lock')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); return rm(p, o); }; const { tryClaim } = await import(${JSON.stringify(MODULE)}); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((res) => setTimeout(res, 1)); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:' + process.pid, batch: null }).ok)); process.stdin.resume();`;
+    const children = [];
+    try {
+      const ready = [];
+      const outs = Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', code]);
+        children.push(child);
+        ready.push(new Promise((res) => child.on('spawn', res)));
+        child.stdout.once('data', (d) => resolve(String(d)));
+        child.on('error', reject);
+        child.on('close', () => resolve(''));
+      })));
+      await Promise.all(ready);
+      await new Promise((res) => setTimeout(res, 300));
+      fs.writeFileSync(go, '');
+      const answers = await outs;
+      assert.equal(answers.filter((o) => o === 'true').length, 1, `round ${round}: ${answers.join(',')}`);
+    } finally {
+      for (const child of children) child.stdin.end();
+    }
+  }
+});
+
+test('a recover guard left by a claimant killed while breaking a stale lock does not block claims for long (R19-scripts-a-L1-02 review)', () => {
+  const r = root();
+  const lock = `${claimFile(r)}.lock`;
+  fs.mkdirSync(lock);
+  fs.mkdirSync(`${lock}.recover`);
+  const lockAge = new Date(Date.now() - 60_000);
+  const guardAge = new Date(Date.now() - 8_000);
+  fs.utimesSync(lock, lockAge, lockAge);
+  fs.utimesSync(`${lock}.recover`, guardAge, guardAge);
+  assert.deepEqual(tryClaim(r, { owner: 'session:s-1', batch: null }), { ok: true });
+  assert.equal(fs.existsSync(lock), false);
+  assert.equal(fs.existsSync(`${lock}.recover`), false);
+});
+
+test('a claimant whose lock was broken and taken by another while it held it leaves the other\'s lock in place (R19-scripts-a-L1-02 review)', () => {
+  const r = root();
+  const lock = `${claimFile(r)}.lock`;
+  const read = fs.readFileSync;
+  // While this claimant decides, another breaks its lock as stale and takes a new one at the same path.
+  fs.readFileSync = (file, ...rest) => {
+    if (file === claimFile(r)) {
+      fs.rmSync(lock, { recursive: true, force: true });
+      fs.mkdirSync(lock);
+    }
+    return read(file, ...rest);
+  };
+  try {
+    tryClaim(r, { owner: 'session:s-1', batch: null });
+  } finally {
+    fs.readFileSync = read;
+  }
+  assert.equal(fs.existsSync(lock), true, 'the other claimant\'s lock was removed');
+});
+
+test('a claimant that cannot mark the lock it took removes it, so the next claim is not blocked (R19-scripts-a-L1-02 review 2)', () => {
+  const r = root();
+  const lock = `${claimFile(r)}.lock`;
+  const write = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (file === path.join(lock, 'owner')) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    return write(file, ...rest);
+  };
+  try {
+    assert.throws(() => tryClaim(r, { owner: 'session:s-1', batch: null }), /ENOSPC/);
+  } finally {
+    fs.writeFileSync = write;
+  }
+  assert.equal(fs.existsSync(lock), false, 'the lock was left behind');
+  assert.deepEqual(tryClaim(r, { owner: 'session:s-1', batch: null }), { ok: true });
+});
+
 test('a fork takes the claim from the paused session it forks, never from another live owner', () => {
   const r = root();
   session(r, 's-src', 'awaiting_user');

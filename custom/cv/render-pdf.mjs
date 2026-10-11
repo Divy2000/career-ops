@@ -23,7 +23,7 @@
 // the drafts are removed; a publishing render is let finish, and the input keeps
 // the chosen layout only when that render published it.
 
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,6 +38,24 @@ const GENERATE = path.join(CODE, 'generate-pdf.mjs');
 const MAX_OUTPUT = 16 * 1024 * 1024;
 const VALUE_FLAGS = ['--max-pages', '--format', '--report', '--kind'];
 const PASS_THROUGH = ['--format', '--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check'];
+// Preloaded into each generate-pdf.mjs child: logs the path of every temp HTML it writes, before writing it, to the
+// file named by TEMP_LOG_ENV, so a stopped render removes its own temp and never one of a concurrent render.
+const TEMP_LOG_ENV = 'CAREER_OPS_RENDER_TEMP_LOG';
+const TEMP_HOOK = `data:text/javascript,${encodeURIComponent(`
+import fsp from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const log = process.env.${TEMP_LOG_ENV};
+const writeFile = fsp.writeFile;
+if (log) {
+  fsp.writeFile = (file, ...rest) => {
+    if (typeof file === 'string' && basename(file).startsWith('.career-ops-render-')) appendFileSync(log, file + '\\n');
+    return writeFile(file, ...rest);
+  };
+  syncBuiltinESMExports();
+}
+`)}`;
 const USAGE = `Usage: node custom/cv/render-pdf.mjs <input.html> <output.pdf> [--max-pages=N] [--strict-pages] [${PASS_THROUGH.join('] [')}]`;
 
 // generate-pdf.mjs's strict overflow (enforcePageBudget): the PDF is written, then refused before the index is.
@@ -152,21 +170,22 @@ async function main() {
   // The scratch folder lives until the last render ends, however the run ends.
   process.on('exit', removeDrafts);
   // generate-pdf.mjs writes .career-ops-render-<uuid>.html, a full copy of the CV, beside the HTML it renders, and
-  // removes it in a finally that a stop can skip (a second SIGINT makes Playwright exit at once). One still there once
-  // its render has ended is that render's leftover; the ones there before it started belong to other renders.
-  const renderTemps = (dir) => {
+  // removes it in a finally that a stop can skip (a second SIGINT makes Playwright exit at once). Other renders write
+  // theirs in the same folder at any time, so each child names its own: TEMP_HOOK logs every such path to that child's
+  // log before writing it, and only the paths in the log are removed.
+  let renders = 0;
+  const ownTemps = (log) => {
     try {
-      return readdirSync(dir).filter((f) => f.startsWith('.career-ops-render-') && f.endsWith('.html'));
+      return readFileSync(log, 'utf8').split('\n').filter((f) => path.basename(f).startsWith('.career-ops-render-'));
     } catch {
       return [];
     }
   };
   const generate = (from, to, extra, env = process.env) => new Promise((resolve, reject) => {
     if (stopping) return;
-    const tempDir = path.dirname(from);
-    const tempsBefore = new Set(renderTemps(tempDir));
-    const child = spawn(process.execPath, [GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
-      cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'],
+    const tempLog = path.join(scratch, `temps-${++renders}.log`);
+    const child = spawn(process.execPath, ['--import', TEMP_HOOK, GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
+      cwd: CODE, env: { ...env, [TEMP_LOG_ENV]: tempLog }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     running = child;
     lastChild = child;
@@ -191,7 +210,7 @@ async function main() {
       // running it (a group signal Playwright swallows), so clean up when the child was killed (its close signal) or
       // when this stop killed a density render. It is NOT killed while the final publish render runs (it is let finish
       // so the input and the PDF agree), so cleaning then would only delete a concurrent render's live temp.
-      if (signal || (stopping && !restoreInput)) for (const f of renderTemps(tempDir)) if (!tempsBefore.has(f)) rmSync(path.join(tempDir, f), { force: true });
+      if (signal || (stopping && !restoreInput)) for (const f of ownTemps(tempLog)) rmSync(f, { force: true });
       child.result = { status, signal, stdout, stderr };
       if (stopping) return;
       if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));

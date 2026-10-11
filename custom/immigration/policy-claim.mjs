@@ -11,6 +11,7 @@
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const IMM = path.join('data', 'immigration');
@@ -18,6 +19,8 @@ const LIVE_SESSION = new Set(['queued', 'running', 'awaiting_user']);
 const STARTING_MS = 2 * 60_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
+// The recover guard lives for a stat and an rm, so one older than this was left by a claimant killed while breaking.
+const GUARD_STALE_MS = 5_000;
 
 export const claimFile = (dataRoot) => path.join(dataRoot, IMM, '.policy-pass.claim');
 
@@ -149,6 +152,47 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+const statOrNull = (dir) => fs.statSync(dir, { throwIfNoEntry: false }) ?? null;
+// The same directory, not one removed and made again at the path (pipeline-lock.mjs's sameLockDirectory).
+const sameLockDirectory = (a, b) => a.dev === b.dev && a.ino === b.ino && (a.ino !== 0 || a.birthtimeMs === b.birthtimeMs);
+const isStale = (stat, ms = LOCK_STALE_MS) => Date.now() - stat.mtimeMs > ms;
+
+/**
+ * Breaks the lock when it is stale; true when it was removed. The verdict and the removal run under a recover guard,
+ * and the lock is judged again under it and removed only when it is still the stale directory first judged: another
+ * claimant may have broken it meanwhile and taken a new one, which is live (pipeline-lock.mjs, same race).
+ */
+function breakStale(lock) {
+  const judged = statOrNull(lock);
+  if (!judged || !isStale(judged)) return false;
+  const guard = `${lock}.recover`;
+  let mine;
+  try {
+    fs.mkdirSync(guard);
+    mine = statOrNull(guard);
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    // A guard left by a claimant killed while breaking would block recovery for good, so an old one is removed. A
+    // mkdir lock cannot compare and remove in one step, so a fresh guard taken between the stat and the rm can be lost
+    // (pipeline-lock.mjs has the same limit); the lock itself is still judged again under whichever guard wins.
+    const held = statOrNull(guard);
+    if (held && isStale(held, GUARD_STALE_MS)) fs.rmSync(guard, { recursive: true, force: true });
+    return false;
+  }
+  try {
+    const now = statOrNull(lock);
+    if (!now || !isStale(now) || !sameLockDirectory(judged, now)) return false;
+    // A claimant paused past GUARD_STALE_MS has had its guard taken over; it then decides nothing.
+    const guardNow = statOrNull(guard);
+    if (!mine || !guardNow || !sameLockDirectory(mine, guardNow)) return false;
+    fs.rmSync(lock, { recursive: true, force: true });
+    return true;
+  } finally {
+    const guardNow = statOrNull(guard);
+    if (mine && guardNow && sameLockDirectory(mine, guardNow)) fs.rmSync(guard, { recursive: true, force: true });
+  }
+}
+
 /** Runs fn under the claim's mkdir lock; a lock left by a crashed holder is broken after LOCK_STALE_MS. */
 function locked(dataRoot, fn) {
   const lock = `${claimFile(dataRoot)}.lock`;
@@ -160,16 +204,31 @@ function locked(dataRoot, fn) {
       break;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
-      const age = Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-      if (age > LOCK_STALE_MS) fs.rmSync(lock, { recursive: true, force: true });
-      else if (Date.now() > deadline) throw new Error(`${lock} is held by another claimant; try again`);
-      else sleep(25);
+      if (breakStale(lock)) continue;
+      if (Date.now() > deadline) throw new Error(`${lock} is held by another claimant; try again`);
+      sleep(25);
     }
+  }
+  // A token inside the lock names this claimant: one held so long it was broken as stale may now be another
+  // claimant's, even at the same inode (a file system that reuses inodes at once), and only this token proves it is not.
+  const token = randomUUID();
+  const owner = path.join(lock, 'owner');
+  try {
+    fs.writeFileSync(owner, token);
+  } catch (err) {
+    fs.rmSync(lock, { recursive: true, force: true });
+    throw err;
   }
   try {
     return fn();
   } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
+    let held = null;
+    try {
+      held = fs.readFileSync(owner, 'utf8');
+    } catch {
+      // Unreadable proves nothing about who holds it: it is left to age out rather than fail fn's own outcome.
+    }
+    if (held === token) fs.rmSync(lock, { recursive: true, force: true });
   }
 }
 
