@@ -65,7 +65,15 @@ function statusTone(s: FileDiff['status']): 'ok' | 'warn' | 'danger' | 'neutral'
 
 export function ChangesPanel({ sessionId, live }: { sessionId: string | null; live: boolean }) {
   const qc = useQueryClient();
-  const [note, setNote] = useState<string | null>(null);
+  // DevChatPage keeps this panel across a session switch: a note shows only beside the session whose revert it reports,
+  // and a switch drops it, so coming back to that session does not bring a stale one back.
+  const [noted, setNoted] = useState<{ sessionId: string; text: string } | null>(null);
+  const [notedFor, setNotedFor] = useState(sessionId);
+  if (notedFor !== sessionId) {
+    setNotedFor(sessionId);
+    setNoted(null);
+  }
+  const note = noted && noted.sessionId === sessionId ? noted.text : null;
   const q = useQuery({ queryKey: ['dev', 'changes', sessionId], queryFn: () => apiGet<Changes>(`/api/dev/changes/${sessionId}`), enabled: Boolean(sessionId), refetchInterval: live ? 1000 : false });
   // The turn's last writes can land after the final poll; refresh once more when the session settles.
   useEffect(() => {
@@ -88,11 +96,11 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
     if (!(await confirm({ title: abs ? 'Revert this file?' : `Revert turn ${turn}?`, body: abs ? `${abs} goes back to its bytes before turn ${turn}.` : `Every file turn ${turn} changed goes back to its earlier bytes.`, confirmLabel: 'Revert', danger: true }))) return;
     try {
       const r = await apiSend<{ reverted: Array<{ abs: string; result: string }> }>('POST', '/api/dev/revert', { sessionId, turn, abs });
-      setNote(`Reverted: ${r.reverted.map((x) => `${x.abs.split('/').pop()} (${x.result})`).join(', ') || 'nothing to revert'}`);
+      setNoted({ sessionId, text: `Reverted: ${r.reverted.map((x) => `${x.abs.split('/').pop()} (${x.result})`).join(', ') || 'nothing to revert'}` });
       await qc.invalidateQueries({ queryKey: ['dev', 'changes', sessionId] });
       await qc.invalidateQueries({ queryKey: ['config'] });
     } catch (err) {
-      setNote(`Revert failed: ${describeError(err)}`);
+      setNoted({ sessionId, text: `Revert failed: ${describeError(err)}` });
     }
   };
   if (!sessionId) return <Empty>Changes appear here per turn once a Dev Chat session runs.</Empty>;

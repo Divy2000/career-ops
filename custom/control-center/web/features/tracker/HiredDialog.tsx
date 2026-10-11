@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 
@@ -8,7 +8,14 @@ export function HiredDialog({ report, company, onClose }: { report: string; comp
   const [story, setStory] = useState('');
   const [output, setOutput] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // hired-share.mjs read-modify-writes its state file unlocked, so a second answer sent before the first lands could
+  // overwrite it: one request at a time.
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const act = async (params: Record<string, unknown>, id: 'tracker.hiredShare' | 'tracker.hiredMark', close: boolean) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     setError(null);
     try {
       const r = await apiSend<{ result: unknown; stderr?: string }>('POST', `/api/actions/${id}`, { params });
@@ -17,6 +24,9 @@ export function HiredDialog({ report, company, onClose }: { report: string; comp
       else setOutput(`${text}\n${r.stderr ?? ''}`.trim());
     } catch (err) {
       setError(describeError(err));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
   // hired-share.mjs prints the payload (the story, which may quote GitHub URLs) before the prefilled issue URL: take the
@@ -36,13 +46,13 @@ export function HiredDialog({ report, company, onClose }: { report: string; comp
       </label>
       <textarea aria-label="Your story" rows={3} placeholder="What worked? (optional)" value={story} onChange={(e) => setStory(e.target.value)} />
       <div className="row gap">
-        <button type="button" onClick={() => void act({ report, anonymity, ...(story ? { story } : {}) }, 'tracker.hiredShare', false)}>
+        <button type="button" onClick={() => void act({ report, anonymity, ...(story ? { story } : {}) }, 'tracker.hiredShare', false)} disabled={busy}>
           Draft story
         </button>
-        <button type="button" onClick={() => void act({ report, mark: 'later' }, 'tracker.hiredMark', true)}>
+        <button type="button" onClick={() => void act({ report, mark: 'later' }, 'tracker.hiredMark', true)} disabled={busy}>
           Not now
         </button>
-        <button type="button" onClick={() => void act({ report, mark: 'never' }, 'tracker.hiredMark', true)}>
+        <button type="button" onClick={() => void act({ report, mark: 'never' }, 'tracker.hiredMark', true)} disabled={busy}>
           No, never ask again
         </button>
         <button type="button" onClick={onClose}>

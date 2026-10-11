@@ -57,8 +57,11 @@ function cell(r: TrackerRow, key: SortKey): string | number | null {
       return r.role;
     case 'score':
       return r.score;
-    case 'status':
-      return STATUS_ORDER.indexOf(r.status);
+    case 'status': {
+      // An unknown status ranks after every known one, as the server's statusRank does.
+      const i = STATUS_ORDER.indexOf(r.status);
+      return i === -1 ? STATUS_ORDER.length : i;
+    }
     case 'date':
       return r.date;
     case 'location':
@@ -77,6 +80,8 @@ export function sortRows(rows: TrackerRow[], sort: SortKey, dir: 'asc' | 'desc')
   return [...rows].sort((a, b) => {
     const x = cell(a, sort);
     const y = cell(b, sort);
+    // Unknown statuses share one rank: name order keeps each one together, as the grouped view does.
+    if (x === y && sort === 'status' && a.status !== b.status) return (a.status < b.status ? -1 : 1) * m;
     if (x === y) return a.num - b.num;
     if (x === null || x === '') return 1;
     if (y === null || y === '') return -1;
