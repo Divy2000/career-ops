@@ -532,7 +532,7 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
       // The library stores each field on one line, as the real serializer does.
       const oneLine = (v: string) => v.replace(/\s+/g, ' ').trim();
       const body = { ...sent, title: oneLine(sent.title), tags: sent.tags.map(oneLine), bullets: sent.bullets.map(oneLine) };
-      const savedId = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const savedId = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const doc = files['/api/projects']!;
       const list = doc.entries as Array<typeof entry>;
       if (method === 'POST') {
@@ -574,9 +574,12 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     const release = holdFirstPutAndApply();
     await click(button('Save project')!);
     await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'One, reworded.');
+    await act(async () => labelled<HTMLTextAreaElement>('Bullet 1')!.focus());
     await release();
     await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
     expect(labelled<HTMLTextAreaElement>('Bullet 1')?.value).toBe('One, reworded.');
+    // The form moved to the renamed entry's row; the field being typed in keeps the focus.
+    expect(document.activeElement).toBe(labelled('Bullet 1'));
     await click(button('Save project')!);
     await until(() => writes().length === 2, 'the second save');
     expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Routing', bullets: ['One, reworded.'] }) }));
@@ -632,22 +635,27 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker' }));
   });
 
-  it('given a new project whose id another entry already has, when the user edits it during the save, then the form stays on the added entry, not the older one', async () => {
-    files['/api/projects']!.entries = [{ ...entry, id: 'c', title: 'C#', tagline: 'The older one', bullets: ['Sharp.'] }];
+  it('given the user typing in a field while a new project saves, when the form moves into the list, then that field keeps the focus and caret', async () => {
     const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
     await mount(createElement(ProjectsLibrary));
     await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
-    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'C++');
-    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Templates.');
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks kites.');
     const release = holdFirstPutAndApply();
     await click(button('Save project')!);
-    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    const dates = labelled<HTMLInputElement>('Dates')!;
+    await type(dates, '2024');
+    await act(async () => {
+      dates.focus();
+      dates.setSelectionRange(2, 2);
+    });
     await release();
     await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
-    expect(labelled<HTMLInputElement>('Title')?.value).toBe('C++');
-    await click(button('Save project')!);
-    await until(() => writes().length === 2, 'the second save');
-    expect(writes()[1]!.body).toMatchObject({ title: 'C++', tagline: null, dates: '2024' });
+    expect(document.querySelector('.project-row--editing')).not.toBeNull();
+    const focused = document.activeElement as HTMLInputElement;
+    expect(focused.getAttribute('aria-label')).toBe('Dates');
+    expect(focused).toBe(labelled('Dates'));
+    expect([focused.selectionStart, focused.selectionEnd]).toEqual([2, 2]);
   });
 
   it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {

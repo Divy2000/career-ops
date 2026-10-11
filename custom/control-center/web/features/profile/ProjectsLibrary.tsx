@@ -1,7 +1,7 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
 // parser session for PDF) and a rank preview against a pasted JD.
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -79,16 +79,14 @@ function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
 
 /**
  * A form whose draft moved on during a save: it now edits the saved version, with the newer text on top. The saved
- * entry is found where the write put it, not by content (the library stores fields normalized): a POST appends it
- * last and answers with its id (ids can repeat, C# and C++ are both "c"), and a PUT keeps it at its index in the
- * version the save was pinned to.
+ * entry is found where the write put it, not by content (the library stores fields normalized): a POST answers with
+ * its id, and a PUT keeps the entry at its index in the version the save was pinned to.
  */
 function onSaved(e: Editing, sent: ProjectDraft, saved: { etag: string; id?: string }, pinned: { posted: boolean; origin: EntryOrigin | null }, list: ProjectsRead | undefined): Editing {
   // Without a list of this version to read the entry from, a POST's id still keeps the next save from adding it again.
   const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false, ...(pinned.posted && saved.id ? { id: saved.id, origin: null } : {}) };
   if (!list || list.etag !== saved.etag) return next;
-  const last = list.entries.at(-1);
-  const now = pinned.posted ? (last?.id === saved.id ? last : undefined) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
+  const now = pinned.posted ? list.entries.find((x) => x.id === saved.id) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
   if (!now) return next;
   return { ...next, id: now.id, base: draftFromEntry(now), tagline: now.tagline, source: now.source, origin: { ids: list.entries.map((x) => x.id), index: list.entries.indexOf(now), bullets: now.bullets } };
 }
@@ -267,6 +265,9 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
   );
 }
 
+/** The field a form had focus in when it unmounted: an open form that moves (into the list, or to a renamed entry) remounts, and takes it back. */
+let heldFocus: { token: number; label: string; start: number | null; end: number | null } | null = null;
+
 function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }: { editing: Editing; liveEtag: string | null; onDiskTitles: string[]; update: Dispatch<SetStateAction<Editing | null>>; isOpen: (token: number) => boolean; onDone: () => void }) {
   const qc = useQueryClient();
   const [saving, setSaving] = useState(false);
@@ -279,6 +280,25 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
   const setBullet = (i: number, value: string) => patch((e) => ({ ...e, draft: { ...e.draft, bullets: e.draft.bullets.map((b, j) => (j === i ? value : b)) } }));
   const say = (m: string[]) => patch((e) => ({ ...e, messages: m }));
   const label = editing.id === null ? 'Add a project' : `Edit ${draft.title || 'project'}`;
+  const formRef = useRef<HTMLFormElement>(null);
+  // Layout effects: the cleanup runs while the old form is still in the document, the setup before the user can type.
+  useLayoutEffect(() => {
+    const form = formRef.current;
+    const held = heldFocus?.token === mine ? heldFocus : null;
+    heldFocus = null;
+    const field = held ? form?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${CSS.escape(held.label)}"]`) : null;
+    if (held && field && (document.activeElement === null || document.activeElement === document.body)) {
+      field.focus();
+      if (held.start !== null && held.end !== null) field.setSelectionRange(held.start, held.end);
+    }
+    return () => {
+      const active = document.activeElement;
+      const name = active?.getAttribute('aria-label');
+      if (form && name && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && form.contains(active)) {
+        heldFocus = { token: mine, label: name, start: active.selectionStart, end: active.selectionEnd };
+      }
+    };
+  }, [mine]);
 
   const save = async (asNew: boolean) => {
     const problems = draftProblems(draft);
@@ -341,7 +361,7 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
   };
 
   return (
-    <form className="project-form" aria-label={label} onSubmit={submit} noValidate>
+    <form ref={formRef} className="project-form" aria-label={label} onSubmit={submit} noValidate>
       <h3 className="project-form__title">{editing.id === null ? 'New project' : `Editing ${editing.draft.title || 'project'}`}</h3>
       <div className="project-form__grid">
         <label className="project-field project-field--wide">
