@@ -931,10 +931,9 @@ if [ -n "${H1B_INDEX_PATH+set}" ]; then
   esac
 fi
 # The launchd plist does not carry H1B_INDEX_PATH, so the daily job always reads the default index: it matters only when
-# a daily job is or will be installed and the default index is not there.
-if [ "$NO_H1B" = 0 ] && [ "$H1B_BLANK" = 0 ] && [ ! -f "$H1B_DEFAULT" ] &&
-  { [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ] || { [ "$MAC_FEATURES" = 1 ] && [ "$NO_LAUNCHD" = 0 ]; }; } &&
-  ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
+# this run installs the daily job for this checkout and the default index is not there.
+if [ "$NO_H1B" = 0 ] && [ "$H1B_BLANK" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$NO_LAUNCHD" = 0 ] &&
+  [ ! -f "$H1B_DEFAULT" ] && ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
   pending "H1B_INDEX_PATH points at $H1B_INDEX, but the daily job does not inherit H1B_INDEX_PATH and reads $H1B_DEFAULT. Copy the index there, or unset H1B_INDEX_PATH and run: $H1B_CMD"
 fi
 if [ "$NO_H1B" = 1 ]; then

@@ -909,28 +909,27 @@ test('an H1B_INDEX_PATH with surrounding spaces is trimmed like the plugin trims
   assert.ok(r.out.includes(`index already installed: ${idx}\n`), r.out);
 });
 
-const DAILY_PLIST = 'Library/LaunchAgents/com.career-ops.immigration-watch.plist';
-test('an H1B_INDEX_PATH other than the default is a pending action when the daily job lacks the default index, since it does not inherit the variable (R18-scripts-b-L2-01 review)', () => {
+test('an H1B_INDEX_PATH other than the default is a pending action when the daily job this run installs lacks the default index, since it does not inherit the variable (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x' } });
-  w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
-  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /the daily job does not inherit H1B_INDEX_PATH/, r.out);
   assert.ok(r.out.includes(path.join(D, 'data/h1b/index.ndjson.gz')), r.out);
 });
 
-test('an H1B_INDEX_PATH other than the default leaves nothing pending when the default index is there too, with --no-h1b-index, or with no daily job (R18-scripts-b-L2-01 review)', () => {
+test('an H1B_INDEX_PATH other than the default leaves nothing pending when the default index is there too, with --no-h1b-index, or with --no-launchd (R18-scripts-b-L2-01 review)', () => {
   const cases = [
-    { name: 'default index present', files: { 'data/h1b/index.ndjson.gz': 'x' }, plist: true, flags: [] },
-    { name: '--no-h1b-index', files: {}, plist: true, flags: ['--no-h1b-index'] },
-    { name: '--no-launchd and no daily job installed', files: {}, plist: false, flags: [] },
+    { name: 'default index present', files: { 'data/h1b/index.ndjson.gz': 'x' }, flags: [] },
+    { name: '--no-h1b-index', files: {}, flags: ['--no-h1b-index'] },
+    // This run leaves launchd alone, and an installed job may run another checkout, so nothing about it is claimed.
+    { name: '--no-launchd', files: {}, flags: ['--no-launchd'], plist: true },
   ];
   for (const c of cases) {
     const { w, D } = fresh({ keychain: true });
     w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x', ...c.files } });
-    if (c.plist) w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
-    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none', ...c.flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+    if (c.plist) w.write('home/Library/LaunchAgents/com.career-ops.immigration-watch.plist', '<plist/>\n');
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none', ...c.flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
     assert.equal(r.status, 0, `${c.name}\n${r.out}`);
     assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, c.name);
   }
@@ -950,8 +949,7 @@ test('an absolute H1B_INDEX_PATH through the real folder of a symlinked checkout
   const D = path.join(w.T, 'linked-checkout');
   w.makeCheckout(real, { files: READY_FILES });
   fs.symlinkSync(real, D);
-  w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
-  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(real, 'data/h1b/index.ndjson.gz') } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(real, 'data/h1b/index.ndjson.gz') } });
   assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
   assert.equal(r.status, 0, r.out);
 });
@@ -963,8 +961,7 @@ test('an H1B_INDEX_PATH whose .. leaves a symlinked data/h1b names another file 
   fs.mkdirSync(path.join(w.T, 'store/idx-2024'), { recursive: true });
   fs.mkdirSync(path.join(D, 'data'), { recursive: true });
   fs.symlinkSync(path.join(w.T, 'store/idx-2024'), path.join(D, 'data/h1b'));
-  w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
-  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/../h1b/index.ndjson.gz' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/../h1b/index.ndjson.gz' } });
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
 });
