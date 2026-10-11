@@ -242,7 +242,12 @@ export function SessionPanel(props: SessionPanelProps) {
         props.onSent?.();
         writeDraft(props.draftKey, null);
       }
-      if (fork) {
+      // A 202 can carry a fork that failed before its turn ran: the panel and its host stay on the session it forked from.
+      const forkFailed = fork && m.status === 'error';
+      if (forkFailed) {
+        setError(`The fork did not start: ${m.error ?? 'session failed to start'}`);
+        if (marks) setRestated((n) => n + 1);
+      } else if (fork) {
         seen.current = 0;
         setSessionId(m.id);
         props.onSessionId?.(m.id);
@@ -254,7 +259,8 @@ export function SessionPanel(props: SessionPanelProps) {
       }
       // A 202 can carry a turn that failed before it ran: nothing was started.
       if (marks && m.status === 'error') props.onStartFailed?.();
-      setReply('');
+      // Kept for another try once the setup is fixed.
+      if (!forkFailed) setReply('');
     } catch (err) {
       if (marks) {
         props.onStartFailed?.();
