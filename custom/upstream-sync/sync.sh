@@ -101,7 +101,7 @@ SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fa
 KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
 { [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] && [ "$KEYCHAIN_TIMEOUT" -le 3600 ]; } || { rm -f "$SECURITY_ERR"; fail "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not ${KEYCHAIN_TIMEOUT//[\"\\]/}."; }
 bounded() {
-  /usr/bin/perl -e '
+  /usr/bin/perl -MPOSIX=WNOHANG -e '
     my $limit = shift;
     my $pid = fork;
     die "cannot start $ARGV[0]: $!\n" unless defined $pid;
@@ -110,11 +110,19 @@ bounded() {
       print STDERR "$ARGV[0]: $!\n";
       exit($!{ENOENT} ? 127 : 126);
     }
-    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid $pid, 0; exit 124 };
+    sub status { ($? & 127) ? 128 + ($? & 127) : $? >> 8 }
+    # The alarm can land just after the main waitpid reaped security: only a security still running is a timeout.
+    $SIG{ALRM} = sub {
+      my $reaped = $?;
+      my $r = waitpid $pid, WNOHANG;
+      if ($r == 0) { kill "KILL", $pid; waitpid $pid, 0; exit 124 }
+      exit status() if $r == $pid;
+      $? = $reaped;
+    };
     alarm $limit;
     waitpid $pid, 0;
     alarm 0;
-    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+    exit status();
   ' "$@"
 }
 TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s career-ops-claude-token -w 2>"$SECURITY_ERR")"
