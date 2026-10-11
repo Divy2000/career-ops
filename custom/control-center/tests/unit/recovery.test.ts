@@ -504,6 +504,17 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(t.revert(false).status).toBe(200);
   });
 
+  it('a run cancelled but not yet ended (its command in the kill grace) blocks the revert while its processes live, as the runner keeps tracking it (R19-supervisor-L2-01)', () => {
+    const live = { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid), childPid: process.pid, childStartedAt: processStartTime(process.pid) };
+    const grace = stalled((dir) => runMeta(dir, { status: 'cancelled', endedAt: null, ...live }));
+    expect(grace.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    expect(fs.readFileSync(grace.file, 'utf8')).toBe('broken by the turn\n');
+    const exited = stalled((dir) => runMeta(dir, { status: 'cancelled', endedAt: null, wrapperPid: deadPid(), childPid: deadPid() }));
+    expect(exited.revert(false).status).toBe(200);
+    const ended = stalled((dir) => runMeta(dir, { status: 'cancelled', endedAt: '2026-10-06T00:00:05.000Z', ...live }));
+    expect(ended.revert(false).status).toBe(200);
+  });
+
   it('a run whose meta has no child PID yet is judged by the PIDs the wrapper recorded in wrapper.json', () => {
     const live = stalled((dir) => {
       runMeta(dir, { wrapperPid: deadPid(), childPid: null });

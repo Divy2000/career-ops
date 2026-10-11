@@ -404,14 +404,17 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
   if (!runId || !/^[\w-]+$/.test(runId)) return false;
   const dir = path.join(dataRoot, 'data', 'control-center', 'runs', runId);
   if (fs.existsSync(path.join(dir, 'exit.json'))) return true;
-  let run: { status?: string; wrapperPid?: number | null; childPid?: number | null; wrapperStartedAt?: unknown; childStartedAt?: unknown } | null;
+  let run: { status?: string; endedAt?: unknown; wrapperPid?: number | null; childPid?: number | null; wrapperStartedAt?: unknown; childStartedAt?: unknown } | null;
   try {
     run = readJson(path.join(dir, 'meta.json'));
   } catch {
     return false;
   }
   if (!run) return false;
-  if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost') return true;
+  if (run.status === 'done' || run.status === 'failed' || run.status === 'lost') return true;
+  // A cancel marks the run at once and records its end only when the command exits (store.ts unended()): until then its
+  // command may still be in the kill grace, so its processes decide below.
+  if (run.status === 'cancelled' && run.endedAt !== null) return true;
   // A queued run is not over while a server will start it: the next server queues it again from its start request and
   // runs it. Only one with no request.json never starts (that server marks it lost). With no server running at all,
   // neither a start request nor its absence can be answered, so the run is as good as lost and no longer blocks a revert.
