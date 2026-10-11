@@ -233,6 +233,8 @@ export const ACTIONS: ActionDef[] = [
     params: z.object({ report: reportLabel, mark: z.enum(['shared', 'later', 'never']) }),
     build: (p, ctx) => node(ctx, 'hiredShare', ['--report', String(p.report), '--mark', p.mark]),
   }),
+  // Read-only: the hires the AGENTS.md cadence still allows asking (never asked, or "later" over 30 days ago).
+  define({ id: 'tracker.hiredStatus', label: 'Hired Wall ask status', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'hiredShare', ['--status']) }),
   // ---- pipeline ----
   define({ id: 'pipeline.prioritize', label: 'Prioritize pipeline', cost: 'free', resources: ['pipeline'], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'prioritize', []) }),
   define({

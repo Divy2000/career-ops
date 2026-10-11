@@ -98,7 +98,7 @@ describe('ackPolicyPass (R18-srv-dom-b-L1-01)', () => {
     const calls: string[][] = [];
     const exec: Exec = async (_cmd, args) => (calls.push(args), results.shift()!);
     const reason = await ackPolicyPass(exec, DEFAULT_CODE_ROOT, '/data', 'data/immigration/batches/b.json', { retryMs: 1 });
-    expect(reason).toBe('acknowledged 2 item(s); 0 still pending');
+    expect(reason).toEqual({ ok: true, text: 'acknowledged 2 item(s); 0 still pending' });
     expect(calls).toHaveLength(3);
     expect(calls.every((a) => a.at(-1) === path.join('/data', 'data/immigration/batches/b.json'))).toBe(true);
   });
@@ -112,6 +112,6 @@ describe('ackPolicyPass (R18-srv-dom-b-L1-01)', () => {
     };
     const reason = await ackPolicyPass(exec, DEFAULT_CODE_ROOT, '/data', 'data/immigration/batches/b.json', { retryMs: 1 });
     expect(n).toBe(3);
-    expect(reason).toBe('could not acknowledge the policy items it was given: pending.json.lock is held by another writer');
+    expect(reason).toEqual({ ok: false, text: 'could not acknowledge the policy items it was given: pending.json.lock is held by another writer' });
   });
 });
