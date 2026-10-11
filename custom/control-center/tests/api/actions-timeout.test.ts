@@ -5,10 +5,13 @@ import { makeTestApp, type TestApp } from "../helpers/app.js";
 import { TIMEOUT_EXIT_CODE, type Exec } from "../../server/routes/system.js";
 
 let t: TestApp;
+// The exit code a timed-out run reports is the runner's; tests swap it to show that no action-level reading of the
+// code (exitMap, findings) can win over the timeout.
+let timedOutCode = TIMEOUT_EXIT_CODE;
 const timedOutExec: Exec = async (cmd) => ({
-  code: TIMEOUT_EXIT_CODE,
+  code: timedOutCode,
   stdout: "",
-  stderr: `\n${cmd} timed out after 30 s`,
+  stderr: `\n(--check)\n${cmd} timed out after 30 s`,
   timedOut: true,
 });
 
@@ -31,13 +34,28 @@ describe("sync action timeout", () => {
     expect(r.json().error).toMatch(/timed out/);
   });
 
+  it("reports a timeout even when the exit code is one the action's exitMap explains", async () => {
+    timedOutCode = 1;
+    const r = await t.app.inject({
+      method: "POST",
+      url: "/api/actions/tracker.setStatus",
+      headers: t.authedWrite,
+      payload: { params: { row: 1, state: "Applied" } },
+    });
+    timedOutCode = TIMEOUT_EXIT_CODE;
+    expect(r.statusCode, r.body).toBe(504);
+    expect(r.json().error).toMatch(/timed out/);
+  });
+
   it("reports a timeout even when the action would read its output as findings", async () => {
+    timedOutCode = 1;
     const r = await t.app.inject({
       method: "POST",
       url: "/api/actions/tracker.syncCheck",
       headers: t.authedWrite,
       payload: {},
     });
+    timedOutCode = TIMEOUT_EXIT_CODE;
     expect(r.statusCode, r.body).toBe(504);
     expect(r.json().error).toMatch(/timed out/);
   });
