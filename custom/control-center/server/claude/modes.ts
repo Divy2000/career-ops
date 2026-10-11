@@ -77,7 +77,7 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
     // jds/<slug>.md: modes/pdf.md saves the JD there before anything else, and the projects house rule ranks it from there.
     writeGlobs: ['output/**', 'jds/*.md', 'templates/cv-*.html', 'templates/cover-*.html', '*.tex'],
     network: ['WebSearch'],
-    extraBash: ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'build-cv-latex.mjs', 'generate-latex.mjs', 'mark-pdf-ready.mjs', 'jd-skill-gap.mjs', 'keyword-match.mjs', 'custom/projects/rank.mjs', 'custom/cv/build-html.mjs', 'custom/cv/render-pdf.mjs'],
+    extraBash: ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'build-cv-latex.mjs', 'generate-latex.mjs', 'mark-pdf-ready.mjs', 'jd-skill-gap.mjs', 'keyword-match.mjs', 'custom/projects/rank.mjs', 'custom/cv/build-html.mjs', 'custom/cv/render-pdf.mjs', 'custom/cv/compile-latex.mjs'],
   },
   outreach: {
     writeGlobs: ['data/contacts.tsv', 'data/follow-ups.md', 'data/reply-candidates.json'],

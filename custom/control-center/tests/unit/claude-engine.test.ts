@@ -1305,8 +1305,8 @@ describe('checkBash: exact per-command argument grammars', () => {
     no(writers('build-cv-html.mjs'), 'node build-cv-html.mjs output/cv.json --preview templates/cv-modern.html');
     no(writers('extract-latex-content.mjs'), 'node extract-latex-content.mjs --out=output/m.json output/cv.tex');
     ok(writers('extract-latex-content.mjs'), 'node extract-latex-content.mjs output/cv.tex --out output/m.json');
-    ok(writers('generate-latex.mjs'), 'node generate-latex.mjs output/cv.tex output/cv.pdf --compile-only');
-    no(writers('generate-latex.mjs'), 'node generate-latex.mjs output/cv.tex --compileonly');
+    ok(writers('custom/cv/compile-latex.mjs'), 'node custom/cv/compile-latex.mjs output/cv.tex output/cv.pdf --compile-only');
+    no(writers('custom/cv/compile-latex.mjs'), 'node custom/cv/compile-latex.mjs output/cv.tex output/cv.pdf --compileonly');
   });
 
   it('scripts that read paths by index: a flag can never fill a path slot, even when fewer paths are given', () => {
@@ -1326,21 +1326,34 @@ describe('checkBash: exact per-command argument grammars', () => {
     ok(writers('build-cv-html.mjs'), 'node build-cv-html.mjs --preview output/cv.json');
   });
 
-  it('generate-latex: the files it compiles next to its input must be writable too, with or without an output path', () => {
+  it('generate-latex: no session compiles with it, since a .tex can read any file on disk; the refusal names the sandboxed wrapper', () => {
     const latex = { ...pdf, bash: [['node', 'generate-latex.mjs']] };
-    // The review trigger: with no output it writes templates/cv-template.pdf, outside the documents scope.
-    no(latex, 'node generate-latex.mjs templates/cv-template.tex --compile-only');
-    // With an output it still compiles (and deletes) <base>.pdf, .aux and .log next to the input.
-    no(latex, 'node generate-latex.mjs templates/cv-template.tex output/cv.pdf --compile-only');
-    no(latex, 'node generate-latex.mjs cv.tex');
-    ok(latex, 'node generate-latex.mjs output/cv.tex');
-    ok(latex, 'node generate-latex.mjs output/cv.tex output/final/cv.pdf --compile-only');
-    const reason = checkBash('node generate-latex.mjs templates/cv-template.tex --compile-only', latex, root);
-    expect(reason).toMatch(/templates\/cv-template\.pdf/);
-    // A protected sibling (here a .log the deny list names) blocks the compile as well.
-    const data = { codeRoot: root, dataRoot: root, allow: ['data/**'], deny: ['data/x.log'], bash: [['node', 'generate-latex.mjs']] };
-    no(data, 'node generate-latex.mjs data/x.tex data/out.pdf');
-    ok(data, 'node generate-latex.mjs data/y.tex data/out.pdf');
+    // The review trigger: \verbatiminput{/abs/path} (or a dropped output/*.sty) compiled here prints any readable file into the PDF and log.
+    for (const cmd of [
+      'node generate-latex.mjs output/cv.tex output/cv.pdf',
+      'node generate-latex.mjs output/cv.tex output/cv.pdf --compile-only',
+      'node generate-latex.mjs output/cv.tex',
+      'node generate-latex.mjs --compile-only output/cv.tex',
+    ]) {
+      const reason = checkBash(cmd, latex, root);
+      expect(reason, cmd).toMatch(/node custom\/cv\/compile-latex\.mjs <in\.tex> <out\.pdf>/);
+    }
+    // Printing its usage compiles nothing.
+    ok(latex, 'node generate-latex.mjs --help');
+    ok(latex, 'node generate-latex.mjs -h');
+  });
+
+  it('compile-latex: reads a .tex inside the roots and writes its PDF only inside the write scope', () => {
+    const wrapper = { ...pdf, bash: [['node', 'custom/cv/compile-latex.mjs']] };
+    ok(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex output/cv.pdf');
+    ok(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex output/final/cv.pdf --compile-only');
+    no(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex cv.pdf');
+    no(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex data/applications.md');
+    no(wrapper, 'node custom/cv/compile-latex.mjs /etc/passwd output/cv.pdf');
+    no(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex /tmp/cv.pdf');
+    no(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex output/cv.pdf output/b.pdf');
+    no(wrapper, 'node custom/cv/compile-latex.mjs output/cv.tex output/cv.pdf --out=output/c.pdf');
+    no(wrapper, 'node custom/cv/compile-latex.mjs -x/../cv.md output/cv.pdf');
   });
 
   it('declared flags are exempt from the output-flag rule whatever their role, and documented switches are accepted', () => {

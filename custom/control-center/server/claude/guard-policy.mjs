@@ -417,6 +417,7 @@ const OUTPUT_FLAG = /^(--out|--output|--outdir|--output-dir|--dest|--root|--dir|
  * - readOnlyWith: switches that make the script write nothing (its read modes),
  *   so with any of them present its outputs are only read;
  * - outputSuffixes: each output is also written with these suffixes appended.
+ * - refusal: why no session may run the script (only its usage switches alone run).
  * Roles: 'input' (read inside the roots), 'output' (inside the write scope),
  * 'value' (plain). Any other dash token is refused: these parsers would treat it
  * as a path (path.resolve turns -x/../cv.md into cv.md).
@@ -441,8 +442,11 @@ const WRITER_SCRIPTS = {
   },
   'generate-cover-letter.mjs': { switches: ['--help', '-h'], next: COVER_FLAGS, eq: COVER_FLAGS, positionals: [] },
   'build-cv-latex.mjs': { switches: ['--help', '--test'], eq: { '--template': 'value' }, positionals: ['input', 'output'], indexed: true },
-  // Compiles in the input's directory: see latexCompileSiblings.
-  'generate-latex.mjs': { switches: ['--compile-only', '--help', '-h'], positionals: ['input', 'output'], compilesNextToInput: true },
+  // A compile reads whatever the .tex names (\verbatiminput{/abs/path}, a sibling .sty in output/) and prints it into the
+  // PDF and log, so no session compiles with it; custom/cv/compile-latex.mjs compiles a copy in a sandbox instead.
+  'generate-latex.mjs': { switches: ['--help', '-h'], positionals: [], refusal: 'generate-latex.mjs compiles the .tex with read access to every file on disk, so sessions may not run it; compile with the sandboxed wrapper instead: node custom/cv/compile-latex.mjs <in.tex> <out.pdf> [--compile-only]' },
+  // Copies only the .tex into a fresh temp folder and compiles it there under sandbox-exec; writes only the PDF.
+  'custom/cv/compile-latex.mjs': { switches: ['--compile-only', '--help', '-h'], positionals: ['input', 'output'] },
   'build-cv-html.mjs': { switches: ['--help', '--test'], positionals: ['input', 'output', 'input'], indexed: true, modes: { '--preview': ['input', 'input'] } },
   'patch-latex-content.mjs': { switches: ['--help'], positionals: ['input', 'input', 'output'] },
   'extract-latex-content.mjs': { switches: ['--help'], next: { '--out': 'output' }, positionals: ['input'] },
@@ -627,20 +631,9 @@ function checkGit(policy, sub, args, label) {
   return null;
 }
 
-/**
- * generate-latex.mjs compiles in the input's directory whether or not an output
- * path is given: <base>.pdf (the default output, and pdflatex's intermediate),
- * the aux and log files, and tectonic's <base>._tectonic.* copies are written
- * there and then deleted. All of them must be inside the write scope.
- */
-function latexCompileSiblings(input) {
-  const dir = path.dirname(input);
-  const base = path.basename(input, '.tex');
-  const exts = ['.pdf', '.aux', '.log', '.out', '.fls', '.fdb_latexmk', '.synctex.gz'];
-  return [...exts.map((e) => `${base}${e}`), `${base}._tectonic.tex`, ...exts.map((e) => `${base}._tectonic${e}`)].map((name) => path.join(dir, name));
-}
-
 function checkWriterScript(policy, script, spec, args, label) {
+  // A refused script may still print its usage, which runs nothing else.
+  if (spec.refusal && !(args.length === 1 && spec.switches.includes(args[0]))) return `${label}: ${spec.refusal}`;
   // A read-mode switch is never consumed as a value: like the scripts, the walk below refuses a value that starts with --.
   const readOnly = (spec.readOnlyWith ?? []).some((s) => args.includes(s));
   const check = (role, value) => {
@@ -660,7 +653,6 @@ function checkWriterScript(policy, script, spec, args, label) {
     rest = args.slice(1);
   }
   let positionals = 0;
-  const given = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (spec.indexed && i < roles.length && a.startsWith('-')) return `${label}: ${script} reads argument ${i + 1} as the ${roles[i]} path, so a flag cannot go there (${a}); give all ${roles.length} paths first`;
@@ -696,15 +688,8 @@ function checkWriterScript(policy, script, spec, args, label) {
     const role = roles[positionals] ?? spec.rest;
     positionals += 1;
     if (!role) return `${label}: ${script} takes at most ${roles.length} path argument${roles.length === 1 ? '' : 's'} (${a})`;
-    given.push(a);
     const why = check(role, a);
     if (why) return why;
-  }
-  if (spec.compilesNextToInput && given[0] !== undefined) {
-    for (const sibling of latexCompileSiblings(given[0])) {
-      const why = writable(policy, sibling, label);
-      if (why) return `${why} (${script} compiles next to its input)`;
-    }
   }
   return null;
 }
