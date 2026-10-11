@@ -19,10 +19,23 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 }));
 
 class FakeEventSource {
-  constructor(public url: string) {}
-  addEventListener() {}
-  removeEventListener() {}
+  static all: FakeEventSource[] = [];
+  private listeners = new Map<string, Array<(ev: MessageEvent) => void>>();
+  constructor(public url: string) {
+    FakeEventSource.all.push(this);
+  }
+  addEventListener(type: string, fn: (ev: MessageEvent) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  }
+  removeEventListener(type: string, fn: (ev: MessageEvent) => void) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn));
+  }
   close() {}
+  /** One stored event of the Process inbox run, as the server sends it on the app event stream. */
+  static emit(seq: number, event: { type: string; [k: string]: unknown }) {
+    const data = JSON.stringify({ sessionId: DONE.id, stored: { seq, ts: '2026-10-10T10:01:00.000Z', event } });
+    for (const es of FakeEventSource.all) for (const fn of es.listeners.get('session.event') ?? []) fn(new MessageEvent('session.event', { data }));
+  }
 }
 
 const URL_A = 'https://jobs.example.com/a';
@@ -89,6 +102,16 @@ async function type(text: string) {
 }
 
 describe('a reply or fork of a finished Process inbox run', () => {
+  it('given Send refused because the run started from elsewhere meanwhile, Evaluate visible stays off while the run goes', async () => {
+    await type('carry on');
+    await act(async () => button('Send').click());
+    await act(async () => FakeEventSource.emit(2, { type: 'status', status: 'running', turn: 1 }));
+    await act(async () => answer!(json(409, { error: `session ${DONE.id} is running` })));
+    await until(() => host.querySelector('[role="alert"]')?.textContent?.includes('is running'), 'the refusal');
+    expect(startMarked()).toBe(false);
+    expect(evaluate().disabled).toBe(true);
+  });
+
   for (const [label, path] of [['Send', `/api/sessions/${DONE.id}/turns`], ['Fork', `/api/sessions/${DONE.id}/fork`]] as const) {
     it(`given ${label} in flight, the start is marked and Evaluate visible is off until the server answers`, async () => {
       await type('carry on');

@@ -184,10 +184,13 @@ export function SessionPanel(props: SessionPanelProps) {
     for (const env of transcript.envelopes.slice(seen.current)) onEnvelope(env.kind, env.payload, env.turn);
     seen.current = transcript.envelopes.length;
   }, [transcript.envelopes, onEnvelope]);
+  // Bumped when a reply or fork reported as a start fails: the host hears the status again, since a turn started
+  // meanwhile from elsewhere keeps the session going.
+  const [restated, setRestated] = useState(0);
   useEffect(() => {
     // A session the server no longer has reports 'gone', so a host waiting on it does not wait forever.
     onStatus?.(gone ? 'gone' : transcript.status, gone ? null : transcript.reason);
-  }, [gone, transcript.status, transcript.reason, onStatus]);
+  }, [gone, transcript.status, transcript.reason, onStatus, restated]);
   const start = async (text: string) => {
     props.onStarting?.();
     setBusy(true);
@@ -247,7 +250,10 @@ export function SessionPanel(props: SessionPanelProps) {
       if (marks && m.status === 'error') props.onStartFailed?.();
       setReply('');
     } catch (err) {
-      if (marks) props.onStartFailed?.();
+      if (marks) {
+        props.onStartFailed?.();
+        setRestated((n) => n + 1);
+      }
       if (err instanceof ApiError && err.status === 404) setLostId(sessionId);
       else setError(describeError(err));
     } finally {
