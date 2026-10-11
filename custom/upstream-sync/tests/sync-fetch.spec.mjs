@@ -1418,6 +1418,18 @@ test('a whitespace-only Keychain token stops the sync as a missing one, as the C
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('a security command that cannot run (exit 126) is named as the problem, not a locked Keychain (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'exit 126' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: the security command could not be run \(exit 126\)/m);
+    assert.doesNotMatch(res.log, /unlock-keychain|not found|setup-token/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('a locked Keychain (security exit 36) stops the sync saying the token could not be read, never that it is missing (R22-scripts-b-L3-01)', () => {
   const w = makeWorld();
   const home = path.join(w.base, 'home');

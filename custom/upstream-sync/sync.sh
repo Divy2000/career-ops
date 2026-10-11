@@ -102,6 +102,8 @@ if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "${TOKEN//[[:spac
   fail "Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w"
 elif [ "$SECURITY_RC" = 127 ]; then
   fail "Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin)."
+elif [ "$SECURITY_RC" = 126 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: the security command could not be run (exit 126${SECURITY_WHY:+: $SECURITY_WHY}); check that /usr/bin/security is the one first on PATH."
 elif [ "$SECURITY_RC" != 0 ]; then
   fail "Could not read Keychain item career-ops-claude-token: security failed (exit $SECURITY_RC${SECURITY_WHY:+: $SECURITY_WHY}). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then re-run."
 fi
