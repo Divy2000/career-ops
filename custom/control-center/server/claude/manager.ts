@@ -334,16 +334,22 @@ export class SessionManager {
     // A second evaluation of a posting a live session of the mode's class evaluates (one waiting for the user's reply
     // too: the reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const cls = evaluationClass(input.mode);
-    const live = new Map<string, string>();
-    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
     const key = (url: string) => `${cls}\0${postingKey(input.mode, { type: 'url', value: url })}`;
+    const live = new Map<string, string>();
+    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(key(m.target.value), m.id);
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
+    // Two spellings of one posting in this batch (a tracking param, a trailing slash) are one evaluation: the first starts.
+    const batch = new Map<string, string>();
     for (const url of input.urls) {
-      const holder = live.get(url);
-      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
+      const holder = live.get(key(url));
+      const twin = batch.get(key(url));
+      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : twin ? `not started: ${twin} in this batch is the same posting` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
       if (why) refused.push(unstartedMeta(input.mode, { type: 'url', value: url }, input.model ?? null, why));
-      else urls.push(url);
+      else {
+        urls.push(url);
+        batch.set(key(url), url);
+      }
     }
     if (urls.length === 0) return { sessions: refused, reserved: [] };
     for (const url of urls) this.fanningOut.add(key(url));
