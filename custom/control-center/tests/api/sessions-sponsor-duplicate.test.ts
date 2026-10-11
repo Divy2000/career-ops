@@ -226,3 +226,21 @@ describe('the sponsorship check company key is the company-file slug', () => {
     }
   });
 });
+
+// The company guard keys on a company target, so a raw POST naming the company only in its prompt would pass it.
+describe('a sponsorship check must name its company as its target', () => {
+  for (const target of [{ type: 'none', value: null }, { type: 'text', value: 'Acme' }, { type: 'url', value: 'https://acme.example/jobs/1' }, { type: 'app', value: '3' }, { type: 'company', value: '   ' }]) {
+    it(`given a live check of Acme, when a check is started with target ${JSON.stringify(target)}, then it is refused with 400`, async () => {
+      const app = await freshApp();
+      try {
+        liveSession(app, 'sponsorship-check', 'Acme', 'running');
+        const res = await call(app, { mode: 'sponsorship-check', target, prompt: 'Run a sponsorship check for Acme. #3' });
+        expect(res.statusCode, res.body).toBe(400);
+        expect((res.json() as { error: string }).error).toBe('a sponsorship check needs a company target');
+      } finally {
+        await quiet(app);
+        await app.close();
+      }
+    });
+  }
+});

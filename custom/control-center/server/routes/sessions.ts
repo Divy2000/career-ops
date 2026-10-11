@@ -239,6 +239,10 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       if (url && !plainPostingUrl(url)) return reply.code(400).send({ error: 'a url target must be a plain http(s) job posting URL: no credentials, no spaces, at most 2048 characters' });
       parsed.data.target = { type: 'url', value: url || null };
     }
+    // The one-check-per-company guard keys on the company target: a check naming its company only in the prompt would pass it.
+    if (parsed.data.mode === 'sponsorship-check' && !(parsed.data.target.type === 'company' && parsed.data.target.value?.trim())) {
+      return reply.code(400).send({ error: 'a sponsorship check needs a company target' });
+    }
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: parsed.data.target.type === 'company' ? `another sponsorship check is already starting for ${parsed.data.target.value?.trim()}` : `another batch evaluate is already starting ${parsed.data.target.value}` });
     const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
