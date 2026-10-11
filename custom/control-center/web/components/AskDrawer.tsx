@@ -16,6 +16,7 @@ import { localJdPath } from '@shared/local-jd';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { useTracker } from '../lib/queries';
+import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
 
 export interface Proposal {
@@ -115,6 +116,8 @@ function invalidParams(p: { action: string; params: Record<string, unknown> }): 
     if (param.required && missing) return `${p.action} needs "${param.name}", ${param.about}`;
     // A row the tracker cannot have (abc, 1.5, 0) would only fail after the user confirmed it.
     if (param.name === 'row' && !missing && !/^[1-9]\d*$/.test(String(value).trim())) return `${p.action} needs "row", ${param.about}`;
+    // tracker.setStatus's schema takes only the exact canonical spelling (applied, "Applied " or Ghosted are refused).
+    if (p.action === 'setStatus' && param.name === 'state' && !missing && !(STATES as readonly unknown[]).includes(value)) return `setStatus needs "state", ${param.about}`;
   }
   if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
   if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
