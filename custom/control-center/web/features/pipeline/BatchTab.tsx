@@ -53,12 +53,15 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   // Batch stays off until it answers. An id the server no longer lists stops blocking once that read is done.
   const processId = process.panel.sessionId;
   const processUnlisted = processId !== null && sessions.data !== undefined && !sessions.data.some((s) => s.id === processId);
+  // The id that one read answered for, so a later poll of the list does not turn Batch off again.
+  const [readFor, setReadFor] = useState<string | null>(null);
   const { refetch } = sessions;
   useEffect(() => {
-    if (processUnlisted) void refetch();
-  }, [processUnlisted, processId, refetch]);
+    if (!processUnlisted || readFor === processId) return;
+    void refetch().finally(() => setReadFor(processId));
+  }, [processUnlisted, processId, readFor, refetch]);
   const pipelineLive = process.waiting || livePipelineId(sessions.data) !== null;
-  const blocked = pipelineLive || sessions.isPending || sessions.isError || (processUnlisted && sessions.isFetching);
+  const blocked = pipelineLive || sessions.isPending || sessions.isError || (processUnlisted && readFor !== processId);
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
   const asking = useRef(false);
   // A start can answer after the user left the page: only a still-mounted one moves them to the session.

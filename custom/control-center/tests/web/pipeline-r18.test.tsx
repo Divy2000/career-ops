@@ -36,6 +36,7 @@ const pipelineSession = (id: string, status: string) => session(id, status, { ty
 
 let host: HTMLElement;
 let root: Root;
+let queryClient: QueryClient;
 let sessions: SessionMeta[];
 let posts: Array<{ url: string; body: unknown }>;
 // A start the test answers itself, so it can leave the page before the server answers.
@@ -84,7 +85,8 @@ async function mount(tab: 'inbox' | 'batch' = 'inbox') {
   const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => null });
   const tracker = createRoute({ getParentRoute: () => rootRoute, path: '/tracker', component: () => null });
   const router = createRouter({ routeTree: rootRoute.addChildren([pipeline, sessionsRoute, sessionRoute, tracker]), history: createMemoryHistory({ initialEntries: ['/pipeline'] }) });
-  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(RouterProvider, { router })))));
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => root.render(createElement(QueryClientProvider, { client: queryClient }, createElement(ConfirmProvider, null, createElement(RouterProvider, { router })))));
   return router;
 }
 const button = (start: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(start));
@@ -147,13 +149,13 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     expect(posts).toEqual([]);
   });
 
-  // The Process inbox panel reported its id, but the sessions list read so far predates it: the next read is held.
+  // The Process inbox panel reported its id, but the sessions list read so far predates it: a later read is held.
   const heldSecondList = () => {
     const inner = vi.mocked(fetch).getMockImplementation()!;
     let reads = 0;
     let release: (() => void) | null = null;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
-      if (input === '/api/sessions' && !init?.method && ++reads > 1 && !release) await new Promise<void>((r) => (release = r));
+      if (input === '/api/sessions' && !init?.method && ++reads === 2) await new Promise<void>((r) => (release = r));
       return inner(input as string, init);
     });
     return () => release;
@@ -181,6 +183,24 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     expect(button('Batch evaluate')!.disabled).toBe(true);
     await act(async () => released()!());
     await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+  });
+
+  it('given a remembered Process inbox id the server no longer lists, a later poll of the list does not turn Batch evaluate off', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-gone');
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    let release: (() => void) | null = null;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && !init?.method && !release) await new Promise<void>((r) => (release = r));
+      return inner(input as string, init);
+    });
+    void queryClient.refetchQueries({ queryKey: ['sessions'] });
+    await until(() => release, 'the poll sent');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(button('Batch evaluate')!.disabled).toBe(false);
+    await act(async () => release!());
   });
 });
 
