@@ -70,6 +70,14 @@ async function pendingUrlsAt(company: string): Promise<string[]> {
   return urls;
 }
 
+/** Whether a posting is a pending Inbox row, which a running Process inbox session is evaluating. */
+async function isPendingInboxRow(url: string): Promise<boolean> {
+  const pipeline = await apiGet<PipelineRead>('/api/pipeline');
+  return pipeline.kind === 'ok' && pipeline.rows.some((r) => !r.done && r.url === url);
+}
+
+const PROCESS_INBOX_RUNNING = 'Process inbox is evaluating the pending rows: an evaluation started now would evaluate, report and bill them a second time. Try again once it ends.';
+
 export function useAskHotkey(toggle: () => void): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -153,6 +161,23 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
     const company = String(p.params.company ?? '').trim();
     let companyUrls: string[] = [];
+    // Process inbox evaluates every pending row, so an evaluation of one of them would run, report and bill it twice.
+    const pipelineLive = (sessions.data ?? []).some((s) => s.mode === 'pipeline' && LIVE.has(s.status));
+    if (pipelineLive && p.action === 'evaluateCompany') {
+      update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
+      return;
+    }
+    if (pipelineLive && p.action === 'evaluate') {
+      try {
+        if (await isPendingInboxRow(String(p.params.url).trim())) {
+          update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
+          return;
+        }
+      } catch (err) {
+        update(p.id, { state: 'failed', note: describeError(err) });
+        return;
+      }
+    }
     if (p.action === 'evaluateCompany') {
       try {
         companyUrls = (await pendingUrlsAt(company)).filter((u) => !activeFor(u));
