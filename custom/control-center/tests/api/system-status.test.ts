@@ -8,7 +8,7 @@ import { execNoShell, type Exec } from '../../server/routes/system.js';
 describe('GET /api/system/status: the stored token', () => {
   for (const [stored, readToken] of [
     [true, async () => 'tok'],
-    [false, async () => Promise.reject(new Error('Keychain item career-ops-claude-token not found'))],
+    [false, async () => Promise.reject(new Error('Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a "$USER" -s career-ops-claude-token -w'))],
   ] as const) {
     it(`reports keychainTokenPresent ${stored} from the token reader and never runs security itself`, async () => {
       const calls: string[] = [];
@@ -21,6 +21,7 @@ describe('GET /api/system/status: the stored token', () => {
         const res = await t.app.inject({ method: 'GET', url: '/api/system/status', headers: t.authed });
         expect(res.statusCode).toBe(200);
         expect(res.json().keychainTokenPresent).toBe(stored);
+        expect(res.json().keychainToken.state).toBe(stored ? 'present' : 'missing');
         expect(calls).not.toContain('security');
       } finally {
         await t.close();

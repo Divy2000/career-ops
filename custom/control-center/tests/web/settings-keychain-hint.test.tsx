@@ -22,7 +22,7 @@ const READS: Record<string, unknown> = {
   '/api/sessions/engine': { playwrightAvailable: false, modes: [] },
   '/api/usage': { kind: 'ok', dir: '/home/.claude/projects', fiveHour: window0, sevenDay: window0, files: 0, computedAt: '2026-10-06T12:00:00.000Z', budgets: { fiveHourTokens: null, sevenDayTokens: 2000000 } } satisfies UsageResponse,
 };
-const STATUS = { node: 'v24.0.0', claude: { bin: '/usr/local/bin/claude', version: '2.1.0', error: null, approved: true, problem: null }, roots: { code: '/code', data: '/data' }, keychainTokenPresent: false, anthropicApiKeySet: false, careerOps: { version: '1.0.0' } } satisfies SystemStatus;
+const STATUS = { node: 'v24.0.0', claude: { bin: '/usr/local/bin/claude', version: '2.1.0', error: null, approved: true, problem: null }, roots: { code: '/code', data: '/data' }, keychainTokenPresent: false, keychainToken: { state: 'missing', reason: null }, anthropicApiKeySet: false, careerOps: { version: '1.0.0' } } satisfies SystemStatus;
 
 afterEach(async () => {
   await act(async () => root.unmount());
