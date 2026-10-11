@@ -20,8 +20,29 @@ export const isCredential = (name: string): boolean => name.startsWith('ANTHROPI
  * data root's .env. The app reads and edits only the data root's data/pipeline.md, data/scan-history.tsv, portals.yml
  * and config/profile.yml, so a scan it starts must read and write those: an empty value keeps each script's default (they read it with ||), and dotenv never
  * overwrites a variable that is already set. A caller may still pass one explicitly.
+ * The same holds for every other data file or folder a script the app starts lets the environment move: reply
+ * candidates (paste-reply), follow-ups (followup-seed), documents and intake state (intake), reports and batch state
+ * (reserve-report-num, verify-pipeline), jds (verify-pipeline), tracker additions (merge-tracker), and cv.md and
+ * article-digest.md (add-entry). CAREER_OPS_TRACKER and CAREER_OPS_PDF_INDEX pass, since the app follows them too; lock
+ * locations pass so the app's writers still exclude the user's own CLI.
  */
-const PINNED_TO_DATA_ROOT = { CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PROFILE: '' };
+const PINNED_TO_DATA_ROOT = {
+  CAREER_OPS_PIPELINE: '',
+  CAREER_OPS_SCAN_HISTORY: '',
+  CAREER_OPS_PORTALS: '',
+  CAREER_OPS_PROFILE: '',
+  CAREER_OPS_REPLY_CANDIDATES: '',
+  CAREER_OPS_FOLLOWUPS: '',
+  CAREER_OPS_DOCUMENTS_DIR: '',
+  CAREER_OPS_INTAKE_STATE: '',
+  CAREER_OPS_REPORTS_DIR: '',
+  CAREER_OPS_REPORTS: '',
+  CAREER_OPS_JDS: '',
+  CAREER_OPS_ADDITIONS: '',
+  CAREER_OPS_BATCH_STATE: '',
+  CAREER_OPS_CV: '',
+  CAREER_OPS_ARTICLE_DIGEST: '',
+};
 
 export function childEnv(extra: NodeJS.ProcessEnv = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};

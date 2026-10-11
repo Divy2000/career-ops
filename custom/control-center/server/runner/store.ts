@@ -151,8 +151,14 @@ export class RunStore {
     // Only run folders: Finder drops .DS_Store here, and anything else stray is not a run either.
     for (const entry of fs.readdirSync(runsDir(this.dataRoot), { withFileTypes: true })) {
       if (!entry.isDirectory() || !RUN_ID.test(entry.name)) continue;
-      const meta = this.read(entry.name);
-      if (meta) out.push(meta);
+      // One unreadable or half-written meta.json (a power loss mid-write) must not stop the list, the server's start
+      // (reconcile) or the queue: that run is left out and logged, as policy-claim.mjs treats it as holding nothing.
+      try {
+        const meta = this.read(entry.name);
+        if (meta) out.push(meta);
+      } catch (err) {
+        console.warn(`[runs] skipped run ${entry.name}: its meta.json cannot be read (${(err as Error).message})`);
+      }
     }
     return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
   }

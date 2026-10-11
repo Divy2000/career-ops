@@ -144,6 +144,52 @@ describe('action registry', () => {
     }
   });
 
+  it('Paste a reply appends to the data root\'s reply-candidates.json even when the shell exported CAREER_OPS_REPLY_CANDIDATES (R21-srv-core-L2-01)', async () => {
+    const elsewhere = path.join(tempDir('cc-reply-elsewhere-'), 'rc.json');
+    const saved = process.env.CAREER_OPS_REPLY_CANDIDATES;
+    process.env.CAREER_OPS_REPLY_CANDIDATES = elsewhere;
+    try {
+      const res = await post('/api/actions/followups.replyPaste', { params: { subject: 'Interview R21 marker', from: 'jordan@example.com', body: 'Can we talk on Tuesday?' } });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fs.existsSync(elsewhere)).toBe(false);
+      expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json'), 'utf8')).toContain('Interview R21 marker');
+    } finally {
+      if (saved === undefined) delete process.env.CAREER_OPS_REPLY_CANDIDATES;
+      else process.env.CAREER_OPS_REPLY_CANDIDATES = saved;
+    }
+  });
+
+  it('a run whose meta.json is empty or torn (a power loss mid-write) neither stops the app starting nor breaks the runs list and async actions (R21-srv-core-L1-01)', async () => {
+    const dataRoot = copyFixtureRoot();
+    const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
+    fs.mkdirSync(path.join(runs, '20260101000000-aaaaaa'), { recursive: true });
+    fs.writeFileSync(path.join(runs, '20260101000000-aaaaaa', 'meta.json'), '');
+    fs.mkdirSync(path.join(runs, '20260101000001-bbbbbb'), { recursive: true });
+    fs.writeFileSync(path.join(runs, '20260101000001-bbbbbb', 'meta.json'), '{"id": "20260101000001-bb');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const torn = await makeTestApp({ dataRoot });
+    try {
+      const res = await torn.app.inject({ method: 'POST', url: '/api/actions/pipeline.prioritize', headers: torn.authedWrite, payload: { params: {} } });
+      expect(res.statusCode, res.body).toBe(202);
+      const { runId } = res.json();
+      const deadline = Date.now() + 30_000;
+      let meta: { status: string } = { status: 'queued' };
+      while (['queued', 'running'].includes(meta.status)) {
+        if (Date.now() > deadline) throw new Error(`run ${runId} still ${meta.status}`);
+        await new Promise((r) => setTimeout(r, 100));
+        meta = (await torn.app.inject({ method: 'GET', url: `/api/runs/${runId}`, headers: torn.authed })).json().meta;
+      }
+      expect(meta.status).toBe('done');
+      const list = await torn.app.inject({ method: 'GET', url: '/api/runs', headers: torn.authed });
+      expect(list.statusCode, list.body).toBe(200);
+      expect(list.json().map((r: { id: string }) => r.id)).toEqual([runId]);
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('20260101000000-aaaaaa'))).not.toEqual([]);
+    } finally {
+      warn.mockRestore();
+      await torn.close();
+    }
+  });
+
   it('Audit plugins runs the community plugin audit to the end instead of exiting with the usage text (R8-04)', async () => {
     const res = await post('/api/actions/plugins.audit', { params: {} });
     expect(res.statusCode, res.body).toBe(202);
