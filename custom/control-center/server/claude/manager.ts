@@ -196,11 +196,11 @@ export class SessionManager {
   }
 
   /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
-  liveEvaluationFor(mode: string, target: SessionMeta['target']): string | null {
+  liveEvaluationFor(mode: string, target: SessionMeta['target'], exceptId?: string): string | null {
     const key = postingKey(target);
     if (key === null) return null;
     for (const m of this.readableSessions()) {
-      if (m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
+      if (m.id !== exceptId && m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
     }
     return null;
   }
@@ -217,6 +217,7 @@ export class SessionManager {
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
       const resume = this.hasConversation(meta) || forkPending;
+      if (!resume) this.assertNotEvaluatedElsewhere(meta);
       return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
     } finally {
       this.sending.delete(id);
@@ -224,16 +225,19 @@ export class SessionManager {
   }
 
   async fork(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
-    const src = this.must(id);
-    assertCurrentPolicy(src);
-    const policy = this.turnPolicy(src.mode);
+    const first = this.must(id);
+    assertCurrentPolicy(first);
+    const policy = this.turnPolicy(first.mode);
     // A source with a turn starting or running would get a second paid run beside it, on the conversation it is writing.
-    const conversation = this.hasConversation(src);
-    this.assertIdle(src, { finishing: conversation });
+    this.assertIdle(first, { finishing: false });
     this.sending.add(id);
     try {
+      // A cancelled turn still stopping may yet start the conversation, or write the report a replayed request would.
+      await this.untilFinished(id);
+      const src = this.must(id);
       // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
-      if (!conversation) {
+      if (!this.hasConversation(src)) {
+        this.assertNotEvaluatedElsewhere(src);
         const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
         return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
       }
@@ -246,7 +250,7 @@ export class SessionManager {
 
   /**
    * Refuses a session with a turn being prepared or running, and (unless `finishing` is false) one whose ended turn is
-   * still finishing: only a turn that resumes its conversation can collide with that turn's process and finalize.
+   * still finishing (its process may live until SIGKILL, and its finalize is still to run).
    */
   private assertIdle(meta: SessionMeta, opts: { finishing?: boolean } = {}): void {
     if (this.sending.has(meta.id)) throw new BusyError(`session ${meta.id} is starting a turn`);
@@ -254,6 +258,22 @@ export class SessionManager {
     // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a new turn now
     // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
     if (opts.finishing !== false && this.active.has(meta.id)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+  }
+
+  /** Waits (up to RUN_END_WAIT_MS) for a session's ended turn to finish stopping and finalizing; refused when it does not. */
+  private async untilFinished(id: string): Promise<void> {
+    const deadline = Date.now() + RUN_END_WAIT_MS;
+    while (this.active.has(id)) {
+      if (Date.now() > deadline) throw new BusyError(`session ${id} is still finishing its previous turn`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  /** A replayed original request starts the posting's evaluation again: refused while another session evaluates it. */
+  private assertNotEvaluatedElsewhere(meta: SessionMeta): void {
+    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another batch evaluate is already starting ${meta.target.value}`);
+    const live = this.liveEvaluationFor(meta.mode, meta.target, meta.id);
+    if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */

@@ -87,6 +87,58 @@ describe('session manager: a first turn that never started (R19-claude-L1-01)', 
   });
 });
 
+describe('session manager: replaying an original request never duplicates a live evaluation (R19 review)', () => {
+  function flakyToken() {
+    const state = { ok: false };
+    return { state, readToken: async () => (state.ok ? FAKE_TOKEN : Promise.reject(new Error('Keychain item career-ops-claude-token not found'))) };
+  }
+  const SLOW = { events: [INIT, { __sleep: 3000 }, result('still reading', 0.01)] };
+
+  for (const via of ['reply', 'fork'] as const) {
+    it(`given a failed-before-spawn evaluation and a newer live one of the same posting, when the user tries a ${via} of the failed one, then it is refused with 409`, async () => {
+      const token = flakyToken();
+      const app = await makeTestApp({}, { readToken: token.readToken });
+      try {
+        const url = `https://jobs.example.com/synthetic/r19-dup-${via}`;
+        const body = { mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` };
+        const { id } = (await call(app, 'POST', '/api/sessions', body)).json();
+        expect((await settleOn(app, id)).meta.status).toBe('error');
+        token.state.ok = true;
+        const live = await withScenario(scenarioFile(SLOW), async () => (await call(app, 'POST', '/api/sessions', body)).json());
+        const runsBefore = app.runner.store.list().length;
+        const res = await call(app, 'POST', via === 'reply' ? `/api/sessions/${id}/turns` : `/api/sessions/${id}/fork`, { prompt: 'retry' });
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().error).toContain(live.id);
+        expect(app.runner.store.list().length).toBe(runsBefore);
+        await settleOn(app, live.id);
+      } finally {
+        await app.close();
+      }
+    });
+  }
+
+  it('given a source whose cancelled first turn is still stopping and never started a conversation, when it is forked, then the fork starts only once that run has ended', async () => {
+    const app = await makeTestApp();
+    try {
+      const stubborn = scenarioFile({ events: [{ __ignoreSigterm: true }, { __sleep: 8000 }, result('late', 0.01)] });
+      const { id, turns } = await withScenario(stubborn, async () => (await call(app, 'POST', '/api/sessions', { mode: 'devchat', target: { type: 'none', value: null }, prompt: 'look around' })).json());
+      const srcRun = turns[0].runId as string;
+      const deadline = Date.now() + 10_000;
+      while (app.runner.store.read(srcRun)?.childPid == null && Date.now() < deadline) await wait(50);
+      expect((await call(app, 'POST', `/api/sessions/${id}/cancel`, {})).statusCode).toBe(200);
+      const res = await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/fork`, { prompt: 'again' }));
+      expect(res.statusCode, res.body).toBe(202);
+      const endedAt = app.runner.store.read(srcRun)!.endedAt;
+      expect(endedAt).not.toBeNull();
+      const forkRun = app.runner.store.read(res.json().turns[0].runId)!;
+      expect(Date.parse(forkRun.createdAt)).toBeGreaterThanOrEqual(Date.parse(endedAt!));
+      await settleOn(app, res.json().id);
+    } finally {
+      await app.close();
+    }
+  }, 30_000);
+});
+
 describe('session manager: fork busy guard (R19-claude-L3-01)', () => {
   it('given a session running a turn, when it is forked, then the fork is refused with 409 and no second run starts', async () => {
     const app = await makeTestApp();
