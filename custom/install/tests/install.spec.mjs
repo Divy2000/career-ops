@@ -369,6 +369,7 @@ test('a re-run also waits on the lock of the data root the installed daily job r
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${D}</string>
   <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${jobRoot}</string></dict>
   <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
 </dict>
@@ -381,6 +382,37 @@ test('a re-run also waits on the lock of the data root the installed daily job r
     assert.equal(r.status, 1, r.out);
     assert.ok(!w.log().some((l) => l.includes('pull') || l.startsWith('npm ')), w.log().join('\n'));
     assert.ok(r.out.includes(`error: the daily job is running right now (it holds ${dailyLock(jobRoot)})`), r.out);
+  } finally {
+    job.stop();
+  }
+});
+
+test('a daily job another checkout installed, running on its own data root, neither holds up this checkout\'s pull and installs nor gets its lock taken (R21-scripts-b-L1-01)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D);
+  const other = path.join(w.T, 'other-checkout');
+  fs.mkdirSync(other);
+  const jobRoot = path.join(w.T, 'job-data');
+  fs.mkdirSync(path.join(jobRoot, 'data', 'immigration', 'logs'), { recursive: true });
+  const agents = path.join(w.home, 'Library', 'LaunchAgents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${other}</string>
+  <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
+</dict>
+</plist>
+`);
+  const job = holdDailyLock(w, jobRoot);
+  try {
+    job.waitReady();
+    const r = w.run(args(), { env: { CAREER_OPS_INSTALL_DAILY_WAIT: '1' } });
+    assert.doesNotMatch(r.out, /the daily job is running right now/, r.out);
+    assert.ok(w.log().some((l) => l.includes('pull --ff-only')), w.log().join('\n'));
+    assert.ok(!fs.existsSync(path.join(jobRoot, 'data', 'immigration', '.live-update.pid')), 'the installer named itself in another checkout\'s lock folder');
   } finally {
     job.stop();
   }

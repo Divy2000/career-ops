@@ -312,8 +312,9 @@ ack_done_batch() {
 
 # Acknowledges the batches of earlier done passes whose ack failed, before a new pass: until they are acknowledged
 # their items are still queued, and a new pass would send them to Claude again. One from before the news window is
-# let go of unacknowledged (policyBatchAckable in the Control Center): an ack stamps last_pass with today, and the
-# news between that pass and the window would never be searched. A leftover still failing fails the step.
+# let go of unacknowledged (policyBatchAckable in the Control Center), its items queued for this pass. An ack records
+# the batch's own day as last_pass, not the day it lands, so a late one skips no news. A leftover still failing fails
+# the step.
 ack_leftover_batches() {
   local done batch
   for done in "$IMM"/batches/*.done; do

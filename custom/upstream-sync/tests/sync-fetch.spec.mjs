@@ -224,9 +224,10 @@ function runSync(world, { home, inherited = {}, security = 'exit 44' }) {
   }
   // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
   // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
-  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, ...env } = { ...GIT_ENV, ...inherited };
+  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, CC_NODE_BIN: _node, ...env } = { ...GIT_ENV, ...inherited };
   // The node running these specs, pinned as the plist pins one: sync.sh puts Homebrew's folders first on its PATH.
-  const childEnv = { CC_NODE_BIN: process.execPath, ...env, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` };
+  // Only a test's own inherited pin replaces it, never one from the shell or the plist that runs these specs.
+  const childEnv = { ...env, CC_NODE_BIN: inherited.CC_NODE_BIN ?? process.execPath, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` };
   const res = spawnSync('bash', [path.join(syncDir, 'sync.sh'), '--no-merge'], {
     cwd: world.live,
     env: childEnv,

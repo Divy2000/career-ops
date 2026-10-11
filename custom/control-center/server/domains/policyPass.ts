@@ -164,9 +164,9 @@ function policyBatchDay(dataRoot: string, batch: string): string | null {
 }
 
 /**
- * Whether a done pass's batch may still be acknowledged today. watch.mjs --ack stamps last_pass with the day it runs,
- * and the next pass searches the news back from there, at least newsSince's window: an ack from further after the pass
- * than that window would skip the news between the pass and the window, which is worse than seeing the items twice.
+ * Whether a done pass's batch may still be acknowledged today: only one from within newsSince's window. watch.mjs
+ * --ack records the batch's own day as last_pass (never the day the ack lands, and never moving it back), so a late ack
+ * skips no news; an older batch is let go of unacknowledged, its items queued for the next pass.
  */
 export function policyBatchAckable(dataRoot: string, batch: string, today: string): boolean {
   const day = policyBatchDay(dataRoot, batch);
