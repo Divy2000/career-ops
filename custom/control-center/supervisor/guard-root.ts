@@ -12,6 +12,17 @@ export function defaultGuardRoot(home: string, platform: NodeJS.Platform, env: N
   return path.join(base, 'career-ops-control-center');
 }
 
+/**
+ * An absolute path kept as given; a relative one resolved against the folder the user started from (INIT_CWD, which
+ * npm sets), not npm's package cwd, so CC_DATA_ROOT and CC_GUARD_DIR mean the same folder wherever the user launched.
+ */
+export function resolveFromLaunchDir(raw: string, env: NodeJS.ProcessEnv): string {
+  if (path.isAbsolute(raw)) return path.resolve(raw);
+  const from = env.INIT_CWD;
+  const base = from && path.isAbsolute(from) ? from : process.cwd();
+  return path.resolve(base, raw);
+}
+
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
@@ -19,7 +30,7 @@ function isInside(child: string, parent: string): boolean {
 
 /** CC_GUARD_DIR or the default, canonicalized; refuses (before creating anything) a location inside either root. */
 export function resolveGuardRoot(opts: { env: NodeJS.ProcessEnv; codeRoot: string; dataRoot: string; home: string; platform: NodeJS.Platform }): string {
-  const wanted = path.resolve(opts.env.CC_GUARD_DIR || defaultGuardRoot(opts.home, opts.platform, opts.env));
+  const wanted = resolveFromLaunchDir(opts.env.CC_GUARD_DIR || defaultGuardRoot(opts.home, opts.platform, opts.env), opts.env);
   const canonical = resolveReal(wanted);
   for (const [label, root] of [
     ['code', opts.codeRoot],
