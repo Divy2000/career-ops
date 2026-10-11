@@ -1,4 +1,4 @@
-// Insights scripts (JSON by default, spec 1d) cached by the mtimes of their inputs and the local day.
+// Insights scripts (JSON by default, spec 1d) cached by the mtimes of their inputs and code, and the local day.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '../config.js';
@@ -64,12 +64,12 @@ const mtimeOf = (file: string): string => {
   }
 };
 
-function dirKey(dir: string): string {
+function dirKey(dir: string, only?: RegExp): string {
   let names: string[];
   try {
     names = fs
       .readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isFile())
+      .filter((e) => e.isFile() && (!only || only.test(e.name)))
       .map((e) => e.name)
       .sort();
   } catch {
@@ -98,6 +98,16 @@ export function inputsKey(dataRoot: string, trackerPath?: string): string {
   return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`), ...tracker].join('|');
 }
 
+const CODE_FILE = /\.(mjs|json)$/;
+
+/**
+ * The code a script runs: its own file, the shared modules and JSON beside it, and the states it maps statuses with. An
+ * update changes a script's output or JSON shape without touching any data input.
+ */
+export function codeKey(codeRoot: string, scriptPath: string): string {
+  return [`script:${mtimeOf(scriptPath)}`, `code/:${dirKey(codeRoot, CODE_FILE)}`, `code/lib/:${dirKey(path.join(codeRoot, 'lib'), CODE_FILE)}`, `code/templates/states.yml:${mtimeOf(path.join(codeRoot, 'templates', 'states.yml'))}`].join('|');
+}
+
 const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'data', 'control-center', 'insights', `${script}.json`);
 
 export async function readInsight(cfg: ServerConfig, exec: Exec, script: InsightScript, opts: { recompute?: boolean; now?: () => number } = {}): Promise<InsightRead> {
@@ -108,7 +118,8 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   const extra = script === 'companyHistory' ? companyHistoryInputs(cfg.dataRoot, rawTrackerPath(cfg.dataRoot)) : { args: [], env: {} };
   // The portals file company-history reads may be a lane file outside the data root.
   const portals = extra.env.CAREER_OPS_PORTALS ? `|portals=${extra.env.CAREER_OPS_PORTALS}:${mtimeOf(extra.env.CAREER_OPS_PORTALS)}` : '';
-  const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}${portals}|day:${localDate(new Date(now()))}`;
+  const scriptPath = cliScriptPath(cfg.codeRoot, def.cli);
+  const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}${portals}|${codeKey(cfg.codeRoot, scriptPath)}|day:${localDate(new Date(now()))}`;
   const file = cachePath(cfg.dataRoot, script);
   if (!opts.recompute) {
     try {
@@ -119,7 +130,7 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
       /* no usable cache */
     }
   }
-  const r = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, def.cli), ...extra.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...extra.env } });
+  const r = await exec(process.execPath, [scriptPath, ...extra.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...extra.env } });
   let json: unknown;
   try {
     json = JSON.parse(r.stdout);

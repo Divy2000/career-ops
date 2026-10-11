@@ -7,6 +7,7 @@ import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { findAction } from '../../server/actions/registry.js';
 import { childEnv } from '../../server/system/child-env.js';
+import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 
 describe('the insights cache key', () => {
   // upskill leaves out skills cv.md already has and story provenance traces stories to cv.md and the digest.
@@ -209,4 +210,31 @@ describe('Company history with a second-lane CAREER_OPS_PORTALS in the server en
       else process.env.CAREER_OPS_PORTALS = prior;
     }
   });
+});
+
+describe('the insights cache after a code update (R18-srv-dom-a-L1-01)', () => {
+  // A checkout with only what readInsight loads itself; the scripts are never run (exec is a stub).
+  function codeRoot(): string {
+    const root = tempDir('cc-insights-code-');
+    fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
+    for (const rel of ['funnel-velocity.mjs', 'tracker-utils.mjs', 'lib/local-today.mjs', 'templates/states.yml']) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), '// v1\n');
+    }
+    return root;
+  }
+
+  for (const rel of ['funnel-velocity.mjs', 'tracker-utils.mjs', 'lib/local-today.mjs', 'templates/states.yml']) {
+    it(`recomputes the same day with unchanged data when ${rel} in the code checkout changes`, async () => {
+      let runs = 0;
+      const exec: Exec = async () => ((runs += 1), { code: 0, stdout: '{"ok":true}', stderr: '' });
+      const cfg = testConfig({ codeRoot: codeRoot() });
+      await readInsight(cfg, exec, 'funnelVelocity');
+      expect((await readInsight(cfg, exec, 'funnelVelocity')).fromCache).toBe(true);
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(path.join(cfg.codeRoot, rel), later, later);
+      expect((await readInsight(cfg, exec, 'funnelVelocity')).fromCache).toBe(false);
+      expect(runs).toBe(2);
+    });
+  }
 });
