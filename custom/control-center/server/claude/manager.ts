@@ -463,13 +463,17 @@ export class SessionManager {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
+    // Decided before the delete removes the record of when the session got the number.
+    const owned = num !== null && this.ownsReservation(meta!, num);
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
     let deleted: boolean;
     try {
       deleted = this.store.delete(id);
     } finally {
-      if (num !== null) {
+      if (num !== null && !owned) {
+        console.warn(`[sessions] session ${id} deleted: report number ${num} was already lost (its reservation was collected), so it is not released`);
+      } else if (num !== null) {
         const released = await this.releaseReportNum(num, meta?.creditedReport?.num === num);
         if (released.startsWith('could not')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
@@ -511,8 +515,9 @@ export class SessionManager {
         this.store.setStatus(meta.id, 'error', reason);
         // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
         if (meta.reportNum !== null) {
+          const owned = this.ownsReservation(meta, meta.reportNum);
           this.store.setReportNum(meta.id, null);
-          void this.releaseReportNum(meta.reportNum, false);
+          if (owned) void this.releaseReportNum(meta.reportNum, false);
         }
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
@@ -682,7 +687,7 @@ export class SessionManager {
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
     if (num === null || meta.creditedReport?.num === num) return meta;
-    const sentinel = path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    const sentinel = this.sentinelPath(num);
     const createdAt = readSentinelCreatedAt(sentinel);
     if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
       const now = new Date();
@@ -718,6 +723,20 @@ export class SessionManager {
       console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     }
     return this.store.read(meta.id)!;
+  }
+
+  private sentinelPath(num: number): string {
+    return path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+  }
+
+  /**
+   * Whether `num`'s sentinel is still the session's: written no later than the session got the number. A sentinel the
+   * stale GC collected is gone, or belongs to whichever reservation claimed the number next, and is not the session's
+   * to release.
+   */
+  private ownsReservation(meta: SessionMeta, num: number): boolean {
+    const createdAt = readSentinelCreatedAt(this.sentinelPath(num));
+    return createdAt !== null && createdAt <= this.reservedAt(meta, num);
   }
 
   private reservationPath(id: string): string {
