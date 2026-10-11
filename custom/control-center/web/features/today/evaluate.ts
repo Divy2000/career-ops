@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { localJdPath } from '@shared/local-jd';
+import { dedupUrlKey } from '@shared/dedup-url';
 import type { SessionMeta } from '@shared/api';
 import { startEvaluateSession, startSavedJdSession, useSessions } from '../../lib/sessions';
 
@@ -18,8 +19,14 @@ const ACTIVE = new Set(['queued', 'running', 'awaiting_user']);
  */
 export function useActiveEvaluation() {
   const sessions = useSessions();
-  return (ref: string): SessionMeta | undefined => sessions.data?.find((s) => s.mode === 'oferta' && ACTIVE.has(s.status) && s.target.value === ref);
+  return (ref: string): SessionMeta | undefined => {
+    const key = postingRefKey(ref);
+    return sessions.data?.find((s) => s.mode === 'oferta' && ACTIVE.has(s.status) && s.target.value !== null && postingRefKey(s.target.value) === key);
+  };
 }
+
+/** A posting URL by the key POST /api/pipeline/add dedups it on (two spellings of one posting are one); a saved JD as is. */
+const postingRefKey = (ref: string) => (localJdPath(ref) === null ? dedupUrlKey(ref) : ref);
 
 // Starts still waiting on POST /api/sessions, by posting reference: a second Evaluate of the same posting meanwhile
 // (its shortlist row and Quick evaluate) joins the first instead of sending another.

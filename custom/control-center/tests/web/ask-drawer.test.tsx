@@ -429,6 +429,16 @@ describe('Ask drawer: evaluate joins an already-running evaluation (R17-shared-c
     expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-active' } }]);
     expect(item.dataset.proposalState).toBe('done');
   });
+
+  it('opens the live oferta session for another spelling of its posting URL (a tracking param and a trailing slash) instead of starting a second paid one (R25-shared-comp-L2-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.example.com/1/?utm_source=linkedin' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await act(async () => bodyButton('Do it')!.click());
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-active' } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
 });
 
 
@@ -827,6 +837,14 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
 
   it('given Process inbox is running, an evaluate of a pending Inbox row fails before asking and starts nothing', async () => {
     const item = await propose('evaluate', { url: 'https://jobs.acme.example/1' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+  });
+
+  it('given Process inbox is running, an evaluate of a pending Inbox row spelled with a tracking param and a trailing slash fails before asking and starts nothing (R25-shared-comp-L2-01)', async () => {
+    const item = await propose('evaluate', { url: 'https://jobs.acme.example/1/?utm_source=linkedin' });
     expect(document.body.querySelector('.dialog')).toBeNull();
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');

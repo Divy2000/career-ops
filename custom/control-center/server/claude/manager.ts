@@ -20,6 +20,7 @@ import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
+import { dedupUrlKey } from '../../shared/dedup-url.js';
 import { sponsorCheckCompany } from '../../shared/company-slug.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass, donePolicyBatches, dropPolicyBatch, dropUnreadablePolicyBatch, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
@@ -1217,11 +1218,12 @@ function owesReport(meta: SessionMeta): boolean {
 }
 
 /**
- * The dedupe key of what a session writes for: a posting's URL, the saved JD a local:jds/ text target names (as finalize
- * keys it), or the company a sponsorship check writes data/immigration/companies/** for (by its company-file slug).
+ * The dedupe key of what a session writes for: a posting's URL (by its dedup key, so two spellings of one posting are
+ * one), the saved JD a local:jds/ text target names (as finalize keys it), or the company a sponsorship check writes
+ * data/immigration/companies/** for (by its company-file slug).
  */
 function postingKey(mode: string, target: SessionMeta['target']): string | null {
-  if (target.type === 'url' && target.value) return `url\0${target.value}`;
+  if (target.type === 'url' && target.value) return `url\0${dedupUrlKey(target.value)}`;
   if (target.type === 'company' && mode === 'sponsorship-check') {
     if (target.value?.trim()) return `company\0${sponsorCheckCompany(target.value)}`;
   }
