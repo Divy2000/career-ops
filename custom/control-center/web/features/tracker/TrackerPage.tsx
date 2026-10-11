@@ -80,6 +80,8 @@ export function sortRows(rows: TrackerRow[], sort: SortKey, dir: 'asc' | 'desc')
   return [...rows].sort((a, b) => {
     const x = cell(a, sort);
     const y = cell(b, sort);
+    // Unknown statuses share one rank: name order keeps each one together, as the grouped view does.
+    if (x === y && sort === 'status' && a.status !== b.status) return (a.status < b.status ? -1 : 1) * m;
     if (x === y) return a.num - b.num;
     if (x === null || x === '') return 1;
     if (y === null || y === '') return -1;

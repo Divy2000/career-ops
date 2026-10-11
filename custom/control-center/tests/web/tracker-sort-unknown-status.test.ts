@@ -19,4 +19,10 @@ describe('tracker status sort', () => {
   it('puts an unknown status first when descending, the mirror of ascending', () => {
     expect(sortRows(rows, 'status', 'desc').map((r) => r.status)).toEqual(['On hold', 'SKIP', 'Interview']);
   });
+
+  it('keeps each unknown status together instead of interleaving them by row number', () => {
+    const mixed = [row(1, 'Paused'), row(2, 'On hold'), row(3, 'Paused'), row(4, 'Applied'), row(5, 'On hold')];
+    expect(sortRows(mixed, 'status', 'asc').map((r) => r.num)).toEqual([4, 2, 5, 1, 3]);
+    expect(sortRows(mixed, 'status', 'desc').map((r) => r.num)).toEqual([1, 3, 2, 5, 4]);
+  });
 });
