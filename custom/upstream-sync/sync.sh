@@ -90,8 +90,20 @@ BEHIND="$(git rev-list --count origin/main..upstream/main)"
 [[ "$BEHIND" =~ ^[0-9]+$ ]] || fail "could not count commits between origin/main and upstream/main"
 echo "fork is $BEHIND commit(s) behind upstream/main"
 
-if ! TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
-  fail "Keychain item career-ops-claude-token not found"
+# Only exit 44 (errSecItemNotFound) or an empty token means the item is missing, as the Control Center reads it: any
+# other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine, so it never asks for a new one.
+# No double quotes in these messages: notify passes them to osascript inside a quoted string.
+SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
+TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$SECURITY_ERR")"
+SECURITY_RC=$?
+SECURITY_WHY="$(tail -c 200 "$SECURITY_ERR" | tr '\n"\\' "  '" | sed 's/ *$//')"
+rm -f "$SECURITY_ERR"
+if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "$TOKEN" ]; }; then
+  fail "Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w"
+elif [ "$SECURITY_RC" = 127 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin)."
+elif [ "$SECURITY_RC" != 0 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: security failed (exit $SECURITY_RC${SECURITY_WHY:+: $SECURITY_WHY}). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then re-run."
 fi
 # The binary that gets the token, checked before anything is replaced: the first build that keeps the token out of
 # hooks and tools (install.sh's headless onboarding also needs --restricted, so its CLAUDE_HEADLESS_MIN is higher).

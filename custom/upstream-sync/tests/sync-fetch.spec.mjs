@@ -1370,6 +1370,56 @@ test('a live update that cannot take the daily lock for a reason other than a ti
   }
 });
 
+const KEYCHAIN_LOCKED = 'echo "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2; exit 36';
+
+test('a Keychain item that does not exist (security exit 44) stops the sync with the setup-token advice (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2; exit 44' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Keychain item career-ops-claude-token not found\. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w$/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('an empty Keychain token stops the sync as a missing one, before anything is replaced (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'echo ""' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Keychain item career-ops-claude-token not found\. Run: claude setup-token/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a locked Keychain (security exit 36) stops the sync saying the token could not be read, never that it is missing (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: KEYCHAIN_LOCKED });
+    assert.equal(res.status, 1, res.log);
+    const problem = res.log.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    assert.match(problem, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 36: security: SecKeychainSearchCopyNext: User interaction is not allowed\.\)\. /, res.log);
+    assert.match(problem, /Unlock it with: security unlock-keychain, then re-run/);
+    assert.doesNotMatch(res.log, /not found|setup-token/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a Keychain read refused for another reason (security exit 51) names the exit code without the setup-token advice (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'exit 51' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 51\)\. .*security unlock-keychain/m);
+    assert.doesNotMatch(res.log, /not found|setup-token/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 // ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----
 
 /**
