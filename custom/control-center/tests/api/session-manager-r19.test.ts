@@ -235,7 +235,7 @@ describe('session manager: a waiting evaluation keeps its reserved number (R19-c
     }
   });
 
-  it('given a lost number whose replacement cannot be recorded, when the turn fails before spawn, then the session still owns the replacement', async () => {
+  it('given a lost number whose replacement cannot be recorded, when the turn fails before spawn, then the replacement goes back to the pool and the next reply runs', async () => {
     const app = await makeTestApp();
     try {
       const fan = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r19-l3-d'] })).json());
@@ -243,13 +243,20 @@ describe('session manager: a waiting evaluation keeps its reserved number (R19-c
       const n = fan.reserved[0] as number;
       await settleOn(app, id);
       fs.rmSync(sentinel(app, n));
+      const reserved = () => fs.readdirSync(path.join(app.cfg.dataRoot, 'reports')).filter((f) => f.endsWith('-RESERVED.md'));
+      const before = reserved();
       // reservation.json cannot be written: a folder stands in its place.
       fs.mkdirSync(path.join(app.sessions.store.guardDirOf(id), 'reservation.json'));
       await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'try again' });
       const { meta } = await settleOn(app, id);
       expect(meta.status).toBe('error');
-      expect(meta.reportNum).toEqual(expect.any(Number));
-      expect(fs.existsSync(sentinel(app, meta.reportNum!))).toBe(true);
+      expect(meta.reportNum).toBeNull();
+      expect(reserved()).toEqual(before);
+      fs.rmdirSync(path.join(app.sessions.store.guardDirOf(id), 'reservation.json'));
+      await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'and again' }));
+      const next = (await settleOn(app, id)).meta;
+      expect(next.status).toBe('awaiting_user');
+      expect(runArgs(app, next.turns.at(-1)!.runId).preamble).not.toMatch(/Report number \d+ is reserved/);
     } finally {
       await app.close();
     }

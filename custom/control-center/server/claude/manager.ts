@@ -615,9 +615,15 @@ export class SessionManager {
     const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', '1'], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
     const fresh = r.code === 0 ? parseReservedRange(r.stdout) : [];
     if (fresh.length === 1) {
-      // The session holds the number first, so a failure below leaves it with an owner that releases it.
+      // Recorded first: a number held without its record would read as lost on the next turn. One that cannot be
+      // recorded goes straight back to the pool, and the turn fails holding none.
+      try {
+        fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
+      } catch (err) {
+        await this.releaseReportNum(fresh[0]!, false);
+        throw err;
+      }
       this.store.setReportNum(meta.id, fresh[0]!);
-      fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
     } else console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     return this.store.read(meta.id)!;
   }
