@@ -10,6 +10,9 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# The lock-wait poll and the ack backoff sleep through CC_SLEEP_BIN, so a caller (the specs) can hand them one that the
+# folders put first above cannot shadow.
+SLEEP_BIN="${CC_SLEEP_BIN:-sleep}"
 # shellcheck source=custom/launchd/pinned-node.sh
 source "$ROOT/custom/launchd/pinned-node.sh"
 # User data follows career-ops' data-root contract (CAREER_OPS_ROOT / .career-ops-data).
@@ -40,7 +43,7 @@ if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
     while [ "$update_wait" -lt 24 ]; do
       if [ -n "$update_pid" ] && kill -0 "$update_pid" 2>/dev/null; then break; fi
       update_pid=""
-      sleep 0.05
+      "$SLEEP_BIN" 0.05
       update_pid="$(cat "$IMM/.live-update.pid" 2>/dev/null)"
       [[ "$update_pid" =~ ^[0-9]+$ ]] || update_pid=""
       update_wait=$((update_wait + 1))
@@ -297,7 +300,7 @@ process.stdout.write(policy.sha256);
 ack_done_batch() {
   local batch="$1" attempt
   for attempt in 1 2 3; do
-    [ "$attempt" -eq 1 ] || sleep $((attempt - 1))
+    [ "$attempt" -eq 1 ] || "$SLEEP_BIN" $((attempt - 1))
     if node custom/immigration/watch.mjs --ack "$batch"; then
       rm -f "$batch.done"
       return 0
