@@ -136,7 +136,8 @@ describe('the daily job probe on real processes', () => {
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
       // It waits until afterEach kills the job's process group, so how long the job lives never depends on the host's load.
       fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nexec /bin/sleep 100000\n', { mode: 0o755 });
-      const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, CAREER_OPS_ROOT: data };
+      // The longest Keychain wait run-daily.sh allows, so its own bound never ends the job before the test does.
+      const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, CAREER_OPS_ROOT: data, CC_KEYCHAIN_TIMEOUT: '3600' };
       return { root, data, env };
     }
     // Waits for the pidfile for as long as the job is alive, not a fixed number of polls: under heavy load the job's
