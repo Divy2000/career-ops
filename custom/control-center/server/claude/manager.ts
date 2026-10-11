@@ -121,7 +121,7 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
-  /** The postings (mode and URL) a fan-out or a replayed original request is starting right now, before their runs exist. */
+  /** The postings (mode and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
@@ -192,7 +192,8 @@ export class SessionManager {
 
   /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
   isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
-    return target.type === 'url' && !!target.value && this.fanningOut.has(`${mode}\0${target.value}`);
+    const key = postingKey(target);
+    return key !== null && this.fanningOut.has(`${mode}\0${key}`);
   }
 
   /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
@@ -287,8 +288,9 @@ export class SessionManager {
     if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another evaluation is already starting ${meta.target.value}`);
     const live = this.liveEvaluationFor(meta.mode, meta.target, exceptId ?? undefined);
     if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
-    if (meta.target.type !== 'url' || !meta.target.value) return () => {};
-    const key = `${meta.mode}\0${meta.target.value}`;
+    const posting = postingKey(meta.target);
+    if (posting === null) return () => {};
+    const key = `${meta.mode}\0${posting}`;
     this.fanningOut.add(key);
     return () => this.fanningOut.delete(key);
   }
@@ -300,7 +302,7 @@ export class SessionManager {
     // reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const live = new Map<string, string>();
     for (const m of this.readableSessions()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
-    const key = (url: string) => `${input.mode}\0${url}`;
+    const key = (url: string) => `${input.mode}\0${postingKey({ type: 'url', value: url })}`;
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
     for (const url of input.urls) {
@@ -595,17 +597,13 @@ export class SessionManager {
     const num = meta.reportNum;
     if (num === null || meta.creditedReport?.num === num) return meta;
     const sentinel = path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
-    let createdAt: number | null = null;
-    try {
-      createdAt = Date.parse((JSON.parse(fs.readFileSync(sentinel, 'utf8')) as { created_at?: string }).created_at ?? '');
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
-    }
+    const createdAt = readSentinelCreatedAt(sentinel);
     if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
       const now = new Date();
       try {
         fs.utimesSync(sentinel, now, now);
-        return meta;
+        // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
+        if (readSentinelCreatedAt(sentinel) === createdAt) return meta;
       } catch (err) {
         // Collected between the read and the refresh: the number is lost like any other.
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
@@ -1050,6 +1048,17 @@ function postingKey(target: SessionMeta['target']): string | null {
     if (jd !== null) return `jds\0${jd}`;
   }
   return null;
+}
+
+/** When a reservation sentinel was claimed (reserve-report-num writes created_at), or null when it is gone or unreadable. */
+function readSentinelCreatedAt(sentinel: string): number | null {
+  try {
+    const at = Date.parse((JSON.parse(fs.readFileSync(sentinel, 'utf8')) as { created_at?: string }).created_at ?? '');
+    return Number.isNaN(at) ? null : at;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    return null;
+  }
 }
 
 /** The minimal policy reconcile uses to finish a turn whose mode no longer resolves (removed or renamed upstream): finalize only reads its class. */

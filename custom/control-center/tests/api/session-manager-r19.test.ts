@@ -136,7 +136,10 @@ describe('session manager: replaying an original request never duplicates a live
     }
   });
 
-  it('given a reply replaying a failed evaluation that has not reached its run yet, when the same posting is started again, then the start is refused with 409', async () => {
+  it.each([
+    ['a posting URL', { type: 'url', value: 'https://jobs.example.com/synthetic/r19-dup-window' }],
+    ['a saved JD', { type: 'text', value: 'local:jds/r19-dup-window.md' }],
+  ] as const)('given a reply replaying a failed evaluation of %s that has not reached its run yet, when the same posting is started again, then the start is refused with 409', async (_what, target) => {
     let release!: () => void;
     const state = { mode: 'fail' as 'fail' | 'hold' };
     const readToken = async () => {
@@ -146,8 +149,9 @@ describe('session manager: replaying an original request never duplicates a live
     };
     const app = await makeTestApp({}, { readToken });
     try {
-      const url = 'https://jobs.example.com/synthetic/r19-dup-window';
-      const body = { mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` };
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'jds'), { recursive: true });
+      fs.writeFileSync(path.join(app.cfg.dataRoot, 'jds', 'r19-dup-window.md'), '# Analyst at Acme\n');
+      const body = { mode: 'oferta', target, prompt: `Evaluate this job posting following the mode file: ${target.value}` };
       const { id } = (await call(app, 'POST', '/api/sessions', body)).json();
       expect((await settleOn(app, id)).meta.status).toBe('error');
       state.mode = 'hold';
