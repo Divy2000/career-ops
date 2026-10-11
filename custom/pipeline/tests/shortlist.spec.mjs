@@ -521,3 +521,24 @@ syncBuiltinESMExports();
   assert.match(fs.readFileSync(out, 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n[\s\S]*## Excluded by sponsorship alerts/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.startsWith('shortlist.md.')), []);
 });
+
+test('a shortlist write that fails leaves no temp file behind in data/ (R24-scripts-a-L1-02 review)', () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  const preload = path.join(root, 'rename-fails.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.promises.rename;
+fs.promises.rename = async (from, to) => {
+  if (String(to).endsWith('shortlist.md')) { const err = new Error('disk full'); err.code = 'ENOSPC'; throw err; }
+  return real(from, to);
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /disk full/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.startsWith('shortlist.md')), []);
+});

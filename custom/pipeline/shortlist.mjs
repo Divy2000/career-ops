@@ -6,7 +6,7 @@
 //
 //   node custom/pipeline/shortlist.mjs [--min-rank 3] [--top 40]
 
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -285,8 +285,12 @@ async function main() {
   // Through a temp file + rename like writeTiers: the Control Center's watcher reads shortlist.md on change, and an
   // overlapping run (the daily job and the shortlist action) must not leave its tail behind a shorter table.
   const tmp = `${OUT}.tmp-${process.pid}`;
-  await writeFile(tmp, md);
-  await rename(tmp, OUT);
+  try {
+    await writeFile(tmp, md);
+    await rename(tmp, OUT);
+  } finally {
+    await rm(tmp, { force: true });
+  }
   process.stdout.write(`shortlist: ${shortlist.length} kept, ${excluded.length} excluded, ${companies.length} companies (${looked} tier lookups) -> data/shortlist.md\n`);
 }
 
