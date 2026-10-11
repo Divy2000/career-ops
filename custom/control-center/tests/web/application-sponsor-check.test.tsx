@@ -64,7 +64,7 @@ async function openTab(label: string) {
   await act(async () => tab(label)!.click());
 }
 const tab = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((b) => b.textContent === label);
-const refreshButton = () => [...host.querySelectorAll('button')].find((b) => /^(Refresh check|Sponsorship check running)/.test(b.textContent ?? ''));
+const refreshButton = () => [...host.querySelectorAll('button')].find((b) => /^(Refresh check|Sponsorship check running|Sponsorship check needs your reply)/.test(b.textContent ?? ''));
 const lastPanel = () => panels.filter((p) => p.mode === 'sponsorship-check').pop();
 async function leave() {
   await act(async () => root.unmount());
@@ -113,6 +113,17 @@ describe('Application > Sponsorship > Refresh check', () => {
     await act(async () => lastPanel()!.onStatus!('done', 'clean exit with output'));
     expect(refreshButton()!.disabled).toBe(false);
     expect(refreshButton()!.textContent).toContain('Refresh check');
+  });
+
+  it("a check waiting for the user's reply keeps the button off, so no second paid check of the company starts (R23-feat-c-X-01)", async () => {
+    await openApplication('Acme Robotics');
+    await act(async () => refreshButton()!.click());
+    await act(async () => lastPanel()!.onSessionId!('check-app'));
+    await act(async () => lastPanel()!.onStatus!('awaiting_user', 'the turn ended with a question'));
+    expect(refreshButton()!.disabled).toBe(true);
+    expect(refreshButton()!.textContent).toContain('Sponsorship check needs your reply');
+    await act(async () => lastPanel()!.onStatus!('done', 'clean exit with output'));
+    expect(refreshButton()!.disabled).toBe(false);
   });
 
   it('leaving the tab while the check is still starting keeps it: the button stays off, and its session shows once it is created', async () => {

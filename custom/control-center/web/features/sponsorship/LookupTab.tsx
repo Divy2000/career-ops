@@ -80,7 +80,7 @@ function Totals({ check }: { check: H1bCheck }) {
 export function SponsorCheckLauncher({ company }: { company: string }) {
   // A paid session that writes the company file and alert rows: it survives leaving the tab, and the button stays off
   // while it runs, so a second check of the same company cannot run beside it.
-  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)));
+  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)), { holdWhileAwaiting: true });
   return (
     <div className="card stack">
       <div className="row gap" style={{ justifyContent: 'space-between' }}>
@@ -90,7 +90,7 @@ export function SponsorCheckLauncher({ company }: { company: string }) {
         </div>
         <div className="row gap">
           <button type="button" className="button--primary" disabled={check.busy} onClick={check.start}>
-            {check.busy ? 'Sponsorship check running' : 'Run sponsorship check'} <Pill tone="warn">Uses tokens</Pill>
+            {check.awaitingReply ? 'Sponsorship check needs your reply' : check.busy ? 'Sponsorship check running' : 'Run sponsorship check'} <Pill tone="warn">Uses tokens</Pill>
           </button>
           <Link to="/sessions" className="button-link">
             Sessions

@@ -11,7 +11,7 @@ const describeRows = (rows: TrackerRow[]) => rows.map((r) => `#${r.num} ${r.comp
  * browser tab) is shown again when the Tracker comes back, so a running one is not lost by leaving the page.
  */
 export function CompareSelected({ rows, onClear }: { rows: TrackerRow[]; onClear: () => void }) {
-  const compare = useRememberedSession('cc.tracker.compare');
+  const compare = useRememberedSession('cc.tracker.compare', { holdWhileAwaiting: true });
   // The rows of a comparison started here; one re-attached after a return has its rows in its own transcript.
   const [launched, setLaunched] = useState<TrackerRow[] | null>(null);
   if (rows.length === 0 && !compare.shown) return null;
@@ -24,7 +24,7 @@ export function CompareSelected({ rows, onClear }: { rows: TrackerRow[]; onClear
       {rows.length > 0 && (
         <div className="toolbar selection-bar" role="region" aria-label="Selected rows">
           <span className="muted small">{rows.length} selected</span>
-          <button type="button" disabled={rows.length < 2 || compare.busy} onClick={launch} title={rows.length < 2 ? 'Select at least two rows' : compare.busy ? 'A comparison is running' : undefined}>
+          <button type="button" disabled={rows.length < 2 || compare.busy} onClick={launch} title={rows.length < 2 ? 'Select at least two rows' : compare.awaitingReply ? 'A comparison is waiting for your reply' : compare.busy ? 'A comparison is running' : undefined}>
             Compare selected (ofertas) <Pill tone="warn">Uses tokens</Pill>
           </button>
           <button type="button" className="button--ghost" onClick={onClear}>

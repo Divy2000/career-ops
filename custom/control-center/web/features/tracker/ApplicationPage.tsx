@@ -343,12 +343,12 @@ function ReportTab({ report }: { report: NonNullable<ReturnType<typeof useApplic
  * tab switch, and while one runs (started here or there) the button stays off, so no second check writes the file.
  */
 function SponsorshipRefresh({ company }: { company: string }) {
-  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)));
+  const check = useRememberedSession(sponsorCheckKey(sponsorCheckCompany(company)), { holdWhileAwaiting: true });
   return (
     <div className="stack">
       <div className="row gap">
         <button type="button" className="button--primary" disabled={check.busy} onClick={check.start}>
-          {check.busy ? 'Sponsorship check running' : 'Refresh check'} <Pill tone="warn">Uses tokens</Pill>
+          {check.awaitingReply ? 'Sponsorship check needs your reply' : check.busy ? 'Sponsorship check running' : 'Refresh check'} <Pill tone="warn">Uses tokens</Pill>
         </button>
       </div>
       {check.shown && (

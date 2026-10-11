@@ -32,7 +32,7 @@ async function open(company: string) {
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(SponsorCheckLauncher, { key: company, company }))));
   await until(() => checkButton(), 'the check button');
 }
-const checkButton = () => [...host.querySelectorAll('button')].find((b) => /^(Run sponsorship check|Sponsorship check running)/.test(b.textContent ?? ''));
+const checkButton = () => [...host.querySelectorAll('button')].find((b) => /^(Run sponsorship check|Sponsorship check running|Sponsorship check needs your reply)/.test(b.textContent ?? ''));
 const lastPanel = () => panels.filter((p) => p.mode === 'sponsorship-check').pop();
 
 beforeEach(() => {
@@ -62,6 +62,17 @@ describe('Lookup > Run sponsorship check', () => {
     expect(lastPanel()!.autoStart).toBeFalsy();
     expect(checkButton()!.disabled).toBe(true);
     await act(async () => lastPanel()!.onStatus!('done', null));
+    expect(checkButton()!.disabled).toBe(false);
+  });
+
+  it("a check waiting for the user's reply keeps the button off, so no second paid check of the company starts (R23-feat-c-X-01)", async () => {
+    await open('Acme Robotics');
+    await act(async () => checkButton()!.click());
+    await act(async () => lastPanel()!.onSessionId!('check-1'));
+    await act(async () => lastPanel()!.onStatus!('awaiting_user', 'the turn ended with a question'));
+    expect(checkButton()!.disabled).toBe(true);
+    expect(checkButton()!.textContent).toContain('Sponsorship check needs your reply');
+    await act(async () => lastPanel()!.onStatus!('done', 'clean exit with output'));
     expect(checkButton()!.disabled).toBe(false);
   });
 
