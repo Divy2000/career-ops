@@ -5,10 +5,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LogViewer } from '@web/features/runs/RunsPage';
 import type { RunMeta } from '@shared/api';
+import { HttpEventSource } from '../fakes/http-event-source';
+import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** Models the browser: an error on a live stream reconnects by itself unless the page closed it. */
+/** A stream the test drives by hand; closing it stops delivery. */
 class FakeEventSource {
   static last: FakeEventSource | null = null;
   onerror: ((ev: Event) => void) | null = null;
@@ -24,12 +26,6 @@ class FakeEventSource {
     if (this.closed) return;
     for (const fn of this.listeners.get(type) ?? []) fn(new MessageEvent(type, { data: JSON.stringify(data) }));
   }
-  // A browser fires both the onerror handler and every 'error' listener.
-  drop() {
-    const ev = new Event('error');
-    this.onerror?.(ev);
-    for (const fn of this.listeners.get('error') ?? []) fn(ev as MessageEvent);
-  }
   close() {
     this.closed = true;
   }
@@ -37,18 +33,31 @@ class FakeEventSource {
 
 let host: HTMLElement;
 let root: Root;
-const run = { id: 'r-1', label: 'Full ATS scan', status: 'running' } as RunMeta;
-const line = (seq: number, text: string) => ({ seq, ts: '2026-10-05T12:00:00.000Z', stream: 'stdout', line: text });
 const log = () => host.querySelector('[aria-label="Run log"]')?.textContent ?? '';
+// Each row is the local clock, then the line.
+const logLines = () => [...host.querySelectorAll('[aria-label="Run log"] > div')].map((row) => row.childNodes[1]?.textContent);
 
-beforeEach(async () => {
-  vi.stubGlobal('EventSource', FakeEventSource);
+/** The shape of tests/helpers/run-stream-server.ts, which is server code the web typecheck must not follow. */
+interface RunStreamServer {
+  origin: string;
+  headers: Record<string, string>;
+  run: RunMeta;
+  dropConnections(): void;
+  openGate(): void;
+  close(): Promise<void>;
+}
+const RUN_STREAM_SERVER = '../helpers/run-stream-server';
+const startRunStreamServer = async (): Promise<RunStreamServer> =>
+  ((await import(/* @vite-ignore */ RUN_STREAM_SERVER)) as { startRunStreamServer(): Promise<RunStreamServer> }).startRunStreamServer();
+
+const render = (run: RunMeta) => act(async () => root.render(createElement(LogViewer, { run })));
+
+beforeEach(() => {
   // jsdom lays nothing out, so elements have no scrollTo; the viewer scrolls the log to its end on each line.
   Element.prototype.scrollTo = () => {};
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(LogViewer, { run })));
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -58,15 +67,31 @@ afterEach(async () => {
 });
 
 describe('a run log after a dropped connection', () => {
-  it('given a live run whose stream drops once, when the stream comes back, then the log keeps the earlier lines and shows the new ones', async () => {
-    await act(async () => FakeEventSource.last!.emit('line', line(1, 'scanning greenhouse')));
-    await act(async () => FakeEventSource.last!.drop());
-    await act(async () => FakeEventSource.last!.emit('line', line(2, 'scanning ashby')));
-    expect(log()).toContain('scanning greenhouse');
-    expect(log()).toContain('scanning ashby');
-  });
+  it('given a live run whose stream drops after line 1, when the browser reconnects to the real server, then the log resumes after line 1 without repeating it', async () => {
+    const server = await startRunStreamServer();
+    try {
+      HttpEventSource.target = { origin: server.origin, headers: server.headers };
+      HttpEventSource.all = [];
+      vi.stubGlobal('EventSource', HttpEventSource);
+      await render(server.run);
+      await until(() => log().includes('scanning greenhouse'), 'line 1 over the first connection', 1000);
+
+      await act(async () => server.dropConnections());
+      // The run writes more while the client reconnects.
+      server.openGate();
+      await until(() => host.textContent?.includes('ended: done'), 'the run to end over the replacement connection', 1000);
+
+      const es = HttpEventSource.all[0]!;
+      expect(es.connections).toEqual([null, '1']);
+      expect(logLines()).toEqual(['scanning greenhouse', 'scanning ashby', 'scanning lever']);
+    } finally {
+      await server.close();
+    }
+  }, 30_000);
 
   it('given a run that ends, when run.done arrives, then the viewer says it ended and stops listening', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    await render({ id: 'r-1', label: 'Full ATS scan', status: 'running' } as RunMeta);
     await act(async () => FakeEventSource.last!.emit('run.done', { status: 'done' }));
     expect(host.textContent).toContain('ended: done');
     expect(FakeEventSource.last!.closed).toBe(true);
