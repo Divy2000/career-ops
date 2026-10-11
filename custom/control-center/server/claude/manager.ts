@@ -12,7 +12,7 @@ import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
-import { conversationStarted, sessionsDir, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
+import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
@@ -123,6 +123,8 @@ export class SessionManager {
   private sending = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
+  /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
+  private cancelledBeforeSpawn = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
   private policyAckTimer: NodeJS.Timeout | null = null;
@@ -146,8 +148,8 @@ export class SessionManager {
     return () => this.listeners.delete(cb);
   }
 
-  list(): SessionMeta[] {
-    return this.store.list();
+  list(opts: { strict?: boolean } = {}): SessionMeta[] {
+    return this.store.list(opts);
   }
 
   read(id: string): SessionMeta | null {
@@ -201,7 +203,7 @@ export class SessionManager {
     const key = postingKey(target);
     if (key === null) return null;
     const cls = evaluationClass(mode);
-    for (const m of this.readableSessions()) {
+    for (const m of this.store.list()) {
       if (m.id !== exceptId && evaluationClass(m.mode) === cls && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
     }
     return null;
@@ -219,7 +221,8 @@ export class SessionManager {
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
       const resume = this.hasConversation(meta) || forkPending;
-      const unclaim = resume ? () => {} : this.claimReplay(meta);
+      // A resumed evaluation that still owes its report evaluates the posting again, as a replayed request does.
+      const unclaim = !resume || owesReport(meta) ? this.claimReplay(meta) : () => {};
       try {
         return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
       } finally {
@@ -252,8 +255,15 @@ export class SessionManager {
           unclaim();
         }
       }
-      const forked = this.store.fork(id);
-      return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+      // A copy of an evaluation that still owes its report writes one of its own: refused beside any live evaluation of
+      // the posting, the source included while it waits for the user.
+      const unclaim = owesReport(src) ? this.claimReplay(src, null) : () => {};
+      try {
+        const forked = this.store.fork(id);
+        return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+      } finally {
+        unclaim();
+      }
     } finally {
       this.sending.delete(id);
     }
@@ -303,7 +313,7 @@ export class SessionManager {
     // too: the reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const cls = evaluationClass(input.mode);
     const live = new Map<string, string>();
-    for (const m of this.readableSessions()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
+    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
     const key = (url: string) => `${cls}\0${postingKey({ type: 'url', value: url })}`;
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
@@ -322,21 +332,6 @@ export class SessionManager {
     } finally {
       for (const url of urls) this.fanningOut.delete(key(url));
     }
-  }
-
-  /** Every session whose meta.json reads: one unreadable folder must not stop a fan-out (the list route fails on it). */
-  private readableSessions(): SessionMeta[] {
-    const out: SessionMeta[] = [];
-    for (const entry of fs.readdirSync(sessionsDir(this.cfg.dataRoot), { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      try {
-        const meta = this.store.read(entry.name);
-        if (meta) out.push(meta);
-      } catch {
-        // Unreadable or half-written: not a session this guard can compare against.
-      }
-    }
-    return out;
   }
 
   private async startFanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
@@ -384,6 +379,14 @@ export class SessionManager {
   cancel(id: string): SessionMeta {
     const meta = this.must(id);
     const turn = meta.turns.at(-1);
+    if (!turn && meta.status === 'queued' && this.sending.has(id)) {
+      // Its first turn is still preparing (the CLI version probe, the Keychain read): it ends before Claude is spawned.
+      this.cancelledBeforeSpawn.add(id);
+      this.store.setStatus(id, 'cancelled');
+      this.emit(id, { type: 'status', status: 'cancelled', reason: 'cancel requested' });
+      this.bus.publish('session.status', { sessionId: id, status: 'cancelled', mode: meta.mode });
+      return this.store.read(id)!;
+    }
     if (turn && (meta.status === 'running' || meta.status === 'queued')) {
       // A turn whose run already ended is being finalized (or about to be): marking it cancelled here would turn a
       // completed turn into "cancelled", keep its pipeline row pending, leave its policy batch unacknowledged and let
@@ -644,7 +647,35 @@ export class SessionManager {
     return Date.parse(meta.createdAt);
   }
 
+  /**
+   * A new session's first turn is claimed (as send and fork claim theirs) until it is running, so a delete is refused
+   * while it prepares; a cancel meanwhile is honoured before anything is spawned.
+   */
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
+    const claimed = !this.sending.has(meta.id);
+    if (claimed) this.sending.add(meta.id);
+    try {
+      return await this.prepareAndSpawn(meta, policy, prompt, opts);
+    } finally {
+      if (claimed) this.sending.delete(meta.id);
+      this.cancelledBeforeSpawn.delete(meta.id);
+    }
+  }
+
+  /** A turn cancelled before its run started: a first turn's report reservation goes back to the pool, as for one that cannot start. */
+  private async endCancelledBeforeSpawn(meta: SessionMeta): Promise<SessionMeta> {
+    const num = this.store.read(meta.id)?.reportNum ?? null;
+    if (num !== null && meta.turns.length === 0) {
+      this.store.setReportNum(meta.id, null);
+      const reason = `cancelled by the user before the turn started; ${await this.releaseReportNum(num, false)}`;
+      // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
+      this.emit(meta.id, { type: 'status', status: 'cancelled', reason });
+      this.bus.publish('session.status', { sessionId: meta.id, status: 'cancelled', mode: meta.mode });
+    }
+    return this.store.read(meta.id)!;
+  }
+
+  private async prepareAndSpawn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
     const sessionDir = this.store.guardDirOf(meta.id);
     const n = meta.turns.length + 1;
@@ -694,8 +725,11 @@ export class SessionManager {
       state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id), resumed: opts.resume };
       fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     } catch (err) {
+      if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
+    // Checked after the last await: no cancel can land between here and the spawn.
+    if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
     let run: RunMeta;
     try {
       run = this.runner.start({
@@ -842,7 +876,17 @@ export class SessionManager {
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
       // SIGKILL: the turn is only over once the run has ended (its exit recorded), so the tracker waits for that instead
       // of finalizing a turn whose process is still writing the conversation.
-      if (!run || run.endedAt === null) return;
+      if (!run) {
+        // Its record is gone (a runs prune, a folder deleted by hand): nothing will ever record its exit. While the runner
+        // still follows its process, that process may still write the report, so the turn waits for it; then the turn
+        // ends in error and gives its report number back, as reconcile does for a run record missing after a restart.
+        stopRun();
+        if (this.runner.ending(runId)) return;
+        clearInterval(timer);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)).finally(() => this.active.delete(id));
+        return;
+      }
+      if (run.endedAt === null) return;
       clearInterval(timer);
       safePull();
       const ended = run;
@@ -1049,6 +1093,11 @@ const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awai
  */
 function evaluationClass(mode: string): string {
   return isReportGated(mode) ? '\0report' : mode;
+}
+
+/** An evaluation that has not been credited its report yet: its next turn, or a copy's, still writes one. */
+function owesReport(meta: SessionMeta): boolean {
+  return isReportGated(meta.mode) && meta.creditedReport === undefined;
 }
 
 /** The dedupe key of a posting a session evaluates: its URL, or the saved JD a local:jds/ text target names (as finalize keys it). */

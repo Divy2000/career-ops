@@ -4,7 +4,7 @@ import type { ServerConfig } from '../config.js';
 import { BusyError, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
 import { englishModeOf, listLaunchableModeIds } from '../claude/modes.js';
 import { isReportGated } from '../claude/honesty.js';
-import { sessionsDir, type SessionMeta } from '../claude/sessions.js';
+import type { SessionMeta } from '../claude/sessions.js';
 import { readPipeline } from '../domains/pipeline.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { EXPLICIT_HEADER } from './settings.js';
@@ -14,7 +14,6 @@ import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
@@ -69,7 +68,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
         const other = uploadTarget(opts.cfg.dataRoot, m.target.value);
         return other.kind === 'upload' && other.path === target.path;
       };
-      if (manager.list().some(names)) return;
+      if (manager.list({ strict: true }).some(names)) return;
       removeUpload(opts.cfg.dataRoot, target.path);
     } catch (err) {
       app.log.warn({ err, value }, 'could not remove an uploaded CV (or tell whether a session still reads it); the startup sweep will');
@@ -138,13 +137,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   // evaluate, the advisor, another tab) would evaluate, report and bill that row twice: whichever starts second is refused.
   const LIVE = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
   const isProcessInbox = (mode: string) => englishModeOf(mode) === 'pipeline';
-  /** Every session whose meta.json reads: one unreadable folder must not stop every start (the list route fails on it). */
-  const liveSessions = (): SessionMeta[] =>
-    fs
-      .readdirSync(sessionsDir(opts.cfg.dataRoot), { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => manager.read(e.name))
-      .filter((m): m is SessionMeta => m !== null && LIVE.has(m.status));
+  const liveSessions = (): SessionMeta[] => manager.list().filter((m) => LIVE.has(m.status));
   /** The posting URLs of the pending Inbox rows Process inbox works on; it leaves saved-JD (local:jds/) rows out. */
   const pendingInboxUrls = (): Set<string> => {
     const read = readPipeline(opts.cfg.dataRoot);

@@ -232,13 +232,21 @@ export class SessionStore {
     return meta;
   }
 
-  list(): SessionMeta[] {
+  /** `strict`: an unreadable meta.json throws instead, for a caller that must not guess what that session holds. */
+  list(opts: { strict?: boolean } = {}): SessionMeta[] {
     const out: SessionMeta[] = [];
     // Only session folders: Finder drops .DS_Store here, and anything else stray is not a session either.
     for (const entry of fs.readdirSync(sessionsDir(this.dataRoot), { withFileTypes: true })) {
       if (!entry.isDirectory() || !SESSION_ID.test(entry.name)) continue;
-      const meta = this.read(entry.name);
-      if (meta) out.push(meta);
+      // One unreadable or half-written meta.json (a power loss mid-write) must not stop the list, the server's start
+      // (reconcile) or a duplicate guard: that session is left out and logged.
+      try {
+        const meta = this.read(entry.name);
+        if (meta) out.push(meta);
+      } catch (err) {
+        if (opts.strict === true) throw err;
+        console.warn(`[sessions] skipped session ${entry.name}: its meta.json cannot be read (${(err as Error).message})`);
+      }
     }
     return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
   }
