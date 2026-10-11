@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../server/claude/cli-version.js';
+import { approvedClaudeVersions, parseClaudeVersion, probeEnv, unapprovedWarning } from '../server/claude/cli-version.js';
+
+export { probeEnv };
 
 /**
  * The Node versions every dependency in package-lock.json accepts (the app's and the test suite's alike, since the
@@ -53,8 +55,10 @@ export interface PreflightInput {
   claudeBin: string;
   nodeVersion: string;
   env: NodeJS.ProcessEnv;
-  /** Injected runner: an exit code, or the code and stdout (`claude --version` needs its output). */
-  exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string }>;
+  /** Injected runner: an exit code, or the code and stdout (`claude --version` needs its output), plus stderr and a timeout when known. */
+  exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string; stderr?: string; timedOut?: boolean; enoent?: boolean }>;
+  /** Limit for the Keychain read; an unanswered unlock dialog holds it until then. */
+  keychainTimeoutMs?: number;
   /** Per-attempt limit for `claude --version`; a cold first start can self-update before it answers. */
   claudeTimeoutMs?: number;
   /** Every claude binary found on this machine; more than one is a warning, since the first is pinned for the server. */
@@ -83,20 +87,31 @@ export interface PreflightResult {
   warnings: string[];
 }
 
-export const KEYCHAIN_HELP =
-  'Keychain item "career-ops-claude-token" is missing. Run: claude setup-token, then\n  security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
+/** errSecItemNotFound: the only `security find-generic-password` exit that means the item is absent. */
+const SECURITY_ITEM_NOT_FOUND = 44;
+const KEYCHAIN_TIMEOUT_MS = 8000;
+
+type KeychainRead = { code: number; stdout?: string; stderr?: string; timedOut?: boolean; enoent?: boolean };
 
 /**
- * The supervisor's environment minus what no probed program needs: its CC_* internals (CC_TOKEN and CC_SESSION_SECRET
- * drive the local API) and Claude/Anthropic credentials, the same names server/system/child-env.ts drops for every child
- * the server starts. A copy, not an import: Dev Chat may edit server/system/, and a file the supervisor loads must not
- * be one it can break (tests/unit/claude-engine.test.ts SW2-claude-05); tests/unit/preflight.test.ts keeps them equal.
+ * Absent (exit 44) or empty, which sessions refuse the same way (server/claude/manager.ts), asks for a new token. Any
+ * other failure (a locked keychain, no UI to prompt, a timeout) leaves a stored token that is fine.
  */
-export function probeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const secret = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
-  const drop = (k: string) => k.startsWith('CC_') || k.startsWith('ANTHROPIC_') || (k.startsWith('CLAUDE_CODE_') && secret.test(k.slice('CLAUDE_CODE_'.length)));
-  return Object.fromEntries(Object.entries(base).filter(([k]) => !drop(k)));
+function keychainProblem(r: KeychainRead, timeoutMs: number): string | null {
+  if (r.timedOut) return keychainUnreadable(`security timed out after ${timeoutMs / 1000}s`);
+  if (r.enoent) return 'Could not read Keychain item "career-ops-claude-token": the `security` command was not found on PATH (it ships with macOS in /usr/bin).';
+  if (r.code === SECURITY_ITEM_NOT_FOUND) return KEYCHAIN_HELP;
+  if (r.code !== 0) return keychainUnreadable(`security failed (exit ${r.code}${r.stderr?.trim() ? `: ${r.stderr.trim().slice(-200)}` : ''})`);
+  // An injected runner that returns only a code has no stdout to check.
+  return r.stdout !== undefined && !r.stdout.trim() ? KEYCHAIN_HELP : null;
 }
+
+function keychainUnreadable(why: string): string {
+  return `Could not read Keychain item "career-ops-claude-token": ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
+}
+
+export const KEYCHAIN_HELP =
+  'Keychain item "career-ops-claude-token" is missing. Run: claude setup-token, then\n  security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
 
 function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   return new Promise((resolve) => {
@@ -115,9 +130,9 @@ function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   });
 }
 
-async function exitCode(cmd: string, args: string[]): Promise<number | { code: number; stdout: string }> {
-  const r = await probe(cmd, args, 8000);
-  return r.enoent ? 127 : r.code;
+async function exitCode(cmd: string, args: string[], timeoutMs = KEYCHAIN_TIMEOUT_MS): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean; enoent: boolean }> {
+  const r = await probe(cmd, args, timeoutMs);
+  return { code: r.enoent ? 127 : r.code, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, enoent: r.enoent };
 }
 
 const CLAUDE_FALLBACKS = ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
@@ -192,7 +207,8 @@ async function probeClaude(input: PreflightInput): Promise<{ error: string } | {
   if (input.exec) {
     const out = await input.exec(input.claudeBin, ['--version']);
     const code = typeof out === 'number' ? out : out.code;
-    if (code !== 0) return { error: claudeFailure(input.claudeBin, { code, timedOut: false, enoent: code === 127, stdout: '', stderr: '' }, timeoutMs) };
+    const timedOut = typeof out !== 'number' && out.timedOut === true;
+    if (code !== 0 || timedOut) return { error: claudeFailure(input.claudeBin, { code, timedOut, enoent: code === 127 || (typeof out !== 'number' && out.enoent === true), stdout: '', stderr: '' }, timeoutMs) };
     stdout = typeof out === 'number' ? '' : out.stdout;
   } else {
     let last: Probe = { code: 1, timedOut: false, enoent: false, stdout: '', stderr: '' };
@@ -303,7 +319,8 @@ export function testHost(env: NodeJS.ProcessEnv): Pick<PreflightInput, 'platform
 }
 
 export async function preflight(input: PreflightInput): Promise<PreflightResult> {
-  const exec = input.exec ?? exitCode;
+  const keychainTimeoutMs = input.keychainTimeoutMs ?? KEYCHAIN_TIMEOUT_MS;
+  const exec = input.exec ?? ((cmd: string, args: string[]) => exitCode(cmd, args, keychainTimeoutMs));
   const errors: string[] = [];
   const warnings: string[] = [];
   if (!nodeSupported(input.nodeVersion, NODE_RANGE)) {
@@ -317,8 +334,9 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
   // Tests point CC_CLAUDE_BIN at the fake and must not depend on this machine's Keychain.
   const skipKeychain = input.env.NODE_ENV === 'test' && input.env.CC_SKIP_KEYCHAIN !== '0';
   if (!skipKeychain) {
-    const r = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w']);
-    if ((typeof r === 'number' ? r : r.code) !== 0) errors.push(KEYCHAIN_HELP);
+    const out = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w']);
+    const problem = keychainProblem(typeof out === 'number' ? { code: out } : out, keychainTimeoutMs);
+    if (problem) errors.push(problem);
   }
   errors.push(...(await managedSettingsProblems(input.managedSettings)));
   const others = (input.claudeCandidates ?? []).filter((c) => c !== input.claudeBin);
