@@ -6,7 +6,7 @@
 // loads the whole graph anew.
 import fs from 'node:fs';
 import path from 'node:path';
-import chokidar from 'chokidar';
+import chokidar, { type FSWatcher } from 'chokidar';
 
 // Static and dynamic imports with a literal relative specifier. A match inside a comment or a string only
 // adds a path to watch (at worst, creating that file restarts the child once), so over-matching is harmless.
@@ -68,17 +68,50 @@ export function serverEntries(codeRoot: string, packageRoot: string, core: reado
   const root = path.resolve(codeRoot);
   const out = [...core];
   for (const tree of SERVER_TREES) {
-    const dir = path.join(packageRoot, tree);
-    let names: string[];
-    try {
-      names = fs.readdirSync(dir, { recursive: true, encoding: 'utf8' });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
-    }
-    for (const name of names) if (/\.(ts|mjs|js)$/.test(name) && !name.split(path.sep).includes('node_modules')) out.push(path.relative(root, path.join(dir, name)));
+    for (const file of moduleFiles(path.join(packageRoot, tree))) out.push(path.relative(root, file));
   }
   return out;
+}
+
+const unreadable = new Set<string>();
+const logError = (what: string, err: unknown) => console.error(`[supervisor] ${what}: ${err instanceof Error ? err.message : String(err)}`);
+
+/**
+ * The .ts/.mjs/.js files under `dir`, node_modules aside. A directory that cannot be read (gone, or unreadable, such as
+ * a mode 000 folder a Dev Chat step left) is skipped: one bad subtree must not stop the supervisor watching the rest.
+ */
+function moduleFiles(dir: string): string[] {
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    // Every refresh and reload walks the trees again: report a folder once, not on every walk.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !unreadable.has(dir)) {
+      unreadable.add(dir);
+      logError(`cannot read ${dir}; its modules are not watched`, err);
+    }
+    return [];
+  }
+  unreadable.delete(dir);
+  const out: string[] = [];
+  for (const d of dirents) {
+    const file = path.join(dir, d.name);
+    if (d.isDirectory()) {
+      if (d.name !== 'node_modules') out.push(...moduleFiles(file));
+    } else if (/\.(ts|mjs|js)$/.test(d.name)) out.push(file);
+  }
+  return out;
+}
+
+/**
+ * Watches the package's server/ and shared/ trees, calling `onChange(absolutePath)` on every change. A path chokidar
+ * cannot watch (EACCES on a new mode 000 folder) is logged: an 'error' event with no listener would exit the supervisor.
+ */
+export function watchServerTrees(packageRoot: string, onChange: (file: string) => void): FSWatcher {
+  const watcher = chokidar.watch(SERVER_TREES.map((tree) => path.join(packageRoot, tree)), { ignoreInitial: true });
+  watcher.on('all', (_event, file) => onChange(file));
+  watcher.on('error', (err) => logError('watching server/ and shared/ failed', err));
+  return watcher;
 }
 
 /**
@@ -110,19 +143,29 @@ export async function watchCoreGraph(codeRoot: string, entries: GraphEntries, on
   };
   let watched = new Set(files());
   const watcher = chokidar.watch([...watched], { ignoreInitial: true });
-  const refresh = async () => {
-    const next = new Set(files());
-    const added = [...next].filter((f) => !watched.has(f));
-    const gone = [...watched].filter((f) => !next.has(f));
-    watched = next;
-    if (gone.length) await watcher.unwatch(gone);
-    if (added.length) watcher.add(added);
-    for (const f of added) if (fs.existsSync(f)) onChange(f);
+  // Callers void this: a disk error re-reading the graph is logged and the files watched so far stay watched, since
+  // an unhandled rejection would exit the supervisor and /__recovery with it. One at a time, each against the set the
+  // one before it left: two compared with the same set would both add (and signal) the same new files.
+  let queue = Promise.resolve();
+  const refresh = () => (queue = queue.then(apply));
+  const apply = async () => {
+    try {
+      const next = new Set(files());
+      const added = [...next].filter((f) => !watched.has(f));
+      const gone = [...watched].filter((f) => !next.has(f));
+      if (gone.length) await watcher.unwatch(gone);
+      if (added.length) watcher.add(added);
+      watched = next;
+      for (const f of added) if (fs.existsSync(f)) onChange(f);
+    } catch (err) {
+      logError('re-reading the core import graph failed; still watching the previous files', err);
+    }
   };
   watcher.on('all', (_event, file) => {
     onChange(file);
     void refresh();
   });
+  watcher.on('error', (err) => logError('watching the core import graph failed', err));
   await new Promise<void>((resolve) => watcher.once('ready', () => resolve()));
   return { refresh, close: () => watcher.close() };
 }

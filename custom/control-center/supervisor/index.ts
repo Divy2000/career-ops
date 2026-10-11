@@ -11,12 +11,11 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import chokidar from 'chokidar';
 import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates, testHost } from './preflight.js';
 import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
-import { SERVER_TREES, serverEntries, serverLoads, watchCoreGraph } from './core-graph.js';
+import { serverEntries, serverLoads, watchCoreGraph, watchServerTrees } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
@@ -451,7 +450,6 @@ async function main(): Promise<void> {
   // graph of the core modules the server loads (custom/projects/lib.mjs and what it imports from the upstream root, edited
   // by Dev Chat or fast-forwarded by the weekly sync): only a new process loads that whole graph anew (core-graph.ts).
   if (!process.env.CC_NO_RELOAD) {
-    const watcher = chokidar.watch(SERVER_TREES.map((tree) => path.join(PACKAGE_ROOT, tree)), { ignoreInitial: true });
     let debounce: NodeJS.Timeout | null = null;
     const changed = (file: string) => {
       if (debounce) clearTimeout(debounce);
@@ -460,7 +458,7 @@ async function main(): Promise<void> {
         void bg.reload();
       }, 500);
     };
-    watcher.on('all', (_event, file) => changed(file));
+    watchServerTrees(PACKAGE_ROOT, changed);
     const core = await watchCoreGraph(CODE_ROOT, CORE_ENTRIES, changed);
     // The new code may import files the old one did not: recomputed after every attempt, a failed one included.
     bg.onStatus((st) => {

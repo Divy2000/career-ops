@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { coreImportGraph, coreImportGraphWithMissing, serverEntries, serverLoads, watchCoreGraph } from '../../supervisor/core-graph.js';
+import { coreImportGraph, coreImportGraphWithMissing, serverEntries, serverLoads, watchCoreGraph, watchServerTrees } from '../../supervisor/core-graph.js';
 import { CONTRACT } from '../../server/core/adapter.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -30,7 +30,16 @@ function scratchRoot(): string {
 const stops: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const stop of stops.splice(0)) await stop();
+  vi.restoreAllMocks();
 });
+
+/** A directory no one can read or watch (mode 000); made readable again after the test, so its temp root can go. */
+function lockedDir(dir: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.chmodSync(dir, 0);
+  stops.push(async () => fs.chmodSync(dir, 0o755));
+  return dir;
+}
 
 describe('the import graph of the core modules the server loads', () => {
   it('follows relative imports transitively from custom/ into the upstream root, and nothing else', () => {
@@ -155,5 +164,93 @@ describe('a change anywhere in that graph restarts the server child, whose fresh
     put(root, 'lib/case.mjs', 'export const lower = (s) => s.toLocaleLowerCase();\n');
     for (let i = 0; i < 100 && !changes.length; i++) await wait(50);
     expect(changes).toEqual([path.join(root, 'lib/case.mjs')]);
+  });
+});
+
+describe('a disk error in the watched trees is logged, and the supervisor keeps serving the proxy and /__recovery (R20-supervisor-L1-01)', () => {
+  // Root reads and watches a mode 000 folder, so there is no EACCES to see.
+  it.skipIf(process.getuid?.() === 0)('the server entries skip a subtree that cannot be read, keeping every file that can', () => {
+    const root = scratchRoot();
+    const pkg = path.join(root, 'custom', 'control-center');
+    put(root, 'custom/control-center/server/index.ts', 'export {};\n');
+    put(root, 'custom/control-center/shared/theme.ts', 'export {};\n');
+    const locked = lockedDir(path.join(pkg, 'server', 'tmp'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(serverEntries(root, pkg, ['custom/projects/lib.mjs']).sort()).toEqual(['custom/control-center/server/index.ts', 'custom/control-center/shared/theme.ts', 'custom/projects/lib.mjs']);
+    // Every refresh and reload walks the trees again: one leftover folder is reported once, not on every walk.
+    serverEntries(root, pkg, ['custom/projects/lib.mjs']);
+    expect(log.mock.calls.filter((c) => String(c[0]).includes(locked))).toHaveLength(1);
+  });
+
+  it('a refresh whose entries cannot be read logs the error, keeps the files it watched and resolves', async () => {
+    const root = scratchRoot();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let fail = false;
+    const changes: string[] = [];
+    const watcher = await watchCoreGraph(root, () => {
+      if (fail) throw Object.assign(new Error('EACCES: permission denied, scandir'), { code: 'EACCES' });
+      return ['custom/projects/lib.mjs'];
+    }, (file) => changes.push(file));
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    fail = true;
+    await expect(watcher.refresh()).resolves.toBeUndefined();
+    expect(log.mock.calls.flat().join(' ')).toContain('EACCES');
+    put(root, 'lib/text.mjs', 'export const trim = (s) => s.trimStart();\n');
+    for (let i = 0; i < 100 && !changes.length; i++) await wait(50);
+    expect(changes).toContain(path.join(root, 'lib/text.mjs'));
+  });
+
+  it('two refreshes started together signal a file the graph gained once, and leave it watched (R20-supervisor-L1-01 review)', async () => {
+    const root = scratchRoot();
+    const changes: string[] = [];
+    const watcher = await watchCoreGraph(root, ['custom/projects/lib.mjs'], (file) => changes.push(file));
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    // The graph drops lib/text.mjs and gains lib/case.mjs (already on disk) in one edit: a refresh unwatches and adds.
+    put(root, 'lib/case.mjs', 'export const lower = (s) => s.toLowerCase();\n');
+    fs.writeFileSync(path.join(root, 'tracker-parse.mjs'), "import { lower } from './lib/case.mjs';\nexport const normalize = (s) => lower(s);\n");
+    const caseFile = path.join(root, 'lib/case.mjs');
+    await Promise.all([watcher.refresh(), watcher.refresh()]);
+    expect(changes.filter((f) => f === caseFile)).toHaveLength(1);
+    await wait(SETTLE);
+    changes.length = 0;
+    put(root, 'lib/case.mjs', 'export const lower = (s) => s.toLocaleLowerCase();\n');
+    for (let i = 0; i < 100 && !changes.includes(caseFile); i++) await wait(50);
+    expect(changes).toContain(caseFile);
+  });
+
+  // Root reads and watches a mode 000 folder, so there is no EACCES to see.
+  it.skipIf(process.getuid?.() === 0)('a graph path that turns up as a directory no one can watch is logged, not thrown', async () => {
+    const root = scratchRoot();
+    put(root, 'tracker-parse.mjs', "import { trim } from './lib/text.mjs';\nimport { later } from './lib/later.mjs';\nexport const normalize = (s) => trim(s);\n");
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const watcher = await watchCoreGraph(root, ['custom/projects/lib.mjs'], () => undefined);
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    lockedDir(path.join(root, 'lib', 'later.mjs'));
+    for (let i = 0; i < 100 && !log.mock.calls.length; i++) await wait(50);
+    expect(log.mock.calls.flat().join(' ')).toContain('EACCES');
+  });
+
+  // Root reads and watches a mode 000 folder, so there is no EACCES to see.
+  it.skipIf(process.getuid?.() === 0)('the server/ and shared/ watcher logs a directory it cannot watch and keeps reporting changes', async () => {
+    const root = scratchRoot();
+    const pkg = path.join(root, 'custom', 'control-center');
+    put(root, 'custom/control-center/server/index.ts', 'export {};\n');
+    put(root, 'custom/control-center/shared/theme.ts', 'export {};\n');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const changes: string[] = [];
+    const watcher = watchServerTrees(pkg, (file) => changes.push(file));
+    stops.push(() => watcher.close());
+    await new Promise<void>((resolve) => watcher.once('ready', () => resolve()));
+    await wait(SETTLE);
+    lockedDir(path.join(pkg, 'server', 'tmp'));
+    for (let i = 0; i < 100 && !log.mock.calls.length; i++) await wait(50);
+    expect(log.mock.calls.flat().join(' ')).toContain('EACCES');
+    changes.length = 0;
+    const file = put(root, 'custom/control-center/shared/theme.ts', 'export const x = 1;\n');
+    for (let i = 0; i < 100 && !changes.includes(file); i++) await wait(50);
+    expect(changes).toContain(file);
   });
 });
