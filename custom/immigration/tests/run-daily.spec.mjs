@@ -5,6 +5,7 @@ import fs, { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { CLI_CANDIDATES } from '../../../rank-pipeline.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..', '..');
@@ -38,7 +39,7 @@ const jobTest = fs.existsSync('/usr/bin/lockf') ? test : (name, fn) => test(name
 
 // The argv the real rank-pipeline.mjs gives claude (its claude candidate, then --model as callCli adds it), so the
 // stand-in below sends what the scheduled rank really sends.
-const RANK_CLAUDE = (await import(path.join(ROOT, 'rank-pipeline.mjs'))).CLI_CANDIDATES.find((c) => c.bin === 'claude');
+const RANK_CLAUDE = CLI_CANDIDATES.find((c) => c.bin === 'claude');
 const RANK_ARGV = [...RANK_CLAUDE.args('RANK PROMPT'), '--model', 'sonnet'];
 
 const CONFINEMENT = path.join(ROOT, 'custom/control-center/server/claude/confinement.mjs');
