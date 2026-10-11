@@ -677,6 +677,13 @@ describe('Apply documents classification and suggestion', () => {
     expect((await docs(12)).suggestedCover).toBeNull();
   });
 
+  it('suggests an unclaimed company CV for a row with no report, but none another report owns', async () => {
+    out('output/008-umbrella-corp-analyst/cv/umbrella-corp-cv.pdf');
+    expect((await docs(5)).suggestedPdf).toBeNull();
+    out('output/cv-umbrella-corp-security.pdf');
+    expect((await docs(5)).suggestedPdf).toBe('output/cv-umbrella-corp-security.pdf');
+  });
+
   it('suggests the newest tailored CV in the report application bundle when the manifest has none', async () => {
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v002/cv.pdf');
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
