@@ -129,9 +129,14 @@ async function main() {
   if (args.ack) return ack(args.ack);
   const sinceArg = args.since;
   await mkdir(DIR, { recursive: true });
+  // Exclusive create: the policy pass appends to these files without the pending lock, so a file that appeared since
+  // any earlier check (another run's header, an appended entry) is left as it is rather than truncated.
   for (const [name, header] of Object.entries(HEADERS)) {
-    const file = path.join(DIR, name);
-    if (!existsSync(file)) await writeFile(file, header);
+    try {
+      await writeFile(path.join(DIR, name), header, { flag: 'wx' });
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
   }
   const readSeen = async () => (existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] });
   // Read once before the fetch for the cursors only; the merge below reads it again under the lock.
