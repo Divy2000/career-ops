@@ -996,6 +996,10 @@ describe('guard root (policy and revert bookkeeping outside every session write 
     // Trimmed like CC_DATA_ROOT: padding is not part of the folder name, and a blank value means the default.
     expect(resolveGuardRoot({ env: { CC_GUARD_DIR: ' ../cc-guard2 ', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'cc-guard2'));
     expect(resolveGuardRoot({ env: { CC_GUARD_DIR: '  ', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'Library', 'Application Support', 'career-ops-control-center'));
+    // Only CC_GUARD_DIR follows the launch folder; the default stays where it always was, so a relative XDG_STATE_HOME
+    // does not move earlier sessions' policies and revert bookkeeping when the app is started from another folder.
+    const xdg = path.relative(process.cwd(), path.join(base, 'xdg'));
+    expect(resolveGuardRoot({ env: { XDG_STATE_HOME: xdg, INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'linux' })).toBe(path.join(base, 'xdg', 'career-ops-control-center'));
   });
 });
 
