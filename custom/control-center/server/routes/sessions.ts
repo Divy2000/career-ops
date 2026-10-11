@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { plainPostingUrl } from '../../shared/posting-url.js';
+import { sponsorCheckRefusal } from '../../shared/company-slug.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
 
@@ -243,6 +244,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (parsed.data.mode === 'sponsorship-check' && !(parsed.data.target.type === 'company' && parsed.data.target.value?.trim())) {
       return reply.code(400).send({ error: 'a sponsorship check needs a company target' });
     }
+    const noCompanyFile = parsed.data.mode === 'sponsorship-check' ? sponsorCheckRefusal(parsed.data.target.value ?? '') : null;
+    if (noCompanyFile) return reply.code(400).send({ error: noCompanyFile });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: parsed.data.target.type === 'company' ? `another sponsorship check is already starting for ${parsed.data.target.value?.trim()}` : `another batch evaluate is already starting ${parsed.data.target.value}` });
     const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
