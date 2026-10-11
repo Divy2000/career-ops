@@ -321,6 +321,81 @@ describe('change sets the disk no longer matches', () => {
     fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
     expect(recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn: 1 })).toMatchObject({ status: 500, text: expect.stringMatching(/revert failed: .*JSON/) });
   });
+
+  describe('a write that fails partway (R19-supervisor-L1-01)', () => {
+    afterEach(() => vi.restoreAllMocks());
+    function recoverable() {
+      const { sessionDir: guardSession, ctx, file, created } = fakeSession();
+      const guardRoot = fs.realpathSync(tempDir('cc-recovery-root-'));
+      const sessionsDir = fs.realpathSync(tempDir('cc-recovery-sessions-'));
+      fs.mkdirSync(path.join(guardRoot, 'sessions'));
+      fs.renameSync(guardSession, path.join(guardRoot, 'sessions', 's1'));
+      fs.mkdirSync(path.join(sessionsDir, 's1'));
+      fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
+      return { file, created, revert: (turn: number) => recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn }) };
+    }
+    const enospc = () => Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+
+    it('leaves no temp file next to the target when the restore cannot be written', () => {
+      const t = recoverable();
+      vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      expect(t.revert(2)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at notes\.md: ENOSPC/) });
+      expect(fs.readdirSync(path.dirname(t.file)).filter((n) => n.includes('.cc-revert-'))).toEqual([]);
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('line one\nline TWO\nline three\n');
+    });
+
+    it('reports the write failure itself even when the temp file cannot be removed after it', () => {
+      const t = recoverable();
+      vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      });
+      expect(t.revert(2)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at notes\.md: ENOSPC/) });
+    });
+
+    it('a whole-turn revert from the API names the files already reverted too, keeping the error\'s code', () => {
+      const { sessionDir, meta, ctx, file, created } = fakeSession();
+      expect(revertTurn(sessionDir, meta, 2, ctx)).toEqual([{ abs: file, result: 'restored' }]);
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      let err: NodeJS.ErrnoException | null = null;
+      try {
+        revertTurn(sessionDir, meta, 1, ctx);
+      } catch (e) {
+        err = e as NodeJS.ErrnoException;
+      }
+      expect(err?.code).toBe('ENOSPC');
+      expect(err?.message).toMatch(/^revert failed at new\.md: ENOSPC.*\nalready reverted before the failure:\nnotes\.md: restored$/);
+      expect(fs.existsSync(created)).toBe(true);
+    });
+
+    it('names the files of the turn already reverted before the failure, and a retry finishes the rest', () => {
+      const t = recoverable();
+      expect(t.revert(2).status).toBe(200);
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      const failed = t.revert(1);
+      expect(failed.status).toBe(500);
+      expect(failed.text).toMatch(/^revert failed at new\.md: ENOSPC/);
+      expect(failed.text).toMatch(/notes\.md: restored/);
+      expect(failed.text).not.toMatch(/new\.md: deleted/);
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('line one\nline two\n');
+      // On a retry notes.md is already at its pre-turn bytes and is not written: it is not named as reverted by this one.
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      expect(t.revert(1)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at new\.md: ENOSPC.*\nnothing was reverted$/) });
+      vi.restoreAllMocks();
+      expect(t.revert(1)).toMatchObject({ status: 200, text: 'notes.md: unchanged\nnew.md: deleted' });
+      expect(fs.existsSync(t.created)).toBe(false);
+    });
+  });
 });
 
 describe('/__recovery revert requests', () => {
