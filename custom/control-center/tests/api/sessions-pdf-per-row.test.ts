@@ -126,6 +126,18 @@ describe('a reply to or fork of a tailored CV session while another for its row 
     });
   });
 
+  for (const kind of ['turns', 'fork'] as const) {
+    it(`a ${kind === 'turns' ? 'reply to' : 'fork of'} a finished one is refused while another is paused for a reply`, async () => {
+      await withApp(async (app) => {
+        const paused = pdfSession(app, '12', 'awaiting_user');
+        const done = pdfSession(app, '12', 'done');
+        const res = await turn(app, done.id, kind);
+        expect(res.statusCode).toBe(409);
+        expect((res.json() as { error: string }).error).toContain(paused.id);
+      });
+    });
+  }
+
   it('two paused ones of different lineages (from before this guard) do not block each other for good', async () => {
     await withApp(async (app) => {
       pdfSession(app, '12', 'awaiting_user');

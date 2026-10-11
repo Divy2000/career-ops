@@ -205,12 +205,13 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return /^\d+$/.test(row) ? String(Number(row)) : row;
   };
   /**
-   * Null when a tailored CV for the row may run, else the 409 reason naming the session in the way. A start is held by
-   * any live one. A reply or fork carries a CV run on, so it is held only by one whose turn runs or is starting (not by
-   * one paused for a reply, which would leave two paused sessions refusing each other's reply), and never by its own session.
+   * Null when a tailored CV for the row may run, else the 409 reason naming the session in the way. A start, or a reply
+   * to or fork of a finished session, is held by any live one. A reply to or fork of a session paused for a reply carries
+   * that run on, so it is held only by one whose turn runs or is starting (two paused sessions would otherwise refuse
+   * each other's reply for good), and never by its own session.
    */
   const tailoredCvHolds = (row: string, own: { meta: SessionMeta; kind: 'reply' | 'fork' } | null = null): string | null => {
-    const holds = (m: SessionMeta) => !own || m.status !== 'awaiting_user' || turnsStarting.has(m.id);
+    const holds = (m: SessionMeta) => own?.meta.status !== 'awaiting_user' || m.status !== 'awaiting_user' || turnsStarting.has(m.id);
     const live = liveOrStarting().find((m) => tailoredCvRow(m.mode, m.target) === row && !(own?.kind === 'reply' && m.id === own.meta.id) && holds(m));
     return live ? `session ${live.id} is already generating the tailored CV for tracker row #${row}. Open it instead.` : null;
   };
