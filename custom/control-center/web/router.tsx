@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter, type SearchSchemaInput } from '@tanstack/react-router';
+import { createRootRoute, createRoute, createRouter, notFound, type SearchSchemaInput } from '@tanstack/react-router';
 import { Shell } from './components/Shell';
 import { TodayPage } from './features/today/TodayPage';
 import { TrackerPage, type TrackerSearch, type TrackerTab, type SortKey } from './features/tracker/TrackerPage';
@@ -44,8 +44,20 @@ const trackerRoute = createRoute({
   }),
 });
 
+/**
+ * A tracker row number, normalized ("05" is row 5), or not found. The pages put it in fetch paths, session prompts and
+ * per-row guard keys, so `5%23<text>` (decoded to `5#<text>`) must not load row 5 and carry its text along.
+ */
+const rowParams = {
+  parse: ({ n }: { n: string }): { n: string } => {
+    if (!/^\d{1,9}$/.test(n) || Number(n) === 0) throw notFound();
+    return { n: String(Number(n)) };
+  },
+  stringify: ({ n }: { n: string }) => ({ n }),
+};
+
 // A different row is a different page: without the remount, its tab and a delete preview carry over to the next row.
-const applicationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage, remountDeps: ({ params }) => params });
+const applicationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage, params: rowParams, remountDeps: ({ params }) => params });
 
 const pipelineRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -110,7 +122,7 @@ const tutorialsRoute = createRoute({
   }),
 });
 
-const routeTree = rootRoute.addChildren([
+export const routeTree = rootRoute.addChildren([
   todayRoute,
   trackerRoute,
   applicationRoute,
@@ -119,7 +131,7 @@ const routeTree = rootRoute.addChildren([
   insightsRoute,
   followupsRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: ApplyPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/apply/$n', component: ApplyRowPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/apply/$n', component: ApplyRowPage, params: rowParams }),
   createRoute({ getParentRoute: () => rootRoute, path: '/interviews', component: InterviewsPage }),
   discoverRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/sessions', component: SessionsPage }),
