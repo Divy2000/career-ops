@@ -439,7 +439,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const meta = manager.read(req.params.id);
       if (!meta) return reply.code(404).send({ error: 'no such session' });
       // Deleted first: a running session refuses, and its upload stays with it.
-      manager.delete(req.params.id);
+      await manager.delete(req.params.id);
       dropUpload(meta);
       releaseOnceExited(req.params.id, meta.turns.at(-1)?.runId);
       return { ok: true };

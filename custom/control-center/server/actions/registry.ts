@@ -353,7 +353,7 @@ export const ACTIONS: ActionDef[] = [
         });
         return null;
       }
-      return { status: 409, error: `Report ${held.map((h) => `${h.num} is held by session ${h.sessionId}`).join(', ')}. Cancel or finish that session first; it releases its own number.` };
+      return { status: 409, error: `Report ${held.map((h) => `${h.num} is held by session ${h.sessionId}`).join(', ')}. Cancel it if it is running, or delete it if it has ended; either releases its number.` };
     },
     build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]),
   }),
