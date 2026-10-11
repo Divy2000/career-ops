@@ -235,6 +235,26 @@ describe('session manager: a waiting evaluation keeps its reserved number (R19-c
     }
   });
 
+  it('given a lost number whose replacement cannot be recorded, when the turn fails before spawn, then the session still owns the replacement', async () => {
+    const app = await makeTestApp();
+    try {
+      const fan = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r19-l3-d'] })).json());
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      await settleOn(app, id);
+      fs.rmSync(sentinel(app, n));
+      // reservation.json cannot be written: a folder stands in its place.
+      fs.mkdirSync(path.join(app.sessions.store.guardDirOf(id), 'reservation.json'));
+      await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'try again' });
+      const { meta } = await settleOn(app, id);
+      expect(meta.status).toBe('error');
+      expect(meta.reportNum).toEqual(expect.any(Number));
+      expect(fs.existsSync(sentinel(app, meta.reportNum!))).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('given its sentinel is still its own, when the user replies, then the number is kept and the sentinel refreshed so a 4h GC does not free it mid-turn', async () => {
     const app = await makeTestApp();
     try {
