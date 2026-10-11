@@ -305,8 +305,19 @@ function applyRevert(plan: RevertPlan): RevertResult {
     const real = resolveReal(plan.abs);
     fs.mkdirSync(path.dirname(real), { recursive: true });
     const tmp = `${real}.cc-revert-${process.pid}`;
-    fs.copyFileSync(plan.key, tmp);
-    fs.renameSync(tmp, real);
+    try {
+      fs.copyFileSync(plan.key, tmp);
+      fs.renameSync(tmp, real);
+    } catch (err) {
+      // A partial copy (ENOSPC) or a failed rename must not leave the temp file in the checkout. A failed cleanup must
+      // not hide the write's own error either.
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        /* the original error below is the one to report */
+      }
+      throw err;
+    }
     return 'restored';
   }
   if (plan.action === 'delete') {
@@ -323,8 +334,35 @@ export function revertFile(turnDir: string, abs: string, ctx: RevertContext): Re
 
 /** All or nothing: every file of the turn is checked before any is written. */
 export function revertTurn(sessionDir: string, meta: MetaLike, n: number, ctx: RevertContext): Array<{ abs: string; result: RevertResult }> {
-  return planTurnRevert(sessionDir, meta, n, ctx).map((p) => ({ abs: p.abs, result: applyRevert(p) }));
+  return applyReverts(planTurnRevert(sessionDir, meta, n, ctx));
 }
+
+/** Errors applyReverts annotated with the file that failed and the files written before it. */
+const annotated = new WeakSet<Error>();
+
+/**
+ * Writes the checked plans in order. A write that fails leaves the files before it already written: its error (code and
+ * path kept) is rethrown with a message naming the file that failed and those already reverted, so the half-applied
+ * turn is visible. A retry reports them as unchanged and reverts the rest.
+ */
+function applyReverts(plans: RevertPlan[]): Array<{ abs: string; result: RevertResult }> {
+  const results: Array<{ abs: string; result: RevertResult }> = [];
+  for (const p of plans) {
+    try {
+      results.push({ abs: p.abs, result: applyRevert(p) });
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const written = results.filter((r) => r.result === 'restored' || r.result === 'deleted');
+      const done = written.length ? `\nalready reverted before the failure:\n${resultLines(written)}` : '\nnothing was reverted';
+      err.message = `revert failed at ${path.basename(p.abs)}: ${err.message}${done}`;
+      annotated.add(err);
+      throw err;
+    }
+  }
+  return results;
+}
+
+const resultLines = (results: Array<{ abs: string; result: RevertResult }>) => results.map((r) => `${path.basename(r.abs)}: ${r.result}`).join('\n');
 
 function planTurnRevert(sessionDir: string, meta: MetaLike, n: number, ctx: RevertContext): RevertPlan[] {
   const turn = changesByTurn(sessionDir, meta).find((t) => t.n === n);
@@ -366,14 +404,17 @@ export function runEnded(dataRoot: string, runId: string | undefined, startOf: (
   if (!runId || !/^[\w-]+$/.test(runId)) return false;
   const dir = path.join(dataRoot, 'data', 'control-center', 'runs', runId);
   if (fs.existsSync(path.join(dir, 'exit.json'))) return true;
-  let run: { status?: string; wrapperPid?: number | null; childPid?: number | null; wrapperStartedAt?: unknown; childStartedAt?: unknown } | null;
+  let run: { status?: string; endedAt?: unknown; wrapperPid?: number | null; childPid?: number | null; wrapperStartedAt?: unknown; childStartedAt?: unknown } | null;
   try {
     run = readJson(path.join(dir, 'meta.json'));
   } catch {
     return false;
   }
   if (!run) return false;
-  if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'lost') return true;
+  if (run.status === 'done' || run.status === 'failed' || run.status === 'lost') return true;
+  // A cancel marks the run at once and records its end only when the command exits (store.ts unended()): until then its
+  // command may still be in the kill grace, so its processes decide below.
+  if (run.status === 'cancelled' && run.endedAt !== null) return true;
   // A queued run is not over while a server will start it: the next server queues it again from its start request and
   // runs it. Only one with no request.json never starts (that server marks it lost). With no server running at all,
   // neither a start request nor its absence can be answered, so the run is as good as lost and no longer blocks a revert.
@@ -501,10 +542,11 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     // A queued run is over only because no server will start it: once the revert is sure to go ahead, mark it lost so
     // the next server does not re-run it over the revert. A refused revert leaves it queued for that server to run.
     if (markLost) markQueuedRunsLost(opts.ctx.dataRoot, meta.id);
-    const results = plans.map((p) => ({ abs: p.abs, result: applyRevert(p) }));
-    return { status: 200, text: results.map((r) => `${path.basename(r.abs)}: ${r.result}`).join('\n') || 'nothing to revert' };
+    const results = applyReverts(plans);
+    return { status: 200, text: resultLines(results) || 'nothing to revert' };
   } catch (err) {
     if (err instanceof RevertRefused) return { status: err.status, text: err.message };
+    if (err instanceof Error && annotated.has(err)) return { status: 500, text: err.message };
     return { status: 500, text: `revert failed: ${(err as Error).message}` };
   }
 }

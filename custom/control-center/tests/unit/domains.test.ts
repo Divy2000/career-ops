@@ -192,6 +192,23 @@ describe('immigration overview', () => {
     expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).alerts.history[0]).toMatchObject({ date: '2026-10-02', company: 'Initech Cloud', status: 'paused' });
   });
 
+  it('reads a headerless official-feed.tsv by position, as watch.mjs does, keeping its first item (R19-srv-dom-a-L2-01)', async () => {
+    // watch.mjs writes the header only when the file is missing, so an existing empty feed gets bare rows appended.
+    const headerless = copyFixtureRoot();
+    fs.writeFileSync(path.join(headerless, 'data/immigration/official-feed.tsv'), '2026-10-09\t2026-10-08\tUSCIS\tFirst item\thttps://a\n2026-10-09\t2026-10-07\tFederal Register\tSecond item\thttps://b\n');
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, headerless, '2026-10-10')).officialFeed).toEqual([
+      { first_seen: '2026-10-09', published: '2026-10-08', source: 'USCIS', title: 'First item', url: 'https://a' },
+      { first_seen: '2026-10-09', published: '2026-10-07', source: 'Federal Register', title: 'Second item', url: 'https://b' },
+    ]);
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).officialFeed[0]).toEqual({
+      first_seen: '2026-10-02',
+      published: '2026-09-29',
+      source: 'Federal Register (Proposed Rule; USCIS)',
+      title: 'Fee for Certain Petitions (proposed)',
+      url: 'https://www.federalregister.example/doc/1',
+    });
+  });
+
   it('counts the watcher queue from pending.json and reports null when there is none', async () => {
     expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).pendingCount).toBeNull();
     const withQueue = copyFixtureRoot();

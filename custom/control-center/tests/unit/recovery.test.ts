@@ -321,6 +321,81 @@ describe('change sets the disk no longer matches', () => {
     fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
     expect(recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn: 1 })).toMatchObject({ status: 500, text: expect.stringMatching(/revert failed: .*JSON/) });
   });
+
+  describe('a write that fails partway (R19-supervisor-L1-01)', () => {
+    afterEach(() => vi.restoreAllMocks());
+    function recoverable() {
+      const { sessionDir: guardSession, ctx, file, created } = fakeSession();
+      const guardRoot = fs.realpathSync(tempDir('cc-recovery-root-'));
+      const sessionsDir = fs.realpathSync(tempDir('cc-recovery-sessions-'));
+      fs.mkdirSync(path.join(guardRoot, 'sessions'));
+      fs.renameSync(guardSession, path.join(guardRoot, 'sessions', 's1'));
+      fs.mkdirSync(path.join(sessionsDir, 's1'));
+      fs.writeFileSync(path.join(sessionsDir, 's1', 'meta.json'), JSON.stringify({ id: 's1', mode: 'devchat', status: 'done', createdAt: 't', turns: [{ n: 1 }, { n: 2 }] }));
+      return { file, created, revert: (turn: number) => recoveryRevert({ sessionsDir, guardRoot, ctx, sessionId: 's1', turn }) };
+    }
+    const enospc = () => Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+
+    it('leaves no temp file next to the target when the restore cannot be written', () => {
+      const t = recoverable();
+      vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      expect(t.revert(2)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at notes\.md: ENOSPC/) });
+      expect(fs.readdirSync(path.dirname(t.file)).filter((n) => n.includes('.cc-revert-'))).toEqual([]);
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('line one\nline TWO\nline three\n');
+    });
+
+    it('reports the write failure itself even when the temp file cannot be removed after it', () => {
+      const t = recoverable();
+      vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      });
+      expect(t.revert(2)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at notes\.md: ENOSPC/) });
+    });
+
+    it('a whole-turn revert from the API names the files already reverted too, keeping the error\'s code', () => {
+      const { sessionDir, meta, ctx, file, created } = fakeSession();
+      expect(revertTurn(sessionDir, meta, 2, ctx)).toEqual([{ abs: file, result: 'restored' }]);
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      let err: NodeJS.ErrnoException | null = null;
+      try {
+        revertTurn(sessionDir, meta, 1, ctx);
+      } catch (e) {
+        err = e as NodeJS.ErrnoException;
+      }
+      expect(err?.code).toBe('ENOSPC');
+      expect(err?.message).toMatch(/^revert failed at new\.md: ENOSPC.*\nalready reverted before the failure:\nnotes\.md: restored$/);
+      expect(fs.existsSync(created)).toBe(true);
+    });
+
+    it('names the files of the turn already reverted before the failure, and a retry finishes the rest', () => {
+      const t = recoverable();
+      expect(t.revert(2).status).toBe(200);
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      const failed = t.revert(1);
+      expect(failed.status).toBe(500);
+      expect(failed.text).toMatch(/^revert failed at new\.md: ENOSPC/);
+      expect(failed.text).toMatch(/notes\.md: restored/);
+      expect(failed.text).not.toMatch(/new\.md: deleted/);
+      expect(fs.readFileSync(t.file, 'utf8')).toBe('line one\nline two\n');
+      // On a retry notes.md is already at its pre-turn bytes and is not written: it is not named as reverted by this one.
+      vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw enospc();
+      });
+      expect(t.revert(1)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at new\.md: ENOSPC.*\nnothing was reverted$/) });
+      vi.restoreAllMocks();
+      expect(t.revert(1)).toMatchObject({ status: 200, text: 'notes.md: unchanged\nnew.md: deleted' });
+      expect(fs.existsSync(t.created)).toBe(false);
+    });
+  });
 });
 
 describe('/__recovery revert requests', () => {
@@ -427,6 +502,17 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(fs.readFileSync(t.file, 'utf8')).toBe('broken by the turn\n');
     fs.writeFileSync(path.join(next, 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: 't' }));
     expect(t.revert(false).status).toBe(200);
+  });
+
+  it('a run cancelled but not yet ended (its command in the kill grace) blocks the revert while its processes live, as the runner keeps tracking it (R19-supervisor-L2-01)', () => {
+    const live = { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid), childPid: process.pid, childStartedAt: processStartTime(process.pid) };
+    const grace = stalled((dir) => runMeta(dir, { status: 'cancelled', endedAt: null, ...live }));
+    expect(grace.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
+    expect(fs.readFileSync(grace.file, 'utf8')).toBe('broken by the turn\n');
+    const exited = stalled((dir) => runMeta(dir, { status: 'cancelled', endedAt: null, wrapperPid: deadPid(), childPid: deadPid() }));
+    expect(exited.revert(false).status).toBe(200);
+    const ended = stalled((dir) => runMeta(dir, { status: 'cancelled', endedAt: '2026-10-06T00:00:05.000Z', ...live }));
+    expect(ended.revert(false).status).toBe(200);
   });
 
   it('a run whose meta has no child PID yet is judged by the PIDs the wrapper recorded in wrapper.json', () => {
