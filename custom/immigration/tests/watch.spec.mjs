@@ -31,10 +31,9 @@ function noonIn(zone, ms) {
  * matches several of them. Items are dated the world's now, never a fixed day: watch.mjs only reads the last 14 days,
  * so a fixed date would age out of the window. watch.mjs's clock starts at `at`, or else at noon of today in `zone`
  * moved `daysAhead` days on, and runs from there: never from the real clock, so local midnight cannot pass between
- * computing the expected day here and watch.mjs dating its run.
+ * computing the expected day here and watch.mjs dating its run. `root` reuses another world's data root, a later day.
  */
-function watchWorld({ daysAhead = 0, zone = ZONE, at = null } = {}) {
-  const root = tempDir('imm-watch-');
+function watchWorld({ daysAhead = 0, zone = ZONE, at = null, root = tempDir('imm-watch-') } = {}) {
   const feeds = path.join(root, 'feeds.json');
   const preload = path.join(root, 'feeds.mjs');
   const start = at ? Date.parse(at) : noonIn(zone, Date.now()) + daysAhead * DAY_MS;
@@ -49,6 +48,7 @@ function watchWorld({ daysAhead = 0, zone = ZONE, at = null } = {}) {
     return r.stdout;
   };
   return {
+    root,
     imm,
     doc: (n, title) => ({ document_number: n, title, publication_date: now.toISOString().slice(0, 10), html_url: `https://www.federalregister.gov/d/${n}`, type: 'Rule', agencies: [{ name: 'USCIS' }] }),
     rssItem: (slug, title) => `<item><title>${title}</title><link>https://www.uscis.gov/news/${slug}</link><pubDate>${now.toUTCString()}</pubDate></item>`,
@@ -228,6 +228,30 @@ for (const clock of [{}, ...NEAR_MIDNIGHT]) test(`acknowledging a pass records i
   assert.equal(w.seen().last_pass, w.today);
   w.watch();
   assert.equal(w.seen().last_pass, w.today, 'a fetch run does not drop it');
+});
+
+test('a batch acknowledged days after its pass records the pass\'s day, so the next run still searches the news since then (R21-srv-dom-b-L1-01)', () => {
+  const w = watchWorld();
+  const passDay = daysBefore(w.today, 3);
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_pass: daysBefore(w.today, 10) }));
+  w.setFeeds({});
+  w.ack({ date: passDay, new_items: [] });
+  assert.equal(w.seen().last_pass, passDay);
+  // Ten days on the window floor is a week past the pass day: only the recorded day reaches back to it.
+  const later = watchWorld({ root: w.root, daysAhead: 10 });
+  later.setFeeds({});
+  assert.equal(later.watch().news_since, passDay);
+});
+
+test('acknowledging an older batch never moves the last successful pass back, and a batch with no date leaves it as it was (R21-srv-dom-b-L1-01)', () => {
+  const w = watchWorld();
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_pass: daysBefore(w.today, 1) }));
+  w.ack({ date: daysBefore(w.today, 2), new_items: [] });
+  assert.equal(w.seen().last_pass, daysBefore(w.today, 1));
+  w.ack({ new_items: [] });
+  assert.equal(w.seen().last_pass, daysBefore(w.today, 1));
 });
 
 test('after days with no successful pass, the news window reaches back to the last one', () => {

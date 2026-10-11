@@ -101,14 +101,21 @@ const withPendingLock = (fn) => withPipelineLock(PENDING, fn);
 
 // Called after the AI pass succeeded: drop the items it was given from the queue.
 async function ack(file) {
-  const done = new Set(JSON.parse(await readFile(file, 'utf8')).new_items.map((i) => i.id));
+  const batch = JSON.parse(await readFile(file, 'utf8'));
+  const done = new Set(batch.new_items.map((i) => i.id));
+  const today = localToday();
+  // The day the pass searched the news up to: the batch's own date (never past today), not the day this ack lands,
+  // which may be days later (a retried ack, or a pass that ran past midnight).
+  const passDay = /^\d{4}-\d{2}-\d{2}$/.test(batch.date ?? '') ? (batch.date < today ? batch.date : today) : null;
   const { before, left } = await withPendingLock(async () => {
     const pending = existsSync(PENDING) ? JSON.parse(await readFile(PENDING, 'utf8')) : [];
     const kept = pending.filter((i) => !done.has(i.id));
     await writeAtomic(PENDING, JSON.stringify(kept, null, 2) + '\n');
-    // A successful pass: the next one searches the news from today on, and from here on after any gap.
+    // A successful pass: the next one searches the news from its day on, and from there after any gap. last_pass only
+    // moves forward, and a batch with no date leaves it as it was: the next pass then searches more, never less.
     const seen = existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] };
-    await writeAtomic(SEEN, JSON.stringify({ ...seen, last_pass: localToday() }, null, 2) + '\n');
+    const lastPass = passDay !== null && !(typeof seen.last_pass === 'string' && seen.last_pass >= passDay) ? passDay : seen.last_pass;
+    await writeAtomic(SEEN, JSON.stringify({ ...seen, last_pass: lastPass }, null, 2) + '\n');
     return { before: pending.length, left: kept.length };
   });
   process.stdout.write(`acknowledged ${before - left} item(s); ${left} still pending\n`);
