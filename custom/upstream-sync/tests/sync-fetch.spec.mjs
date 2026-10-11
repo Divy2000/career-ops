@@ -1184,6 +1184,24 @@ test('the live update skips the Control Center npm ci while it runs on the check
   }
 });
 
+test('an installed daily job whose data root is gone (an unmounted volume) does not block the live update (R20-scripts-b review)', () => {
+  const w = liveWorld({ depsChange: true });
+  const gone = path.join(w.base, 'unmounted', 'co-data');
+  installDailyPlist(w, gone);
+  // A folder nothing can be created in, as an unmounted /Volumes path.
+  mkdirSync(path.join(w.base, 'unmounted'));
+  chmodSync(path.join(w.base, 'unmounted'), 0o555);
+  try {
+    const res = w.update({ wait: 1 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(existsSync(gone), false);
+  } finally {
+    chmodSync(path.join(w.base, 'unmounted'), 0o755);
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 test('a daily job installed on the sync\'s own data root, spelled through a symlink, is locked once, not waited on by the update itself (R20-scripts-b-L1-01)', () => {
   const w = liveWorld({ depsChange: true });
   const alias = path.join(w.base, 'data-alias');

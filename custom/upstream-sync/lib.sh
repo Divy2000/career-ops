@@ -644,7 +644,7 @@ live_update_locked() {
 # main, local changes, already past <commit>, or the daily job still running), 1
 # when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed="" deferred="" data_root job_root rc cc_live=0
+  local deps_before cc_before failed="" deferred="" data_root job_root job_lock rc cc_live=0
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
     if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
       echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
@@ -652,8 +652,12 @@ update_live_checkout() {
     fi
     # While it holds a lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
     # lock held by the update waits for it instead of skipping the day (run-daily.sh).
+    # The installed job's root is checked for a running Control Center either way; its lock is taken only when a
+    # job has run there, since one that never did has no lock to wait for and its root may be gone (an unmounted volume).
     job_root="$(installed_daily_root)"
-    CC_LIVE_UPDATE_HELD="" CC_LIVE_UPDATE_ROOTS="" live_update_locked "$2" "$3" "$1" ${job_root:+"$job_root/data/immigration/.run-daily.lockf"}
+    job_lock=""
+    if [ -n "$job_root" ] && [ -d "$job_root/data/immigration" ]; then job_lock="$job_root/data/immigration/.run-daily.lockf"; fi
+    CC_LIVE_UPDATE_HELD="" CC_LIVE_UPDATE_ROOTS="$job_root" live_update_locked "$2" "$3" "$1" ${job_lock:+"$job_lock"}
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
