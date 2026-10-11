@@ -1757,6 +1757,9 @@ test('a data root that is the home directory, a folder containing it, or / is re
     ['--data-root ~', (w) => ({ args: ['--data-root', w.home] })],
     ['--data-root /', () => ({ args: ['--data-root', '/'] })],
     ['--data-root <parent of home>', (w) => ({ args: ['--data-root', path.dirname(w.home)] })],
+    // Through a folder that does not exist yet: resolved as the kernel will once step 5 creates it (R19-scripts-b-L3-01).
+    ['--data-root ~/new/..', (w) => ({ args: ['--data-root', `${w.home}/new/..`] })],
+    ['--data-root ~/new/deeper/../..', (w) => ({ args: ['--data-root', `${w.home}/new/deeper/../..`] })],
     ['CAREER_OPS_ROOT=$HOME', (w) => ({ args: [], env: { CAREER_OPS_ROOT: w.home } })],
     ['CAREER_OPS_DATA_DIR=$HOME', (w) => ({ args: [], env: { CAREER_OPS_DATA_DIR: w.home } })],
   ];

@@ -139,14 +139,37 @@ fda_place() {
 # The confinement refuses a data root that is the filesystem root or is (or contains) the home directory: a session
 # could read every file under it (assertRootsConfinable in custom/control-center/server/claude/confinement.mjs). Both
 # paths are resolved the way it resolves them (fs.realpathSync.native, which also fixes the letter case on a
-# case-insensitive volume), with pwd -P when node is not there yet; a root that does not exist yet cannot contain
-# home. Exits 1.
+# lexical_path <absolute-path>: the path with empty, . and .. parts folded, without touching the filesystem.
+lexical_path() {
+  local part parts out=()
+  IFS=/ read -ra parts <<< "$1"
+  for part in ${parts[@]+"${parts[@]}"}; do
+    case "$part" in
+      '' | .) ;;
+      ..) if [ "${#out[@]}" -gt 0 ]; then unset 'out[${#out[@]}-1]'; fi ;;
+      *) out+=("$part") ;;
+    esac
+  done
+  if [ "${#out[@]}" -eq 0 ]; then printf '/'; else printf '/%s' "${out[@]}"; fi
+}
+
+# case-insensitive volume), with pwd -P when node is not there yet. A root that does not exist yet is resolved as it
+# will be once created: its deepest existing folder resolved, the rest folded, so ~/new/.. is home. Exits 1.
 real_path() {
   if command -v node >/dev/null 2>&1 &&
     node -e 'process.stdout.write(require("fs").realpathSync.native(process.argv[1]))' "$1" 2>/dev/null; then
     return 0
   fi
-  (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+  if [ -d "$1" ]; then
+    (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+    return
+  fi
+  local head="$1" tail=""
+  while [ ! -d "$head" ]; do
+    tail="/${head##*/}$tail"
+    head="$(dirname "$head")"
+  done
+  lexical_path "$(real_path "$head")$tail"
 }
 refuse_unconfinable_root() { # path
   local real home
@@ -888,20 +911,6 @@ else
 fi
 
 # ---------------------------------------------------------------- H-1B index
-
-# lexical_path <absolute-path>: the path with empty, . and .. parts folded, without touching the filesystem.
-lexical_path() {
-  local part parts out=()
-  IFS=/ read -ra parts <<< "$1"
-  for part in ${parts[@]+"${parts[@]}"}; do
-    case "$part" in
-      '' | .) ;;
-      ..) if [ "${#out[@]}" -gt 0 ]; then unset 'out[${#out[@]}-1]'; fi ;;
-      *) out+=("$part") ;;
-    esac
-  done
-  if [ "${#out[@]}" -eq 0 ]; then printf '/'; else printf '/%s' "${out[@]}"; fi
-}
 
 # physical_path <absolute-path> [depth]: the path as the kernel would resolve it, even before it exists: its deepest
 # existing folder with symlinks resolved (a dangling one followed to its target), then the rest folded lexically.
