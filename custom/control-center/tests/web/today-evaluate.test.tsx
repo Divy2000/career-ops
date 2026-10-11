@@ -250,6 +250,20 @@ describe('a start that answers after the user left Today (R18-feat-c-L1-05)', ()
     expect(router.state.location.pathname).toBe('/tracker');
   });
 
+  it('a shortlist row that goes away while the user stays on Today still opens the session it started (review)', async () => {
+    await today();
+    held = [];
+    await click(evaluateIn('Globex')!);
+    await until(() => held?.length === 1, 'the start on its way');
+    shortlist = { kind: 'ok', path: 'data/shortlist.md', date: '2026-10-10', summary: null, etag: 's2', excluded: [], rows: [row(1, 'Acme', 'local:jds/acme.md')] };
+    await act(async () => qc.invalidateQueries({ queryKey: ['shortlist'] }));
+    await until(() => !rowOf('Globex'), 'the Globex row to go away');
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');
+  });
+
   it('Quick evaluate does not pull the user back to the session page', async () => {
     await today();
     await typeQuickUrl('https://jobs.example.com/other/9');

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useFollowups, useImmigration, useShortlist, useTracker, useUserFile, useWhatsNew } from '../../lib/queries';
 import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, alertTone, TableScroll } from '../../components/ui';
@@ -62,7 +62,7 @@ function DigestChip() {
  * Starts the oferta session for a shortlist row's posting (or its saved JD) and opens it, like Quick evaluate. While an
  * evaluation of the posting is still active, the row links to it instead of starting a second paid one.
  */
-function EvaluateButton({ row }: { row: ShortlistRow }) {
+function EvaluateButton({ row, onPage }: { row: ShortlistRow; onPage: RefObject<boolean> }) {
   const navigate = useNavigate();
   const activeFor = useActiveEvaluation();
   const sessions = useSessions();
@@ -73,14 +73,6 @@ function EvaluateButton({ row }: { row: ShortlistRow }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const url = row.url;
-  // The start can answer after the user left Today: only a still-mounted page opens the new session.
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   const active = url ? activeFor(url) : undefined;
   const go = async () => {
     if (!url) return;
@@ -88,7 +80,7 @@ function EvaluateButton({ row }: { row: ShortlistRow }) {
     setError(null);
     try {
       const m = await startEvaluation(url);
-      if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (onPage.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(describeError(err));
     } finally {
@@ -167,6 +159,15 @@ export function TodayPage() {
   const trackerEmpty = tracker.data?.kind === 'missing' || (tracker.data?.kind === 'ok' && tracker.data.rows.length === 0);
   // Only a CV on disk moves past the first step: a missing, blank or unreadable cv.md (a 502 mid-restart) asks for one.
   const hasCv = cv.data?.kind === 'ok' && cv.data.text.trim() !== '';
+  // A shortlist start can answer after the user left Today: only a still-mounted page opens the new session. It is the
+  // page's, not the row's, since a shortlist refetch or rebuild can drop the row while the user stays here.
+  const onPage = useRef(false);
+  useEffect(() => {
+    onPage.current = true;
+    return () => {
+      onPage.current = false;
+    };
+  }, []);
 
   return (
     <section aria-labelledby="page-title">
@@ -254,7 +255,7 @@ export function TodayPage() {
                               </td>
                               <td className="mono muted">{r.posted ?? ''}</td>
                               <td>
-                                <EvaluateButton row={r} />
+                                <EvaluateButton row={r} onPage={onPage} />
                               </td>
                             </tr>
                           ))}
