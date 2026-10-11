@@ -127,21 +127,26 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   // What Save as cv.md last wrote: that draft is saved, so leaving with it asks nothing.
   const [savedText, setSavedText] = useState<string | null>(null);
   const parse = useParseSession();
-  useUnsaved('the CV import', (draft.trim() !== '' && draft !== savedText) || parse.parsing);
+  // A parser result that landed after the user edited the draft: offered, never written over their edit.
+  const [heldResult, setHeldResult] = useState<string | null>(null);
+  useUnsaved('the CV import', (draft.trim() !== '' && draft !== savedText) || parse.parsing || heldResult !== null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<UserFile | null>(null);
   // The upload whose parser may fill the draft; a retired session's late envelope is dropped.
   const currentUpload = useRef<string | null>(null);
+  // Whether the user edited the draft while the current parse ran: its result is then held for them to apply.
+  const editedDuringParse = useRef(false);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
+    editedDuringParse.current = false;
+    setHeldResult(null);
     parse.begin(p);
     setUploadPath(p);
   };
-  // Typing during a parse makes the draft the user's own: the parse is stopped, so its late result cannot replace it.
   const editDraft = (text: string) => {
-    if (parse.parsing) showUpload(null);
+    if (parse.parsing) editedDuringParse.current = true;
     setDraft(text);
   };
   const parseDone = parse.done;
@@ -149,7 +154,9 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     (forPath: string) => (kind: string, payload: unknown) => {
       if (kind !== 'cv' || currentUpload.current !== forPath) return;
       parseDone();
-      setDraft((payload as { markdown: string }).markdown);
+      const markdown = (payload as { markdown: string }).markdown;
+      if (editedDuringParse.current) setHeldResult(markdown);
+      else setDraft(markdown);
     },
     [parseDone],
   );
@@ -235,6 +242,20 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
         <FilePicker label="CV file" accept=".md,.txt,.markdown,.pdf" onFile={(f) => void onFile(f)} />
       </div>
       {uploadPath && <SessionPanel key={uploadPath} {...parse.panelFor(uploadPath)} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
+      {heldResult !== null && (
+        <p role="status" className="row gap small">
+          <span className="muted">The parser finished, but you edited the draft meanwhile, so your text is kept.</span>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(heldResult);
+              setHeldResult(null);
+            }}
+          >
+            Replace the draft with the parsed CV
+          </button>
+        </p>
+      )}
       <textarea aria-label="CV markdown" className="mono editor" rows={12} value={draft} onChange={(e) => editDraft(e.target.value)} placeholder="# Your name ..." />
       <div className="row gap">
         <button type="button" disabled={saving || !draft.trim()} onClick={() => void save()}>

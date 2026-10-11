@@ -180,17 +180,23 @@ describe('Import CV parse sessions', () => {
     await until(() => sent('POST', '/api/sessions/s-retry/cancel') === 1, 'the cancel of the retried parse');
   });
 
-  it('a draft typed while the parse runs is kept: the parse is cancelled and its late result dropped (R18-feat-b-X-01)', async () => {
+  it('a draft typed while the parse runs is kept, and the parse keeps running: its late result is offered, not applied (R18-feat-b-X-01)', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
     await render(createElement(CvImport));
     await choose('CV file', 'cv.pdf');
     const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
     await act(async () => panel.onSessionId!('s-cv'));
     await act(async () => panel.onStatus!('running', null));
+    panels.clear();
     await typeInto('CV markdown', '# Typed by hand');
-    await until(() => sent('POST', '/api/sessions/s-cv/cancel') === 1, 'the cancel of the parse');
-    await act(async () => panel.onEnvelope!('cv', { markdown: '# From the parser' }, 1));
+    expect(sent('POST', '/api/sessions/s-cv/cancel')).toBe(0);
+    const still = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel still shown');
+    await act(async () => still.onEnvelope!('cv', { markdown: '# From the parser' }, 1));
     expect(textOf('CV markdown')).toBe('# Typed by hand');
+    expect(host.textContent).toContain('you edited the draft');
+    await act(async () => button('Replace the draft with the parsed CV').click());
+    expect(textOf('CV markdown')).toBe('# From the parser');
+    expect(button('Replace the draft with the parsed CV')).toBeUndefined();
   });
 
   it('picking another PDF cancels the parse still running for the first', async () => {
@@ -275,7 +281,7 @@ describe('Import projects', () => {
     await until(() => sent('POST', '/api/sessions/s-proj/cancel') === 1, 'the cancel of the first parse');
   });
 
-  it('a draft typed while the parse runs is kept: the parse is cancelled and its late result dropped (R18-feat-b-X-02)', async () => {
+  it('a draft typed or a format changed while the parse runs is kept, and the parse keeps running: its late result is offered, not applied (R18-feat-b-X-02)', async () => {
     const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
     await render(createElement(ProjectsLibrary));
     await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
@@ -283,11 +289,23 @@ describe('Import projects', () => {
     const panel = await until(() => panels.get('projects/one.pdf'), 'the parser panel');
     await act(async () => panel.onSessionId!('s-proj'));
     await act(async () => panel.onStatus!('running', null));
-    await typeInto('Projects to import', '[{"name": "Typed"}]');
-    await until(() => sent('POST', '/api/sessions/s-proj/cancel') === 1, 'the cancel of the parse');
-    await act(async () => panel.onEnvelope!('projects', { markdown: '## From the parser' }, 1));
-    expect(textOf('Projects to import')).toBe('[{"name": "Typed"}]');
-    expect((host.querySelector('select[aria-label="Import format"]') as HTMLSelectElement).value).toBe('json');
+    panels.clear();
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Import format"]')!;
+    await act(async () => {
+      select.value = 'markdown';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await typeInto('Projects to import', '## Typed');
+    expect(sent('POST', '/api/sessions/s-proj/cancel')).toBe(0);
+    const still = await until(() => panels.get('projects/one.pdf'), 'the parser panel still shown');
+    await act(async () => still.onEnvelope!('projects', { markdown: '## From the parser' }, 1));
+    expect(textOf('Projects to import')).toBe('## Typed');
+    expect(host.querySelector('[aria-label="Import source"]')).toBeNull();
+    expect(host.textContent).toContain('you edited the draft');
+    await act(async () => button('Replace the draft with the parsed projects').click());
+    expect(textOf('Projects to import')).toBe('## From the parser');
+    expect(host.querySelector('[aria-label="Import source"]')?.textContent).toContain('documents/projects/one.pdf');
+    expect(button('Replace the draft with the parsed projects')).toBeUndefined();
   });
 
   it('an upload the network drops says it failed', async () => {
