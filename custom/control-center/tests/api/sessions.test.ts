@@ -249,15 +249,19 @@ describe('Claude sessions', () => {
   });
 
   it('a send right after cancel is refused while the cancelled turn is still stopping or finalizing (R17-claude-L1-01)', async () => {
-    // A CLI that ignores SIGTERM and sleeps in short steps, so the SIGKILL that ends it lands between them.
-    const stubborn = scenarioFile({ events: [INIT, delta('before '), { __ignoreSigterm: true }, ...Array.from({ length: 200 }, () => ({ __sleep: 100 })), result('done', 0.01)] });
+    // A CLI that ignores SIGTERM and sleeps in short steps, so the SIGKILL that ends it lands between them. It ignores
+    // SIGTERM before it streams anything, so a streamed delta proves a cancel can no longer stop it before the SIGKILL.
+    const stubborn = scenarioFile({ events: [{ __ignoreSigterm: true }, INIT, delta('before '), ...Array.from({ length: 200 }, () => ({ __sleep: 100 })), result('done', 0.01)] });
     await withScenario(stubborn, async () => {
       const { id } = (await post('/api/sessions', { mode: 'deep', prompt: 'Research' })).json();
       const runId = () => t.sessions.read(id)!.turns.at(-1)!.runId;
-      for (let i = 0; i < 200 && !t.runner.store.read(runId())?.childPid; i++) await wait(50);
+      const streamed = async () => (await get(`/api/sessions/${id}`)).json().events.some((e: { event: { type: string } }) => e.event.type === 'text.delta');
+      for (let i = 0; i < 300 && !(await streamed()); i++) await wait(50);
+      expect(await streamed()).toBe(true);
       expect((await post(`/api/sessions/${id}/cancel`)).statusCode).toBe(200);
       await wait(300);
       // The process is still running (SIGTERM ignored): the turn is not done, so a reply is refused, not started beside it.
+      expect(t.runner.store.readExit(runId())).toBeNull();
       expect((await post(`/api/sessions/${id}/turns`, { prompt: 'Globex Payments' })).statusCode).toBe(409);
       // Once the process is killed and the turn finalized, the reply starts.
       for (let i = 0; i < 300 && !t.runner.store.readExit(runId()); i++) await wait(50);
