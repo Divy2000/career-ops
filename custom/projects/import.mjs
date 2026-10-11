@@ -25,6 +25,7 @@ import {
 } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { validateFlags } from '../../lib/cli-flags.mjs';
+import { withPipelineLock } from '../../pipeline-lock.mjs';
 
 const DATA = getCareerOpsRoot();
 const TARGET = path.join(DATA, 'article-digest.md');
@@ -87,6 +88,13 @@ async function main() {
   const { entries, blocks, wholeText } = await readInput(file, operands[0]);
   if (!entries.length) throw new Error(`no projects found in ${operands[0]}`);
 
+  // Two --write runs would each read the library and publish a replacement built from it, the later dropping the
+  // other's projects: from the existence check through the publish, a write holds article-digest.md's lock.
+  const job = () => importInto({ entries, blocks, wholeText, write, merge });
+  await (write ? withPipelineLock(TARGET, job) : job());
+}
+
+async function importInto({ entries, blocks, wholeText, write, merge }) {
   const exists = existsSync(TARGET);
   let kept = entries.map((_, i) => i);
   let next;
