@@ -233,7 +233,7 @@ interface NetworkFilters {
   ats: NetworkScanSource[];
   limit: number;
 }
-const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: 'word:intern, word:internship', locations: 'Remote', sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 };
+const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: 'word:intern, word:interns, word:internship, word:internships', locations: 'Remote', sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 };
 
 // The filters the remembered run used, kept beside its id: a re-attached results card must sit under the form it ran.
 const NETWORK_FILTERS_KEY = 'cc.discover.networkScan.params';

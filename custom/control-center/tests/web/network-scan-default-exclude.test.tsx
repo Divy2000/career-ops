@@ -67,7 +67,7 @@ describe('Network scan default filters', () => {
   });
 
   it('still drop internships', async () => {
-    expect(await keptByDefaults(['Backend Engineer Intern', 'Platform Engineering Internship'])).toEqual([false, false]);
+    expect(await keptByDefaults(['Backend Engineer Intern', 'Platform Engineering Internship', 'Backend Engineering Interns', 'Platform Internships 2027'])).toEqual([false, false, false, false]);
   });
 
   it('say beside the Exclude field how a keyword matches', () => {
