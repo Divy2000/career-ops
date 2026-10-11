@@ -244,11 +244,15 @@ export function NetworkScan() {
     if (gone) networkRun.write(null);
   }, [gone]);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
+  // The remembered run is still going: a second sweep would replace it on the page while it keeps running.
+  const running = runId !== null && status === null;
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
-  const start = () =>
+  const start = () => {
+    if (running) return;
     void run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
       if (out && 'runId' in out) setRunId(out.runId);
     });
+  };
   // One add at a time: a second click before the first answers would send the same postings and relabel them.
   const [adding, setAdding] = useState(false);
   const addingRef = useRef(false);
@@ -328,7 +332,7 @@ export function NetworkScan() {
           ))}
         </fieldset>
         <div className="row gap">
-          <button type="submit" disabled={ats.length === 0 || actions.isPending || busy !== null}>
+          <button type="submit" disabled={ats.length === 0 || actions.isPending || busy !== null || running}>
             Run network scan <Pill tone="info">Network</Pill>
           </button>
           <span className="faint">Dry run: nothing is written until you add results.</span>
