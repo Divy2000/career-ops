@@ -134,25 +134,32 @@ describe('the daily job probe on real processes', () => {
       fs.mkdirSync(bin);
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'immigration', 'run-daily.sh'), path.join(root, 'custom', 'immigration', 'run-daily.sh'));
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
-      fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nsleep 20\n', { mode: 0o755 });
+      // It waits until afterEach kills the job's process group, so how long the job lives never depends on the host's load.
+      fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nexec /bin/sleep 100000\n', { mode: 0o755 });
       const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, CAREER_OPS_ROOT: data };
       return { root, data, env };
     }
-    const runningSoon = async (data: string) => {
-      for (let i = 0; i < 50 && !fs.existsSync(dailyPidfile(data)); i++) await new Promise((r) => setTimeout(r, 100));
+    // Waits for the pidfile for as long as the job is alive, not a fixed number of polls: under heavy load the job's
+    // startup (node resolving the data root, the lockf re-exec) takes seconds, and a probe before it reads not running.
+    const runningSoon = async (data: string, pid: number) => {
+      const job = children.find((c) => c.pid === pid)!;
+      while (!fs.existsSync(dailyPidfile(data))) {
+        if (job.exitCode !== null || job.signalCode !== null) throw new Error(`run-daily.sh ended (${job.exitCode ?? job.signalCode}) before it wrote its pidfile`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
       return probeOf(data).runningNow();
     };
 
     it('counts a run started from the checkout as bash custom/immigration/run-daily.sh', async () => {
       const w = world();
-      await started('/bin/bash', ['custom/immigration/run-daily.sh'], { cwd: w.root, argv0: 'bash', env: w.env });
-      expect(await runningSoon(w.data)).toBe(true);
+      const pid = await started('/bin/bash', ['custom/immigration/run-daily.sh'], { cwd: w.root, argv0: 'bash', env: w.env });
+      expect(await runningSoon(w.data, pid)).toBe(true);
     });
 
     it('counts a run started from custom/immigration as bash run-daily.sh', async () => {
       const w = world();
-      await started('/bin/bash', ['run-daily.sh'], { cwd: path.join(w.root, 'custom', 'immigration'), argv0: 'bash', env: w.env });
-      expect(await runningSoon(w.data)).toBe(true);
+      const pid = await started('/bin/bash', ['run-daily.sh'], { cwd: path.join(w.root, 'custom', 'immigration'), argv0: 'bash', env: w.env });
+      expect(await runningSoon(w.data, pid)).toBe(true);
     });
   });
 });
