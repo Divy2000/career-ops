@@ -80,7 +80,7 @@ async function mount(tab: 'inbox' | 'batch' = 'inbox') {
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   root = createRoot(host);
   const rootRoute = createRootRoute();
-  const pipeline = createRoute({ getParentRoute: () => rootRoute, path: '/pipeline', component: PipelinePage, validateSearch: () => ({ tab }) });
+  const pipeline = createRoute({ getParentRoute: () => rootRoute, path: '/pipeline', component: PipelinePage, validateSearch: (search: Record<string, unknown>) => ({ tab: (search.tab as typeof tab | undefined) ?? tab }) });
   const sessionsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/sessions', component: () => null });
   const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => null });
   const tracker = createRoute({ getParentRoute: () => rootRoute, path: '/tracker', component: () => null });
@@ -201,6 +201,24 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(button('Batch evaluate')!.disabled).toBe(false);
     await act(async () => release!());
+  });
+});
+
+describe('Process inbox beside a Batch evaluate still starting', () => {
+  it('given a Batch evaluate fan-out in flight and the user on the Inbox tab, Process inbox offers no start form and says why', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    await act(async () => (await until(() => button('Start them'), 'the confirm')).click());
+    await until(() => hold, 'the fan-out sent');
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
+    await until(() => button('Process inbox'), 'the Inbox tab');
+    await act(async () => button('Process inbox')!.click());
+    await until(() => host.textContent?.includes('Batch evaluations are starting'), 'the note');
+    expect(pipelinePanel()).toBeUndefined();
+    await act(async () => hold!.release());
   });
 });
 

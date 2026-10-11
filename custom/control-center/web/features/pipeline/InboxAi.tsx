@@ -25,6 +25,9 @@ const LIVE = new Set(['queued', 'running', 'awaiting_user']);
 export const livePipelineId = (sessions: SessionMeta[] | undefined, except: string | null = null): string | null =>
   (sessions ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== except)?.id ?? null;
 
+/** Marked by Pipeline > Batch while its fan-out is in flight: its sessions are in no list yet. */
+export const BATCH_STARTING_KEY = 'cc.pipeline.batch';
+
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
 
@@ -92,6 +95,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   useEffect(() => {
     if (livePipeline !== null && processId === null && !process.waiting) attachProcess(livePipeline);
   }, [livePipeline, processId, process.waiting, attachProcess]);
+  const batchStarting = useRememberedSession(BATCH_STARTING_KEY).waiting;
   const pipeline = usePipeline();
   const beingEvaluated = evaluatingTargets(sessions.data);
   // Process inbox leaves saved-JD rows out, so their evaluations (Evaluate JD) do not hold it back.
@@ -134,8 +138,8 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     }
   };
   // Rows being evaluated (or about to be) that Process inbox would evaluate again: no start, reply or fork until they end.
-  const heldBack = busy || pendingEvaluating > 0;
-  const heldBackText = `${busy ? 'Evaluations of the visible rows are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again.`;
+  const heldBack = busy || batchStarting || pendingEvaluating > 0;
+  const heldBackText = `${busy ? 'Evaluations of the visible rows are starting' : batchStarting ? 'Batch evaluations are starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again.`;
   // A finished run's panel keeps its reply and Fork, which carry the run on over the pending rows.
   const replyHeld = process.shown && !process.busy && heldBack;
   return (
