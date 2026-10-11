@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseLibrary, serializeLibrary } from '../lib.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
@@ -199,4 +199,21 @@ test('given a fresh data root, when the Control Center creates the library while
   const titles = parseLibrary(fs.readFileSync(path.join(root, 'article-digest.md'), 'utf8')).entries.map((e) => e.title);
   assert.deepEqual(titles, ['App Project']);
   assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), [], 'the refused import left its temp file behind');
+});
+
+test('given a data root whose filesystem refuses hard links, when a fresh --write import publishes, then it still writes the library (R24-scripts-a-L1-01 review)', () => {
+  const root = tempDir('projects-import-nolink-');
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const preload = path.join(root, 'nolink.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+fs.linkSync = () => { const err = new Error('operation not supported'); err.code = 'ENOTSUP'; throw err; };
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, IMPORT, a, '--write'], { cwd: root, env: rootEnv(root), encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const titles = parseLibrary(fs.readFileSync(path.join(root, 'article-digest.md'), 'utf8')).entries.map((e) => e.title);
+  assert.deepEqual(titles, ['Alpha Service']);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), []);
 });

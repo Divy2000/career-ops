@@ -10,7 +10,7 @@
 // --merge is given; --merge appends only projects whose title is not there yet.
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync, renameSync, linkSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, linkSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   parseLibrary,
@@ -145,17 +145,28 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
   process.stdout.write(`wrote ${plural(kept.length)} to ${TARGET}\n`);
 }
 
-// The lock keeps other imports out, but the Control Center writes article-digest.md without it (an ETag check and an
-// atomic rename). So the replacement goes in only if the library is still the one this run read, checked and
-// published with no await in between: a fresh library is hard-linked into place, which fails if one appeared.
+// The lock keeps other imports and the Control Center's projects routes out, but other writers of article-digest.md
+// (the generic user-file editor, upstream add-entry.mjs) do not take it. So the replacement goes in only if the
+// library is still the one this run read. A fresh library is hard-linked into place, which fails if one appeared. A
+// merge re-reads the library and renames with no await in between; POSIX has no compare-and-rename, so an unlocked
+// writer landing between those two syscalls is still lost.
+const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
+
 function publish(tmp, base) {
   try {
     if (base === null) {
+      const created = () => new Error(`article-digest.md was created while importing (the Control Center may have saved a project); nothing written, rerun with --merge`);
       try {
         linkSync(tmp, TARGET);
       } catch (err) {
-        if (err.code === 'EEXIST') throw new Error(`article-digest.md was created while importing (the Control Center may have saved a project); nothing written, rerun with --merge`);
-        throw err;
+        if (err.code === 'EEXIST') throw created();
+        if (!NO_HARD_LINKS.has(err.code)) throw err;
+        // exFAT and some network mounts have no hard links: an exclusive create still refuses an existing library.
+        try {
+          writeFileSync(TARGET, readFileSync(tmp), { flag: 'wx' });
+        } catch (e) {
+          throw e.code === 'EEXIST' ? created() : e;
+        }
       }
       return;
     }
