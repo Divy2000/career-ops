@@ -141,7 +141,7 @@ if ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$KEYCHAIN_TIMEOUT" -gt
   exit 1
 fi
 bounded() {
-  /usr/bin/perl -e '
+  /usr/bin/perl -MPOSIX=WNOHANG -e '
     my $limit = shift;
     my $pid = fork;
     die "cannot start $ARGV[0]: $!\n" unless defined $pid;
@@ -150,11 +150,19 @@ bounded() {
       print STDERR "$ARGV[0]: $!\n";
       exit($!{ENOENT} ? 127 : 126);
     }
-    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid $pid, 0; exit 124 };
+    sub status { ($? & 127) ? 128 + ($? & 127) : $? >> 8 }
+    # The alarm can land just after the main waitpid reaped security: only a security still running is a timeout.
+    $SIG{ALRM} = sub {
+      my $reaped = $?;
+      my $r = waitpid $pid, WNOHANG;
+      if ($r == 0) { kill "KILL", $pid; waitpid $pid, 0; exit 124 }
+      exit status() if $r == $pid;
+      $? = $reaped;
+    };
     alarm $limit;
     waitpid $pid, 0;
     alarm 0;
-    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+    exit status();
   ' "$@"
 }
 keychain_rc=0
