@@ -296,14 +296,20 @@ jobTest('a Claude Code whose version cannot be read fails the step and never run
   assert.notEqual(r.status, 0);
 });
 
-jobTest('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shim: its call reaches claude with no tools, no MCP servers and dontAsk', () => {
+jobTest('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the shim: its call reaches claude with no tools, no MCP servers, dontAsk and the session Read deny rules', async () => {
+  const { buildReadDenyRules, HOME_READ_DENY, READ_DENY } = await import(CONFINEMENT);
   const w = dailyWorld();
   const r = w.run({ CAREER_OPS_RANK_CLI: 'codex' });
   assert.equal(r.status, 0, `${r.log}\n${r.steps}`);
   assert.match(r.steps, /^rank-pipeline\.mjs --cli claude --limit 100 --model sonnet$/m, 'the CLI is pinned to claude, whatever CAREER_OPS_RANK_CLI says');
   assert.doesNotMatch(r.steps, /unwrapped claude/);
   assert.equal(r.rankCalls.length, 1, r.steps);
-  assert.deepEqual(r.rankCalls[0].argv, ['-p', 'RANK PROMPT', '--effort', 'medium', '--model', 'sonnet', '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell']);
+  // The deny rules travel inline (no file to leave behind), the rule set a session gets under the checkout and the data root (R19-claude-L2-01).
+  const settings = JSON.stringify({ permissions: { deny: buildReadDenyRules([w.root, w.data]) } });
+  assert.deepEqual(r.rankCalls[0].argv, ['-p', 'RANK PROMPT', '--effort', 'medium', '--model', 'sonnet', '--settings', settings, '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell']);
+  const { deny } = r.rankCalls[0].settings.permissions;
+  for (const p of HOME_READ_DENY) assert.ok(deny.includes(`Read(${p})`), `deny lacks Read(${p})`);
+  for (const root of [w.root, w.data]) for (const g of READ_DENY) assert.ok(deny.includes(`Read(/${root}/${g})`), `deny lacks ${g} under ${root}`);
   assert.equal(r.rankCalls[0].disableAutoupdater, '1');
   assert.equal(r.rankCalls[0].token, true);
   assert.match(r.steps, /^rank got: SUMMARY/m);

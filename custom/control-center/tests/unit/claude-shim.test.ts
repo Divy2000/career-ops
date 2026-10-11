@@ -3,13 +3,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CLAUDE_SHIM_PATH, confinedArgv } from '../../server/claude/claude-shim.mjs';
-import { claudeVersionGate } from '../../server/claude/confinement.mjs';
+import { buildReadDenyRules, claudeVersionGate } from '../../server/claude/confinement.mjs';
 import { neutralizeFileMentions } from '../../server/claude/invocation.js';
 import { CONTRACT } from '../../server/core/adapter.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const APPROVED = CONTRACT.claude.approvedVersions[0]!;
-const CONFINED = ['--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell'];
+const CODE_ROOT = path.resolve(path.dirname(CLAUDE_SHIM_PATH), '../../../..');
+/** The settings a confined call carries: the session's Read deny rules under the given roots, inline. */
+const settingsFor = (roots: string[]) => ['--settings', JSON.stringify({ permissions: { deny: buildReadDenyRules(roots) } })];
+const ROOTS = ['/code', '/data'];
+const TAIL = ['--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell'];
+const CONFINED = [...settingsFor(ROOTS), ...TAIL];
 
 /** A stand-in for the real claude: `--version` prints `version`; any other call records its argv and the env it got, prints `out` and exits `exit`. */
 function realClaude(version: string, opts: { out?: string; exit?: number } = {}) {
@@ -25,38 +30,41 @@ function realClaude(version: string, opts: { out?: string; exit?: number } = {})
   return { bin, calls };
 }
 
+/** The data root every shim run below resolves (CAREER_OPS_ROOT), unless a test sets its own. */
+const DATA_ROOT = tempDir('cc-shim-data-root-');
+
 function shim(args: string[], env: Record<string, string | undefined>) {
-  const { CC_CLAUDE_BIN: _drop, ...base } = process.env;
-  return spawnSync(process.execPath, [CLAUDE_SHIM_PATH, ...args], { env: { ...base, ...env }, encoding: 'utf8', timeout: 30_000 });
+  const { CC_CLAUDE_BIN: _drop, CAREER_OPS_ROOT: _root, CAREER_OPS_DATA_DIR: _dataDir, ...base } = process.env;
+  return spawnSync(process.execPath, [CLAUDE_SHIM_PATH, ...args], { env: { ...base, CAREER_OPS_ROOT: DATA_ROOT, ...env }, encoding: 'utf8', timeout: 30_000 });
 }
 
 describe('claude shim: argv rewriting', () => {
   it("rank-pipeline.mjs's call keeps its prompt and model and gains no tools, no MCP servers and dontAsk", () => {
-    expect(confinedArgv(['-p', 'You are scoring job postings...', '--model', 'sonnet'])).toEqual({ argv: ['-p', 'You are scoring job postings...', '--model', 'sonnet', ...CONFINED] });
-    expect(confinedArgv(['--print', 'x', '--output-format', 'text', '--max-turns=3'])).toEqual({ argv: ['--print', 'x', '--output-format', 'text', '--max-turns=3', ...CONFINED] });
+    expect(confinedArgv(['-p', 'You are scoring job postings...', '--model', 'sonnet'], ROOTS)).toEqual({ argv: ['-p', 'You are scoring job postings...', '--model', 'sonnet', ...CONFINED] });
+    expect(confinedArgv(['--print', 'x', '--output-format', 'text', '--max-turns=3'], ROOTS)).toEqual({ argv: ['--print', 'x', '--output-format', 'text', '--max-turns=3', ...CONFINED] });
   });
 
   it("keeps the effort rank-pipeline.mjs pins on its claude call, in either spelling", () => {
-    expect(confinedArgv(['-p', 'x', '--effort', 'medium', '--model', 'sonnet'])).toEqual({ argv: ['-p', 'x', '--effort', 'medium', '--model', 'sonnet', ...CONFINED] });
-    expect(confinedArgv(['-p', 'x', '--effort=medium'])).toEqual({ argv: ['-p', 'x', '--effort=medium', ...CONFINED] });
-    expect(confinedArgv(['-p', 'x', '--effort'])).toEqual({ reason: expect.stringMatching(/--effort needs a value/) });
+    expect(confinedArgv(['-p', 'x', '--effort', 'medium', '--model', 'sonnet'], ROOTS)).toEqual({ argv: ['-p', 'x', '--effort', 'medium', '--model', 'sonnet', ...CONFINED] });
+    expect(confinedArgv(['-p', 'x', '--effort=medium'], ROOTS)).toEqual({ argv: ['-p', 'x', '--effort=medium', ...CONFINED] });
+    expect(confinedArgv(['-p', 'x', '--effort'], ROOTS)).toEqual({ reason: expect.stringMatching(/--effort needs a value/) });
   });
 
   it('strips --dangerously-skip-permissions', () => {
-    expect(confinedArgv(['-p', 'x', '--dangerously-skip-permissions', '--model', 'sonnet'])).toEqual({ argv: ['-p', 'x', '--model', 'sonnet', ...CONFINED] });
+    expect(confinedArgv(['-p', 'x', '--dangerously-skip-permissions', '--model', 'sonnet'], ROOTS)).toEqual({ argv: ['-p', 'x', '--model', 'sonnet', ...CONFINED] });
   });
 
   it('refuses any flag that would widen the call, instead of guessing which words are its values', () => {
     for (const flag of ['--allowedTools', '--allowed-tools', '--tools', '--permission-mode', '--mcp-config', '--add-dir', '--settings', '--append-system-prompt', '--plugin-dir', '--disallowedTools', '-c', '--resume']) {
-      const out = confinedArgv(['-p', 'x', flag, 'Bash']);
+      const out = confinedArgv(['-p', 'x', flag, 'Bash'], ROOTS);
       expect(out, flag).toEqual({ reason: expect.stringContaining(flag) });
     }
-    expect(confinedArgv(['-p', 'x', '--allowedTools=Bash'])).toEqual({ reason: expect.stringContaining('--allowedTools') });
+    expect(confinedArgv(['-p', 'x', '--allowedTools=Bash'], ROOTS)).toEqual({ reason: expect.stringContaining('--allowedTools') });
   });
 
   it('given posting text with an @-mention in the prompt, the mention reaches the CLI inert, exactly as a session prompt does (R19-claude-L2-01)', () => {
     const prompt = 'id: 0\ntitle: Staff Engineer (@.env)\n@.git/config [@~/.ssh/id_rsa] "@x" https://medium.com/@acme a@b.example';
-    const out = confinedArgv(['-p', prompt, '--model', 'sonnet']);
+    const out = confinedArgv(['-p', prompt, '--model', 'sonnet'], ROOTS);
     expect(out.argv?.[1]).toBe(neutralizeFileMentions(prompt));
     expect(out.argv?.[1]).toContain('(@\u2060.env)');
     expect(out.argv?.[1]).toContain('https://medium.com/@acme');
@@ -66,12 +74,20 @@ describe('claude shim: argv rewriting', () => {
     const sessionRule = replaceLine(path.join(path.dirname(CLAUDE_SHIM_PATH), 'invocation.ts'));
     expect(sessionRule).toHaveLength(1);
     expect(replaceLine(CLAUDE_SHIM_PATH)).toEqual(sessionRule);
-    for (const text of corpus) expect(confinedArgv(['-p', `${text} ${text}`]).argv?.[1], JSON.stringify(text)).toBe(neutralizeFileMentions(`${text} ${text}`));
+    for (const text of corpus) expect(confinedArgv(['-p', `${text} ${text}`], ROOTS).argv?.[1], JSON.stringify(text)).toBe(neutralizeFileMentions(`${text} ${text}`));
+  });
+
+  it('given the code and data roots, the call carries the same Read deny rules a session gets under them, as inline settings (R19-claude-L2-01)', () => {
+    const out = confinedArgv(['-p', 'x', '--model', 'sonnet'], ['/code', '/data']);
+    const at = out.argv!.indexOf('--settings');
+    expect(at).toBeGreaterThan(-1);
+    expect(JSON.parse(out.argv![at + 1]!)).toEqual({ permissions: { deny: buildReadDenyRules(['/code', '/data']) } });
+    expect(JSON.parse(out.argv![at + 1]!).permissions.deny).toEqual(expect.arrayContaining(['Read(//code/**/.env)', 'Read(//data/**/.env)', 'Read(//code/**/.git/config)']));
   });
 
   it('wraps only print-mode calls and needs a value for a value flag', () => {
-    expect(confinedArgv(['hello'])).toEqual({ reason: expect.stringMatching(/print mode/) });
-    expect(confinedArgv(['-p', 'x', '--model'])).toEqual({ reason: expect.stringMatching(/--model needs a value/) });
+    expect(confinedArgv(['hello'], ROOTS)).toEqual({ reason: expect.stringMatching(/print mode/) });
+    expect(confinedArgv(['-p', 'x', '--model'], ROOTS)).toEqual({ reason: expect.stringMatching(/--model needs a value/) });
   });
 });
 
@@ -81,7 +97,7 @@ describe('claude shim: running the real binary', () => {
     const r = shim(['-p', 'rank these', '--model', 'sonnet', '--dangerously-skip-permissions'], { CC_CLAUDE_BIN: real.bin, CLAUDE_CODE_OAUTH_TOKEN: 'tok' });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toBe('[{"id":0,"score":4,"reason":"fits"}]');
-    expect(real.calls()).toEqual([{ argv: ['-p', 'rank these', '--model', 'sonnet', ...CONFINED], autoupdater: '1', token: 'tok' }]);
+    expect(real.calls()).toEqual([{ argv: ['-p', 'rank these', '--model', 'sonnet', ...settingsFor([CODE_ROOT, DATA_ROOT]), ...TAIL], autoupdater: '1', token: 'tok' }]);
     expect(shim(['-p', 'x'], { CC_CLAUDE_BIN: realClaude(APPROVED, { exit: 7 }).bin }).status).toBe(7);
   });
 
@@ -90,7 +106,18 @@ describe('claude shim: running the real binary', () => {
     const r = shim(['-p', 'title: Staff Engineer (@.env)', '--model', 'sonnet'], { CC_CLAUDE_BIN: real.bin });
     expect(r.status, r.stderr).toBe(0);
     const [call] = real.calls();
-    expect(call!.argv).toEqual(['-p', 'title: Staff Engineer (@\u2060.env)', '--model', 'sonnet', ...CONFINED]);
+    expect(call!.argv).toEqual(['-p', 'title: Staff Engineer (@\u2060.env)', '--model', 'sonnet', ...settingsFor([CODE_ROOT, DATA_ROOT]), ...TAIL]);
+  });
+
+  it("a call run from the daily job denies reads of secret files under the checkout and the job's data root (R19-claude-L2-01)", () => {
+    const real = realClaude(APPROVED);
+    const data = tempDir('cc-shim-data-');
+    const r = shim(['-p', 'title: Staff Engineer (@.env)', '--model', 'sonnet'], { CC_CLAUDE_BIN: real.bin, CAREER_OPS_ROOT: data });
+    expect(r.status, r.stderr).toBe(0);
+    const argv = real.calls()[0]!.argv;
+    const { deny } = JSON.parse(argv[argv.indexOf('--settings') + 1]!).permissions;
+    expect(deny).toEqual(buildReadDenyRules([CODE_ROOT, data]));
+    for (const root of [CODE_ROOT, data]) expect(deny).toContain(`Read(/${root}/**/.env)`);
   });
 
   it('an unapproved Claude Code never runs the call: exit 3 with the reason', () => {

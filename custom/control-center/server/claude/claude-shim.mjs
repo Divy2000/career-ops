@@ -1,6 +1,7 @@
 // `claude` for calls the daily job makes through scripts it cannot change: run-daily.sh puts a wrapper for this file
 // first on PATH for the rank step, so rank-pipeline.mjs (upstream) gets a confined claude. A wrapped call keeps its
-// prompt (its @-mentions made inert) and model and runs with no tools, no MCP servers and dontAsk, on an approved
+// prompt (its @-mentions made inert) and model and runs with no tools, no MCP servers, dontAsk and the session Read deny
+// rules under the checkout and the data root (a mention that still got through attaches no secret), on an approved
 // Claude Code with the autoupdater off; a flag that could widen it refuses the call. The real binary is CC_CLAUDE_BIN
 // (absolute, never this file); with CC_CLAUDE_EXPECT (real path @ version, as the job's own check saw it) a binary
 // changed since never runs.
@@ -11,10 +12,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { claudeVersionGate } from './confinement.mjs';
+import { buildReadDenyRules, claudeVersionGate } from './confinement.mjs';
 import { isMainModule } from '../../../../lib/is-main-module.mjs';
+import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
 
 export const CLAUDE_SHIM_PATH = fileURLToPath(import.meta.url);
+const CODE_ROOT = path.resolve(path.dirname(CLAUDE_SHIM_PATH), '../../../..');
 
 /** Flags a wrapped call may keep, and whether each takes a value. */
 const KEEP = { '-p': false, '--print': false, '--model': true, '--effort': true, '--output-format': true, '--max-turns': true, '--verbose': false };
@@ -31,11 +34,11 @@ function neutralizeFileMentions(text) {
 }
 
 /**
- * The confined argv for one wrapped call, or why it is refused. Any flag outside KEEP and DROP refuses the call:
+ * The confined argv for one wrapped call (with the Read deny rules under `roots`), or why it is refused. Any flag outside KEEP and DROP refuses the call:
  * permission flags such as --allowedTools take any number of values, so dropping one could swallow the prompt.
  * `--tools ""` (no tools) is followed by another flag, which ends its value list.
  */
-export function confinedArgv(argv) {
+export function confinedArgv(argv, roots = [CODE_ROOT, getCareerOpsRoot()]) {
   const kept = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -54,7 +57,9 @@ export function confinedArgv(argv) {
     }
   }
   if (!kept.includes('-p') && !kept.includes('--print')) return { reason: 'claude-shim: only print mode (-p) calls are wrapped' };
-  return { argv: [...kept, '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', NO_TOOLS] };
+  // Inline, so there is no settings file to remove; the rule source is the one session settings use.
+  const settings = JSON.stringify({ permissions: { deny: buildReadDenyRules(roots) } });
+  return { argv: [...kept, '--settings', settings, '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', NO_TOOLS] };
 }
 
 function refuse(message, code = 1) {
