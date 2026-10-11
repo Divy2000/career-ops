@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
-import { parseTsv, readText } from './files.js';
+import { readText } from './files.js';
 import { localDate } from '../../shared/local-date.js';
 
 export interface DigestSection {
@@ -202,6 +202,19 @@ function readJson(p: string): unknown {
 }
 
 const ALERT_COLUMNS = ['date', 'company', 'slug', 'status', 'headline', 'url'] as const;
+const FEED_COLUMNS = ['first_seen', 'published', 'source', 'title', 'url'] as const;
+
+/** Rows of a TSV whose header row is optional, read by position: line 1 is skipped only when it starts with the first column's name. */
+function parsePositional(text: string, columns: readonly string[]): Record<string, string>[] {
+  return text
+    .replace(/\r/g, '')
+    .split('\n')
+    .filter((line, i) => line.trim() && !(i === 0 && line.startsWith(`${columns[0]}\t`)))
+    .map((line) => {
+      const cells = line.split('\t');
+      return Object.fromEntries(columns.map((c, i) => [c, cells[i] ?? '']));
+    });
+}
 
 /**
  * Every row of company-alerts.tsv, read by position like the core's parseCompanyAlerts: the header is optional (a
@@ -209,14 +222,7 @@ const ALERT_COLUMNS = ['date', 'company', 'slug', 'status', 'headline', 'url'] a
  * The Overview and the sponsorship lookup share it so the two reads cannot drift.
  */
 export function parseAlertHistory(text: string): Record<string, string>[] {
-  return text
-    .replace(/\r/g, '')
-    .split('\n')
-    .filter((line, i) => line.trim() && !(i === 0 && line.startsWith('date\t')))
-    .map((line) => {
-      const cells = line.split('\t');
-      return Object.fromEntries(ALERT_COLUMNS.map((c, i) => [c, cells[i] ?? '']));
-    });
+  return parsePositional(text, ALERT_COLUMNS);
 }
 
 /**
@@ -270,7 +276,8 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     policyChangesError: changes.error,
     alerts: { latest, history },
     alertsError: alerts.error,
-    officialFeed: feedRead.kind === 'ok' ? parseTsv(feedRead.text) : [],
+    // watch.mjs writes the header only when it creates the file and reads the feed by position, so a headerless feed is valid.
+    officialFeed: feedRead.kind === 'ok' ? parsePositional(feedRead.text, FEED_COLUMNS) : [],
     companies,
     tiers: readJson(path.join(imm, 'sponsor-tiers.json')),
     seen: readJson(path.join(imm, 'seen.json')),
