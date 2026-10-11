@@ -253,11 +253,10 @@ export async function readApplyDocuments(codeRoot: string, dataRoot: string, row
   const covers = files.filter((f) => COVER_TEXT.test(f) && artifactKindFromName(f) === 'cover');
   if (!row) return { pdfs, covers, suggestedPdf: null, suggestedCover: null };
   const slug = companySlug(row.company);
-  const named = (f: string) => namesCompany(slug, f);
   // A name match is only a guess: never one the manifest or an application bundle files under another report.
   const otherReports = (f: string) => index.some((r) => r.pdf === f && r.report !== row.report) || (bundleReport(f) ?? row.report) !== row.report;
-  const guess = pdfs.find((f) => named(f) && !otherReports(f));
-  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? guess ?? null, suggestedCover: covers.find(named) ?? null };
+  const guess = (f: string) => namesCompany(slug, f) && !otherReports(f);
+  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? pdfs.find(guess) ?? null, suggestedCover: covers.find(guess) ?? null };
 }
 
 /** The manifest's CV for the report (its last row is the newest), else the highest tailored version in the report's bundle. */

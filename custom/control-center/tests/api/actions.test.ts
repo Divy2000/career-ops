@@ -670,6 +670,13 @@ describe('Apply documents classification and suggestion', () => {
     expect((await docs(10)).suggestedPdf).toBe('output/acme-robotics-extra.pdf');
   });
 
+  it('suggests no cover letter that another report application bundle holds for the same company', async () => {
+    const tracker = path.join(a.cfg.dataRoot, 'data', 'applications.md');
+    fs.appendFileSync(tracker, '| 12 | 2026-10-11 | Initech Cloud | - | Platform Engineer | 4.0/5 | Evaluated | ❌ | [12](../reports/012-initech-cloud-platform.md) | second role |\n');
+    out('output/004-initech-cloud-backend/initech-cloud-backend-cover.md');
+    expect((await docs(12)).suggestedCover).toBeNull();
+  });
+
   it('suggests the newest tailored CV in the report application bundle when the manifest has none', async () => {
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v002/cv.pdf');
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
