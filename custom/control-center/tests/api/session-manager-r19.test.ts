@@ -122,3 +122,54 @@ describe('session manager: fork busy guard (R19-claude-L3-01)', () => {
     }
   });
 });
+
+describe('session manager: a waiting evaluation keeps its reserved number (R19-claude-L3-02)', () => {
+  const sentinel = (app: TestApp, num: number) => path.join(app.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+
+  it('given its sentinel was garbage-collected and the number handed to another evaluation, when the user replies, then the reply is not told the lost number', async () => {
+    const app = await makeTestApp();
+    try {
+      const fan = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r19-l3-a'] })).json());
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+      // verify-pipeline's 4h GC deletes the sentinel; the next reservation takes the same number.
+      fs.rmSync(sentinel(app, n));
+      const other = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r19-l3-b'] })).json());
+      expect(other.reserved).toEqual([n]);
+      await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'try again' }));
+      const { meta } = await settleOn(app, id);
+      expect(runArgs(app, meta.turns[1]!.runId).preamble).not.toContain(`Report number ${n} is reserved`);
+      expect(meta.reportNum).not.toBe(n);
+      // The number it got instead stays its own on the next reply.
+      const fresh = meta.reportNum!;
+      expect(fresh).toEqual(expect.any(Number));
+      await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'once more' }));
+      const third = (await settleOn(app, id)).meta;
+      expect(runArgs(app, third.turns[2]!.runId).preamble).toContain(`Report number ${fresh} is reserved`);
+      expect(third.reportNum).toBe(fresh);
+      await settleOn(app, other.sessions[0].id);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given its sentinel is still its own, when the user replies, then the number is kept and the sentinel refreshed so a 4h GC does not free it mid-turn', async () => {
+    const app = await makeTestApp();
+    try {
+      const fan = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r19-l3-c'] })).json());
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      await settleOn(app, id);
+      const old = new Date(Date.now() - 5 * 60 * 60 * 1000);
+      fs.utimesSync(sentinel(app, n), old, old);
+      await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'try again' }));
+      const { meta } = await settleOn(app, id);
+      expect(runArgs(app, meta.turns[1]!.runId).preamble).toContain(`Report number ${n} is reserved`);
+      expect(meta.reportNum).toBe(n);
+      expect(Date.now() - fs.statSync(sentinel(app, n)).mtimeMs).toBeLessThan(60 * 60 * 1000);
+    } finally {
+      await app.close();
+    }
+  });
+});

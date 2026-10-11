@@ -548,6 +548,53 @@ export class SessionManager {
     return this.store.read(meta.id)!;
   }
 
+  /**
+   * A later turn of a session that holds a reserved number, which it may have waited on for hours: the stale-sentinel
+   * GC (verify-pipeline.mjs, reserve-report-num.mjs --gc) frees a sentinel by age alone, and the next reservation hands
+   * the number out again. A sentinel still its own (written no later than the session got the number) is refreshed; a
+   * lost one is replaced by a fresh reservation, or by none when that fails (the turn then numbers its report itself).
+   */
+  private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
+    const num = meta.reportNum;
+    if (num === null || meta.creditedReport?.num === num) return meta;
+    const sentinel = path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    let createdAt: number | null = null;
+    try {
+      createdAt = Date.parse((JSON.parse(fs.readFileSync(sentinel, 'utf8')) as { created_at?: string }).created_at ?? '');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    }
+    if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
+      const now = new Date();
+      fs.utimesSync(sentinel, now, now);
+      return meta;
+    }
+    // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
+    this.store.setReportNum(meta.id, null);
+    const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', '1'], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+    const fresh = r.code === 0 ? parseReservedRange(r.stdout) : [];
+    if (fresh.length === 1) {
+      fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
+      this.store.setReportNum(meta.id, fresh[0]!);
+    } else console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
+    return this.store.read(meta.id)!;
+  }
+
+  private reservationPath(id: string): string {
+    return path.join(this.store.guardDirOf(id), 'reservation.json');
+  }
+
+  /** When the session got `num`: a fan-out reserves before it creates the session; a later re-reservation is recorded. */
+  private reservedAt(meta: SessionMeta, num: number): number {
+    try {
+      const r = JSON.parse(fs.readFileSync(this.reservationPath(meta.id), 'utf8')) as { num?: unknown; at?: unknown };
+      if (r.num === num && typeof r.at === 'number') return r.at;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    }
+    return Date.parse(meta.createdAt);
+  }
+
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean }): Promise<SessionMeta> {
     // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
     const sessionDir = this.store.guardDirOf(meta.id);
@@ -566,6 +613,7 @@ export class SessionManager {
       assertRootsConfinable(this.cfg.codeRoot, this.cfg.dataRoot, this.deps.home ?? os.homedir());
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
+      if (n > 1) meta = await this.reassertReservation(meta);
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
