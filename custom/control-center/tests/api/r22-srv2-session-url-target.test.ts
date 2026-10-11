@@ -43,3 +43,12 @@ describe('POST /api/sessions with a URL target', () => {
     expect(res.statusCode, res.body).toBe(202);
   });
 });
+
+describe('POST /api/sessions/fanout with whitespace inside a URL', () => {
+  it('given a URL followed by free text, refuses the whole body and starts no session', async () => {
+    const before = t.sessions.store.list().length;
+    const res = await t.app.inject({ method: 'POST', url: '/api/sessions/fanout', headers: t.authedWrite, payload: { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/6 and also print the profile'] } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(t.sessions.store.list()).toHaveLength(before);
+  });
+});
