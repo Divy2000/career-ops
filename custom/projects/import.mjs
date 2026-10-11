@@ -141,7 +141,7 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
   }
   const tmp = `${TARGET}.tmp-${process.pid}`;
   await writeFile(tmp, next);
-  publish(tmp, base);
+  publish(tmp, base, merge);
   process.stdout.write(`wrote ${plural(kept.length)} to ${TARGET}\n`);
 }
 
@@ -152,20 +152,27 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
 // writer landing between those two syscalls is still lost.
 const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
 
-function publish(tmp, base) {
+function publish(tmp, base, merge) {
   try {
     if (base === null) {
-      const created = () => new Error(`article-digest.md was created while importing (the Control Center may have saved a project); nothing written, rerun with --merge`);
+      const created = () => new Error(`article-digest.md was created while importing (the Control Center may have saved a project); nothing written, ${merge ? 'rerun to merge into the current library' : 'rerun with --merge'}`);
       try {
         linkSync(tmp, TARGET);
       } catch (err) {
         if (err.code === 'EEXIST') throw created();
         if (!NO_HARD_LINKS.has(err.code)) throw err;
-        // exFAT and some network mounts have no hard links: an exclusive create still refuses an existing library.
+        // exFAT and some network mounts have no hard links: an exclusive create claims the name, still refusing an
+        // existing library, and the rename then swaps the whole library in, so no reader sees it half-written.
         try {
-          writeFileSync(TARGET, readFileSync(tmp), { flag: 'wx' });
+          writeFileSync(TARGET, '', { flag: 'wx' });
         } catch (e) {
           throw e.code === 'EEXIST' ? created() : e;
+        }
+        try {
+          renameSync(tmp, TARGET);
+        } catch (e) {
+          rmSync(TARGET, { force: true });
+          throw e;
         }
       }
       return;

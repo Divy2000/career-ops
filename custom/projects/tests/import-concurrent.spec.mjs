@@ -217,3 +217,42 @@ syncBuiltinESMExports();
   assert.deepEqual(titles, ['Alpha Service']);
   assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), []);
 });
+
+test('given a data root without hard links, when the fresh library cannot be moved into place, then no empty or partial article-digest.md is left (R24-scripts-a-L1-01 review)', () => {
+  const root = tempDir('projects-import-nolink-');
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const preload = path.join(root, 'nolink-fail.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+fs.linkSync = () => { const err = new Error('operation not supported'); err.code = 'ENOTSUP'; throw err; };
+fs.renameSync = () => { const err = new Error('i/o error'); err.code = 'EIO'; throw err; };
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, IMPORT, a, '--write'], { cwd: root, env: rootEnv(root), encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /i\/o error/);
+  assert.equal(fs.existsSync(path.join(root, 'article-digest.md')), false);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), []);
+});
+
+test('given a fresh data root, when the library appears during a --write --merge import, then the refusal does not tell the user to add --merge (R24-scripts-a-L1-01 review)', async () => {
+  const root = tempDir('projects-import-app-race-');
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const run = heldImport(root, [a, '--write', '--merge']);
+  let result;
+  try {
+    await waitFor(run.held, 20_000);
+    appWrite(root, [{ title: 'App Project', bullets: ['Saved in the app.'] }]);
+    fs.writeFileSync(run.release, '');
+    result = await run.exit;
+  } finally {
+    fs.writeFileSync(run.release, '');
+    run.kill();
+  }
+  assert.equal(result.code, 1, result.stderr);
+  assert.match(result.stderr, /article-digest\.md was created while importing/);
+  assert.doesNotMatch(result.stderr, /rerun with --merge/);
+  assert.match(result.stderr, /rerun to merge into the current library/);
+});
