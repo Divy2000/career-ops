@@ -205,7 +205,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         companyLeftOut = pending.leftOut;
         companyUrls = pending.urls.filter((u) => !activeFor(u));
         if (companyUrls.length === 0) {
-          update(p.id, { state: 'failed', note: `Every pending Inbox posting at ${company} is already being evaluated.` });
+          update(p.id, { state: 'failed', note: companyLeftOut ? `Every other pending Inbox posting at ${company} is already being evaluated. ${companyLeftOut}` : `Every pending Inbox posting at ${company} is already being evaluated.` });
           return;
         }
       } catch (err) {

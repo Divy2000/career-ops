@@ -717,6 +717,29 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address');
   });
 
+  it('given every clean posting is already being evaluated, the note still counts the rows left out (FU-askdrawer-creds review)', async () => {
+    rows.push(row('https://user:secret@jobs.acme.example/9', 'Acme'));
+    const listed = ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'].map((value, i) => ({ id: `s-active-${i}`, mode: 'oferta', status: 'running', target: { type: 'url', value } }));
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return json({ error: 'unexpected' }, 500);
+      }
+      if (String(url) === '/api/pipeline') return json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows });
+      if (String(url) === '/api/sessions') return json(listed);
+      return json([]);
+    });
+    await remountDrawer();
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('already being evaluated');
+    expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address');
+  });
+
   it('given every pending row at the company has an unsendable URL, starts nothing and says why, without asking (FU-askdrawer-creds)', async () => {
     rows.push(row('https://user:secret@jobs.initech.example/1', 'Initech'), row('ftp://jobs.initech.example/2', 'Initech'));
     await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
