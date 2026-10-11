@@ -1,6 +1,8 @@
 import Markdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
+import type { MouseEvent } from 'react';
+import { useRouter } from '@tanstack/react-router';
 
 // Rendered documents sit inside a page that already has its h1, so headings shift down one level.
 const components: Components = {
@@ -17,15 +19,39 @@ export function SafeMarkdown(props: Omit<Options, 'remarkPlugins' | 'rehypePlugi
   return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} disallowedElements={['img']} {...props} components={{ a: ExternalLink, ...props.components }} />;
 }
 
-/** A web link opens in a new tab, like every other external link in the app: in this tab it would drop unsaved page state. */
-const ExternalLink: NonNullable<Components['a']> = ({ href, children }) =>
-  href && /^https?:\/\//i.test(href) ? (
+/** An app path (`/tracker/12`), not `//host` or `/\\host`, which name another site. */
+const APP_PATH = /^\/(?![/\\])/;
+/** A link that leaves nothing behind in this tab: an in-page anchor, or a scheme the browser hands off (mailto:). */
+const STAYS = /^(#|(?!https?:)[a-z][a-z\d+.-]*:)/i;
+
+/**
+ * An app path navigates through the router: a plain href would reload the app and drop its in-memory state (the Ask
+ * advisor session and its proposals, in-flight starts, unsaved page state). Every other web link, including `//host`
+ * and a relative one no app route stands for, opens in a new tab, as every other external link in the app does.
+ */
+const ExternalLink: NonNullable<Components['a']> = ({ href, children }) => {
+  // Optional: the markdown also renders outside the router (tests, static markup), where the link stays a plain href.
+  const router = useRouter({ warn: false });
+  if (href && APP_PATH.test(href)) {
+    const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+      // A modified or non-primary click is the browser's own (open in a new tab or window).
+      if (!router || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      void router.navigate({ href });
+    };
+    return (
+      <a href={href} onClick={onClick}>
+        {children}
+      </a>
+    );
+  }
+  if (!href || STAYS.test(href)) return <a href={href}>{children}</a>;
+  return (
     <a href={href} target="_blank" rel="noreferrer noopener">
       {children}
     </a>
-  ) : (
-    <a href={href}>{children}</a>
   );
+};
 
 /** Sanitized markdown for untrusted text (reports, digests, plugin docs). */
 export function Md({ text }: { text: string }) {

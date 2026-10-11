@@ -250,6 +250,18 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(posts).toEqual([]);
   });
 
+  it('a setStatus to a state that is not canonical fails before asking, naming the exact statuses (R21-shared-comp-L2-02)', async () => {
+    for (const state of ['applied', 'Applied ', 'Ghosted']) {
+      await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 3, state } }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog'), state).toBeNull();
+      expect(item.dataset.proposalState, state).toBe('failed');
+      expect(item.textContent, state).toContain('setStatus needs "state", one of the exact statuses: Evaluated, Applied');
+    }
+    expect(posts).toEqual([]);
+  });
+
   it('a setStatus note over 500 characters fails before asking, matching the server limit (R19-shared-comp-L2-01)', async () => {
     await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 3, state: 'Applied', note: 'x'.repeat(501) } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
