@@ -172,12 +172,11 @@ function breakStale(lock) {
     mine = statOrNull(guard);
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;
-    // A guard left by a claimant killed while breaking would block recovery for good, so an old one is removed, once
-    // judged again: another claimant may have removed it meanwhile and taken a new one.
+    // A guard left by a claimant killed while breaking would block recovery for good, so an old one is removed. A
+    // mkdir lock cannot compare and remove in one step, so a fresh guard taken between the stat and the rm can be lost
+    // (pipeline-lock.mjs has the same limit); the lock itself is still judged again under whichever guard wins.
     const held = statOrNull(guard);
-    if (!held || !isStale(held, GUARD_STALE_MS)) return false;
-    const now = statOrNull(guard);
-    if (now && isStale(now, GUARD_STALE_MS) && sameLockDirectory(held, now)) fs.rmSync(guard, { recursive: true, force: true });
+    if (held && isStale(held, GUARD_STALE_MS)) fs.rmSync(guard, { recursive: true, force: true });
     return false;
   }
   try {
