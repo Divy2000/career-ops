@@ -899,13 +899,16 @@ lexical_path() {
 }
 
 # same_file_path <a> <b>: whether two absolute paths name one file, however spelled (./, //, symlinked folders), even
-# before it exists.
+# before it exists. Folders that exist are resolved as the kernel resolves them (.. after a symlink leaves its target);
+# only when one is missing are the spellings folded lexically.
 same_file_path() {
   local da db
   [ "$1" = "$2" ] || [ "$1" -ef "$2" ] && return 0
-  [ "$(lexical_path "$1")" = "$(lexical_path "$2")" ] && return 0
-  da="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" && db="$(cd "$(dirname "$2")" 2>/dev/null && pwd -P)" &&
+  if da="$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)" && db="$(cd -P "$(dirname "$2")" 2>/dev/null && pwd -P)"; then
     [ "$da/${1##*/}" = "$db/${2##*/}" ]
+  else
+    [ "$(lexical_path "$1")" = "$(lexical_path "$2")" ]
+  fi
 }
 
 step "8/11 H-1B sponsor index"
@@ -923,8 +926,11 @@ if [ -n "${H1B_INDEX_PATH+set}" ]; then
     *) H1B_INDEX="$DIR/$H1B_INDEX" ;;
   esac
 fi
-# The launchd plist does not carry H1B_INDEX_PATH, so the daily job always reads the default index.
-if [ "$H1B_BLANK" = 0 ] && ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
+# The launchd plist does not carry H1B_INDEX_PATH, so the daily job always reads the default index: it matters only when
+# a daily job is or will be installed and the default index is not there.
+if [ "$NO_H1B" = 0 ] && [ "$H1B_BLANK" = 0 ] && [ ! -f "$H1B_DEFAULT" ] &&
+  { [ "$NO_LAUNCHD" = 0 ] || [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ]; } &&
+  ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
   pending "H1B_INDEX_PATH points at $H1B_INDEX, but the daily job does not inherit H1B_INDEX_PATH and reads $H1B_DEFAULT. Copy the index there, or unset H1B_INDEX_PATH and run: $H1B_CMD"
 fi
 if [ "$NO_H1B" = 1 ]; then

@@ -909,13 +909,44 @@ test('an H1B_INDEX_PATH with surrounding spaces is trimmed like the plugin trims
   assert.ok(r.out.includes(`index already installed: ${idx}\n`), r.out);
 });
 
-test('an H1B_INDEX_PATH other than the default is a pending action, since the daily job does not inherit it (R18-scripts-b-L2-01 review)', () => {
+const DAILY_PLIST = 'Library/LaunchAgents/com.career-ops.immigration-watch.plist';
+test('an H1B_INDEX_PATH other than the default is a pending action when the daily job lacks the default index, since it does not inherit the variable (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x' } });
+  w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /the daily job does not inherit H1B_INDEX_PATH/, r.out);
   assert.ok(r.out.includes(path.join(D, 'data/h1b/index.ndjson.gz')), r.out);
+});
+
+test('an H1B_INDEX_PATH other than the default leaves nothing pending when the default index is there too, with --no-h1b-index, or with no daily job (R18-scripts-b-L2-01 review)', () => {
+  const cases = [
+    { name: 'default index present', files: { 'data/h1b/index.ndjson.gz': 'x' }, plist: true, flags: [] },
+    { name: '--no-h1b-index', files: {}, plist: true, flags: ['--no-h1b-index'] },
+    { name: '--no-launchd and no daily job installed', files: {}, plist: false, flags: [] },
+  ];
+  for (const c of cases) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x', ...c.files } });
+    if (c.plist) w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none', ...c.flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+    assert.equal(r.status, 0, `${c.name}\n${r.out}`);
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, c.name);
+  }
+});
+
+test('an H1B_INDEX_PATH whose .. leaves a symlinked data/h1b names another file than the default, as the kernel resolves it (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  w.write('store/h1b/index.ndjson.gz', 'x');
+  fs.mkdirSync(path.join(w.T, 'store/idx-2024'), { recursive: true });
+  fs.mkdirSync(path.join(D, 'data'), { recursive: true });
+  fs.symlinkSync(path.join(w.T, 'store/idx-2024'), path.join(D, 'data/h1b'));
+  w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/../h1b/index.ndjson.gz' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
 });
 
 for (const spelling of ['data/h1b/index.ndjson.gz', './data//h1b/index.ndjson.gz']) {
