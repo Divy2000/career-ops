@@ -767,6 +767,8 @@ export class SessionManager {
       fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     } catch (err) {
       if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
+      // The turn has failed: a cancel while its number is released finds it ended and changes nothing.
+      this.preparing.delete(meta.id);
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
     // Checked after the last await: no cancel can land between here and the spawn.
