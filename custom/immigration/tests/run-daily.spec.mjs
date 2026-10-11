@@ -36,6 +36,11 @@ test('the policy prompt carries the watch JSON, the date and the data dir verbat
 // install, whose self-test runs these specs), the tests that run the script are skipped rather than failed.
 const jobTest = fs.existsSync('/usr/bin/lockf') ? test : (name, fn) => test(name, { skip: 'run-daily.sh is a macOS launchd job and needs /usr/bin/lockf' }, fn);
 
+// The argv the real rank-pipeline.mjs gives claude (its claude candidate, then --model as callCli adds it), so the
+// stand-in below sends what the scheduled rank really sends.
+const RANK_CLAUDE = (await import(path.join(ROOT, 'rank-pipeline.mjs'))).CLI_CANDIDATES.find((c) => c.bin === 'claude');
+const RANK_ARGV = [...RANK_CLAUDE.args('RANK PROMPT'), '--model', 'sonnet'];
+
 const CONFINEMENT = path.join(ROOT, 'custom/control-center/server/claude/confinement.mjs');
 const APPROVED = JSON.parse(readFileSync(path.join(ROOT, 'custom/control-center/server/core/contract.json'), 'utf8')).claude.approvedVersions;
 
@@ -77,7 +82,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   // load, starting the wrapper, the shim and the fake can alone take longer than a short timeout.
   put(
     'rank-pipeline.mjs',
-    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { spawn } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nconst child = spawn('claude', ['-p', 'RANK PROMPT', '--model', 'sonnet'], { stdio: ['pipe', 'pipe', 'inherit'] });\nchild.stdin.end();\nlet out = '';\nchild.stdout.setEncoding('utf8').on('data', (d) => { out += d; });\nlet timer;\nconst arm = () => { timer = setTimeout(() => child.kill('SIGTERM'), Number(process.env.FAKE_RANK_TIMEOUT_MS || 120000)); };\nconst pids = process.env.FAKE_CLAUDE_PIDS;\nif (pids) { const poll = setInterval(() => { if (fs.existsSync(pids)) { clearInterval(poll); arm(); } }, 20); child.on('exit', () => clearInterval(poll)); } else arm();\nchild.on('close', (code, signal) => {\n  clearTimeout(timer);\n  if (code !== 0) {\n    console.error('  batch 1: CLI call failed (' + (signal ?? 'exit ' + code) + ') - entries left un-annotated');\n    fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank batch failed\\n');\n    process.exit(0);\n  }\n  fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n});\n`,
+    `${stub('rank-pipeline.mjs')}import path from 'node:path';\nimport { spawn } from 'node:child_process';\nconst first = process.env.PATH.split(':').map((d) => path.join(d, 'claude')).find((f) => fs.existsSync(f));\nconst small = first && fs.statSync(first).size < 65536;\nif (!small || !fs.readFileSync(first, 'utf8').includes('claude-shim.mjs')) { fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank would run an unwrapped claude: ' + first + '\\n'); process.exit(1); }\nconst child = spawn('claude', ${JSON.stringify(RANK_ARGV)}, { stdio: ['pipe', 'pipe', 'inherit'] });\nchild.stdin.end();\nlet out = '';\nchild.stdout.setEncoding('utf8').on('data', (d) => { out += d; });\nlet timer;\nconst arm = () => { timer = setTimeout(() => child.kill('SIGTERM'), Number(process.env.FAKE_RANK_TIMEOUT_MS || 120000)); };\nconst pids = process.env.FAKE_CLAUDE_PIDS;\nif (pids) { const poll = setInterval(() => { if (fs.existsSync(pids)) { clearInterval(poll); arm(); } }, 20); child.on('exit', () => clearInterval(poll)); } else arm();\nchild.on('close', (code, signal) => {\n  clearTimeout(timer);\n  if (code !== 0) {\n    console.error('  batch 1: CLI call failed (' + (signal ?? 'exit ' + code) + ') - entries left un-annotated');\n    fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank batch failed\\n');\n    process.exit(0);\n  }\n  fs.appendFileSync(${JSON.stringify(stepLog)}, 'rank got: ' + out.trim() + '\\n');\n});\n`,
   );
   fs.writeFileSync(path.join(data, 'config/profile.yml'), 'location:\n  needs_sponsorship: true\n');
   fs.writeFileSync(path.join(bin, 'security'), '#!/bin/bash\necho fake-keychain-token\n', { mode: 0o755 });
@@ -293,7 +298,7 @@ jobTest('the scheduled rank runs rank-pipeline.mjs with --cli claude behind the 
   assert.match(r.steps, /^rank-pipeline\.mjs --cli claude --limit 100 --model sonnet$/m, 'the CLI is pinned to claude, whatever CAREER_OPS_RANK_CLI says');
   assert.doesNotMatch(r.steps, /unwrapped claude/);
   assert.equal(r.rankCalls.length, 1, r.steps);
-  assert.deepEqual(r.rankCalls[0].argv, ['-p', 'RANK PROMPT', '--model', 'sonnet', '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell']);
+  assert.deepEqual(r.rankCalls[0].argv, ['-p', 'RANK PROMPT', '--effort', 'medium', '--model', 'sonnet', '--restricted', '--tools', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell']);
   assert.equal(r.rankCalls[0].disableAutoupdater, '1');
   assert.equal(r.rankCalls[0].token, true);
   assert.match(r.steps, /^rank got: SUMMARY/m);
@@ -342,7 +347,9 @@ jobTest('a rank call the shim refuses for a flag it does not allow fails the ran
   const w = dailyWorld();
   // The stand-in's argv, as an upstream change to rank-pipeline.mjs could make it.
   const stand = path.join(w.root, 'rank-pipeline.mjs');
-  fs.writeFileSync(stand, readFileSync(stand, 'utf8').replace("'--model', 'sonnet']", "'--model', 'sonnet', '--allowedTools', 'Bash']"));
+  const source = readFileSync(stand, 'utf8');
+  assert.ok(source.includes(JSON.stringify(RANK_ARGV)), 'the stand-in spawns claude with RANK_ARGV');
+  fs.writeFileSync(stand, source.replace(JSON.stringify(RANK_ARGV), JSON.stringify([...RANK_ARGV, '--allowedTools', 'Bash'])));
   const r = w.run();
   assert.equal(r.rankCalls.length, 0, r.steps);
   assert.match(r.steps, /^rank batch failed$/m);
