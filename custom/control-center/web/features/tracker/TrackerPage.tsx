@@ -7,6 +7,7 @@ import { StatusControl } from './StatusControl';
 import { HiredDialog } from './HiredDialog';
 import { AskTrackerPanel } from './AskTrackerPanel';
 import { CompareSelected } from './CompareSelected';
+import { postingHref } from '../today/evaluate';
 import type { TrackerRow } from '@shared/api';
 
 export type TrackerTab = 'all' | 'evaluated' | 'interview' | 'responded' | 'applied' | 'top' | 'skip' | 'rejected' | 'discarded';
@@ -171,7 +172,7 @@ export function TrackerPage() {
         if (current) void go({ to: '/tracker/$n', params: { n: String(current.num) } });
         break;
       case 'o':
-        if (current?.url) window.open(current.url, '_blank', 'noopener');
+        if (current?.url) window.open(postingHref(current.url), '_blank', 'noopener');
         break;
       case 'x':
         if (current) toggleChecked(current.num);
@@ -304,7 +305,7 @@ export function TrackerPage() {
                     Open report
                   </Link>
                   {current.url && (
-                    <a className="button-link" href={current.url} target="_blank" rel="noreferrer noopener">
+                    <a className="button-link" href={postingHref(current.url)} target="_blank" rel="noreferrer noopener">
                       Open posting
                     </a>
                   )}
