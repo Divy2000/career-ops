@@ -220,6 +220,29 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     expect(pipelinePanel()).toBeUndefined();
     await act(async () => hold!.release());
   });
+
+  it('given a Batch evaluate fan-out still in flight after the start window, Process inbox is still held back', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    await act(async () => (await until(() => button('Start them'), 'the confirm')).click());
+    await until(() => hold, 'the fan-out sent');
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
+      await until(() => button('Process inbox'), 'the Inbox tab');
+      await act(async () => button('Process inbox')!.click());
+      await until(() => host.textContent?.includes('Batch evaluations are starting'), 'the note');
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(host.textContent).toContain('Batch evaluations are starting');
+      expect(pipelinePanel()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => hold!.release());
+  });
 });
 
 describe('A finished Process inbox run beside evaluations of its rows (R18-feat-b-L3-02)', () => {

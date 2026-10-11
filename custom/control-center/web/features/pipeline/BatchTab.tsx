@@ -11,7 +11,7 @@ import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
-import { BATCH_STARTING_KEY, livePipelineId } from './InboxAi';
+import { livePipelineId, markBatchStarting } from './InboxAi';
 
 // Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
 // server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
@@ -50,8 +50,6 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const sessions = useSessions();
   const process = useRememberedSession('cc.pipeline.process');
   const processStore = useMemo(() => lastSession('cc.pipeline.process'), []);
-  // A fan-out in flight is in no sessions list yet: marked, so a Process inbox on the Inbox tab waits for it.
-  const batchStore = useMemo(() => lastSession(BATCH_STARTING_KEY), []);
   const queryClient = useQueryClient();
   // A Process inbox start that reported its id after the list was read is not in it yet: the list is read again, and
   // Batch stays off until it answers. An id the server no longer lists stops blocking once that read is done.
@@ -99,7 +97,8 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       return;
     }
     const before = new Set(now.data.map((s) => s.id));
-    batchStore.setStarting(true);
+    // A fan-out in flight is in no sessions list yet: marked, so a Process inbox on the Inbox tab waits for it.
+    markBatchStarting(true);
     try {
       const r = await fanOut('oferta', list);
       const outcome = fanoutOutcome(r);
@@ -123,7 +122,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     } finally {
       // The mark goes once the sessions list has the started sessions, so a page left meanwhile does not read an older one.
       await queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined);
-      batchStore.setStarting(false);
+      markBatchStarting(false);
       setBusy(false);
     }
   };

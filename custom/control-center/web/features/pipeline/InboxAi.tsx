@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
@@ -25,8 +25,20 @@ const LIVE = new Set(['queued', 'running', 'awaiting_user']);
 export const livePipelineId = (sessions: SessionMeta[] | undefined, except: string | null = null): string | null =>
   (sessions ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== except)?.id ?? null;
 
-/** Marked by Pipeline > Batch while its fan-out is in flight: its sessions are in no list yet. */
-export const BATCH_STARTING_KEY = 'cc.pipeline.batch';
+// Pipeline > Batch fan-outs in flight: their sessions are in no list yet. Kept in memory for as long as the request
+// runs (reserving the report numbers and starting up to BATCH_MAX_URLS sessions can take a while), and a reload, which
+// drops the request's answer, drops the count with it.
+let batchFanOuts = 0;
+const batchListeners = new Set<() => void>();
+export function markBatchStarting(on: boolean): void {
+  batchFanOuts = Math.max(0, batchFanOuts + (on ? 1 : -1));
+  for (const fn of [...batchListeners]) fn();
+}
+const subscribeBatch = (fn: () => void) => {
+  batchListeners.add(fn);
+  return () => void batchListeners.delete(fn);
+};
+const useBatchStarting = () => useSyncExternalStore(subscribeBatch, () => batchFanOuts > 0);
 
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
@@ -95,7 +107,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   useEffect(() => {
     if (livePipeline !== null && processId === null && !process.waiting) attachProcess(livePipeline);
   }, [livePipeline, processId, process.waiting, attachProcess]);
-  const batchStarting = useRememberedSession(BATCH_STARTING_KEY).waiting;
+  const batchStarting = useBatchStarting();
   const pipeline = usePipeline();
   const beingEvaluated = evaluatingTargets(sessions.data);
   // Process inbox leaves saved-JD rows out, so their evaluations (Evaluate JD) do not hold it back.
