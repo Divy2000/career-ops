@@ -90,6 +90,13 @@ describe('invocation builder', () => {
     expect(text).not.toMatch(/intake\.mjs --text/);
   });
 
+  it('given a reserved report number below 100, when the preamble is built, then it names the number 3-digit zero-padded like reserve-report-num.mjs and the reports/ filenames', () => {
+    const rule10 = (reportNum: number) => buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'en', reportNum }).split('\n').find((l) => l.startsWith('10. '))!;
+    expect(rule10(42)).toContain('Report number 042 is reserved');
+    expect(rule10(7)).toContain('Report number 007 is reserved');
+    expect(rule10(1234)).toContain('Report number 1234 is reserved');
+  });
+
   it('writes a preamble that names the scope, the router context and the envelope contract, with no em dash', () => {
     const text = buildPreamble({ policy: getModePolicy('apply')!, outputLanguage: 'en', reportNum: 12 });
     expect(text).toContain('headless');

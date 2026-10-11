@@ -260,14 +260,14 @@ describe('session manager: a waiting evaluation keeps its reserved number (R19-c
       expect(other.reserved).toEqual([n]);
       await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'try again' }));
       const { meta } = await settleOn(app, id);
-      expect(runArgs(app, meta.turns[1]!.runId).preamble).not.toContain(`Report number ${n} is reserved`);
+      expect(runArgs(app, meta.turns[1]!.runId).preamble).not.toContain(`Report number ${String(n).padStart(3, '0')} is reserved`);
       expect(meta.reportNum).not.toBe(n);
       // The number it got instead stays its own on the next reply.
       const fresh = meta.reportNum!;
       expect(fresh).toEqual(expect.any(Number));
       await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'once more' }));
       const third = (await settleOn(app, id)).meta;
-      expect(runArgs(app, third.turns[2]!.runId).preamble).toContain(`Report number ${fresh} is reserved`);
+      expect(runArgs(app, third.turns[2]!.runId).preamble).toContain(`Report number ${String(fresh).padStart(3, '0')} is reserved`);
       expect(third.reportNum).toBe(fresh);
       await settleOn(app, other.sessions[0].id);
     } finally {
@@ -313,7 +313,7 @@ describe('session manager: a waiting evaluation keeps its reserved number (R19-c
       fs.utimesSync(sentinel(app, n), old, old);
       await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'try again' }));
       const { meta } = await settleOn(app, id);
-      expect(runArgs(app, meta.turns[1]!.runId).preamble).toContain(`Report number ${n} is reserved`);
+      expect(runArgs(app, meta.turns[1]!.runId).preamble).toContain(`Report number ${String(n).padStart(3, '0')} is reserved`);
       expect(meta.reportNum).toBe(n);
       expect(Date.now() - fs.statSync(sentinel(app, n)).mtimeMs).toBeLessThan(60 * 60 * 1000);
     } finally {

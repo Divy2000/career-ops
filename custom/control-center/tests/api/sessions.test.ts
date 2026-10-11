@@ -287,7 +287,7 @@ describe('Claude sessions', () => {
       expect(names).toEqual(expect.arrayContaining(['008-synthetic-corp.md', '009-synthetic-corp.md']));
       expect(names.filter((n) => /^(008|009)-RESERVED/.test(n))).toEqual([]);
       const run = (await call(app, 'GET', `/api/runs/${done[0]!.meta.turns[0]!.runId}`)).json();
-      expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 8 is reserved/);
+      expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 008 is reserved/);
     } finally {
       await app.close();
     }
@@ -1595,7 +1595,7 @@ describe('report reservations and session trackers survive failures (r16-claude)
         await app.sessions.send(id, 'Remote');
         const retried = await settleOn(app, id);
         const run = (await call(app, 'GET', `/api/runs/${retried.meta.turns.at(-1)!.runId}`)).json();
-        expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 64 is reserved/);
+        expect(run.meta.cmd.args.join('\n')).toMatch(/Report number 064 is reserved/);
       });
     } finally {
       await app.close();

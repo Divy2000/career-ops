@@ -246,7 +246,7 @@ export function buildPreamble(input: PreambleInput): string {
     // A localized mode (de/bewerben is apply) has the contract of the English mode it stands for.
     `9. Envelope contract: ${envelopeContractOf(p.id) ?? 'none for this mode; report results as markdown.'}`,
   ];
-  if (input.reportNum !== undefined) lines.push(`10. Report number ${input.reportNum} is reserved for this evaluation. Use it for the report file name and the tracker row; do not call reserve-report-num.`);
+  if (input.reportNum !== undefined) lines.push(`10. Report number ${String(input.reportNum).padStart(3, '0')} is reserved for this evaluation. Use it for the report file name and the tracker row; do not call reserve-report-num.`);
   if (split) lines.push(`User data lives in ${input.dataRoot}; read and write user files there by absolute path.`);
   return lines.join('\n');
 }
