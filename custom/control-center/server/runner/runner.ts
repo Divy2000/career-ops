@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
-import { RunStore, runsDir, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
+import { CANCEL_FILE, RunStore, runsDir, unended, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
 import { createWhole, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS } from '../../supervisor/instance-lock.js';
 import { childEnv } from '../system/child-env.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
@@ -120,7 +120,8 @@ export function processStartTime(pid: number, ps: (pid: number) => string = runP
 export class Runner {
   readonly store: RunStore;
   private queue: Array<{ meta: RunMeta; env: NodeJS.ProcessEnv }> = [];
-  private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout }>();
+  /** killArmed: a SIGKILL for the run's command is armed here, by its cancel or once this process saw it cancelled. */
+  private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout; killArmed: boolean }>();
   private envById = new Map<string, NodeJS.ProcessEnv>();
   /** Queued runs another process left, being rebuilt (their token read) before they join the queue. */
   private adopting = new Set<string>();
@@ -128,6 +129,8 @@ export class Runner {
   private retryTimer: NodeJS.Timeout | null = null;
   /** Starts a dead process left whose wrapper was told to stop and may still record itself: held until it does or the grace ends. */
   private stopping = new Set<string>();
+  /** SIGKILLs armed by cancel: they live in this process only, so close() drops them as its exit would. */
+  private killTimers = new Set<NodeJS.Timeout>();
   /** This process as claims and the schedule lock name it, read once. */
   private self: { pid: number; start: number | null } | null = null;
 
@@ -360,19 +363,25 @@ export class Runner {
     for (const meta of this.store.list()) this.reconcileRun(meta);
   }
 
-  /** One run another process left on disk, settled as at server start: adopted if queued, tracked, finalized or lost if running. */
+  /**
+   * One run another process left on disk, settled as at server start: adopted if queued; tracked, finalized or lost if
+   * running, or if cancelled before it exited (marked so at once, it ends only when its command does).
+   */
   private reconcileRun(meta: RunMeta): void {
     if (meta.status === 'queued') {
       this.adopt(meta);
       return;
     }
-    if (meta.status !== 'running' || this.active.has(meta.id)) return;
-    const exit = this.store.readExit(meta.id);
+    if (!unended(meta) || this.active.has(meta.id)) return;
     const wrapper = this.identity(meta.wrapperPid, meta.wrapperStartedAt);
+    // Read after the wrapper check: a wrapper writes its exit before it exits, so one found gone has recorded it by now.
+    const exit = this.store.readExit(meta.id);
     if (exit) {
       this.finalize(meta, exit);
     } else if (wrapper !== false) {
       this.track(meta);
+      // Cancelled by a process that stopped before its grace ended: the SIGKILL it armed went with it.
+      if (meta.status === 'cancelled') this.afterGrace(() => this.killRecordedCommand(meta.id));
     } else {
       // The PID still runs, as ours with another start or as another user's: reused, not just gone.
       const now = meta.wrapperPid ? this.liveness(meta.wrapperPid) : 'gone';
@@ -382,9 +391,11 @@ export class Runner {
           : now === 'own'
             ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone'
             : 'wrapper process disappeared without an exit record';
-      this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
+      // One the user cancelled stays cancelled: it was meant to stop, and it has.
+      const status = meta.status === 'cancelled' ? 'cancelled' : 'lost';
+      this.store.write({ ...meta, status, endedAt: new Date().toISOString(), error });
       this.dropInputs(meta);
-      this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+      this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId });
     }
   }
 
@@ -471,7 +482,7 @@ export class Runner {
    */
   private holders(): RunMeta[] {
     const runs = new Map<string, RunMeta>();
-    for (const m of this.store.list()) if (m.status === 'running' && !this.endedUntracked(m)) runs.set(m.id, m);
+    for (const m of this.store.list()) if (unended(m) && !this.endedUntracked(m)) runs.set(m.id, m);
     for (const { meta } of this.active.values()) runs.set(meta.id, meta);
     return [...runs.values()];
   }
@@ -631,37 +642,54 @@ export class Runner {
 
   private track(meta: RunMeta): void {
     const timer = setInterval(() => {
-      const current = this.store.read(meta.id) ?? meta;
+      let current = this.store.read(meta.id) ?? meta;
+      // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
+      const entry = this.active.get(meta.id);
+      if (entry && current.status === 'cancelled' && !entry.killArmed) {
+        entry.killArmed = true;
+        this.afterGrace(() => this.killRecordedCommand(meta.id));
+      }
       if (!current.childPid) {
         const w = this.store.readWrapper(meta.id);
         if (w) {
-          current.childPid = w.childPid;
-          current.childStartedAt = this.recordStart(w.childPid);
+          const childStartedAt = this.recordStart(w.childPid);
+          // Onto a fresh read: another server may have cancelled the run while ps read the start.
+          current = { ...(this.store.read(meta.id) ?? current), childPid: w.childPid, childStartedAt };
           this.store.write(current);
         }
       }
+      const gone = !!current.wrapperPid && !this.ours(current.wrapperPid);
+      // Read after the wrapper check: a wrapper writes its exit before it exits, so one found gone has recorded it by now.
       const exit = this.store.readExit(meta.id);
       if (exit) {
         clearInterval(timer);
         this.active.delete(meta.id);
         this.finalize(current, exit);
         this.pump();
-      } else if (current.wrapperPid && !this.ours(current.wrapperPid)) {
+      } else if (gone) {
         clearInterval(timer);
         this.active.delete(meta.id);
-        this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
+        // One the user cancelled stays cancelled: it was meant to stop, and it has.
+        const status = current.status === 'cancelled' ? 'cancelled' : 'lost';
+        this.store.write({ ...current, status, endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
         this.dropInputs(meta);
-        this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+        this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId });
         this.pump();
       }
     }, this.opts.pollMs ?? 250);
     timer.unref();
-    this.active.set(meta.id, { meta, timer });
+    // Tracked already cancelled: reconcileRun arms its SIGKILL.
+    this.active.set(meta.id, { meta, timer, killArmed: meta.status === 'cancelled' });
   }
 
   private finalize(meta: RunMeta, exit: { code: number | null; signal: string | null; endedAt: string }): void {
-    let status: RunMeta['status'] = meta.status === 'cancelled' || exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL' ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
+    // Only a run someone stopped reads cancelled: one marked so (on disk too, as another server may have cancelled it
+    // since `meta` was read), or ended by a signal after its cancel file told it to stop.
+    const marked = meta.status === 'cancelled' || this.store.read(meta.id)?.status === 'cancelled';
+    const stopped = marked || (exit.signal !== null && fs.existsSync(path.join(this.store.dirOf(meta.id), CANCEL_FILE)));
+    let status: RunMeta['status'] = stopped ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
     let error = meta.error;
+    if (!stopped && exit.signal) error = `killed by ${exit.signal}`;
     const meaning = meta.exitMeaning;
     if (status !== 'cancelled' && meaning && exit.code === meaning.code && !(meaning.onlyWithoutStderr && this.store.readRaw(meta.id).lines.some((l) => l.stream === 'stderr'))) {
       status = meaning.status;
@@ -671,6 +699,17 @@ export class Runner {
     this.envById.delete(meta.id);
     this.dropInputs(meta);
     this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId, exitCode: exit.code });
+  }
+
+  /**
+   * Whether a run that is no longer running has yet to record its end (a cancelled one ends when its command does).
+   * One nothing here tracks, left by a process that stopped, is taken over first: settled now or tracked until it exits.
+   */
+  ending(id: string): boolean {
+    if (this.active.has(id)) return true;
+    const meta = this.store.read(id);
+    if (meta?.status === 'cancelled' && meta.endedAt === null) this.reconcileRun(meta);
+    return this.active.has(id);
   }
 
   /**
@@ -716,6 +755,8 @@ export class Runner {
     }
     const marked: RunMeta = { ...meta, status: 'cancelled' };
     this.store.write(marked);
+    const tracked = this.active.get(id);
+    if (tracked) tracked.killArmed = true;
     const signalGroup = child === true || (child === null && wrapper !== true);
     if (childPid && signalGroup) {
       try {
@@ -723,7 +764,7 @@ export class Runner {
       } catch {
         /* group already gone */
       }
-      const killTimer = setTimeout(() => {
+      this.afterGrace(() => {
         if (!this.store.readExit(id) && this.identity(childPid, meta.childStartedAt) !== false) {
           try {
             process.kill(-childPid, 'SIGKILL');
@@ -731,8 +772,7 @@ export class Runner {
             /* gone */
           }
         }
-      }, 5000);
-      killTimer.unref();
+      });
     } else if (meta.wrapperPid && wrapper !== false) {
       // A wrapper that has not recorded its command yet may still be starting, with no SIGTERM handler: a signal would
       // end it with no exit record. The cancel file stops it instead (read before it spawns and after it records the
@@ -745,8 +785,34 @@ export class Runner {
           /* gone */
         }
       }
+      this.afterGrace(() => this.killRecordedCommand(id));
     }
     return marked;
+  }
+
+  private afterGrace(fn: () => void): void {
+    const timer = setTimeout(() => {
+      this.killTimers.delete(timer);
+      fn();
+    }, 5000);
+    timer.unref();
+    this.killTimers.add(timer);
+  }
+
+  /**
+   * SIGKILLs a cancelled run's command group if it has not exited, but only a command provably started before its
+   * wrapper recorded it: a reused PID, or one whose start cannot be read, is never signalled.
+   */
+  private killRecordedCommand(id: string): void {
+    if (this.store.readExit(id)) return;
+    const recorded = this.store.readWrapper(id) as { childPid: number; startedAt?: unknown } | null;
+    const recordedAt = Date.parse(String(recorded?.startedAt));
+    if (!recorded?.childPid || !Number.isFinite(recordedAt) || typeof this.startRecordedBy(recorded.childPid, recordedAt) !== 'number') return;
+    try {
+      process.kill(-recorded.childPid, 'SIGKILL');
+    } catch {
+      /* gone */
+    }
   }
 
   /**
@@ -772,10 +838,10 @@ export class Runner {
     // a second click starts a second paid job. It is settled as at server start first (adopted, tracked, or finalized or
     // lost when its wrapper is gone), so a dead server's run never blocks the action for good.
     for (const m of this.store.list()) {
-      if (m.actionId !== actionId || tracked.has(m.id) || (m.status !== 'queued' && m.status !== 'running')) continue;
+      if (m.actionId !== actionId || tracked.has(m.id) || (m.status !== 'queued' && !unended(m))) continue;
       this.reconcileRun(m);
       const now = this.store.read(m.id);
-      if (now?.status === 'queued' || now?.status === 'running') pending.push(now);
+      if (now && (now.status === 'queued' || unended(now))) pending.push(now);
     }
     return pending;
   }
@@ -796,6 +862,8 @@ export class Runner {
   close(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    for (const timer of this.killTimers) clearTimeout(timer);
+    this.killTimers.clear();
     for (const { timer } of this.active.values()) clearInterval(timer);
     this.active.clear();
   }

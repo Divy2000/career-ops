@@ -80,6 +80,11 @@ export function monotonicIso(): string {
   return new Date(lastStamp).toISOString();
 }
 
+/** A run whose command may still be running: running, or cancelled (marked so at once) before its end was recorded. */
+export function unended(meta: RunMeta): boolean {
+  return meta.status === 'running' || (meta.status === 'cancelled' && meta.endedAt === null);
+}
+
 const RUN_ID = /^[\w-]+$/;
 /** The file in a run's folder that asks its wrapper to stop (wrapper.mjs reads the same name). */
 export const CANCEL_FILE = 'cancel';
@@ -229,10 +234,10 @@ export class RunStore {
     }
   }
 
-  /** Keep the newest `retention` finished runs; running or queued runs are never pruned. */
+  /** Keep the newest `retention` finished runs; queued runs and ones whose command may still be running are never pruned. */
   prune(): number {
     const all = this.list();
-    const finished = all.filter((r) => r.status !== 'running' && r.status !== 'queued');
+    const finished = all.filter((r) => r.status !== 'queued' && !unended(r));
     let removed = 0;
     for (const old of finished.slice(this.retention)) {
       fs.rmSync(this.dirOf(old.id), { recursive: true, force: true });

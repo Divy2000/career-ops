@@ -94,6 +94,22 @@ describe('RunStore', () => {
     expect(() => store.dirOf('../x')).toThrow(/bad run id/);
   });
 
+  it('never prunes a cancelled run whose command has not exited yet (no recorded end), only one that has ended', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root, 1);
+    const base = { actionId: 'a', label: 'a', cost: 'free' as const, resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+    const stopping = store.create(base);
+    store.write({ ...stopping, status: 'cancelled', startedAt: new Date().toISOString() });
+    const ended = store.create(base);
+    store.write({ ...ended, status: 'cancelled', endedAt: new Date().toISOString() });
+    const newest = store.create(base);
+    store.write({ ...newest, status: 'done', endedAt: new Date().toISOString() });
+    expect(store.prune()).toBe(1);
+    expect(store.list().map((r) => r.id)).toEqual([newest.id, stopping.id]);
+    expect(fs.existsSync(store.dirOf(stopping.id))).toBe(true);
+    expect(fs.existsSync(store.dirOf(ended.id))).toBe(false);
+  });
+
   it('ignores stray entries in the runs folder: Finder\'s .DS_Store and a plain file with a run-like name (SW-server-01)', () => {
     const root = tmpRoot();
     const store = new RunStore(root, 1);
@@ -214,6 +230,32 @@ describe('Runner', () => {
     await until(() => !pidAlive(childPid));
     expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('got SIGTERM');
   });
+
+  it('a run whose command is killed by a signal nobody sent through cancel ends failed with the signal, not cancelled (R18-srv-core-L3-02)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const meta = runner.start(req(['0', '20000']));
+    await until(() => Boolean(runner.store.read(meta.id)?.childPid) && runner.store.readRaw(meta.id).lines.length >= 3);
+    const childPid = runner.store.read(meta.id)!.childPid!;
+    // An external kill (memory pressure, a terminal kill): the run is still marked running when its command dies.
+    process.kill(-childPid, 'SIGKILL');
+    await until(() => Boolean(runner.store.read(meta.id)?.endedAt));
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'failed', signal: 'SIGKILL', error: expect.stringMatching(/SIGKILL/) });
+  });
+
+  it('a cancel that could only signal the wrapper still kills a command that ignores SIGTERM once the grace ends (R18-srv-core-L3-01 review)', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(runner.store.read(meta.id)?.childStartedAt) && runner.store.readRaw(meta.id).lines.length >= 1);
+    // Its start could not be confirmed (as when ps answers unknown): cancel signals the wrapper, not the group.
+    runner.store.write({ ...runner.store.read(meta.id)!, childStartedAt: null });
+    runner.cancel(meta.id);
+    await until(() => Boolean(runner.store.read(meta.id)?.endedAt), 15_000);
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
+    expect(runner.store.readRaw(meta.id).lines.map((l) => l.line)).toContain('ignored');
+  }, 20_000);
 
   it('a cancel that lands while the wrapper is still starting ends the run cancelled, with an exit record and no command left running', async () => {
     const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
@@ -344,6 +386,142 @@ describe('Runner', () => {
     }
   });
 
+  it('a run cancelled by a server that stopped before the run exited is settled by the next server with its real exit (R18-srv-core-L3-01 review)', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const meta = first.start(req(['0', '20000']));
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt) && first.store.readRaw(meta.id).lines.length >= 3);
+    first.cancel(meta.id);
+    // Gone at once: marked cancelled, not yet settled.
+    first.close();
+    expect(first.store.read(meta.id)).toMatchObject({ status: 'cancelled', endedAt: null });
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    await until(() => Boolean(second.store.read(meta.id)?.endedAt));
+    expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', exitCode: 143 });
+  });
+
+  it('a command that ignores SIGTERM after a cancel is still killed once the grace ends when the cancelling server stopped first (R18-srv-core-L3-01 review)', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = first.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt) && first.store.readRaw(meta.id).lines.length >= 1);
+    first.cancel(meta.id);
+    first.close();
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    await until(() => Boolean(second.store.read(meta.id)?.endedAt), 15_000);
+    expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
+  }, 20_000);
+
+  it('a command that ignores SIGTERM is still killed once the grace ends when another server already tracked its run before the cancelling server stopped', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = first.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt) && first.store.readRaw(meta.id).lines.length >= 1);
+    // Blue/green: the new server picks the run up while it is still running, then the old one cancels it and stops.
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    first.cancel(meta.id);
+    first.close();
+    await until(() => Boolean(second.store.read(meta.id)?.endedAt), 15_000);
+    expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
+  }, 20_000);
+
+  it('a tracked run keeps the real exit of a wrapper that records it and quits while a tick checks it, instead of marking it lost', async () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'running', wrapperPid: 999_999, wrapperStartedAt: 1_700_000_000 });
+    let exiting = false;
+    // Alive at reconcile; then the wrapper writes its exit record and exits just as a tick probes its PID.
+    const kill = () => {
+      if (!exiting) return;
+      fs.writeFileSync(path.join(store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+      throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50, kill, procStart: () => 1_700_000_000 });
+    runners.push(runner);
+    runner.reconcile();
+    expect(runner.store.read(run.id)?.status).toBe('running');
+    exiting = true;
+    await until(() => Boolean(runner.store.read(run.id)?.endedAt));
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'done', exitCode: 0, error: null });
+  });
+
+  it('a tracking server filling in a run\'s command PID keeps a cancel another server wrote meanwhile, so the run ends cancelled', async () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'running', wrapperPid: 999_999, wrapperStartedAt: 1_700_000_000 });
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'wrapper.json'), JSON.stringify({ wrapperPid: 999_999, childPid: 888_888 }));
+    // Another server cancels the run while this one reads the command's start time.
+    const procStart = (pid: number) => {
+      if (pid === 888_888) store.write({ ...store.read(run.id)!, status: 'cancelled' });
+      return 1_700_000_000;
+    };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50, kill: () => {}, procStart });
+    runners.push(runner);
+    runner.reconcile();
+    await until(() => runner.store.read(run.id)?.childPid === 888_888);
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: new Date().toISOString() }));
+    await until(() => Boolean(runner.store.read(run.id)?.endedAt));
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'cancelled', childPid: 888_888, childStartedAt: 1_700_000_000, signal: 'SIGTERM' });
+  });
+
+  it('a cancelled run whose wrapper vanished without an exit record before any server settled it still reads cancelled', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'cancelled', startedAt: new Date().toISOString() });
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    runner.reconcile();
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'cancelled', endedAt: expect.any(String), error: expect.stringMatching(/without an exit record/) });
+  });
+
+  it('a cancelled run this server tracks whose wrapper is killed before recording an exit still reads cancelled', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(runner.store.read(meta.id)?.childStartedAt) && runner.store.readRaw(meta.id).lines.length >= 1);
+    const { wrapperPid, childPid } = runner.store.read(meta.id)!;
+    runner.cancel(meta.id);
+    // Killed from outside during the grace, before it could record anything; then its command too.
+    process.kill(wrapperPid!, 'SIGKILL');
+    process.kill(-childPid!, 'SIGKILL');
+    await until(() => Boolean(runner.store.read(meta.id)?.endedAt));
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'cancelled', error: expect.stringMatching(/without an exit record/) });
+  });
+
+  it('a run another server cancelled that has not exited yet still holds its resources and blocks a second run of its action (R18-srv-core-L3-01 review)', async () => {
+    const root = tmpRoot();
+    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+      runners.push(runner);
+      // Cancelled by the other server after this one reconciled; its wrapper is still stopping the command.
+      const started = processStartTime(sleeper.pid!);
+      const theirs = runner.store.create({ ...req(['0'], { resources: ['pipeline'] }) });
+      runner.store.write({ ...theirs, status: 'cancelled', startedAt: new Date().toISOString(), wrapperPid: sleeper.pid!, wrapperStartedAt: typeof started === 'number' ? started : null });
+      const other = runner.start(req(['0'], { actionId: 'test.other', resources: ['pipeline'] }));
+      expect(runner.store.read(other.id)?.status).toBe('queued');
+      expect(runner.startUnlessPending(req(['0'], { resources: ['pipeline'] }))).toMatchObject({ pending: { id: theirs.id } });
+      runner.cancel(other.id);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
   it('a live wrapper is kept when ps says "no such process" but the PID still answers (they disagree): judged by liveness alone (seed review)', async () => {
     const root = tmpRoot();
     const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
@@ -380,6 +558,22 @@ describe('Runner', () => {
     } finally {
       sleeper.kill('SIGKILL');
     }
+  });
+
+  it('reconcile keeps the real exit of a wrapper that records it and quits while reconcile checks it, instead of marking the run lost', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'running', wrapperPid: 999_999, wrapperStartedAt: 1_700_000_000 });
+    // The wrapper writes its exit record and exits just as reconcile probes its PID.
+    const kill = () => {
+      fs.writeFileSync(path.join(store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+      throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50, kill });
+    runners.push(runner);
+    runner.reconcile();
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'done', exitCode: 0, error: null });
   });
 
   it('a PID that answers kill(pid, 0) only with EPERM is never our run, whatever its recorded start: reconcile marks the run lost as reused (EPERM review)', async () => {
