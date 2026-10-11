@@ -10,6 +10,7 @@ import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { SessionManager } from '../../server/claude/manager.js';
 import { donePolicyBatches } from '../../server/domains/policyPass.js';
+import { localDate } from '../../shared/local-date.js';
 
 let t: TestApp;
 // A turn that cannot read the Claude token fails before it spawns (a locked Keychain).
@@ -96,6 +97,27 @@ describe('the manual AI policy pass', () => {
       expect((await settle(id)).meta.status).toBe('done');
     });
     expect(readPending().map((i) => i.id)).toEqual([item(5).id]);
+  });
+
+  it('given nothing queued, when the pass ends done, then last_pass moves to today so the next pass does not search the same news again (R22-srv-dom-b-L2-01)', async () => {
+    const seenFile = path.join(t.cfg.dataRoot, 'data', 'immigration', 'seen.json');
+    const before = fs.existsSync(seenFile) ? fs.readFileSync(seenFile, 'utf8') : null;
+    try {
+      for (const queue of [null, []]) {
+        fs.writeFileSync(seenFile, JSON.stringify({ ids: [], last_pass: '2026-01-01' }));
+        if (queue === null) fs.rmSync(pendingFile(), { force: true });
+        else writePending(queue);
+        // The pass is dated the day it starts; a run that crosses midnight records that day.
+        const startDay = localDate(new Date());
+        const res = await start();
+        expect(res.statusCode, res.body).toBe(202);
+        expect((await settle(res.json().id)).meta.status).toBe('done');
+        expect([startDay, localDate(new Date())]).toContain((JSON.parse(fs.readFileSync(seenFile, 'utf8')) as { last_pass: string }).last_pass);
+      }
+    } finally {
+      if (before === null) fs.rmSync(seenFile, { force: true });
+      else fs.writeFileSync(seenFile, before);
+    }
   });
 
   it('given queued items, when the pass fails, then they stay pending for the next run', async () => {

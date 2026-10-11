@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { ackPolicyPass, PendingUnreadableError, preparePolicyPass } from '../../server/domains/policyPass.js';
+import { ackPolicyPass, PendingUnreadableError, policyBatchReadable, preparePolicyPass } from '../../server/domains/policyPass.js';
 import type { Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -72,12 +72,13 @@ describe('preparePolicyPass', () => {
     expect(prompt).toContain('"title": "Fee rule $& {{TODAY}} $1"');
   });
 
-  it('given nothing queued (no pending.json, or an empty list), when a pass is prepared, then it still runs the news search with no items and writes no batch', () => {
+  it('given nothing queued (no pending.json, or an empty list), when a pass is prepared, then it still runs the news search and writes a batch with no items, so a done pass records its day (R22-srv-dom-b-L2-01)', () => {
     for (const root of [dataRoot(), dataRoot('[]\n')]) {
       const pass = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
-      expect(pass.batch).toBeNull();
       expect(pass.prompt).toContain('"new_items": []');
-      expect(fs.existsSync(path.join(root, 'data', 'immigration', 'batches'))).toBe(false);
+      expect(pass.batch).toMatch(/^data\/immigration\/batches\/20261005T190000-cc-[0-9a-f]{8}\.json$/);
+      expect(JSON.parse(fs.readFileSync(path.join(root, pass.batch!), 'utf8'))).toEqual({ date: '2026-10-05', news_since: '2026-10-02', new_items: [] });
+      expect(policyBatchReadable(root, pass.batch!)).toBe(true);
     }
   });
 
