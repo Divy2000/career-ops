@@ -652,6 +652,27 @@ describe('one Control Center per data root (SW-claude-02)', () => {
     }
   });
 
+  it('a restart whose new server fails while the old one is up says the old one keeps serving, on the reply and the page (R20-supervisor-L3-01)', async () => {
+    const port = await freePort();
+    // The first child takes this port, so the restart's new child cannot listen while the old one holds it.
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(await freePort()) } });
+    try {
+      await until(() => /Control Center ready/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to start');
+      const cookie = await signIn(port);
+      const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' });
+      expect(restart.status, restart.body).toBe(502);
+      expect(restart.body).toMatch(/^the new server did not start; the running server keeps serving the previous code: server child exited before listening/);
+      expect(restart.body).not.toMatch(/still does not start/);
+      expect((await request(port, 'GET', '/healthz')).status).toBe(200);
+      const page = (await request(port, 'GET', '/__recovery', { cookie })).body;
+      const block = page.slice(page.indexOf('<div class="status">'), page.indexOf('<form', page.indexOf('<div class="status">')));
+      expect(block).toMatch(/The last start failed/);
+      expect(block).toMatch(/The running server keeps serving the previous code\./);
+    } finally {
+      await stop(s);
+    }
+  });
+
   it('a startup error the child printed in colour (FORCE_COLOR) reaches every page and reply as plain text', async () => {
     const held = await heldPort();
     const port = await freePort();

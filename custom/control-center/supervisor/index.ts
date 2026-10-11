@@ -142,7 +142,8 @@ function safeEqual(a: string, b: string): boolean {
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'`;
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
-export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState): string {
+/** `serving`: a server child is up, so a failed start was a reload's new child, and the old one still answers. */
+export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState, serving: boolean): string {
   const sessions = listDevSessions(sessionsDir);
   const blocks = sessions.map((meta) => {
     const turns = listChanges(guardSessionDir(guardRoot, meta.id), meta);
@@ -174,7 +175,7 @@ form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:var(--
 </style></head><body><h1>Control Center recovery</h1>
 <p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
 <div id="revert-status" role="alert"></div>
-<div class="status"><strong>Server reload status</strong>${renderStatus(status)}<form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
+<div class="status"><strong>Server reload status</strong>${renderStatus(status)}${serving && status.state === 'failed' ? '<p>The running server keeps serving the previous code.</p>' : ''}<form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
 ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 <script>${RECOVERY_SCRIPT}</script>
 </body></html>`;
@@ -311,7 +312,7 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': sessionCookie, location: '/__recovery' }).end();
         return true;
       }
-      const html = renderRecovery(sessionsDir, guardRoot, bg.status);
+      const html = renderRecovery(sessionsDir, guardRoot, bg.status, bg.active !== null);
       res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(html);
       return true;
     }
@@ -333,7 +334,8 @@ async function main(): Promise<void> {
       }
       // A blue/green reload: with no server running (a first start that failed) the new one takes over at once.
       const result = await bg.reload();
-      const text = result.state === 'ok' ? 'the server started' : `the server still does not start: ${result.error}`;
+      // A failed reload leaves the active child in place: say so, or the user is steered to reverts while the app is up.
+      const text = result.state === 'ok' ? 'the server started' : bg.active ? `the new server did not start; the running server keeps serving the previous code: ${result.error}` : `the server still does not start: ${result.error}`;
       res.writeHead(result.state === 'ok' ? 200 : 502, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(text);
       return true;
     }

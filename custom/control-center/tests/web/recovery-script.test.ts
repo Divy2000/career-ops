@@ -86,7 +86,8 @@ describe('the recovery page script', () => {
     expect(status().textContent).toMatch(/drains the running server.*again to confirm/);
     press('restart');
     await until(() => status().textContent === 'Restart failed: refused', 'the restart reply');
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // One POST: the GET after it re-reads the reload status a failed restart left (R20-supervisor-L3-01).
+    expect(fetch.mock.calls.filter((c) => (c as unknown[])[1] && ((c as unknown[])[1] as { method?: string }).method === 'POST')).toHaveLength(1);
     expect(form('restart').querySelector('button')!.textContent).toBe('Restart the server');
   });
 
@@ -104,6 +105,40 @@ describe('the recovery page script', () => {
     answer({ ok: false, status: 502, text: async () => 'the server still does not start: boom' });
     await until(() => status().textContent!.startsWith('Restart failed:'), 'the restart failure');
     expect([...document.querySelectorAll('button')].every((b) => !b.disabled)).toBe(true);
+  });
+
+  it('a failed restart shows the reload status as it is now, not as the page was rendered (R20-supervisor-L3-01)', async () => {
+    document.body.innerHTML = `${PAGE}<div class="status"><strong>Server reload status</strong><p>The last reload came up at t0 (pid 1).</p></div>`;
+    const now = '<div class="status"><strong>Server reload status</strong><p>The last start failed at t1.</p><p>The running server keeps serving the previous code.</p></div>';
+    const fetch = vi.fn(async (_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? { ok: false, status: 502, text: async () => 'the new server did not start; the running server keeps serving the previous code: boom' } : { ok: true, status: 200, text: async () => `<html><body>${now}</body></html>` },
+    );
+    vi.stubGlobal('fetch', fetch);
+    submit('restart');
+    await until(() => document.querySelector('.status')!.textContent!.includes('The last start failed at t1.'), 'the status block refreshed');
+    expect(document.querySelector('.status')!.textContent).toContain('The running server keeps serving the previous code.');
+    expect(document.querySelectorAll('.status')).toHaveLength(1);
+    expect(status().textContent).toBe('Restart failed: the new server did not start; the running server keeps serving the previous code: boom');
+    expect(fetch).toHaveBeenLastCalledWith(location.href, expect.objectContaining({ credentials: 'same-origin' }));
+  });
+
+  it('a restart pressed once while the status re-read is under way still needs only the confirming press (R20-supervisor-L3-01 review)', async () => {
+    document.body.innerHTML = `<div id="revert-status" role="alert"></div><div class="status"><strong>Server reload status</strong><p>The last reload came up at t0 (pid 1).</p><form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>`;
+    let page: (v: { ok: boolean; status: number; text: () => Promise<string> }) => void = () => undefined;
+    const fetch = vi.fn((_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? Promise.resolve({ ok: false, status: 502, text: async () => 'boom' }) : new Promise<{ ok: boolean; status: number; text: () => Promise<string> }>((r) => (page = r)),
+    );
+    vi.stubGlobal('fetch', fetch);
+    submit('restart');
+    await until(() => fetch.mock.calls.length === 2, 'the status re-read');
+    press('restart');
+    expect(form('restart').querySelector('button')!.textContent).toBe('Confirm restart');
+    page({ ok: true, status: 200, text: async () => '<div class="status"><strong>Server reload status</strong><p>The last start failed at t1.</p><form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>' });
+    await until(() => document.querySelector('.status')!.textContent!.includes('t1'), 'the status block refreshed');
+    expect(form('restart').querySelector('button')!.textContent).toBe('Confirm restart');
+    press('restart');
+    await until(() => fetch.mock.calls.length === 3, 'the confirmed restart');
+    expect((fetch.mock.calls[2] as unknown[])[1]).toMatchObject({ method: 'POST' });
   });
 
   // It runs the script a second time, as the reload does.
