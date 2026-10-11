@@ -172,8 +172,9 @@ export async function readDocuments(codeRoot: string, dataRoot: string, report: 
   const jdsDir = path.join(dataRoot, 'jds');
   // With a report, only its own jds/<n>- captures: a company match would also list the JDs of the company's other reports.
   // The prefix is compared as a number, as jd-capture.mjs does: hand-named captures are 7- or 0007- as often as 007-.
+  // archive-posting.mjs without --report names a capture {YYYY-MM-DD}_..., whose year is not a report number.
   const reportOf = (f: string) => {
-    const m = /^(\d+)-/.exec(f);
+    const m = /^\d{4}-\d{2}-\d{2}[_-]/.test(f) ? null : /^(\d+)-/.exec(f);
     return m ? parseInt(m[1]!, 10) : null;
   };
   const ownsJd = report === null ? (f: string) => namesCompany(slug, f) : (f: string) => reportOf(f) === report;

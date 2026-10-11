@@ -427,6 +427,17 @@ describe('documents for a row whose number differs from its report', () => {
     }
   });
 
+  it('does not read the date of a capture archived without --report as a report number (R24-srv-dom-a-L2-01)', async () => {
+    const files = ['jds/2026-10-11_acme-robotics_engineer.pdf', 'jds/2026-10-11_initech-cloud_backend.pdf'];
+    for (const f of files) write(f);
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), '| 11 | 2026-10-11 | Initech Cloud | - | Platform Engineer | 3.0/5 | Evaluated | ❌ | [2026](../reports/2026-initech-cloud.md) | numbered 2026 |\n');
+    try {
+      expect((await docsOf(11)).jds).toEqual([]);
+    } finally {
+      for (const f of files) fs.rmSync(path.join(d.cfg.dataRoot, f), { force: true });
+    }
+  });
+
   it('falls back to the company match for JDs when the row has no report', async () => {
     write('jds/umbrella-corp-security-analyst.md');
     expect((await docsOf(5)).jds).toEqual(['jds/umbrella-corp-security-analyst.md']);
