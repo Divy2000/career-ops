@@ -146,17 +146,27 @@ export function ChangesPanel({ sessionId, live }: { sessionId: string | null; li
 }
 
 export function GitDiff() {
-  const q = useQuery({ queryKey: ['dev', 'git-diff'], queryFn: () => apiGet<{ ok: boolean; stat: string; diff: string; error: string | null }>('/api/dev/git-diff'), refetchInterval: 10_000 });
+  const q = useQuery({ queryKey: ['dev', 'git-diff'], queryFn: () => apiGet<{ ok: boolean; stat: string; diff: string; untracked: string[]; untrackedTotal?: number; error: string | null }>('/api/dev/git-diff'), refetchInterval: 10_000 });
+  const untracked = q.data?.untracked ?? [];
+  const untrackedTotal = Math.max(q.data?.untrackedTotal ?? 0, untracked.length);
+  const summary = [q.data?.stat.trim().split('\n').at(-1), untrackedTotal > 0 ? `${untrackedTotal} untracked` : null].filter(Boolean).join(', ');
   return (
     <details className="card">
-      <summary>git diff for custom/ {q.data?.stat ? <span className="faint small">({q.data.stat.trim().split('\n').at(-1)})</span> : null}</summary>
+      <summary>git diff for custom/ {summary ? <span className="faint small">({summary})</span> : null}</summary>
       {q.isError && (
         <p role="alert" className="danger-text small">
           Could not load the git diff: {describeError(q.error)}
         </p>
       )}
       {q.data?.error && <p className="danger-text small">{q.data.error}</p>}
-      {q.data && <pre tabIndex={0} className="log mono small">{q.data.diff || 'clean'}</pre>}
+      {untracked.length > 0 && (
+        <>
+          <p className="small">Untracked (new) files:</p>
+          <pre tabIndex={0} className="log mono small">{untracked.join('\n')}</pre>
+          {untrackedTotal > untracked.length && <p className="muted small">and {untrackedTotal - untracked.length} more</p>}
+        </>
+      )}
+      {q.data && (q.data.diff || (q.data.ok && untracked.length === 0)) && <pre tabIndex={0} className="log mono small">{q.data.diff || 'clean'}</pre>}
     </details>
   );
 }

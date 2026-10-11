@@ -35,8 +35,9 @@ export function useRememberedSession(key: string) {
     return () => clearTimeout(t);
   }, [waiting, key, store]);
   const shown = id !== null || starts > 0;
-  // A reply or fork reported as a start (marksTurnStarts) runs a session the stream still shows as finished.
-  const busy = waiting || startingHere || (shown && !startFailed && (status === null || status === 'queued' || status === 'running'));
+  // A reply or fork reported as a start (marksTurnStarts) runs a session the stream still shows as finished. The status
+  // counts only while a session is held: a panel left without one (its session gone) reports an empty stream's 'queued'.
+  const busy = waiting || startingHere || (id !== null && !startFailed && (status === null || status === 'queued' || status === 'running'));
   const onStatus = useCallback(
     (s: string) => {
       setStatus(s);

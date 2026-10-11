@@ -9,6 +9,9 @@ import type { Exec } from './system.js';
 import { execNoShell } from './system.js';
 import { listChanges, revertFile, revertTurn, RevertRefused } from '../../supervisor/recovery.js';
 
+/** Untracked files listed by the git diff card; a build tree left under custom/ would otherwise list thousands. */
+const UNTRACKED_SHOWN = 500;
+
 export async function devchatRoutes(app: FastifyInstance, opts: { cfg: ServerConfig; manager: SessionManager; exec?: Exec }): Promise<void> {
   const { cfg, manager } = opts;
   const exec = opts.exec ?? execNoShell;
@@ -43,6 +46,20 @@ export async function devchatRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.get('/api/dev/git-diff', async () => {
     const r = await exec('git', ['diff', '--stat', '--', 'custom/'], { cwd: cfg.codeRoot, timeoutMs: 15_000 });
     const full = await exec('git', ['diff', '--', 'custom/'], { cwd: cfg.codeRoot, timeoutMs: 15_000 });
-    return { ok: r.code === 0, stat: r.stdout, diff: full.stdout.slice(0, 200_000), error: r.code === 0 ? null : r.stderr.trim() };
+    // git diff never shows untracked files, so a turn that only added files would read as clean.
+    const others = await exec('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', 'custom/'], { cwd: cfg.codeRoot, timeoutMs: 15_000 });
+    // The full diff is shown truncated anyway, so one that overflowed the output buffer (failed, but with output) does
+    // not fail the read; one that failed with nothing to show does.
+    const fullFailed = full.code !== 0 && (full.timedOut || full.stdout === '');
+    const failed = [r, others].find((x) => x.code !== 0) ?? (fullFailed ? full : undefined);
+    const untracked = others.code === 0 ? others.stdout.split('\0').filter(Boolean) : [];
+    return {
+      ok: !failed,
+      stat: r.stdout,
+      diff: full.stdout.slice(0, 200_000),
+      untracked: untracked.slice(0, UNTRACKED_SHOWN),
+      untrackedTotal: untracked.length,
+      error: failed ? failed.stderr.trim() || `git exited ${failed.code}` : null,
+    };
   });
 }
