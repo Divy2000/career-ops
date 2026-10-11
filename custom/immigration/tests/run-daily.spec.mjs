@@ -486,7 +486,7 @@ jobTest('an ack that keeps failing leaves a .done marker, and the next run ackno
   assert.deepEqual(doneMarks(third.imm), []);
 });
 
-jobTest('a leftover done batch from an old day is acknowledged before the pass, so its items are not sent to Claude again (r22 follow-up)', () => {
+jobTest('a leftover done batch from an old day is acknowledged before the new pass runs, whatever its age (r22 follow-up)', () => {
   const w = dailyWorld();
   failingAckWatch(w);
   const batches = path.join(w.data, 'data', 'immigration', 'batches');
