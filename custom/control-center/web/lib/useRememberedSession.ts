@@ -11,8 +11,8 @@ export function useRememberedSession(key: string) {
   const [id, setId] = useState<string | null>(store.read);
   const [startingElsewhere, setStartingElsewhere] = useState(store.starting);
   const [starts, setStarts] = useState(0);
-  // A start sent by this mount's own panel (its start form), as opposed to one another mount sent.
-  const [startedHere, setStartedHere] = useState(false);
+  // A start this mount sent (start() or its panel's own form) that has not reported yet, as opposed to one another mount sent.
+  const [startingHere, setStartingHere] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [startFailed, setStartFailed] = useState(false);
   useEffect(() => {
@@ -24,8 +24,9 @@ export function useRememberedSession(key: string) {
     sync();
     return subscribeSession(key, sync);
   }, [key, store]);
-  // Another mount's start still in flight: no panel to show yet, but the button stays off until it reports.
-  const waiting = startingElsewhere && starts === 0 && !startedHere && id === null;
+  // Another mount's start still in flight: no panel to show yet, but the button stays off until it reports, even while
+  // an earlier finished session is still held here.
+  const waiting = startingElsewhere && !startingHere;
   // A start marked by a page that reloaded mid-flight has no panel left to report it; if it never does within a bounded
   // window, clear the mark so the start form is not disabled forever.
   useEffect(() => {
@@ -52,6 +53,7 @@ export function useRememberedSession(key: string) {
     (sid: string) => {
       store.write(sid);
       store.setStarting(false);
+      setStartingHere(false);
       setId(sid);
     },
     [store],
@@ -59,17 +61,19 @@ export function useRememberedSession(key: string) {
   // The panel shows why the start failed; the button comes back for another try.
   const onStartFailed = useCallback(() => {
     store.setStarting(false);
+    setStartingHere(false);
     setStartFailed(true);
   }, [store]);
   // The panel started a session from its own form: marked like start(), so a page mounted meanwhile waits for it.
   const onStarting = useCallback(() => {
     store.setStarting(true);
-    setStartedHere(true);
+    setStartingHere(true);
     setStartFailed(false);
   }, [store]);
   const start = () => {
     store.write(null);
     store.setStarting(true);
+    setStartingHere(true);
     setId(null);
     setStatus(null);
     setStartFailed(false);
