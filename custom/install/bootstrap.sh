@@ -12,13 +12,33 @@ main() {
       -e 's#^[^@/]+@##' -e 's#/+$##' -e 's#\.git$##' | tr '[:upper:]' '[:lower:]'
   }
 
+  # A --dir value as install.sh's abspath reads it (~ and ~/ are home, a relative path is under the current folder), so
+  # both scripts name one checkout even when the shell left a quoted ~ alone.
+  abspath() {
+    local p="$1"
+    case "$p" in
+      "~") p="$HOME" ;;
+      "~/"*) p="$HOME/${p#"~/"}" ;;
+    esac
+    case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+    while [ "${#p}" -gt 1 ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+    printf '%s' "$p"
+  }
+
   local repo="${CAREER_OPS_REPO_URL:-https://github.com/Divy2000/career-ops.git}"
   local ref="${CAREER_OPS_INSTALL_REF:-fork-install-v3}"
   local tty_dev="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"
   local dir="$HOME/career-ops" args=("$@") i answer=""
 
   for ((i = 0; i < ${#args[@]}; i++)); do
-    if [ "${args[$i]}" = "--dir" ] && [ $((i + 1)) -lt ${#args[@]} ]; then dir="${args[$((i + 1))]}"; fi
+    [ "${args[$i]}" = "--dir" ] || continue
+    # Refused as install.sh's value_of refuses it, before anything is cloned.
+    if [ $((i + 1)) -ge ${#args[@]} ] || [ -z "${args[$((i + 1))]}" ] || [ "${args[$((i + 1))]#--}" != "${args[$((i + 1))]}" ]; then
+      printf 'error: --dir needs a value\nRun install.sh --help for the options.\n' >&2
+      return 2
+    fi
+    dir="$(abspath "${args[$((i + 1))]}")"
+    args[$((i + 1))]="$dir"
   done
 
   # An existing checkout's own installer runs instead of a fresh clone: checked before the confirm, so the gate never

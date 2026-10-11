@@ -200,7 +200,9 @@ export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {
         for (const e of fs.readdirSync(d, { withFileTypes: true })) {
           const f = path.join(d, e.name);
           if (skip.has(f)) continue;
-          if (e.isDirectory()) {
+          if (e.isSymbolicLink()) {
+            out[path.relative(T, f)] = `-> ${fs.readlinkSync(f)}`; // its target, which may not exist
+          } else if (e.isDirectory()) {
             out[`${path.relative(T, f)}/`] = '';
             if (isNestedCheckout(f)) {
               roots.push(f);

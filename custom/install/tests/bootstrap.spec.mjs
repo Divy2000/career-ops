@@ -74,6 +74,49 @@ test('--dir chooses the clone location and the tag can be overridden', () => {
   assert.ok(w.log().includes(`install-sh --dir ${dest}`));
 });
 
+test('a quoted ~ in --dir means the home folder, as install.sh reads it: one clone of the pinned tag there, handed to install.sh by its full path (R19-scripts-b-L3-02)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'elsewhere');
+  const r = w.run(['--dir', '~/elsewhere', '--no-start'], { script: BOOTSTRAP_SH, tty: 'y\n' });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(r.out.split('\n').includes(`  clone into: ${dest}`), r.out);
+  assert.ok(w.log().includes(`git clone --branch fork-install-v3 ${FORK_URL} ${dest}`), w.log().join('\n'));
+  assert.ok(w.log().includes(`install-sh --dir ${dest} --no-start`), w.log().join('\n'));
+  assert.equal(fs.existsSync(path.join(w.cwd, '~')), false, 'no folder named ~ in the current directory');
+});
+
+test('a relative --dir is handed to install.sh as the full path bootstrap cloned into (R19-scripts-b-L3-02)', () => {
+  const w = world();
+  const dest = path.join(w.cwd, 'rel', 'co');
+  const r = w.run(['--dir', 'rel/co/'], { script: BOOTSTRAP_SH, tty: 'y\n' });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(w.log().includes(`git clone --branch fork-install-v3 ${FORK_URL} ${dest}`), w.log().join('\n'));
+  assert.ok(w.log().includes(`install-sh --dir ${dest}`), w.log().join('\n'));
+});
+
+test('a quoted ~ in --dir finds the existing checkout in the home folder instead of cloning again (R19-scripts-b-L3-02)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'career-ops');
+  w.makeCheckout(dest);
+  fs.mkdirSync(path.join(dest, 'custom', 'install'), { recursive: true });
+  fs.writeFileSync(path.join(dest, 'custom', 'install', 'install.sh'), '#!/bin/bash\necho "install-sh $*" >> "$STUB_LOG"\n', { mode: 0o755 });
+  const r = w.run(['--dir', '~/career-ops'], { script: BOOTSTRAP_SH, tty: 'y\n' });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!w.log().some((l) => l.startsWith('git clone')), w.log().join('\n'));
+  assert.ok(w.log().includes(`install-sh --dir ${dest}`), w.log().join('\n'));
+});
+
+test('--dir with no value is refused as install.sh refuses it, before the confirm and before anything is cloned (R19-scripts-b-L3-02 review)', () => {
+  for (const args of [['--dir'], ['--dir', ''], ['--dir', '--no-start']]) {
+    const w = world();
+    const r = w.run(args, { script: BOOTSTRAP_SH, tty: 'y\n' });
+    assert.equal(r.status, 2, `${JSON.stringify(args)}: ${r.out}`);
+    assert.match(r.out, /error: --dir needs a value/);
+    assert.doesNotMatch(r.out, /Continue\? \[y\/N\]/);
+    assert.equal(w.log().length, 0, w.log().join('\n'));
+  }
+});
+
 test('an existing checkout is reused: no second clone', () => {
   const w = world();
   const dest = path.join(w.home, 'career-ops');

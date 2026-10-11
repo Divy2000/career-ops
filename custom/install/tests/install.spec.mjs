@@ -1757,6 +1757,14 @@ test('a data root that is the home directory, a folder containing it, or / is re
     ['--data-root ~', (w) => ({ args: ['--data-root', w.home] })],
     ['--data-root /', () => ({ args: ['--data-root', '/'] })],
     ['--data-root <parent of home>', (w) => ({ args: ['--data-root', path.dirname(w.home)] })],
+    // Through a folder that does not exist yet: resolved as the kernel will once step 5 creates it (R19-scripts-b-L3-01).
+    ['--data-root ~/new/..', (w) => ({ args: ['--data-root', `${w.home}/new/..`] })],
+    ['--data-root ~/new/deeper/../..', (w) => ({ args: ['--data-root', `${w.home}/new/deeper/../..`] })],
+    ['--data-root ~/a/link/.. where link dangles to ~/q', (w) => {
+      fs.mkdirSync(path.join(w.home, 'a'), { recursive: true });
+      fs.symlinkSync(path.join(w.home, 'q'), path.join(w.home, 'a', 'link'));
+      return { args: ['--data-root', `${w.home}/a/link/..`] };
+    }],
     ['CAREER_OPS_ROOT=$HOME', (w) => ({ args: [], env: { CAREER_OPS_ROOT: w.home } })],
     ['CAREER_OPS_DATA_DIR=$HOME', (w) => ({ args: [], env: { CAREER_OPS_DATA_DIR: w.home } })],
   ];
@@ -1777,6 +1785,15 @@ test('a data root next to the home directory is fine', () => {
   const r = w.run(['--dir', D, '--non-interactive', ...QUIET, '--data-root', path.join(w.home, 'career-data')]);
   assert.equal(r.status, 0, r.out);
   assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
+});
+
+test('a data root that does not exist yet, named with a trailing slash in CAREER_OPS_ROOT, is that folder, not its parent (review of R19-scripts-b-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const root = path.join(w.home, 'new-root');
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CAREER_OPS_ROOT: `${root}/` } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /is your home directory or contains it/);
+  assert.ok(fs.existsSync(path.join(root, 'modes', '_custom.md')));
 });
 
 test('the test world finds no system copy of a tool the installer probes for, so a missing-tool spec means the same on every OS (SW3-tests-06)', () => {
