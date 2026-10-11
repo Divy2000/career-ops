@@ -205,15 +205,13 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return /^\d+$/.test(row) ? String(Number(row)) : row;
   };
   /**
-   * Null when a tailored CV for the row may run, else the 409 reason naming the live session in the way. `own` is the
-   * session a reply carries on or a fork copies: a session of its fork lineage paused for a reply does not hold it back
-   * (as with Process inbox), and a reply's own session never does.
+   * Null when a tailored CV for the row may run, else the 409 reason naming the session in the way. A start is held by
+   * any live one. A reply or fork carries a CV run on, so it is held only by one whose turn runs or is starting (not by
+   * one paused for a reply, which would leave two paused sessions refusing each other's reply), and never by its own session.
    */
   const tailoredCvHolds = (row: string, own: { meta: SessionMeta; kind: 'reply' | 'fork' } | null = null): string | null => {
-    const ownRoot = own ? runRoot(own.meta) : null;
-    const live = liveOrStarting().find(
-      (m) => tailoredCvRow(m.mode, m.target) === row && !(own?.kind === 'reply' && m.id === own.meta.id) && !(m.status === 'awaiting_user' && runRoot(m) === ownRoot),
-    );
+    const holds = (m: SessionMeta) => !own || m.status !== 'awaiting_user' || turnsStarting.has(m.id);
+    const live = liveOrStarting().find((m) => tailoredCvRow(m.mode, m.target) === row && !(own?.kind === 'reply' && m.id === own.meta.id) && holds(m));
     return live ? `session ${live.id} is already generating the tailored CV for tracker row #${row}. Open it instead.` : null;
   };
   /** The 409 reason a reply or fork is refused with when it would carry on Process inbox or an evaluation over the same pending rows, or null. */

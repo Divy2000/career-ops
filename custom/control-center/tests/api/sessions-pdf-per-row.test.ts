@@ -3,7 +3,7 @@
 // for a row whose pdf session is still live (R19-shared-comp-L1-01).
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import type { SessionMeta } from '../../server/claude/sessions.js';
@@ -100,6 +100,37 @@ describe('a reply to or fork of a tailored CV session while another for its row 
       await quiet(app);
       app.sessions.store.setStatus(fork.id, 'awaiting_user');
       expect((await turn(app, source.id, 'turns')).statusCode).toBe(202);
+    });
+  });
+
+  it('of two paused ones of the same lineage, only one of two replies sent together goes on', async () => {
+    await withApp(async (app) => {
+      const source = pdfSession(app, '12', 'awaiting_user');
+      const fork = app.sessions.store.create({ mode: 'pdf', policyClass: source.policyClass, target: source.target, model: null, forkedFrom: source.id });
+      app.sessions.store.setStatus(fork.id, 'awaiting_user');
+      // The first reply is held in flight before its turn begins (the token read), so its session still reads paused.
+      const send = app.sessions.send.bind(app.sessions);
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      const spy = vi.spyOn(app.sessions, 'send').mockImplementationOnce(async (...args) => {
+        await held;
+        return send(...args);
+      });
+      const first = turn(app, source.id, 'turns');
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      const second = await turn(app, fork.id, 'turns');
+      release();
+      expect(second.statusCode).toBe(409);
+      expect((second.json() as { error: string }).error).toContain(source.id);
+      expect((await first).statusCode).toBe(202);
+    });
+  });
+
+  it('two paused ones of different lineages (from before this guard) do not block each other for good', async () => {
+    await withApp(async (app) => {
+      pdfSession(app, '12', 'awaiting_user');
+      const other = pdfSession(app, '12', 'awaiting_user');
+      expect((await turn(app, other.id, 'turns')).statusCode).toBe(202);
     });
   });
 
