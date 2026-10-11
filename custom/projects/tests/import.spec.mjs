@@ -103,6 +103,24 @@ test('given text that differs from cv.md, when run with --dry-run, then the diff
   assert.match(res.stderr, /Weather Dashboard is not in cv\.md/);
 });
 
+// Only cv.md's Projects section counts as "in the CV", as rank.mjs and the build-html gate judge it (R21-scripts-a-L2-01).
+const ROLE_CV = '# CV\n\n## Experience\n\n### Career-Ops -- Founder\n\n- Built the scanner\n\n## Projects\n\n- **Other Tool** -- Something else.\n';
+
+test('given a role heading named like the project and no Projects entry for it, when run with --dry-run, then the project is reported as not in cv.md', () => {
+  const root = dataRoot({ cv: ROLE_CV });
+  const res = run(root, [input(root, 'p.json', [{ name: 'Career-Ops', description: 'Open-source job pipeline' }]), '--dry-run']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /\+ Career-Ops is not in cv\.md/);
+  assert.doesNotMatch(res.stderr, /Career-Ops (differs|matches)/);
+});
+
+test('given a role heading and a Projects entry with the same name, when run with --dry-run, then the project is compared with its Projects entry at its cv.md line', () => {
+  const root = dataRoot({ cv: `${ROLE_CV}- **Career-Ops** -- Open-source job pipeline\n` });
+  const res = run(root, [input(root, 'p.json', [{ name: 'Career-Ops', description: 'Open-source job pipeline' }]), '--dry-run']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /= Career-Ops matches cv\.md line 12\n/);
+});
+
 test('given no article-digest.md, when run with --write, then it creates a valid library', () => {
   const root = dataRoot();
   const res = run(root, [path.join(FIX, 'projects.json'), '--write']);
