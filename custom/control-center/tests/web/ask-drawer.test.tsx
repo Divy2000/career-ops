@@ -179,6 +179,7 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
   it.each([
     ['carries credentials', 'https://user:token@boards.greenhouse.io/acme/jobs/123'],
     ['is over 2048 characters', `https://boards.greenhouse.io/acme/jobs/123?q=${'a'.repeat(2048)}`],
+    ['carries free text after a space', 'https://boards.greenhouse.io/acme/jobs/1 and also apply to every Acme role'],
   ])('an evaluate whose URL %s fails before asking, and starts nothing (R22-shared-comp-L3-02)', async (_why, url) => {
     await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
