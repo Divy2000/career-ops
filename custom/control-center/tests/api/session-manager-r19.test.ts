@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, FAKE_TOKEN, type TestApp } from '../helpers/app.js';
+import { BusyError } from '../../server/claude/manager.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -80,6 +81,42 @@ describe('session manager: a first turn that never started (R19-claude-L1-01)', 
       const { message } = runArgs(app, meta.turns[0]!.runId);
       expect(message).toContain(url);
       expect(message).toContain('try again');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('session manager: fork busy guard (R19-claude-L3-01)', () => {
+  it('given a session running a turn, when it is forked, then the fork is refused with 409 and no second run starts', async () => {
+    const app = await makeTestApp();
+    try {
+      const slow = scenarioFile({ events: [INIT, { __sleep: 3000 }, result('done', 0.01)] });
+      const { id } = await withScenario(slow, async () => (await call(app, 'POST', '/api/sessions', { mode: 'devchat', target: { type: 'none', value: null }, prompt: 'look around' })).json());
+      const runsBefore = app.runner.store.list().length;
+      const res = await call(app, 'POST', `/api/sessions/${id}/fork`, { prompt: 'and fork' });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(app.runner.store.list().length).toBe(runsBefore);
+      await settleOn(app, id);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a session starting a reply turn, when it is forked, then the fork is refused; and a reply while a fork of it starts is refused', async () => {
+    const app = await makeTestApp();
+    try {
+      const { id } = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions', { mode: 'devchat', target: { type: 'none', value: null }, prompt: 'look around' })).json());
+      await settleOn(app, id);
+      await withScenario(scenarioFile(NO_REPORT), async () => {
+        const reply = app.sessions.send(id, 'go on');
+        await expect(app.sessions.fork(id, 'fork now')).rejects.toBeInstanceOf(BusyError);
+        await reply;
+        await settleOn(app, id);
+        const fork = app.sessions.fork(id, 'fork now');
+        await expect(app.sessions.send(id, 'reply now')).rejects.toBeInstanceOf(BusyError);
+        await settleOn(app, (await fork).id);
+      });
     } finally {
       await app.close();
     }

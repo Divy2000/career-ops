@@ -210,11 +210,7 @@ export class SessionManager {
     assertCurrentPolicy(meta);
     const policy = this.turnPolicy(meta.mode);
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
-    if (this.sending.has(id)) throw new BusyError(`session ${id} is starting a turn`);
-    if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${id} is ${meta.status}`);
-    // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a reply now
-    // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
-    if (this.active.has(id)) throw new BusyError(`session ${id} is still finishing its previous turn`);
+    this.assertIdle(meta);
     this.sending.add(id);
     try {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
@@ -231,13 +227,33 @@ export class SessionManager {
     const src = this.must(id);
     assertCurrentPolicy(src);
     const policy = this.turnPolicy(src.mode);
-    // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
-    if (!this.hasConversation(src)) {
-      const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
-      return this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+    // A source with a turn starting or running would get a second paid run beside it, on the conversation it is writing.
+    const conversation = this.hasConversation(src);
+    this.assertIdle(src, { finishing: conversation });
+    this.sending.add(id);
+    try {
+      // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
+      if (!conversation) {
+        const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
+        return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+      }
+      const forked = this.store.fork(id);
+      return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+    } finally {
+      this.sending.delete(id);
     }
-    const forked = this.store.fork(id);
-    return this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+  }
+
+  /**
+   * Refuses a session with a turn being prepared or running, and (unless `finishing` is false) one whose ended turn is
+   * still finishing: only a turn that resumes its conversation can collide with that turn's process and finalize.
+   */
+  private assertIdle(meta: SessionMeta, opts: { finishing?: boolean } = {}): void {
+    if (this.sending.has(meta.id)) throw new BusyError(`session ${meta.id} is starting a turn`);
+    if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${meta.id} is ${meta.status}`);
+    // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a new turn now
+    // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
+    if (opts.finishing !== false && this.active.has(meta.id)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
