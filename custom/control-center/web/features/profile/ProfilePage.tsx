@@ -235,6 +235,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
     }
     setConflict(null);
     setSavedText(draft);
+    setHeldResult(null);
     setNote('cv.md saved. Run a network scan from Discover to find matches.');
     await qc.invalidateQueries({ queryKey: ['config'] });
     onImported?.();
@@ -258,6 +259,9 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
             }}
           >
             Replace the draft with the parsed CV
+          </button>
+          <button type="button" onClick={() => setHeldResult(null)}>
+            Keep my draft
           </button>
         </p>
       )}

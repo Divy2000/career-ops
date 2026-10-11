@@ -90,6 +90,18 @@ async function typeInto(label: string, text: string) {
 }
 const textOf = (label: string) => host.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)!.value;
 
+/** Uploads a PDF, lets its parse run, edits the draft, then lands the parse result, which is held behind the banner. */
+async function holdParsed(fileLabel: string, file: string, panelKey: string, draftLabel: string, kind: string, typed: string) {
+  await choose(fileLabel, file);
+  const panel = await until(() => panels.get(panelKey), 'the parser panel');
+  await act(async () => panel.onSessionId!('s-held'));
+  await act(async () => panel.onStatus!('running', null));
+  await typeInto(draftLabel, typed);
+  await act(async () => panel.onEnvelope!(kind, { markdown: '## From the parser' }, 1));
+  await act(async () => panel.onStatus!('done', null));
+  expect(host.textContent).toContain('you edited the draft');
+}
+
 describe('Import CV parse sessions', () => {
   it('leaving while the PDF parse runs asks first, since its result would be lost', async () => {
     const { CvImport } = await import('@web/features/profile/ProfilePage');
@@ -215,6 +227,27 @@ describe('Import CV parse sessions', () => {
     expect(textOf('CV markdown')).toBe('# Second turn');
     await act(async () => panel.onEnvelope!('cv', { markdown: '# Third turn' }, 3));
     expect(textOf('CV markdown')).toBe('# Third turn');
+  });
+
+  it('Keep my draft dismisses a held parse result and keeps the edit (review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await holdParsed('CV file', 'cv.pdf', '/data/uploads/cv.pdf', 'CV markdown', 'cv', '# Typed by hand');
+    await act(async () => button('Keep my draft').click());
+    expect(host.textContent).not.toContain('you edited the draft');
+    expect(textOf('CV markdown')).toBe('# Typed by hand');
+  });
+
+  it('saving the edited draft clears the held parse result, so leaving asks nothing (review)', async () => {
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await holdParsed('CV file', 'cv.pdf', '/data/uploads/cv.pdf', 'CV markdown', 'cv', '# Typed by hand');
+    await act(async () => button('Save as cv.md').click());
+    await until(() => host.textContent?.includes('cv.md saved'), 'the save');
+    expect(host.textContent).not.toContain('you edited the draft');
+    await act(async () => button('Leave').click());
+    await until(() => host.dataset.left === 'yes', 'leaving without a question');
+    expect(dialog()).toBeNull();
   });
 
   it('picking another PDF cancels the parse still running for the first', async () => {
@@ -351,6 +384,31 @@ describe('Import projects', () => {
     await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
     await choose('Projects file', 'down.pdf');
     await until(() => host.textContent?.includes('Upload failed: Failed to fetch'), 'the upload failure');
+  });
+
+  it('Keep my draft dismisses a held parse result (review)', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await render(createElement(ProjectsLibrary));
+    await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
+    await holdParsed('Projects file', 'one.pdf', 'projects/one.pdf', 'Projects to import', 'projects', '[{"name":"X"}]');
+    await act(async () => button('Keep my draft').click());
+    expect(host.textContent).not.toContain('you edited the draft');
+    expect(textOf('Projects to import')).toBe('[{"name":"X"}]');
+  });
+
+  it('appending the edited draft clears the held parse result, so leaving asks nothing (review)', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await render(createElement(ProjectsLibrary));
+    await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
+    await holdParsed('Projects file', 'one.pdf', 'projects/one.pdf', 'Projects to import', 'projects', '[{"name":"X"}]');
+    await act(async () => button('Preview').click());
+    await until(() => button('Append'), 'the Append button');
+    await act(async () => button('Append').click());
+    await until(() => textOf('Projects to import') === '' || undefined, 'the append to finish');
+    expect(host.textContent).not.toContain('you edited the draft');
+    await act(async () => button('Leave').click());
+    await until(() => host.dataset.left === 'yes', 'leaving without a question');
+    expect(dialog()).toBeNull();
   });
 
   it('a double click on Append sends one append', async () => {

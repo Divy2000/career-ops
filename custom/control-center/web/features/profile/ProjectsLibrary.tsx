@@ -524,6 +524,8 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       onAppended();
       if (generation.current !== mine) return;
       generation.current += 1;
+      editedSinceParse.current = false;
+      setHeldResult(null);
       setPreviewed(null);
       setText('');
       setSource(null);
@@ -574,6 +576,9 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
             }}
           >
             Replace the draft with the parsed projects
+          </button>
+          <button type="button" onClick={() => setHeldResult(null)}>
+            Keep my draft
           </button>
         </p>
       )}
