@@ -11,7 +11,7 @@ import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
-import { livePipelineId, markBatchStarting, useBatchStarting } from './InboxAi';
+import { endBatchStarting, livePipelineId, markBatchStarting, useBatchStarting } from './InboxAi';
 
 // Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
 // server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
@@ -96,8 +96,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     try {
       await launch();
     } finally {
-      await queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined);
-      markBatchStarting(false);
+      await endBatchStarting(queryClient);
       setBusy(false);
     }
   };

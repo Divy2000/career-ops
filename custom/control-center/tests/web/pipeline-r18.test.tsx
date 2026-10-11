@@ -295,6 +295,30 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     expect(host.textContent).not.toContain('Batch evaluations');
   });
 
+  it('given a sessions list that never answers after a Batch evaluate fan-out, the fan-out stops holding the others in time', async () => {
+    const router = await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && !init?.method && posts.some((p) => p.url === '/api/sessions/fanout')) return new Promise<Response>(() => undefined);
+      return inner(input as string, init);
+    });
+    await act(async () => button('Batch evaluate')!.click());
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => (await until(() => button('Start them'), 'the confirm')).click());
+      await until(() => posts.length === 1 || undefined, 'the fan-out');
+      await act(async () => vi.advanceTimersByTime(60_000));
+      await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+      await typeUrls('https://jobs.example.com/free');
+      await settle();
+      expect(button('Batch evaluate')!.disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('given a Batch evaluate fan-out still in flight after the start window, Process inbox is still held back', async () => {
     holdUrl = '/api/sessions/fanout';
     const router = await mount('batch');

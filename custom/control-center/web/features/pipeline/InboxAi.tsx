@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -34,6 +34,19 @@ const batchListeners = new Set<() => void>();
 export function markBatchStarting(on: boolean): void {
   batchFanOuts = Math.max(0, batchFanOuts + (on ? 1 : -1));
   for (const fn of [...batchListeners]) fn();
+}
+// A fan-out's mark goes once the sessions list has its sessions, so a page left meanwhile does not read an older list;
+// a read that never answers (a restarting server) gives up after this long rather than holding the others for good.
+const SESSIONS_REREAD_LIMIT_MS = 10_000;
+export async function endBatchStarting(queryClient: QueryClient): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<void>((resolve) => (timer = setTimeout(resolve, SESSIONS_REREAD_LIMIT_MS)));
+  try {
+    await Promise.race([queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined), limit]);
+  } finally {
+    clearTimeout(timer);
+    markBatchStarting(false);
+  }
 }
 const subscribeBatch = (fn: () => void) => {
   batchListeners.add(fn);
@@ -151,10 +164,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     } finally {
       // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
       onFanOut?.();
-      if (marked) {
-        await queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined);
-        markBatchStarting(false);
-      }
+      if (marked) await endBatchStarting(queryClient);
       asking.current = false;
       setBusy(false);
     }
