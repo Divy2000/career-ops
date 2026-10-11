@@ -835,8 +835,9 @@ describe('Runner', () => {
       CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', PATH: '/bin', HOME: '/h',
     };
     const env = childEnv({}, base);
-    // The four scan paths are always set, empty, so a scan writes the data root's files (R12-srv-core-L2-03, R17-srv-core-X-01).
-    expect(Object.keys(env).sort()).toEqual(['CAREER_OPS_PIPELINE', 'CAREER_OPS_PORTALS', 'CAREER_OPS_PROFILE', 'CAREER_OPS_SCAN_HISTORY', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
+    // The data-file paths are always set, empty, so a script writes the data root's files (R12-srv-core-L2-03, R17-srv-core-X-01, R21-srv-core-L2-01).
+    const pinned = ['CAREER_OPS_ADDITIONS', 'CAREER_OPS_ARTICLE_DIGEST', 'CAREER_OPS_BATCH_STATE', 'CAREER_OPS_CV', 'CAREER_OPS_DOCUMENTS_DIR', 'CAREER_OPS_FOLLOWUPS', 'CAREER_OPS_INTAKE_STATE', 'CAREER_OPS_JDS', 'CAREER_OPS_PIPELINE', 'CAREER_OPS_PORTALS', 'CAREER_OPS_PROFILE', 'CAREER_OPS_REPLY_CANDIDATES', 'CAREER_OPS_REPORTS', 'CAREER_OPS_REPORTS_DIR', 'CAREER_OPS_SCAN_HISTORY'];
+    expect(Object.keys(env).sort()).toEqual([...pinned, 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'HOME', 'PATH']);
     // A session's own credentials, passed explicitly, still reach it.
     expect(childEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' }, base)).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'kc', ANTHROPIC_API_KEY: '' });
   });
@@ -872,6 +873,16 @@ describe('Runner', () => {
     expect(env).toMatchObject({ CAREER_OPS_PORTALS: '', CAREER_OPS_PROFILE: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '' });
     // A caller passing one explicitly still wins (the network scan writes its own ephemeral portals file).
     expect(childEnv({ CAREER_OPS_PORTALS: '/tmp/ephemeral.yml' }, lane).CAREER_OPS_PORTALS).toBe('/tmp/ephemeral.yml');
+  });
+
+  it('pins every data-file override an action\'s script honours to the data root, so it writes the files the app reads (R21-srv-core-L2-01)', () => {
+    const names = ['CAREER_OPS_REPLY_CANDIDATES', 'CAREER_OPS_FOLLOWUPS', 'CAREER_OPS_DOCUMENTS_DIR', 'CAREER_OPS_INTAKE_STATE', 'CAREER_OPS_REPORTS_DIR', 'CAREER_OPS_REPORTS', 'CAREER_OPS_JDS', 'CAREER_OPS_ADDITIONS', 'CAREER_OPS_BATCH_STATE', 'CAREER_OPS_CV', 'CAREER_OPS_ARTICLE_DIGEST'];
+    const shell = Object.fromEntries([...names.map((n) => [n, `/elsewhere/${n}`]), ['PATH', '/bin']]);
+    const env = childEnv({}, shell);
+    expect(Object.fromEntries(names.map((n) => [n, env[n]]))).toEqual(Object.fromEntries(names.map((n) => [n, ''])));
+    // The overrides the app itself follows on both sides pass through.
+    expect(childEnv({}, { CAREER_OPS_TRACKER: '/t/applications.md', CAREER_OPS_PDF_INDEX: '/t/pdf-index.tsv' })).toMatchObject({ CAREER_OPS_TRACKER: '/t/applications.md', CAREER_OPS_PDF_INDEX: '/t/pdf-index.tsv' });
+    expect(childEnv({ CAREER_OPS_REPORTS_DIR: '/explicit' }, shell).CAREER_OPS_REPORTS_DIR).toBe('/explicit');
   });
 
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {

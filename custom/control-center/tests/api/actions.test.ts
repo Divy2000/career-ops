@@ -144,6 +144,21 @@ describe('action registry', () => {
     }
   });
 
+  it('Paste a reply appends to the data root\'s reply-candidates.json even when the shell exported CAREER_OPS_REPLY_CANDIDATES (R21-srv-core-L2-01)', async () => {
+    const elsewhere = path.join(tempDir('cc-reply-elsewhere-'), 'rc.json');
+    const saved = process.env.CAREER_OPS_REPLY_CANDIDATES;
+    process.env.CAREER_OPS_REPLY_CANDIDATES = elsewhere;
+    try {
+      const res = await post('/api/actions/followups.replyPaste', { params: { subject: 'Interview R21 marker', from: 'jordan@example.com', body: 'Can we talk on Tuesday?' } });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fs.existsSync(elsewhere)).toBe(false);
+      expect(fs.readFileSync(path.join(t.cfg.dataRoot, 'data', 'reply-candidates.json'), 'utf8')).toContain('Interview R21 marker');
+    } finally {
+      if (saved === undefined) delete process.env.CAREER_OPS_REPLY_CANDIDATES;
+      else process.env.CAREER_OPS_REPLY_CANDIDATES = saved;
+    }
+  });
+
   it('a run whose meta.json is empty or torn (a power loss mid-write) neither stops the app starting nor breaks the runs list and async actions (R21-srv-core-L1-01)', async () => {
     const dataRoot = copyFixtureRoot();
     const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
