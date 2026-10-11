@@ -660,6 +660,16 @@ describe('Apply documents classification and suggestion', () => {
     expect((await docs(9)).suggestedPdf).toBe('output/acme-robotics-cv.pdf');
   });
 
+  it('suggests no CV for a new report of the same company when its only name match is filed under another report (R24-srv-dom-a-L3-01)', async () => {
+    const tracker = path.join(a.cfg.dataRoot, 'data', 'applications.md');
+    fs.appendFileSync(tracker, '| 10 | 2026-10-11 | Acme Robotics | - | Platform Engineer | 4.0/5 | Evaluated | ❌ | [10](../reports/010-acme-robotics-platform.md) | third role |\n');
+    out('output/007-acme-robotics-staff-engineer/cv/acme-robotics-cv.pdf');
+    const past = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(path.join(a.cfg.dataRoot, 'output', 'acme-robotics-extra.pdf'), past, past);
+    // acme-robotics-cv.pdf is indexed under report 1 and the bundle belongs to report 7; only the fixture's unclaimed name match is left.
+    expect((await docs(10)).suggestedPdf).toBe('output/acme-robotics-extra.pdf');
+  });
+
   it('suggests the newest tailored CV in the report application bundle when the manifest has none', async () => {
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v002/cv.pdf');
     out('output/006-vandelay-systems-senior-python-engineer/cv/tailored/v010/cv.pdf');
