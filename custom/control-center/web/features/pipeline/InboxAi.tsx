@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouter, type AnyRouter } from '@tanstack/react-router';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Pill } from '../../components/ui';
@@ -54,6 +54,21 @@ const subscribeBatch = (fn: () => void) => {
 };
 export const useBatchStarting = () => useSyncExternalStore(subscribeBatch, () => batchFanOuts > 0);
 
+/**
+ * Watches, while a start is in flight, whether the user leaves the Inbox (another page or tab, even if they come back):
+ * only a start whose user never left moves them to its session. A filter change is not leaving, nor is the Inbox being
+ * shown again (a refreshed list or Retry after an error remounts it while the user stays).
+ */
+export function watchLeavingInbox(router: AnyRouter): { left: () => boolean; stop: () => void } {
+  const where = (l: { pathname: string; search: unknown }) => `${l.pathname}?${(l.search as { tab?: string }).tab ?? 'inbox'}`;
+  const inbox = where(router.state.location);
+  let left = false;
+  const stop = router.subscribe('onBeforeNavigate', (e) => {
+    if (where(e.toLocation) !== inbox) left = true;
+  });
+  return { left: () => left, stop };
+}
+
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
 
@@ -64,6 +79,7 @@ export const PROCESS_INBOX_PROMPT =
  */
 export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking = false, uncheckable = false }: { urls: string[]; savedJds?: number; evaluating?: number; onFanOut?: () => void; checking?: boolean; uncheckable?: boolean }) {
   const navigate = useNavigate();
+  const router = useRouter();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   // The pipeline session is paid and edits data/pipeline.md: the last one is re-attached when the page comes back, and
@@ -136,19 +152,12 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   const [busy, setBusy] = useState(false);
   // The disabled button lags the click by a render, and confirms queue: a second click before it would ask twice.
   const asking = useRef(false);
-  // A start can answer after the user left the page: only a still-mounted one moves them to the session.
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   const evaluateAll = async () => {
     if (unique.length === 0 || tooMany || asking.current) return;
     asking.current = true;
     setBusy(true);
     let marked = false;
+    const leaving = watchLeavingInbox(router);
     try {
       if (unique.length > FANOUT_CONFIRM_ABOVE && !(await confirm({ title: `Start ${unique.length} evaluation sessions?`, body: 'They run in parallel under the Claude slot cap. Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
       // Counted like a Batch fan-out, so the Batch tab waits for it too once this tab is left.
@@ -158,12 +167,13 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
       const outcome = fanoutOutcome(r);
       setNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
       // A session that did not start is reported here; the Sessions page would hide why.
-      if (outcome.failedUrls.length === 0 && mounted.current) await navigate({ to: '/sessions' });
+      if (outcome.failedUrls.length === 0 && !leaving.left()) await navigate({ to: '/sessions' });
     } catch (err) {
       setNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {
       // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
       onFanOut?.();
+      leaving.stop();
       if (marked) await endBatchStarting(queryClient);
       asking.current = false;
       setBusy(false);

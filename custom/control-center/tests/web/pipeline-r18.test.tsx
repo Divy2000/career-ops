@@ -453,6 +453,26 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
     expect(router.state.location.pathname).toBe('/sessions/s-jd');
   });
 
+  it('Evaluate visible still moves a user who stayed to Sessions after the Inbox was shown again', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
+    await act(async () => button('Evaluate visible (2)')!.click());
+    await until(() => hold, 'the fan-out sent');
+    // A failed refresh of the list swaps the Inbox for an error card, and Retry shows it again.
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    let down = true;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (input === '/api/pipeline' && down ? new Response('down', { status: 502 }) : inner(input as string, init)));
+    await act(async () => queryClient.invalidateQueries({ queryKey: ['pipeline'] }));
+    const retry = await until(() => button('Retry'), 'the error card');
+    down = false;
+    await act(async () => retry.click());
+    await until(() => button('Evaluate visible'), 'the Inbox shown again');
+    await act(async () => hold!.release());
+    await settle();
+    expect(router.state.location.pathname).toBe('/sessions');
+  });
+
   it('Evaluate visible does not move a user who went elsewhere to Sessions', async () => {
     holdUrl = '/api/sessions/fanout';
     const router = await mount();

@@ -20,7 +20,9 @@ function json(status: number, body: unknown) {
 }
 
 const navigated: unknown[] = [];
-vi.mock('@tanstack/react-router', async (importOriginal) => ({ ...(await importOriginal<object>()), useNavigate: () => async (to: unknown) => void navigated.push(to) }));
+// The Inbox stays where it is for the whole start: no navigation off it.
+const router = { state: { location: { pathname: '/pipeline', search: { tab: 'inbox' } } }, subscribe: () => () => undefined };
+vi.mock('@tanstack/react-router', async (importOriginal) => ({ ...(await importOriginal<object>()), useNavigate: () => async (to: unknown) => void navigated.push(to), useRouter: () => router }));
 
 async function mount(component: 'BatchTab' | { inboxUrls: string[] } = 'BatchTab') {
   sent = [];

@@ -6,7 +6,7 @@ import { apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, ScorePill, ShortlistScore, SponsorPill, Tabs, alertTone, TableScroll } from '../../components/ui';
-import { InboxAi } from './InboxAi';
+import { InboxAi, watchLeavingInbox } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
 import { localJdPath } from '@shared/local-jd';
@@ -295,22 +295,15 @@ function EvaluateJd({ reference, label, running, checking }: { reference: string
     if (jd === null) return;
     setBusy(true);
     setError(null);
-    // A start can answer after the user left the Inbox, or left and came back: only one that never left moves them to the
-    // session. The Inbox (page and tab), not this row's button, which a filter or a refreshed list can take away while
-    // the user stays; a filter change alone is not leaving.
-    const where = (l: { pathname: string; search: unknown }) => `${l.pathname}?${(l.search as { tab?: string }).tab ?? 'inbox'}`;
-    const inbox = where(router.state.location);
-    let left = false;
-    const unsubscribe = router.subscribe('onBeforeNavigate', (e) => {
-      if (where(e.toLocation) !== inbox) left = true;
-    });
+    // The Inbox, not this row's button, which a filter or a refreshed list can take away while the user stays.
+    const leaving = watchLeavingInbox(router);
     try {
       const m = await startSavedJdSession(reference, jd);
-      if (!left) await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (!leaving.left()) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(`Could not start the evaluation: ${describeError(err)}`);
     } finally {
-      unsubscribe();
+      leaving.stop();
       setBusy(false);
     }
   };
