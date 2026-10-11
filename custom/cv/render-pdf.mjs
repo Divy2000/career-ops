@@ -27,7 +27,7 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, statSync }
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fitToPages, countPdfPages } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { resolveWorkspaceRootFor } from '../../tracker-utils.mjs';
@@ -35,6 +35,9 @@ import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const CODE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const GENERATE = path.join(CODE, 'generate-pdf.mjs');
+// Preloaded into each generate-pdf.mjs child: the page loads only the HTML it renders, no other local file (a session's
+// HTML may frame or embed file:///Users/me/.ssh/id_rsa, which would print into the PDF).
+const LOCAL_FILE_GUARD = pathToFileURL(path.join(CODE, 'custom/control-center/server/claude/local-file-guard.mjs')).href;
 const MAX_OUTPUT = 16 * 1024 * 1024;
 const VALUE_FLAGS = ['--max-pages', '--format', '--report', '--kind'];
 const PASS_THROUGH = ['--format', '--report', '--kind', '--allow-reorder', '--allow-nonchronological', '--skip-fact-check'];
@@ -184,7 +187,7 @@ async function main() {
   const generate = (from, to, extra, env = process.env) => new Promise((resolve, reject) => {
     if (stopping) return;
     const tempLog = path.join(scratch, `temps-${++renders}.log`);
-    const child = spawn(process.execPath, ['--import', TEMP_HOOK, GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
+    const child = spawn(process.execPath, ['--import', LOCAL_FILE_GUARD, '--import', TEMP_HOOK, GENERATE, from, to, ...forwarded, `--max-pages=${maxPages}`, ...extra], {
       cwd: CODE, env: { ...env, [TEMP_LOG_ENV]: tempLog }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     running = child;
