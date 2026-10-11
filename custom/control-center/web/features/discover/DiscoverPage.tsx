@@ -222,18 +222,64 @@ function scanDegradations(summary: ScanSummary): { notes: string[]; noData: bool
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
 const networkRun = lastSession('cc.discover.networkScan');
 
+const SINCE_DAYS = [1, 3, 7, 14, 30] as const;
+const DEPTHS = [50, 100, 200, 500] as const;
+interface NetworkFilters {
+  roles: string;
+  exclude: string;
+  locations: string;
+  sinceDays: (typeof SINCE_DAYS)[number];
+  ats: NetworkScanSource[];
+  limit: number;
+}
+const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: 'intern', locations: 'Remote', sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 };
+
+// The filters the remembered run used, kept beside its id: a re-attached results card must sit under the form it ran.
+const NETWORK_FILTERS_KEY = 'cc.discover.networkScan.params';
+function readRunFilters(): NetworkFilters {
+  if (networkRun.read() === null) return DEFAULT_FILTERS;
+  let v: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(NETWORK_FILTERS_KEY) ?? 'null');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return DEFAULT_FILTERS;
+    v = parsed as Record<string, unknown>;
+  } catch {
+    return DEFAULT_FILTERS;
+  }
+  const text = (x: unknown, fallback: string) => (typeof x === 'string' ? x : fallback);
+  const ats = Array.isArray(v.ats) && v.ats.length > 0 && new Set(v.ats).size === v.ats.length && v.ats.every((a) => (NETWORK_SCAN_SOURCES as readonly unknown[]).includes(a)) ? (v.ats as NetworkScanSource[]) : DEFAULT_FILTERS.ats;
+  return {
+    roles: text(v.roles, DEFAULT_FILTERS.roles),
+    exclude: text(v.exclude, DEFAULT_FILTERS.exclude),
+    locations: text(v.locations, DEFAULT_FILTERS.locations),
+    sinceDays: SINCE_DAYS.find((d) => d === v.sinceDays) ?? DEFAULT_FILTERS.sinceDays,
+    ats,
+    limit: DEPTHS.find((d) => d === v.limit) ?? DEFAULT_FILTERS.limit,
+  };
+}
+function writeRunFilters(filters: NetworkFilters | null): void {
+  try {
+    if (filters) sessionStorage.setItem(NETWORK_FILTERS_KEY, JSON.stringify(filters));
+    else sessionStorage.removeItem(NETWORK_FILTERS_KEY);
+  } catch {
+    // storage refused: a re-attached run only shows the default filters
+  }
+}
+
 export function NetworkScan() {
   const actions = useActions();
   const qc = useQueryClient();
   const { run, busy, message, setMessage } = useRunAction();
-  const [roles, setRoles] = useState('backend, platform');
-  const [exclude, setExclude] = useState('intern');
-  const [locations, setLocations] = useState('Remote');
-  const [sinceDays, setSinceDays] = useState<1 | 3 | 7 | 14 | 30>(7);
-  const [ats, setAts] = useState<NetworkScanSource[]>(['greenhouse', 'lever']);
-  const [limit, setLimit] = useState(100);
+  const [initial] = useState(readRunFilters);
+  const [roles, setRoles] = useState(initial.roles);
+  const [exclude, setExclude] = useState(initial.exclude);
+  const [locations, setLocations] = useState(initial.locations);
+  const [sinceDays, setSinceDays] = useState(initial.sinceDays);
+  const [ats, setAts] = useState(initial.ats);
+  const [limit, setLimit] = useState(initial.limit);
   const [runId, setRunIdState] = useState<string | null>(networkRun.read);
-  const setRunId = (id: string) => {
+  const setRunId = (id: string, filters: NetworkFilters) => {
+    writeRunFilters(filters);
     networkRun.write(id);
     setRunIdState(id);
   };
@@ -242,7 +288,9 @@ export function NetworkScan() {
   // Nothing to follow: the results card goes, and the run is not re-attached next time.
   const gone = status === RUN_GONE;
   useEffect(() => {
-    if (gone) networkRun.write(null);
+    if (!gone) return;
+    networkRun.write(null);
+    writeRunFilters(null);
   }, [gone]);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
   // The remembered run is still going: a second sweep would replace it on the page while it keeps running.
@@ -250,8 +298,9 @@ export function NetworkScan() {
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const start = () => {
     if (running) return;
+    const filters: NetworkFilters = { roles, exclude, locations, sinceDays, ats, limit };
     void run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
-      if (out && 'runId' in out) setRunId(out.runId);
+      if (out && 'runId' in out) setRunId(out.runId, filters);
     });
   };
   // One add at a time: a second click before the first answers would send the same postings and relabel them.
@@ -306,7 +355,7 @@ export function NetworkScan() {
           <label>
             <span className="muted">Posted within</span>{' '}
             <select aria-label="Posted window" value={sinceDays} onChange={(e) => setSinceDays(Number(e.target.value) as typeof sinceDays)}>
-              {[1, 3, 7, 14, 30].map((d) => (
+              {SINCE_DAYS.map((d) => (
                 <option key={d} value={d}>
                   {d}d
                 </option>
@@ -316,7 +365,7 @@ export function NetworkScan() {
           <label>
             <span className="muted">Depth</span>{' '}
             <select aria-label="Scan depth" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-              {[50, 100, 200, 500].map((d) => (
+              {DEPTHS.map((d) => (
                 <option key={d} value={d}>
                   {d}
                 </option>
