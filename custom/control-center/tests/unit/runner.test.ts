@@ -457,6 +457,26 @@ describe('Runner', () => {
     expect(runner.store.read(run.id)).toMatchObject({ status: 'done', exitCode: 0, error: null });
   });
 
+  it('a tracking server filling in a run\'s command PID keeps a cancel another server wrote meanwhile, so the run ends cancelled', async () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'running', wrapperPid: 999_999, wrapperStartedAt: 1_700_000_000 });
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'wrapper.json'), JSON.stringify({ wrapperPid: 999_999, childPid: 888_888 }));
+    // Another server cancels the run while this one reads the command's start time.
+    const procStart = (pid: number) => {
+      if (pid === 888_888) store.write({ ...store.read(run.id)!, status: 'cancelled' });
+      return 1_700_000_000;
+    };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50, kill: () => {}, procStart });
+    runners.push(runner);
+    runner.reconcile();
+    await until(() => runner.store.read(run.id)?.childPid === 888_888);
+    fs.writeFileSync(path.join(store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: new Date().toISOString() }));
+    await until(() => Boolean(runner.store.read(run.id)?.endedAt));
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'cancelled', childPid: 888_888, childStartedAt: 1_700_000_000, signal: 'SIGTERM' });
+  });
+
   it('a cancelled run whose wrapper vanished without an exit record before any server settled it still reads cancelled', () => {
     const root = tmpRoot();
     const store = new RunStore(root);

@@ -642,7 +642,7 @@ export class Runner {
 
   private track(meta: RunMeta): void {
     const timer = setInterval(() => {
-      const current = this.store.read(meta.id) ?? meta;
+      let current = this.store.read(meta.id) ?? meta;
       // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
       const entry = this.active.get(meta.id);
       if (entry && current.status === 'cancelled' && !entry.killArmed) {
@@ -652,8 +652,9 @@ export class Runner {
       if (!current.childPid) {
         const w = this.store.readWrapper(meta.id);
         if (w) {
-          current.childPid = w.childPid;
-          current.childStartedAt = this.recordStart(w.childPid);
+          const childStartedAt = this.recordStart(w.childPid);
+          // Onto a fresh read: another server may have cancelled the run while ps read the start.
+          current = { ...(this.store.read(meta.id) ?? current), childPid: w.childPid, childStartedAt };
           this.store.write(current);
         }
       }
