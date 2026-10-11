@@ -22,6 +22,8 @@ const READ: ProjectsRead = {
 type Call = { method: string; url: string; body: unknown; headers: Record<string, string> };
 let calls: Call[];
 let putResponse: { status: number; body: unknown };
+/** When set, the next PUT waits for it: a save still on its way. */
+let putGate: Promise<void> | null;
 let convertResponse: { status: number; body: unknown };
 let host: HTMLElement;
 let root: Root;
@@ -39,7 +41,12 @@ async function mount() {
       const method = init?.method ?? 'GET';
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null, headers: (init?.headers ?? {}) as Record<string, string> });
       if (url === '/api/projects' && method === 'GET') return json(200, READ);
-      if (url.startsWith('/api/projects/') && method === 'PUT') return json(putResponse.status, putResponse.body);
+      if (url.startsWith('/api/projects/') && method === 'PUT') {
+        const gate = putGate;
+        putGate = null;
+        if (gate) await gate;
+        return json(putResponse.status, putResponse.body);
+      }
       if (url === '/api/projects/convert') return json(convertResponse.status, convertResponse.body);
       if (url.startsWith('/api/files/user/')) return json(200, { key: 'cv', path: 'cv.md', kind: 'ok', text: '# CV\n', etag: 'c1' });
       return json(404, { error: 'not stubbed' });
@@ -76,6 +83,7 @@ const type = (el: HTMLInputElement, value: string) =>
 beforeEach(() => {
   document.body.innerHTML = '';
   putResponse = { status: 200, body: { ok: true, etag: 'e2', id: 'event-router', warnings: [] } };
+  putGate = null;
   convertResponse = { status: 200, body: { markdown: '', entries: [], duplicates: [], warnings: [], errors: [] } };
 });
 afterEach(async () => {
@@ -136,6 +144,26 @@ describe('Projects library tab', () => {
     expect(put.url).toBe('/api/projects/event-router');
     expect(put.headers['If-Match']).toBe('e1');
     expect(put.body).toMatchObject({ title: 'Ranking Notes', bullets: ['One.', 'Two.'], source: 'documents/projects/router.pdf' });
+  });
+
+  it('given a save that renames the entry and another write landing before the list reloads, when the user typed meanwhile, then the next save updates the entry under the id the save answered with', async () => {
+    // The route answers with the id the renamed entry is stored under; the list still shows the version before the save.
+    putResponse = { status: 200, body: { ok: true, etag: 'e2', id: 'event-routing', warnings: [] } };
+    await mount();
+    await click(byRole('tab', 'Projects')!);
+    await click(await until(() => byRole('button', 'Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    let release: () => void = () => {};
+    putGate = new Promise<void>((r) => (release = r));
+    await click(byRole('button', 'Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await act(async () => release());
+    const puts = () => calls.filter((c) => c.method === 'PUT');
+    await until(() => puts().length === 1 && byRole('button', 'Save project') && (byRole('button', 'Save project') as HTMLButtonElement).disabled === false, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Dates')!.value).toBe('2024');
+    await click(byRole('button', 'Save project')!);
+    await until(() => puts().length === 2, 'the second save');
+    expect(puts()[1]).toMatchObject({ url: '/api/projects/event-routing', headers: { 'If-Match': 'e2' }, body: { title: 'Event Routing', dates: '2024' } });
   });
 
   it('shows the errors a converted import would cause and keeps Append disabled', async () => {

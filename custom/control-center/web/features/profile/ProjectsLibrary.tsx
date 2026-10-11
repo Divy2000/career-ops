@@ -83,8 +83,10 @@ function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
  * its id, and a PUT keeps the entry at its index in the version the save was pinned to.
  */
 function onSaved(e: Editing, sent: ProjectDraft, saved: { etag: string; id?: string }, pinned: { posted: boolean; origin: EntryOrigin | null }, list: ProjectsRead | undefined): Editing {
-  // Without a list of this version to read the entry from, a POST's id still keeps the next save from adding it again.
-  const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false, ...(pinned.posted && saved.id ? { id: saved.id, origin: null } : {}) };
+  // Without a list of this version to read the entry from, the id the save answered with (the title it stored, as a
+  // rename changes it) keeps the next save on this entry: a POST is not added again, a renaming PUT finds it.
+  const answered = saved.id ? { id: saved.id, ...(pinned.posted ? { origin: null } : {}) } : {};
+  const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false, ...answered };
   if (!list || list.etag !== saved.etag) return next;
   const now = pinned.posted ? list.entries.find((x) => x.id === saved.id) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
   if (!now) return next;

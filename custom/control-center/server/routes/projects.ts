@@ -127,6 +127,16 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return { ok: true, etag: out.etag, ...(id ? { id } : {}), warnings: check.warnings };
   }
 
+  /** The id `entry` is stored under once written (it derives from the title). None for an entry the library refuses: the write itself then answers 422 with the reason. */
+  async function storedId(entry: z.infer<typeof entrySchema>): Promise<string | undefined> {
+    const l = await lib();
+    try {
+      return l.parseLibrary(l.serializeEntry(entry)).entries[0]?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
   const exists = (l: ProjectsLib, text: string, id: string) => l.parseLibrary(text).entries.some((e) => e.id === id);
 
   app.get('/api/projects', async () => view());
@@ -134,13 +144,7 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.post<{ Body: unknown }>('/api/projects', async (req, reply) => {
     const body = entrySchema.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: entryProblem(body.error.issues), issues: body.error.issues });
-    const l = await lib();
-    let id: string | undefined;
-    try {
-      id = l.parseLibrary(l.serializeEntry(body.data)).entries[0]?.id;
-    } catch (err) {
-      return reply.code(422).send({ error: (err as Error).message, errors: [(err as Error).message] });
-    }
+    const id = await storedId(body.data);
     return save(req, reply, (lb, text) => lb.appendEntry(text, body.data), id);
   });
 
@@ -148,7 +152,9 @@ export async function projectRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const body = entrySchema.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: entryProblem(body.error.issues), issues: body.error.issues });
     const { id } = req.params;
-    return save(req, reply, (l, text) => (exists(l, text, id) ? l.replaceEntry(text, id, body.data) : { notFound: `no project ${id}` }), id);
+    // The id comes from the title, so a save that renames the entry answers with the id it is stored under now.
+    const savedId = await storedId(body.data);
+    return save(req, reply, (l, text) => (exists(l, text, id) ? l.replaceEntry(text, id, body.data) : { notFound: `no project ${id}` }), savedId);
   });
 
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
