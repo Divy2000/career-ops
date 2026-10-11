@@ -1217,7 +1217,118 @@ test('--onboard headless with a Claude Code too old to scrub hook and tool child
     assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, `${version}: claude -p ran\n${r.out}`);
     assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.289 or later/, version);
     assert.match(r.out, /claude update/, version);
+    // claude update can land on a version the contract has not approved yet: name one that passes, when it can be read.
+    assert.match(r.out, /claude install 2\.1\.289/, version);
   }
+});
+
+/** Rewrites the approved Claude Code versions in the contract every checkout this world makes is cloned from. */
+const approveClaude = (w, versions) => fs.writeFileSync(path.join(w.fakeSrc, 'custom/control-center/server/core/contract.json'), JSON.stringify({ claude: { approvedVersions: versions } }));
+
+test('--onboard headless with a newer Claude Code the contract does not approve never hands it the token and prints the interactive command (R20 FU-scripts-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, ['2.1.289']);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.300' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Headless onboarding runs only on a Claude Code version the Control Center approves \(approved: 2\.1\.289; found: 2\.1\.300\)/);
+  assert.match(r.out, /claude install 2\.1\.289/);
+  assert.doesNotMatch(r.out, /unexpected failure/, 'a refusal is not a crash');
+  assert.match(r.out, /Or run: cd .* && claude /);
+});
+
+test('--onboard headless with a contract that approves no version yet says so, and names no command that installs one (R20 FU-scripts-02 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, []);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.300' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /approved: none yet; found: 2\.1\.300/);
+  assert.match(r.out, /No Claude Code version is approved for headless onboarding yet/);
+  assert.doesNotMatch(r.out, /claude install|probe:reads|installs an approved one/);
+  assert.match(r.out, /yet\. Run: cd .* && claude /);
+});
+
+test('--onboard headless names the newest approved version that meets the headless floor, never one below it (R20 FU-scripts-02 review)', () => {
+  for (const [approved, expected] of [[['2.1.200', '2.1.295', '2.1.289'], '2.1.295'], [['2.1.289', '2.1.296-beta.1'], '2.1.296-beta.1'], [['2.1.296-beta.1', '2.1.296'], '2.1.296'], [['2.1.289-beta.1'], null], [['2.1.200'], null]]) {
+    const { w, D } = fresh({ keychain: true });
+    approveClaude(w, approved);
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.300' } });
+    assert.equal(r.status, 3, r.out);
+    assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+    const named = [...r.out.matchAll(/claude install (\S+?)[),]/g)].map((m) => m[1]);
+    assert.deepEqual([...new Set(named)], expected ? [expected] : [], `${approved}: ${r.out}`);
+    if (!expected) assert.match(r.out, /No approved Claude Code version meets 2\.1\.289 yet/, r.out);
+  }
+});
+
+test('--onboard headless with a too-old Claude Code the contract lists still names an approved version new enough (R20 FU-scripts-02 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, ['2.1.287', '2.1.289']);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.287' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /claude install 2\.1\.289 installs an approved one/);
+});
+
+test('--onboard headless runs the exact binary it approved, resolved past any symlink, with the autoupdater off (R20 FU-scripts-02 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_DRAFTS: '1' } });
+  assert.equal(w.claudeArgv()?.[0], '-p', r.out);
+  // bin/claude is a symlink, as ~/.local/bin/claude is: an update re-points it, so the run starts the file it checked.
+  assert.deepEqual(w.log().filter((l) => l.startsWith('claude-bin ')), [`claude-bin ${fs.realpathSync(path.join(w.bin, 'claude'))} DISABLE_AUTOUPDATER=1`]);
+});
+
+test('--onboard headless checks the approved binary again right before the run, so one updated in place since is refused (R20 FU-scripts-02 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  // Two --version calls pass (the floor and the gate); from the third on, the same file reports an unapproved version.
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_LATER_VERSION: '2.1.300', FAKE_CLAUDE_LATER_AFTER: '2' } });
+  assert.equal(w.calls('claude --version').length, 3, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Claude Code changed while onboarding was being prepared/);
+});
+
+test('--onboard headless with a too-old Claude Code and a contract that approves nothing yet points at the interactive command (R20 FU-scripts-02 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, []);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.287' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /no Claude Code version is approved for headless onboarding yet, so until one is run the interactive command/);
+});
+
+test('--onboard headless runs on a newer Claude Code once the checkout\'s contract approves it, read at run time (R20 FU-scripts-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, ['2.1.289', '2.1.300']);
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_VERSION: '2.1.300', FAKE_CLAUDE_DRAFTS: '1' } });
+  assert.equal(w.claudeArgv()?.[0], '-p', r.out);
+  assert.ok(w.claudeArgv().includes('--restricted'));
+  assert.ok(r.out.includes(path.join(data, 'data', 'install', 'onboarding-draft', 'questions.md')), r.out);
+});
+
+test('--onboard headless still runs on an approved Claude Code when node writes a warning to stderr (R20 FU-scripts-02 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  // Stands in for a NODE_OPTIONS warning or a deprecation notice from every node the installer runs.
+  const warn = `--import=data:text/javascript,process.stderr.write(${encodeURIComponent(JSON.stringify('(node) warning: stand-in\n'))})`;
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_DRAFTS: '1', NODE_OPTIONS: warn } });
+  assert.equal(w.claudeArgv()?.[0], '-p', r.out);
+});
+
+test('--onboard headless with a checkout whose contract cannot be read never hands claude the token and says what to do (R20 FU-scripts-02)', () => {
+  const { w, D } = fresh({ keychain: true });
+  fs.rmSync(path.join(w.fakeSrc, 'custom/control-center/server/core/contract.json'));
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless']);
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Headless onboarding could not read the approved Claude Code versions/);
+  assert.doesNotMatch(r.out, /unexpected failure/, 'a refusal is not a crash');
+  assert.match(r.out, /Or run: cd .* && claude /);
 });
 
 test('--onboard headless without the Keychain item is a pending action (exit 3) and claude is not called', () => {

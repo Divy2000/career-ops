@@ -139,6 +139,10 @@ fs.writeFileSync(path.join(root, 'data', 'h1b', 'index.ndjson.gz'), 'x');
   put(path.join(dir, 'custom/launchd/install.sh'), '#!/bin/bash\necho "launchd-install $*" >> "$STUB_LOG"\n[ -z "${FAKE_LOCK_PROBE:-}" ] || "$FAKE_LOCK_PROBE" "launchd-install"\nexit "${FAKE_LAUNCHD_EXIT:-0}"\n', 0o755);
   put(path.join(dir, 'custom/control-center/bin/cc'), '#!/bin/sh\necho "cc $*" >> "$STUB_LOG"\n', 0o755);
   put(path.join(dir, 'custom/control-center/package.json'), '{"name":"fake-cc"}\n');
+  // The real version gate, and a contract approving the claude stub's default version (tests rewrite it per case).
+  const confinement = 'custom/control-center/server/claude/confinement.mjs';
+  put(path.join(dir, confinement), fs.readFileSync(path.join(REPO_ROOT, confinement), 'utf8'));
+  put(path.join(dir, 'custom/control-center/server/core/contract.json'), JSON.stringify({ claude: { approvedVersions: ['2.1.289'] } }));
 }
 
 export function makeWorld({ tools = DEFAULT_TOOLS, keychain = false } = {}) {

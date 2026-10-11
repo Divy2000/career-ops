@@ -15,7 +15,8 @@ NODE_RANGE="^22.22.2 || ^24.15.0 || >=26.0.0"
 NODE_SUPPORTED="22.22.2+, 24.15+ or 26+"
 KEYCHAIN_SERVICE="career-ops-claude-token"
 # Headless onboarding needs CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (2.1.288) and --restricted, first probed by the
-# Control Center on 2.1.289.
+# Control Center on 2.1.289. The floor names what an older CLI lacks; headless_claude_gate then requires a version the
+# contract approves, as newer ones are unprobed.
 CLAUDE_HEADLESS_MIN="2.1.289"
 # The terminal the installer talks to. Overridable so tests can feed answers from a file.
 TTY_DEV="${CAREER_OPS_INSTALL_TTY:-/dev/tty}"
@@ -308,6 +309,42 @@ fi
 # ---------------------------------------------------------------- helpers
 
 lib() { node "$SCRIPT_DIR/cli.mjs" "$@"; }
+# Headless onboarding hands the session the OAuth token, so it runs only on a Claude Code whose confinement flags
+# (--restricted, SUBPROCESS_ENV_SCRUB) were probed: the versions the checkout's contract approves
+# (claude.approvedVersions), the list the Control Center and the daily job gate on. Prints one line of fields split by
+# the unit separator (\x1f, which read never collapses as it does tabs), "state detail list identity newest": state is approved, unapproved or error; detail is the
+# found version, or why the version or contract cannot be read; approved list is "none yet" for an empty list and
+# "unknown" for an unreadable contract; identity is the approved binary's real path@version ("-" otherwise); newest is
+# the newest approved version that meets CLAUDE_HEADLESS_MIN, empty when none does. Only stdout counts, so a node warning cannot turn "approved" into a
+# refusal. Always exits 0, as bash 3.2 fires the ERR trap on a failing command substitution.
+headless_claude_gate() {
+  CONFINEMENT="$DIR/custom/control-center/server/claude/confinement.mjs" INSTALL_LIB="$SCRIPT_DIR/lib.mjs" \
+    HEADLESS_MIN="$CLAUDE_HEADLESS_MIN" CLAUDE_BIN="$CLAUDE_BIN" node --input-type=module -e '
+const line = (...fields) => process.stdout.write(fields.map((f) => String(f).replace(/[\x1f\n]+/g, " ")).join("\x1f"));
+const reason = (err) => String(err?.message ?? err).split("\n")[0];
+let approved, newest, gate;
+try {
+  const { versionAtLeast } = await import(process.env.INSTALL_LIB);
+  const { claudeVersionGate, contractApprovedVersions } = await import(process.env.CONFINEMENT);
+  approved = contractApprovedVersions();
+  // Semver order on x.y.z, then a release above its own pre-releases (2.1.296-beta.1 < 2.1.296).
+  const core = (v) => String(v).split("-")[0];
+  const tagged = (v) => String(v).includes("-");
+  const atLeast = (a, b) => (core(a) === core(b) ? !tagged(a) || tagged(b) : versionAtLeast(core(a), core(b)));
+  newest = approved.filter((v) => atLeast(v, process.env.HEADLESS_MIN)).reduce((best, v) => (best && atLeast(best, v) ? best : v), "");
+  try {
+    gate = claudeVersionGate(process.env.CLAUDE_BIN, approved);
+  } catch (err) {
+    line("error", reason(err), approved.length ? approved.join(", ") : "none yet", "-", newest);
+    process.exit(0);
+  }
+} catch (err) {
+  line("error", reason(err), "unknown", "-", "");
+  process.exit(0);
+}
+line(gate.problem ? "unapproved" : "approved", gate.version, approved.length ? approved.join(", ") : "none yet", gate.problem ? "-" : gate.identity, newest);
+' 2>/dev/null || printf 'error\037node could not run the version gate\037unknown\037-\037'
+}
 seed() { node "$SCRIPT_DIR/seed.mjs" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -1066,6 +1103,7 @@ else
       ;;
     headless)
       draft="$DATA/data/install/onboarding-draft"
+      headless_ready=0
       if [ -z "$CLAUDE_BIN" ]; then
         pending "Install Claude Code, then re-run with --onboard headless (or run the interactive command)."
       elif [ "$KEYCHAIN_OK" = 0 ]; then
@@ -1075,7 +1113,33 @@ else
         # Older builds ignore CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, so hook and tool children would inherit the token,
         # or lack --restricted, so the user's own settings (allow rules, hooks) would widen the session.
         say "  Headless onboarding needs Claude Code $CLAUDE_HEADLESS_MIN or later, which keeps the token out of hooks and tools and confines the session (found: ${claude_version:-unknown})."
-        pending "Update Claude Code (claude update), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+        # claude update can land on a version newer than the probed ones, which the gate below refuses: name an approved one.
+        update_hint="claude update"
+        gate="$(headless_claude_gate)"
+        IFS=$'\037' read -r gate_state gate_found gate_approved gate_identity gate_fix <<< "$gate"
+        if [ -n "$gate_fix" ]; then
+          update_hint="claude update installs the latest, which may not be approved yet; claude install $gate_fix installs an approved one"
+        elif [ "$gate_approved" = "none yet" ]; then
+          update_hint="claude update; no Claude Code version is approved for headless onboarding yet, so until one is run the interactive command"
+        elif [ "$gate_approved" != unknown ]; then
+          update_hint="claude update; no approved Claude Code version meets $CLAUDE_HEADLESS_MIN yet, so until one does run the interactive command"
+        fi
+        pending "Update Claude Code ($update_hint), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+      elif gate="$(headless_claude_gate)"; IFS=$'\037' read -r gate_state gate_found gate_approved gate_identity gate_fix <<< "$gate"; [ "$gate_state" != approved ]; then
+        if [ "$gate_state" = unapproved ]; then
+          # A newer CLI than the probed ones can change what --restricted and the scrub do while still passing >= MIN.
+          say "  Headless onboarding runs only on a Claude Code version the Control Center approves (approved: $gate_approved; found: $gate_found), because an unprobed one can change what --restricted and the token scrub do."
+          if [ -n "$gate_fix" ]; then
+            pending "Get an approved version (claude install $gate_fix), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+          elif [ "$gate_approved" = "none yet" ]; then
+            pending "No Claude Code version is approved for headless onboarding yet. Run: cd $QDIR && claude $(shell_quote "$prompt")"
+          else
+            pending "No approved Claude Code version meets $CLAUDE_HEADLESS_MIN yet. Run: cd $QDIR && claude $(shell_quote "$prompt")"
+          fi
+        else
+          say "  Headless onboarding could not read the approved Claude Code versions or the installed one: $gate_found"
+          pending "Fix the problem above (a checkout without the Control Center contract is fixed by re-running the installer), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+        fi
       else
         # Drafts from an earlier run would be listed as this run's and picked up by "Resume from drafts": they hold
         # personal data, so they are moved aside, not deleted.
@@ -1094,15 +1158,26 @@ else
         hprompt="$(lib render-headless "$SCRIPT_DIR/onboard-headless-prompt.md" "$draft" ${inputs[@]+"${inputs[@]}"})"
         extra_dirs=()
         if [ "$DATA" != "$DIR" ]; then extra_dirs=(--add-dir "$DATA"); fi
+        # The binary checked above, asked again just before it gets the token: an npm or Homebrew update rewrites it in
+        # place at the same path, so its real path alone does not pin the version.
+        recheck="$(headless_claude_gate)"
+        IFS=$'\037' read -r _ _ _ recheck_identity _ <<< "$recheck"
+        headless_ready=1
+      fi
+      if [ "$headless_ready" = 1 ] && [ "$recheck_identity" != "$gate_identity" ]; then
+        say "  Claude Code changed while onboarding was being prepared (approved: $gate_identity; now: ${recheck_identity:--}); nothing was run."
+        pending "Re-run with --onboard headless once Claude Code has finished updating. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+      elif [ "$headless_ready" = 1 ]; then
         say "  Running a restricted headless Claude (reads your documents, writes drafts only to $draft). This uses your Claude subscription."
         # The token lives only in the child's environment; it is never echoed, logged or placed on a command line.
         # As in the Control Center's sessions, SUBPROCESS_ENV_SCRUB keeps it out of hook and tool children, and
         # --strict-mcp-config starts none of the user's or the project's MCP servers, which would inherit it.
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
+        # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
         if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w)" ANTHROPIC_API_KEY="" \
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 \
-          "$CLAUDE_BIN" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
+          "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
           --permission-mode dontAsk --strict-mcp-config --add-dir "$draft" ${extra_dirs[@]+"${extra_dirs[@]}"} \
           --allowedTools Read Glob Grep "Edit(/$draft/**)" --max-turns 40 --output-format text); then
