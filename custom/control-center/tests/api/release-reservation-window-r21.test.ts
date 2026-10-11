@@ -8,6 +8,7 @@ import path from 'node:path';
 import { makeTestApp, FAKE_TOKEN, type TestApp } from '../helpers/app.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
+import { unrecordedFor } from '../../server/actions/registry.js';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = ['done', 'awaiting_user', 'error', 'cancelled'];
@@ -162,7 +163,7 @@ describe('Release report numbers while a session is about to record its number (
       const first = release(app, 40);
       await until(() => releases === 1, 'the first release to run');
       const fanning = call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/fu-e'] });
-      await wait(300);
+      await until(() => unrecordedFor(app.cfg.dataRoot).taking > 0, 'the Batch evaluate to wait for the release');
       const second = await release(app, 41);
       expect(second.statusCode, second.body).toBe(409);
       unblock();

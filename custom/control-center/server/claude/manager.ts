@@ -374,8 +374,12 @@ export class SessionManager {
       }
     } finally {
       // A session releases its own number; the ones never handed to a session go straight back to the pool.
-      for (const num of reserved) if (!handed.has(num)) await this.releaseReportNum(num, false);
-      this.recordedReportNums(reserved);
+      // Each one leaves the unrecorded set before it is released, never after: a later reservation may take it again.
+      for (const num of reserved) {
+        if (handed.has(num)) continue;
+        this.recordedReportNums([num]);
+        await this.releaseReportNum(num, false);
+      }
     }
     return { sessions, reserved };
   }
@@ -644,20 +648,24 @@ export class SessionManager {
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
     const { r, nums: fresh } = await this.takeReportNums(1);
-    try {
-      if (fresh.length === 1) {
-        // Recorded first: a number held without its record would read as lost on the next turn. One that cannot be
-        // recorded goes straight back to the pool, and the turn fails holding none.
-        try {
-          fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
-        } catch (err) {
-          await this.releaseReportNum(fresh[0]!, false);
-          throw err;
-        }
+    if (fresh.length === 1) {
+      // Recorded first: a number held without its record would read as lost on the next turn. One that cannot be
+      // recorded goes straight back to the pool, and the turn fails holding none.
+      try {
+        fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
+      } catch (err) {
+        this.recordedReportNums(fresh);
+        await this.releaseReportNum(fresh[0]!, false);
+        throw err;
+      }
+      try {
         this.store.setReportNum(meta.id, fresh[0]!);
-      } else console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
-    } finally {
+      } finally {
+        this.recordedReportNums(fresh);
+      }
+    } else {
       this.recordedReportNums(fresh);
+      console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     }
     return this.store.read(meta.id)!;
   }
