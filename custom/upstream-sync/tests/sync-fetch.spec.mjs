@@ -1522,6 +1522,38 @@ test('a Keychain read refused at the prompt (security exit 51) names the exit co
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('a Keychain read that never answers (locked keychain, unlock prompt nobody answers) stops the sync fast with the reason and frees its lock', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  // A security that waits forever, as one blocked on an unanswered unlock dialog does, with a child of its own.
+  const childPid = path.join(w.base, 'security-child.pid');
+  try {
+    const started = Date.now();
+    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: '2' }, security: `sleep 100000 &\necho $! > "${childPid}"\nwait` });
+    assert.ok(Date.now() - started < 30_000, `the sync waited ${Date.now() - started} ms for the Keychain`);
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security did not answer within 2 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run\.$/m);
+    assert.doesNotMatch(res.log, /not found|setup-token/);
+    const lock = spawnSync('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/usr/bin/true']);
+    assert.equal(lock.status, 0, 'the sync lock is free once the run has failed');
+    assert.notEqual(spawnSync('/bin/kill', ['-0', readFileSync(childPid, 'utf8').trim()]).status, 0, 'nothing the Keychain read started is left running');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a Keychain wait that is not a whole number of seconds stops the sync before the Keychain is read', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  const read = path.join(w.base, 'security-ran');
+  try {
+    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: 'soon' }, security: `touch "${read}"\necho tok-123` });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not soon\.$/m);
+    assert.equal(existsSync(read), false);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 // ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----
 
 /**

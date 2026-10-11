@@ -94,7 +94,30 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 # other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine, so it never asks for a new one.
 # No double quotes in these messages: notify passes them to osascript inside a quoted string.
 SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
-TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$SECURITY_ERR")"
+# A locked login keychain can make security wait on an unlock dialog that an unattended run never answers, holding the
+# sync lock all the while: the read gets CC_KEYCHAIN_TIMEOUT seconds (default 60). Stock macOS has no timeout(1), so
+# perl runs security in its own process group and kills that group when the alarm fires, exiting 124 as timeout(1) does.
+KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
+[[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { rm -f "$SECURITY_ERR"; fail "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not ${KEYCHAIN_TIMEOUT//[\"\\]/}."; }
+bounded() {
+  /usr/bin/perl -e '
+    my $limit = shift;
+    my $pid = fork;
+    die "cannot start $ARGV[0]: $!\n" unless defined $pid;
+    if ($pid == 0) {
+      setpgrp(0, 0);
+      exec { $ARGV[0] } @ARGV;
+      print STDERR "$ARGV[0]: $!\n";
+      exit($!{ENOENT} ? 127 : 126);
+    }
+    $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid $pid, 0; exit 124 };
+    alarm $limit;
+    waitpid $pid, 0;
+    alarm 0;
+    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+  ' "$@"
+}
+TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s career-ops-claude-token -w 2>"$SECURITY_ERR")"
 SECURITY_RC=$?
 TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
 TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
@@ -102,6 +125,8 @@ SECURITY_WHY="$(tail -c 200 "$SECURITY_ERR" | tr '\n"\\' "  '" | sed 's/ *$//')"
 rm -f "$SECURITY_ERR"
 if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "$TOKEN" ]; }; then
   fail "Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w"
+elif [ "$SECURITY_RC" = 124 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: security did not answer within $KEYCHAIN_TIMEOUT s. The login keychain is probably locked and waiting at an unlock prompt nobody answered. Unlock it with: security unlock-keychain, then re-run."
 elif [ "$SECURITY_RC" = 127 ]; then
   fail "Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin)."
 elif [ "$SECURITY_RC" = 126 ]; then
