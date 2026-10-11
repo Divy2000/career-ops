@@ -27,6 +27,8 @@ let calls: Array<{ method: string; url: string }>;
 // Requests to a URL in `holding` wait until released, so a second click can land while the first is in flight.
 let holding: Set<string>;
 let released: Array<() => void>;
+// A CV write that the server refuses, for a save that does not complete.
+let cvWriteFails: boolean;
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
@@ -34,6 +36,7 @@ beforeEach(() => {
   calls = [];
   holding = new Set();
   released = [];
+  cvWriteFails = false;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -45,6 +48,7 @@ beforeEach(() => {
       const upload = url.match(/^\/api\/(cv|projects)\/upload\?name=(.+)$/);
       if (upload) return json(200, { path: `${upload[1] === 'cv' ? '/data/uploads/' : 'projects/'}${decodeURIComponent(upload[2]!)}`, bytes: 3 });
       if (url.endsWith('/cancel')) return json(200, { status: 'cancelled' });
+      if (url === '/api/files/user/cv' && method === 'PUT' && cvWriteFails) return json(500, { error: 'disk full' });
       if (url === '/api/files/user/cv' || url === '/api/files/user/voiceDna') return method === 'PUT' ? json(200, { ok: true, etag: 'e2' }) : json(200, { key: 'x', path: 'x.md', kind: 'ok', text: '', etag: 'e1' });
       if (url === '/api/projects') return json(200, { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [] });
       if (url === '/api/projects/convert') return json(200, { markdown: '## X\n- y.\n', entries: [{ title: 'X' }], duplicates: [], warnings: [], errors: [] });
@@ -248,6 +252,71 @@ describe('Import CV parse sessions', () => {
     await act(async () => button('Leave').click());
     await until(() => host.dataset.left === 'yes', 'leaving without a question');
     expect(dialog()).toBeNull();
+  });
+
+  it('a parse result that lands while Save as cv.md is writing is held, not shown as the saved draft (R24-feat-b-L1-01)', async () => {
+    holding.add('PUT /api/files/user/cv');
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await typeInto('CV markdown', '# Pasted by hand');
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => panel.onStatus!('running', null));
+    await act(async () => button('Save as cv.md').click());
+    await until(() => released.length === 1 || undefined, 'the held write');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# From the parser' }, 1));
+    await act(async () => panel.onStatus!('done', null));
+    expect(textOf('CV markdown')).toBe('# Pasted by hand');
+    expect(host.textContent).toContain('The parser finished while the draft was being saved, so your draft is kept.');
+    await act(async () => released.forEach((r) => r()));
+    await until(() => host.textContent?.includes('cv.md saved'), 'the save');
+    expect(textOf('CV markdown')).toBe('# Pasted by hand');
+    expect(host.textContent).toContain('The parser finished while the draft was being saved, so the saved text is kept.');
+    await act(async () => button('Replace the draft with the parsed CV').click());
+    expect(textOf('CV markdown')).toBe('# From the parser');
+    await act(async () => button('Leave').click());
+    await until(() => dialog(), 'the unsaved-changes question for the parsed CV');
+  });
+
+  it('a parse result that lands during a save that then fails is offered without claiming the draft was saved (R24-feat-b-L1-01 review)', async () => {
+    holding.add('PUT /api/files/user/cv');
+    cvWriteFails = true;
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await typeInto('CV markdown', '# Pasted by hand');
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => button('Save as cv.md').click());
+    await until(() => released.length === 1 || undefined, 'the held write');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# From the parser' }, 1));
+    await act(async () => released.forEach((r) => r()));
+    await until(() => host.textContent?.includes('Could not save cv.md'), 'the failed save');
+    expect(textOf('CV markdown')).toBe('# Pasted by hand');
+    expect(host.textContent).not.toContain('saved text is kept');
+    expect(host.textContent).toContain('The parser finished while the draft was being saved, and the save did not complete, so your draft is kept.');
+    await act(async () => button('Replace the draft with the parsed CV').click());
+    expect(textOf('CV markdown')).toBe('# From the parser');
+  });
+
+  it('a follow-up parse result after a save supersedes the result held during that save (R24-feat-b-L1-01 review)', async () => {
+    holding.add('PUT /api/files/user/cv');
+    const { CvImport } = await import('@web/features/profile/ProfilePage');
+    await render(createElement(CvImport));
+    await choose('CV file', 'cv.pdf');
+    const panel = await until(() => panels.get('/data/uploads/cv.pdf'), 'the parser panel');
+    await act(async () => panel.onSessionId!('s-cv'));
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# First parse' }, 1));
+    await act(async () => button('Save as cv.md').click());
+    await until(() => released.length === 1 || undefined, 'the held write');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# Second turn' }, 2));
+    await act(async () => released.forEach((r) => r()));
+    await until(() => host.textContent?.includes('cv.md saved'), 'the save');
+    expect(textOf('CV markdown')).toBe('# First parse');
+    await act(async () => panel.onEnvelope!('cv', { markdown: '# Third turn' }, 3));
+    expect(textOf('CV markdown')).toBe('# Third turn');
+    expect(button('Replace the draft with the parsed CV')).toBeUndefined();
   });
 
   it('picking another PDF cancels the parse still running for the first', async () => {

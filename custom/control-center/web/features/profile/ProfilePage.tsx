@@ -120,6 +120,13 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
   );
 }
 
+const HELD_NOTES = {
+  edited: 'The parser finished, but you edited the draft meanwhile, so your text is kept.',
+  saving: 'The parser finished while the draft was being saved, so your draft is kept.',
+  saved: 'The parser finished while the draft was being saved, so the saved text is kept.',
+  unsaved: 'The parser finished while the draft was being saved, and the save did not complete, so your draft is kept.',
+} as const;
+
 export function CvImport({ onImported }: { onImported?: () => void }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -129,6 +136,9 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   const parse = useParseSession();
   // A parser result that landed after the user edited the draft: offered, never written over their edit.
   const [heldResult, setHeldResult] = useState<string | null>(null);
+  // Why the result is held. One that landed while Save as cv.md was asking or writing is held, since that save writes the
+  // draft it was clicked with; the banner then says whether that save completed.
+  const [heldWhy, setHeldWhy] = useState<'edited' | 'saving' | 'saved' | 'unsaved'>('edited');
   useUnsaved('the CV import', (draft.trim() !== '' && draft !== savedText) || parse.parsing || heldResult !== null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -148,20 +158,32 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   };
   const applyParsed = (markdown: string) => {
     editedSinceParse.current = false;
+    // A newer result supersedes one still held, so Replace never brings back an older parse.
+    setHeldResult(null);
     setDraft(markdown);
   };
   const editDraft = (text: string) => {
     editedSinceParse.current = true;
     setDraft(text);
   };
+  // The disabled button lags the click by a render, and confirms queue: a second click before it would ask twice.
+  const savingNow = useRef(false);
+  // A parse result that landed during the current save, which that save's success must not clear.
+  const heldDuringSaveNow = useRef(false);
   const parseDone = parse.done;
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
       if (kind !== 'cv' || currentUpload.current !== forPath) return;
       parseDone();
       const markdown = (payload as { markdown: string }).markdown;
-      if (editedSinceParse.current) setHeldResult(markdown);
-      else applyParsed(markdown);
+      if (savingNow.current) {
+        heldDuringSaveNow.current = true;
+        setHeldWhy('saving');
+        setHeldResult(markdown);
+      } else if (editedSinceParse.current) {
+        setHeldWhy('edited');
+        setHeldResult(markdown);
+      } else applyParsed(markdown);
     },
     [parseDone],
   );
@@ -195,20 +217,20 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
   };
   // One save at a time: a second PUT on the same ETag would come back 409 as "changed on disk".
   const [saving, setSaving] = useState(false);
-  // The disabled button lags the click by a render, and confirms queue: a second click before it would ask twice.
-  const savingNow = useRef(false);
   const save = async () => {
     if (savingNow.current) return;
     savingNow.current = true;
+    heldDuringSaveNow.current = false;
     setSaving(true);
     try {
-      await saveCv();
+      const saved = await saveCv();
+      if (heldDuringSaveNow.current) setHeldWhy(saved ? 'saved' : 'unsaved');
     } finally {
       savingNow.current = false;
       setSaving(false);
     }
   };
-  const saveCv = async () => {
+  const saveCv = async (): Promise<boolean> => {
     setNote(null);
     setSaveError(null);
     try {
@@ -223,7 +245,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
           confirmLabel: 'Replace cv.md',
           danger: true,
         });
-        if (!ok) return;
+        if (!ok) return false;
       }
       await apiSend('PUT', '/api/files/user/cv', { text: draft }, current.etag ? { 'If-Match': current.etag } : {});
     } catch (err) {
@@ -231,14 +253,15 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
         setConflict((err.body as { current: UserFile }).current);
         setSaveError('cv.md changed on disk while it was being saved. Review the current version below, then save again to overwrite it.');
       } else setSaveError(`Could not save cv.md: ${describeError(err)}`);
-      return;
+      return false;
     }
     setConflict(null);
     setSavedText(draft);
-    setHeldResult(null);
+    if (!heldDuringSaveNow.current) setHeldResult(null);
     setNote('cv.md saved. Run a network scan from Discover to find matches.');
     await qc.invalidateQueries({ queryKey: ['config'] });
     onImported?.();
+    return true;
   };
   return (
     <div className="card import-card">
@@ -250,7 +273,7 @@ export function CvImport({ onImported }: { onImported?: () => void }) {
       {uploadPath && <SessionPanel key={uploadPath} {...parse.panelFor(uploadPath)} mode="cv-ingest" title="Parse the uploaded CV" target={{ type: 'text', value: uploadPath }} initialPrompt={`Read the CV at ${uploadPath} and emit it as markdown in the cv envelope.`} autoStart onEnvelope={onEnvelope} startLabel="Parse" />}
       {heldResult !== null && (
         <p role="status" className="row gap small">
-          <span className="muted">The parser finished, but you edited the draft meanwhile, so your text is kept.</span>
+          <span className="muted">{HELD_NOTES[heldWhy]}</span>
           <button
             type="button"
             onClick={() => {
