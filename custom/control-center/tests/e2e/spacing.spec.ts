@@ -25,7 +25,7 @@ async function login(page: Page) {
 /** Boxed blocks (cards, tables, layout wrappers) that sit directly after one another with almost no space between them. */
 const touchingBlocks = (page: Page) =>
   page.evaluate(() => {
-    const layout = (el: Element) => /(^| )(grid-2|split|tiles|stack|apply-grid)( |$)/.test(el.className.toString());
+    const layout = (el: Element) => /(^| )(grid-2|split|tiles|stack|apply-grid|turn-hold)( |$)/.test(el.className.toString());
     const boxed = (el: Element) => {
       if (layout(el)) return true;
       const cs = getComputedStyle(el);
