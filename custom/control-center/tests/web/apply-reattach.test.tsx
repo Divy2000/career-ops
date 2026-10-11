@@ -12,13 +12,14 @@ import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type PanelProps = { mode: string; sessionId?: string | null; startLabel?: string; onStarting?: () => void; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void; onStartFailed?: () => void };
+type PanelProps = { mode: string; sessionId?: string | null; startLabel?: string; marksTurnStarts?: boolean; onStarting?: () => void; onEnvelope?: (kind: string, payload: unknown, turn: number) => void; onSessionId?: (id: string) => void; onStatus?: (s: string, r: string | null) => void; onStartFailed?: () => void };
 let panels: PanelProps[];
 vi.mock('@web/components/SessionPanel', () => ({
   // Like the real panel: with no session it shows its start form, whose button sends POST /api/sessions (onStarting).
   SessionPanel: (props: PanelProps) => {
     panels.push(props);
-    return props.sessionId ? null : createElement('button', { type: 'button', onClick: () => props.onStarting?.() }, props.startLabel ?? 'Start session');
+    // With a session it shows its reply form, whose Send carries the turn.
+    return props.sessionId ? createElement('button', { type: 'button' }, 'Send') : createElement('button', { type: 'button', onClick: () => props.onStarting?.() }, props.startLabel ?? 'Start session');
   },
 }));
 
@@ -28,6 +29,10 @@ let pdfStatus: string;
 let docs: ApplyDocuments;
 /** While set, POST /api/sessions waits for it, so a test can leave the page while the start is in flight. */
 let startGate: Promise<void> | null;
+/** While set, POST /api/sessions/s-apply-12/turns (Fill) waits for it, so a test can act while the turn is in flight. */
+let turnGate: Promise<void> | null;
+/** Set to refuse the Fill turn as the server does when the draft runs a turn started elsewhere. */
+let turnRefused: boolean;
 let root: Root;
 let router: AnyRouter;
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -50,6 +55,9 @@ async function openApply(n: string | null = '12') {
 }
 const applyPanel = () => panels.filter((p) => p.mode === 'apply').pop();
 const draftButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Draft answers');
+const sendButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Send');
+/** Whether the panel's reply can be sent: a disabled fieldset around it holds it back. */
+const canReply = () => sendButton()?.closest('fieldset')?.disabled !== true;
 const fillButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Fill real form');
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 
@@ -71,6 +79,8 @@ beforeEach(() => {
   docs = DOCS;
   pdfStatus = 'running';
   startGate = null;
+  turnGate = null;
+  turnRefused = false;
   sessionStorage.clear();
   vi.stubGlobal(
     'fetch',
@@ -82,6 +92,11 @@ beforeEach(() => {
         return json({ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'queued', target: { type: 'app', value: '12' } });
       }
       if (url === '/api/sessions' && init?.method !== 'POST') return json([]);
+      if (url === '/api/sessions/s-apply-12/turns' && init?.method === 'POST') {
+        if (turnGate) await turnGate;
+        if (turnRefused) return new Response(JSON.stringify({ error: 'session s-apply-12 is running' }), { status: 409, headers: { 'content-type': 'application/json' } });
+        return json({ ...URL_SESSION, id: 's-apply-12', status: 'running', target: { type: 'app', value: '12' } });
+      }
       if (url === '/api/sessions/s-pdf-12') return json({ meta: { ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: pdfStatus, target: { type: 'app', value: '12' } }, events: [{ seq: 1, event: { type: 'status', status: pdfStatus, reason: null } }] });
       if (url === '/api/sessions/s-apply-url') return json({ meta: URL_SESSION, events: [] });
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404, headers: { 'content-type': 'application/json' } });
@@ -286,6 +301,99 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect(newDraft()).toBeUndefined();
   });
 
+  // A reply in the panel starts a paid turn, but the session reads as finished until its stream shows the turn: New
+  // draft would let go of it and Draft answers start a second apply session filling the same form beside it.
+  /** The user replies in the panel: the real panel reports the turn as a start only when its host asks for it. */
+  async function replyInFlight(): Promise<PanelProps> {
+    const p = applyPanel()!;
+    if (p.marksTurnStarts) await act(async () => p.onStarting!());
+    return p;
+  }
+
+  it('given a reply to the finished draft in flight, New draft is not offered until its turn ends', async () => {
+    await openApply();
+    await draftAnswers();
+    expect(newDraft()).toBeDefined();
+    const p = await replyInFlight();
+    expect(newDraft()).toBeUndefined();
+    await act(async () => p.onSessionId!('s-apply-12'));
+    await act(async () => applyPanel()!.onStatus!('running', null));
+    expect(newDraft()).toBeUndefined();
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    expect(newDraft()).toBeDefined();
+  });
+
+  it('given the page left and opened again while a reply is in flight, neither New draft nor Draft answers is offered until it reports', async () => {
+    await openApply();
+    await draftAnswers();
+    const p = await replyInFlight();
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    // The re-attached draft still reads as finished: its stream has not shown the new turn yet.
+    // The draft exists: its panel stays, re-attached, rather than a note that the session is being created.
+    const back = applyPanel()!;
+    expect(back.sessionId).toBe('s-apply-12');
+    expect(host.textContent).not.toContain('Starting the apply session');
+    await act(async () => back.onStatus!('done', 'clean exit with output'));
+    expect(newDraft()).toBeUndefined();
+    expect(draftButton()).toBeUndefined();
+    expect(canReply()).toBe(false);
+    // The left panel reports the turn: the draft is attached again and runs it.
+    await act(async () => p.onSessionId!('s-apply-12'));
+    await until(() => applyPanel()?.sessionId === 's-apply-12' && applyPanel(), 'the draft attached again');
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    expect(newDraft()).toBeDefined();
+  });
+
+  it('given Fill refused because the draft is running a turn started elsewhere meanwhile, New draft stays off while it runs', async () => {
+    let release!: () => void;
+    turnGate = new Promise<void>((r) => (release = r));
+    turnRefused = true;
+    await openApply();
+    await draftAnswers();
+    await until(() => fillButton() && !fillButton()!.disabled && fillButton(), 'Fill real form enabled');
+    await act(async () => fillButton()!.click());
+    await act(async () => applyPanel()!.onStatus!('running', null));
+    await act(async () => release());
+    await until(() => host.textContent?.includes('Could not send the fill turn'), 'the refusal');
+    expect(sessionStorage.getItem('cc.apply.12:starting')).toBeNull();
+    expect(newDraft()).toBeUndefined();
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    expect(newDraft()).toBeDefined();
+  });
+
+  it('given Fill in flight, New draft is not offered, here or after leaving and coming back, until the server answers', async () => {
+    let release!: () => void;
+    turnGate = new Promise<void>((r) => (release = r));
+    await openApply();
+    await draftAnswers();
+    await until(() => fillButton() && !fillButton()!.disabled && fillButton(), 'Fill real form enabled');
+    await act(async () => fillButton()!.click());
+    expect(newDraft()).toBeUndefined();
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    // The draft exists: its panel stays, re-attached, rather than a note that the session is being created.
+    const back = applyPanel()!;
+    expect(back.sessionId).toBe('s-apply-12');
+    expect(host.textContent).not.toContain('Starting the apply session');
+    await act(async () => back.onStatus!('done', 'clean exit with output'));
+    await act(async () => back.onEnvelope!('answers', ANSWERS, 1));
+    expect(newDraft()).toBeUndefined();
+    expect(draftButton()).toBeUndefined();
+    // A second Fill or reply from here would be refused beside the first, and the refusal would let go of its mark.
+    expect(fillButton()!.disabled).toBe(true);
+    expect(canReply()).toBe(false);
+    await act(async () => release());
+    await until(() => applyPanel()?.sessionId === 's-apply-12' && applyPanel(), 'the draft attached again');
+    expect(canReply()).toBe(true);
+    await act(async () => applyPanel()!.onStatus!('running', null));
+    expect(newDraft()).toBeUndefined();
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    expect(newDraft()).toBeDefined();
+  });
+
   it('on /apply with no row, a draft attached after leaving mid-start brings back its posting URL', async () => {
     await openApply(null);
     await act(async () => draftButton()!.click());
@@ -376,6 +484,21 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect(host.querySelector('a[href="/sessions/s-pdf-12"]')).toBeNull();
     expect(host.textContent).toContain('The tailored CV session is starting.');
     expect(generate()!.disabled).toBe(true);
+  });
+
+  it('Given an earlier CV session finished, When Generate CV PDF starts another, Then the page says it is starting and links no finished session', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    pdfStatus = 'done';
+    sessionStorage.setItem('cc.pdf.12', 's-pdf-12');
+    let release!: () => void;
+    startGate = new Promise<void>((r) => (release = r));
+    await openApply();
+    await until(() => generate() && !generate()!.disabled && generate(), 'Generate CV PDF on');
+    await act(async () => generate()!.click());
+    expect(host.querySelector('a[href="/sessions/s-pdf-12"]')).toBeNull();
+    expect(host.textContent).toContain('The tailored CV session is starting.');
+    expect(generate()!.disabled).toBe(true);
+    await act(async () => release());
   });
 
   it('Generate CV PDF comes back once the tailored CV session ended', async () => {

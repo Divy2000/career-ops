@@ -234,26 +234,29 @@ export function DevChatPage() {
       mounted.current = false;
     };
   }, []);
-  const [startingElsewhere, setStartingElsewhere] = useState(devStore.starting);
+  // A start or reply in flight in this browser tab, sent by this mount or another.
+  const [startMarked, setStartMarked] = useState(devStore.starting);
   const [startedHere, setStartedHere] = useState(false);
   // Re-renders when another mount's start stores its session (or the Sessions page forgets it), so it is re-read.
   const [, setStoreTick] = useState(0);
   useEffect(() => {
     const sync = () => {
-      setStartingElsewhere(devStore.starting());
+      setStartMarked(devStore.starting());
       setStoreTick((t) => t + 1);
     };
     sync();
     return subscribeSession(DEV_SESSION_KEY, sync);
   }, []);
   const sessionId = session ?? readLastDevSession();
-  const waiting = startingElsewhere && !startedHere && sessionId === null;
-  // A start whose page reloaded mid-flight never reports: the mark is cleared after the window, so the form comes back.
+  const waiting = startMarked && !startedHere && sessionId === null;
+  // A start (or a reply, which is marked too) whose page reloaded mid-flight never reports: the mark is cleared after
+  // the window, so the form and New conversation come back.
+  const markedElsewhere = startMarked && !startedHere;
   useEffect(() => {
-    if (!waiting) return;
+    if (!markedElsewhere) return;
     const t = setTimeout(() => devStore.setStarting(false), START_REPORT_WINDOW_MS);
     return () => clearTimeout(t);
-  }, [waiting]);
+  }, [markedElsewhere]);
   const [gone, setGone] = useState<string | null>(null);
   // The session must be a Dev Chat session that exists: a deleted, mistyped or other-root id, another mode's session or a
   // route under /api/sessions/ (engine) is dropped with a note instead of hanging the page.
@@ -287,6 +290,8 @@ export function DevChatPage() {
       }
       writeLastDevSession(id);
       devStore.setStarting(false);
+      // This mount's start or reply has reported: a later mark is another page's.
+      setStartedHere(false);
       if (mounted.current) void navigate({ to: '/dev', search: { session: id }, replace: true });
     },
     [navigate],
@@ -295,7 +300,10 @@ export function DevChatPage() {
     devStore.setStarting(true);
     setStartedHere(true);
   }, []);
-  const onStartFailed = useCallback(() => devStore.setStarting(false), []);
+  const onStartFailed = useCallback(() => {
+    devStore.setStarting(false);
+    setStartedHere(false);
+  }, []);
   const newConversation = () => {
     writeLastDevSession(null);
     setPanel((p) => ({ key: p.key + 1, own: null, seen: null }));
@@ -313,7 +321,9 @@ export function DevChatPage() {
   const live = sessionId !== null && meta.isSuccess && !missing && status !== 'gone' && !isTerminal(status);
   // New conversation is offered only once the current session has settled: while it is starting, queued or running, a
   // second Dev Chat session would edit the same files beside it, and reverting the first could overwrite the second's.
-  const busy = sessionId !== null && status !== 'gone' && !isTerminal(status);
+  // A reply in flight (marked like a start, by this mount or one that was left) runs a session its stream still shows
+  // as finished.
+  const busy = startMarked || (sessionId !== null && status !== 'gone' && !isTerminal(status));
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
@@ -348,7 +358,10 @@ export function DevChatPage() {
               </p>
             </div>
           ) : (
-            <SessionPanel key={`devchat-${panel.key}`} mode="devchat" title="Dev Chat" sessionId={sessionId} placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} onStarting={onStarting} onStartFailed={onStartFailed} blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
+            <fieldset disabled={markedElsewhere} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
+              <SessionPanel key={`devchat-${panel.key}`} mode="devchat" title="Dev Chat" sessionId={sessionId} placeholder="Describe the change: a new Insights tab, a fix in custom/immigration, an edit to the house rules" onStatus={onStatus} onSessionId={setSessionId} onStarting={onStarting} onStartFailed={onStartFailed} marksTurnStarts blacklistAllowed={blacklist} onSent={onSent} startLabel="Send" />
+            </fieldset>
           )}
           {sessionId && !busy && (
             <div className="row gap">

@@ -98,14 +98,18 @@ export function SponsorCheckLauncher({ company }: { company: string }) {
         </div>
       </div>
       {check.shown && (
-        <SessionPanel
-          key={check.panelKey}
-          {...check.panel}
-          mode="sponsorship-check"
-          title="Sponsorship check"
-          target={{ type: 'company', value: company }}
-          initialPrompt={sponsorCheckPrompt(company)}
-        />
+        <fieldset disabled={check.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
+          <SessionPanel
+            key={check.panelKey}
+            {...check.panel}
+            marksTurnStarts
+            mode="sponsorship-check"
+            title="Sponsorship check"
+            target={{ type: 'company', value: company }}
+            initialPrompt={sponsorCheckPrompt(company)}
+          />
+        </fieldset>
       )}
     </div>
   );

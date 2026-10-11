@@ -113,8 +113,9 @@ export function AiSearchTab() {
           </button>
         </div>
       )}
-      {remembered.waiting ? (
+      {remembered.waiting && remembered.panel.sessionId === null ? (
         // Left mid-start: the search is still being created, and a second Search would start a second paid session.
+        // A search that exists (a reply to it in flight) keeps its panel.
         <div className="card session" role="status">
           <h2 style={{ margin: 0 }}>
             AI search <Pill tone="warn">Uses tokens</Pill>
@@ -124,7 +125,10 @@ export function AiSearchTab() {
           </p>
         </div>
       ) : (
-        <SessionPanel key={`${remembered.panelKey}-${fresh}`} {...remembered.panel} onStatus={onStatus} mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
+        <fieldset disabled={remembered.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
+          <SessionPanel key={`${remembered.panelKey}-${fresh}`} {...remembered.panel} onStatus={onStatus} marksTurnStarts mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
+        </fieldset>
       )}
       {offers.length > 0 && (
         <div className="card">
