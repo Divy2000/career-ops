@@ -993,6 +993,9 @@ describe('guard root (policy and revert bookkeeping outside every session write 
     expect(chosen).toBe(path.join(base, 'cc-guard'));
     // A relative INIT_CWD is not a launch folder npm would set, so the cwd is the base, as for CC_DATA_ROOT.
     expect(resolveGuardRoot({ env: { CC_GUARD_DIR: path.relative(process.cwd(), path.join(base, 'g2')), INIT_CWD: 'repo' }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'g2'));
+    // Trimmed like CC_DATA_ROOT: padding is not part of the folder name, and a blank value means the default.
+    expect(resolveGuardRoot({ env: { CC_GUARD_DIR: ' ../cc-guard2 ', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'cc-guard2'));
+    expect(resolveGuardRoot({ env: { CC_GUARD_DIR: '  ', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'Library', 'Application Support', 'career-ops-control-center'));
   });
 });
 

@@ -30,7 +30,7 @@ function isInside(child: string, parent: string): boolean {
 
 /** CC_GUARD_DIR or the default, canonicalized; refuses (before creating anything) a location inside either root. */
 export function resolveGuardRoot(opts: { env: NodeJS.ProcessEnv; codeRoot: string; dataRoot: string; home: string; platform: NodeJS.Platform }): string {
-  const wanted = resolveFromLaunchDir(opts.env.CC_GUARD_DIR || defaultGuardRoot(opts.home, opts.platform, opts.env), opts.env);
+  const wanted = resolveFromLaunchDir(opts.env.CC_GUARD_DIR?.trim() || defaultGuardRoot(opts.home, opts.platform, opts.env), opts.env);
   const canonical = resolveReal(wanted);
   for (const [label, root] of [
     ['code', opts.codeRoot],
