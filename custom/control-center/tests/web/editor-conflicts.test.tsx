@@ -514,7 +514,7 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
   });
 
   /** Holds the first write until released and, as the real routes do, writes its body into the library (the id comes from the title; a POST answers with it). */
-  function holdFirstPutAndApply() {
+  function holdFirstPutAndApply(opts: { otherWriteAfterPost?: boolean } = {}) {
     const real = vi.mocked(fetch).getMockImplementation()!;
     let release: () => void = () => {};
     const held = new Promise<void>((r) => (release = r));
@@ -532,12 +532,14 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
       // The library stores each field on one line, as the real serializer does.
       const oneLine = (v: string) => v.replace(/\s+/g, ' ').trim();
       const body = { ...sent, title: oneLine(sent.title), tags: sent.tags.map(oneLine), bullets: sent.bullets.map(oneLine) };
-      const savedId = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const savedId = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
       const doc = files['/api/projects']!;
       const list = doc.entries as Array<typeof entry>;
       if (method === 'POST') {
         doc.entries = [...list, { ...entry, ...body, id: savedId }];
-        return json(200, { ...((await res.json()) as object), id: savedId });
+        const answer = { ...((await res.json()) as object), id: savedId };
+        if (opts.otherWriteAfterPost) doc.etag = 'e-other';
+        return json(200, answer);
       }
       const id = String(input).split('/').pop();
       doc.entries = list.map((e) => (e.id === id ? { ...e, ...body, id: savedId } : e));
@@ -612,6 +614,40 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     await click(button('Save project')!);
     await until(() => writes().length === 2, 'the second save');
     expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Kite Tracker', dates: '2024' }) }));
+  });
+
+  it('given a new project saving, when another write lands before the list reloads, then the next save updates the added entry instead of adding it twice', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks kites.');
+    const release = holdFirstPutAndApply({ otherWriteAfterPost: true });
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker' }));
+  });
+
+  it('given a new project whose id another entry already has, when the user edits it during the save, then the form stays on the added entry, not the older one', async () => {
+    files['/api/projects']!.entries = [{ ...entry, id: 'c', title: 'C#', tagline: 'The older one', bullets: ['Sharp.'] }];
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'C++');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Templates.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('C++');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]!.body).toMatchObject({ title: 'C++', tagline: null, dates: '2024' });
   });
 
   it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {

@@ -79,13 +79,16 @@ function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
 
 /**
  * A form whose draft moved on during a save: it now edits the saved version, with the newer text on top. The saved
- * entry is found where the write put it, not by content (the library stores fields normalized): a POST answers with
- * its id, and a PUT keeps the entry at its index in the version the save was pinned to.
+ * entry is found where the write put it, not by content (the library stores fields normalized): a POST appends it
+ * last and answers with its id (ids can repeat, C# and C++ are both "c"), and a PUT keeps it at its index in the
+ * version the save was pinned to.
  */
 function onSaved(e: Editing, sent: ProjectDraft, saved: { etag: string; id?: string }, pinned: { posted: boolean; origin: EntryOrigin | null }, list: ProjectsRead | undefined): Editing {
-  const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false };
+  // Without a list of this version to read the entry from, a POST's id still keeps the next save from adding it again.
+  const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false, ...(pinned.posted && saved.id ? { id: saved.id, origin: null } : {}) };
   if (!list || list.etag !== saved.etag) return next;
-  const now = pinned.posted ? list.entries.find((x) => x.id === saved.id) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
+  const last = list.entries.at(-1);
+  const now = pinned.posted ? (last?.id === saved.id ? last : undefined) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
   if (!now) return next;
   return { ...next, id: now.id, base: draftFromEntry(now), tagline: now.tagline, source: now.source, origin: { ids: list.entries.map((x) => x.id), index: list.entries.indexOf(now), bullets: now.bullets } };
 }
