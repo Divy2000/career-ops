@@ -81,7 +81,7 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   const followupsReply = async (reply: { code: (n: number) => { header: (k: string, v: string) => { send: (b: unknown) => unknown }; send: (b: unknown) => unknown } }, fn: () => Promise<Awaited<ReturnType<typeof editFollowups>>>) => {
     try {
       const r = await fn();
-      if (!r.ok) return reply.code(r.error === 'not-found' ? 404 : 400).send({ error: r.error });
+      if (!r.ok) return reply.code(r.error === 'not-found' ? 404 : r.error === 'stale' ? 409 : 400).send({ error: r.error });
       return { ok: true, ...(r.num !== undefined ? { num: r.num } : {}) };
     } catch (err) {
       if (err instanceof FollowupsBusyError) return reply.code(409).header('retry-after', '1').send({ error: err.message });
@@ -99,9 +99,10 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   });
 
   app.delete<{ Body: Record<string, unknown> }>('/api/followups/log', async (req, reply) => {
-    const parsed = z.object({ num: z.number().int().positive() }).safeParse(req.body ?? {});
+    // The cells name the row as the page read it, hand edits included, so they are compared to the file, not validated.
+    const parsed = z.object({ num: z.number().int().positive(), appNum: z.number().int().positive(), date: z.string(), channel: z.string(), contact: z.string(), notes: z.string() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'log.delete', num: parsed.data.num }));
+    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'log.delete', ...parsed.data }));
   });
 
   app.post<{ Body: Record<string, unknown> }>('/api/followups/override', async (req, reply) => {

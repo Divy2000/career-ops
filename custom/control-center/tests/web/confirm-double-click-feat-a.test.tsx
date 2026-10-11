@@ -18,7 +18,7 @@ vi.mock('@web/components/ModeLauncher', () => ({ ModeLauncher: () => null }));
 let host: HTMLElement;
 let root: Root;
 let routes: Record<string, unknown>;
-let calls: Array<{ method: string; url: string }>;
+let calls: Array<{ method: string; url: string; body?: unknown }>;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
@@ -30,7 +30,7 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
-      calls.push({ method, url });
+      calls.push({ method, url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
       const key = `${method} ${url}`;
       if (key in routes) return json(routes[key]);
       if (method !== 'GET') return json({ ok: true, etag: 'e2', reverted: [], sessions: [], reserved: [] });
@@ -86,7 +86,7 @@ describe('a double click on a confirm-opening button asks once', () => {
   });
 
   it('Follow-ups Clear pin and Delete follow-up', async () => {
-    const entry = { num: 3, company: 'Acme', role: 'SRE', status: 'applied', score: '4/5', appliedDate: '2026-09-01', daysSinceApplication: 30, daysSinceLastFollowup: 5, followupCount: 1, urgency: 'waiting', nextFollowupDate: '2026-10-20', daysUntilNext: 10, nextOverride: '2026-10-20', contacts: [], followups: [{ num: 7, date: '2026-10-01', channel: 'Email', contact: '', notes: '' }] };
+    const entry = { num: 3, company: 'Acme', role: 'SRE', status: 'applied', score: '4/5', appliedDate: '2026-09-01', daysSinceApplication: 30, daysSinceLastFollowup: 5, followupCount: 1, urgency: 'waiting', nextFollowupDate: '2026-10-20', daysUntilNext: 10, nextOverride: '2026-10-20', contacts: [], followups: [{ num: 7, appNum: 3, date: '2026-10-01', company: 'Acme', role: 'SRE', channel: 'Email', contact: '', notes: '' }] };
     routes['GET /api/followups'] = { metadata: { analysisDate: '2026-10-10', totalTracked: 1, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 1, retired: 0 }, entries: [entry] };
     const { CadenceTab } = await import('@web/features/followups/FollowupsPage');
     await render(CadenceTab);
@@ -94,7 +94,10 @@ describe('a double click on a confirm-opening button asks once', () => {
     expect(calls.filter((c) => c.method === 'DELETE' && c.url === '/api/followups/override')).toHaveLength(1);
     await act(async () => byLabel('Show history for Acme')!.click());
     await doubleClickAsksOnce(() => byLabel('Delete follow-up 7'), 'Delete');
-    expect(calls.filter((c) => c.method === 'DELETE' && c.url === '/api/followups/log')).toHaveLength(1);
+    const deletes = calls.filter((c) => c.method === 'DELETE' && c.url === '/api/followups/log');
+    expect(deletes).toHaveLength(1);
+    // The row's application, date and cells travel with its num, so a num reused since this view loaded is refused (R23-srv-dom-a-L1-01).
+    expect(deletes[0]!.body).toEqual({ num: 7, appNum: 3, date: '2026-10-01', channel: 'Email', contact: '', notes: '' });
   });
 
   it('Pipeline Back to queue', async () => {

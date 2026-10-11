@@ -135,12 +135,12 @@ describe('follow-ups edits', () => {
     expect(r.text).toContain('| 1 | 2 | 2026-10-03 | N | R | Email |  |  |');
   });
   it('deletes a log row by num and reports unknown nums', () => {
-    const r = applyFollowupEdit(FOLLOWUPS, { op: 'log.delete', num: 2 });
+    const r = applyFollowupEdit(FOLLOWUPS, { op: 'log.delete', num: 2, appNum: 6, date: '2026-10-02', channel: 'LinkedIn', contact: 'HM', notes: 'thanks' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.text).not.toContain('| 2 | 6 |');
     expect(r.text).toContain('| 1 | 1 |');
-    expect(applyFollowupEdit(FOLLOWUPS, { op: 'log.delete', num: 9 })).toEqual({ ok: false, error: 'not-found' });
+    expect(applyFollowupEdit(FOLLOWUPS, { op: 'log.delete', num: 9, appNum: 6, date: '2026-10-02', channel: 'LinkedIn', contact: 'HM', notes: 'thanks' })).toEqual({ ok: false, error: 'not-found' });
   });
   it('sets a pin by replacing the previous one and clears it', () => {
     const set = applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: '2026-10-20', setOn: '2026-10-03' });
@@ -184,13 +184,24 @@ describe('follow-ups edits', () => {
     expect(r.ok && r.num).toBe(2);
     if (!r.ok) return;
     expect(r.text).toContain('| 1 | 3 | 2026-09-01 | Acme | Eng | Email | Pat | asked |\n| 2 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n\n## Later');
-    expect(applyFollowupEdit(before, { op: 'log.delete', num: 2026 })).toEqual({ ok: false, error: 'not-found' });
+    expect(applyFollowupEdit(before, { op: 'log.delete', num: 2026, appNum: 5, date: '2026-10-03', channel: 'Email', contact: '', notes: '' })).toEqual({ ok: false, error: 'not-found' });
   });
   it('refuses to delete a follow-up whose num appears more than once, rather than deleting another application\'s row (R13-feat-a-L2-01)', () => {
     const text = `${FOLLOWUPS}\n| num | appNum | date | company | role | channel | contact | notes |\n|---|---|---|---|---|---|---|---|\n| 1 | 5 | 2026-10-03 | Globex | SRE | Email |  |  |\n`;
-    expect(applyFollowupEdit(text, { op: 'log.delete', num: 1 })).toEqual({ ok: false, error: 'ambiguous' });
+    expect(applyFollowupEdit(text, { op: 'log.delete', num: 1, appNum: 5, date: '2026-10-03', channel: 'Email', contact: '', notes: '' })).toEqual({ ok: false, error: 'ambiguous' });
     const add = applyFollowupEdit(text, { op: 'log.add', appNum: 6, date: '2026-10-04', company: 'V', role: 'R', channel: 'Email', contact: '', notes: '' });
     expect(add.ok && add.num).toBe(3);
+  });
+  it('refuses to delete a follow-up whose num now belongs to another row, as a reused max+1 num does after a stale view (R23-srv-dom-a-L1-01)', () => {
+    // #2 (application 6, 2026-10-02) was deleted elsewhere and #2 reused for application 30's new follow-up.
+    const reused = FOLLOWUPS.replace('| 2 | 6 | 2026-10-02 | Vandelay | Eng | LinkedIn | HM | thanks |', '| 2 | 30 | 2026-10-09 | Initech | SRE | Email |  | new |');
+    expect(applyFollowupEdit(reused, { op: 'log.delete', num: 2, appNum: 6, date: '2026-10-02', channel: 'LinkedIn', contact: 'HM', notes: 'thanks' })).toEqual({ ok: false, error: 'stale' });
+    // Same application, another day: still not the row the view showed.
+    const redated = FOLLOWUPS.replace('| 2 | 6 | 2026-10-02 |', '| 2 | 6 | 2026-10-09 |');
+    expect(applyFollowupEdit(redated, { op: 'log.delete', num: 2, appNum: 6, date: '2026-10-02', channel: 'LinkedIn', contact: 'HM', notes: 'thanks' })).toEqual({ ok: false, error: 'stale' });
+    // Same application and day, logged again after the delete: the channel, contact or notes still tell it apart.
+    const relogged = FOLLOWUPS.replace('| 2 | 6 | 2026-10-02 | Vandelay | Eng | LinkedIn | HM | thanks |', '| 2 | 6 | 2026-10-02 | Vandelay | Eng | Email | Recruiter | second note |');
+    expect(applyFollowupEdit(relogged, { op: 'log.delete', num: 2, appNum: 6, date: '2026-10-02', channel: 'LinkedIn', contact: 'HM', notes: 'thanks' })).toEqual({ ok: false, error: 'stale' });
   });
   it('rejects dates that are not YYYY-MM-DD', () => {
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: 'tomorrow', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });

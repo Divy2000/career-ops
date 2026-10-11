@@ -81,6 +81,11 @@ export function applyFollowupEdit(text, edit) {
       // A num written twice (a hand edit, or an older second table) cannot say which application's row is meant.
       if (matches.length > 1) return { ok: false, error: 'ambiguous' };
       const idx = matches[0];
+      // A num is reused (max + 1) once the highest row is deleted: the row must still be the one the client saw, cell for
+      // cell as followup-cadence.mjs parseFollowups read it.
+      const parts = lines[idx].split('|').map((s) => s.trim());
+      const same = parseInt(parts[2], 10) === edit.appNum && parts[3] === edit.date && parts[6] === edit.channel && parts[7] === edit.contact && (parts[8] || '') === edit.notes;
+      if (!same) return { ok: false, error: 'stale' };
       lines.splice(idx, 1);
       return { ok: true, text: join(lines) };
     }

@@ -125,13 +125,19 @@ export function CadenceTab() {
       removing.current = false;
     }
   };
-  const removeAsked = async (num: number) => {
+  const removeAsked = async (row: FollowupRowRef) => {
+    const { num } = row;
     if (!(await confirm({ title: `Delete follow-up #${num}?`, body: 'The entry is removed from data/follow-ups.md.', confirmLabel: 'Delete', danger: true }))) return;
     try {
-      await apiSend('DELETE', '/api/followups/log', { num });
+      await apiSend('DELETE', '/api/followups/log', row);
       setMessage(`Deleted follow-up #${num}`);
       void refresh();
     } catch (err) {
+      if ((err as { body?: { error?: unknown } } | null)?.body?.error === 'stale') {
+        setMessage(`Could not delete: follow-up #${num} changed since this page loaded, so nothing was deleted. The list is reloaded.`);
+        void refresh();
+        return;
+      }
       setMessage(`Could not delete: ${describeError(err)}`);
     }
   };
@@ -362,15 +368,18 @@ export function FollowupsPage() {
   );
 }
 
+/** A logged row as the page last saw it: a delete is refused once the row with this num reads differently. */
+type FollowupRowRef = { num: number; appNum: number; date: string; channel: string; contact: string; notes: string };
+
 /** Logged follow-ups; a legacy bullet line (num null) has no row number to delete by, so it has no Delete. */
-export function FollowupHistory({ company, followups, onDelete }: { company: string; followups: FollowupEntry[]; onDelete: (num: number) => void }) {
+export function FollowupHistory({ company, followups, onDelete }: { company: string; followups: FollowupEntry[]; onDelete: (row: FollowupRowRef) => void }) {
   return (
     <ul className="bullets" aria-label={`Follow-up history for ${company}`}>
       {followups.map((f, i) => (
         <li key={`${f.date}-${i}`}>
           <span className="mono">{f.date}</span> {f.channel} {f.contact && <span className="muted">to {f.contact}</span>} <span className="faint">{f.notes}</span>{' '}
           {f.num !== null && (
-            <button type="button" aria-label={`Delete follow-up ${f.num}`} onClick={() => onDelete(f.num!)}>
+            <button type="button" aria-label={`Delete follow-up ${f.num}`} onClick={() => onDelete({ num: f.num!, appNum: f.appNum, date: f.date, channel: f.channel, contact: f.contact, notes: f.notes })}>
               Delete
             </button>
           )}
@@ -380,7 +389,7 @@ export function FollowupHistory({ company, followups, onDelete }: { company: str
   );
 }
 
-function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; logLocked: boolean; onLog: () => void; onSaving: (busy: boolean) => void; onLogged: (m: string) => void; onPin: (appNum: number, date: string | null) => void; onDelete: (num: number) => void }) {
+function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; logLocked: boolean; onLog: () => void; onSaving: (busy: boolean) => void; onLogged: (m: string) => void; onPin: (appNum: number, date: string | null) => void; onDelete: (row: FollowupRowRef) => void }) {
   return (
     <>
       <tr>
