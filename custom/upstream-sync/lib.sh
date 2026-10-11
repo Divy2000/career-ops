@@ -584,6 +584,43 @@ process.exit(live !== null && (start === null || live === "unknown" || live === 
 ' "$lock"
 }
 
+# installed_daily_root: the data root the installed daily job writes its launchd logs under
+# (<root>/data/immigration/logs), which differs from the sync's own when the two plists were written with different
+# CAREER_OPS_ROOT values (launchd/install.sh --jobs daily leaves an installed sync job alone). Prints nothing without
+# an installed job or plutil.
+installed_daily_root() {
+  local out
+  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null)" || return 0
+  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/data/immigration/logs/launchd.out.log}" ;; esac
+}
+
+# live_update_locked <wait-seconds> <commit> [<daily-lock>...]: takes each daily lock in turn, naming its holder in
+# .live-update.pid beside it, then runs the locked update_live_checkout. A lock that is the same file as one already
+# held (another spelling of the same root) is skipped, since lockf would wait on its own parent. Each data root it
+# holds is added to CC_LIVE_UPDATE_ROOTS, one per line, for the Control Center check. Returns lockf's 75 when a lock
+# is still held after the wait.
+live_update_locked() {
+  local wait="$1" commit="$2" lock held
+  shift 2
+  if [ "$#" -eq 0 ]; then
+    CC_LIVE_UPDATE_LOCKED=1 update_live_checkout "" "" "$commit"
+    return
+  fi
+  lock="$1"
+  shift
+  while IFS= read -r held; do
+    if [ -n "$held" ] && [ "$held" -ef "$lock" ]; then live_update_locked "$wait" "$commit" "$@"; return; fi
+  done <<<"${CC_LIVE_UPDATE_HELD:-}"
+  mkdir -p "$(dirname "$lock")" || { echo "cannot create the folder of the daily job's lock $lock"; return 1; }
+  # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
+  # The daily lock always lives at <data-root>/data/immigration/.run-daily.lockf, so the data root is its
+  # grandparent's parent. The Control Center's supervisor.lock sits under that root.
+  CC_LIVE_UPDATE_HELD="${CC_LIVE_UPDATE_HELD:+$CC_LIVE_UPDATE_HELD$'\n'}$lock" \
+    CC_LIVE_UPDATE_ROOTS="${CC_LIVE_UPDATE_ROOTS:+$CC_LIVE_UPDATE_ROOTS$'\n'}$(dirname "$(dirname "$(dirname "$lock")")")" \
+    /usr/bin/lockf -k -t "$wait" "$lock" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && live_update_locked "$4" "$2" "${@:5}"' \
+    live_update_locked "${BASH_SOURCE[0]}" "$commit" "$(dirname "$lock")/.live-update.pid" "$wait" "$@"
+}
+
 # update_live_checkout <daily-lock> <wait-seconds> <commit>: after the sync PR
 # merged, bring the live checkout (the current directory) up to <commit>, the
 # tested sync commit the fork's main was moved to: this never moves it past
@@ -594,32 +631,28 @@ process.exit(live !== null && (start === null || live === "unknown" || live === 
 # the root dependencies (lifecycle scripts included) when deps_fingerprint
 # changed, and the Control Center's (npm ci) when its tracked lockfile changed,
 # since bin/cc only checks that its node_modules exists. All of it runs holding
-# <daily-lock>, the lock run-daily.sh holds for its whole run, so scripts and
+# <daily-lock>, the lock run-daily.sh holds for its whole run, and the installed
+# daily job's lock when that job runs on another data root, so scripts and
 # node_modules never change under a running daily job; it waits up to
-# <wait-seconds> for that run to end. Prints one line saying what happened. Returns 0
+# <wait-seconds> for each to end. Prints one line saying what happened. Returns 0
 # when updated, 3 when updated but an install failed, 10 when left alone (not on
 # main, local changes, already past <commit>, or the daily job still running), 1
 # when the arguments, the fetch, the fingerprint or the fast-forward failed.
 update_live_checkout() {
-  local deps_before cc_before failed="" deferred="" data_root rc
+  local deps_before cc_before failed="" deferred="" data_root job_root rc cc_live=0
   if [ -z "${CC_LIVE_UPDATE_LOCKED:-}" ]; then
     if [ -z "${1:-}" ] || ! [[ "${2:-}" =~ ^[0-9]+$ ]] || [ -z "${3:-}" ]; then
       echo "update_live_checkout: needs the daily job's lock file, a wait in seconds and the commit to move to"
       return 1
     fi
-    mkdir -p "$(dirname "$1")" || { echo "cannot create the folder of the daily job's lock $1"; return 1; }
-    # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
-    # While it holds the lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
+    # While it holds a lock, the update names its pid in .live-update.pid beside it: a daily start that finds the
     # lock held by the update waits for it instead of skipping the day (run-daily.sh).
-    # The daily lock's path is re-passed as $4 so the re-exec'd run can resolve the data root it names.
-    CC_LIVE_UPDATE_LOCKED=1 /usr/bin/lockf -k -t "$2" "$1" /bin/bash -c 'trap "rm -f \"\$3\"" EXIT; echo "$$" > "$3"; source "$1" && update_live_checkout "$4" "" "$2"' update_live_checkout "${BASH_SOURCE[0]}" "$3" "$(dirname "$1")/.live-update.pid" "$1"
+    job_root="$(installed_daily_root)"
+    CC_LIVE_UPDATE_HELD="" CC_LIVE_UPDATE_ROOTS="" live_update_locked "$2" "$3" "$1" ${job_root:+"$job_root/data/immigration/.run-daily.lockf"}
     rc=$?
     if [ "$rc" = 75 ]; then echo "the daily job is still running"; return 10; fi
     return "$rc"
   fi
-  # The daily job's lock always lives at <data-root>/data/immigration/.run-daily.lockf, so the data root is its
-  # grandparent's parent. The Control Center's supervisor.lock sits under that root.
-  data_root="$(dirname "$(dirname "$(dirname "$1")")")"
   fetch_main origin || { echo "cannot refresh origin/main after the merge"; return 1; }
   if [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then echo "the live checkout is not on main"; return 10; fi
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "the live checkout has local changes"; return 10; fi
@@ -635,7 +668,10 @@ update_live_checkout() {
     failed="npm install"
   fi
   if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
-    if control_center_running "$data_root"; then
+    while IFS= read -r data_root; do
+      if [ -n "$data_root" ] && control_center_running "$data_root"; then cc_live=1; break; fi
+    done <<<"${CC_LIVE_UPDATE_ROOTS:-}"
+    if [ "$cc_live" = 1 ]; then
       # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the
       # running instance's dependencies alone; a restart alone never installs them (bin/cc only checks node_modules
       # exists), so point the user at the one command that does.
