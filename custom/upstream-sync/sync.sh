@@ -247,16 +247,23 @@ if [ -z "$BLOCKERS" ]; then
   cd "$LIVE" || fail "live checkout missing"
   # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
   # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
+  # lockf says why it could not take a lock (other than the wait running out) on stderr only: kept to name it below,
+  # then passed on to the log.
+  LIVE_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-live.XXXXXX")" || LIVE_ERR=""
+  if [ -n "$LIVE_ERR" ]; then exec 4>&2 2>"$LIVE_ERR"; fi
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
   LIVE_RC=$?
-  # lockf failing for a reason other than the wait (a lock it cannot create, one of its sysexits 64-78) says why on
-  # stderr, the log, only; so does an update killed or broken after it took the lock.
+  LOCKF_WHY=""
+  if [ -n "${LIVE_ERR:-}" ]; then
+    exec 2>&4 4>&-
+    cat "$LIVE_ERR" >&2
+    LOCKF_WHY="$(grep -m 1 '^lockf: ' "$LIVE_ERR" | tr '"\\' "''")"
+    rm -f "$LIVE_ERR"
+  fi
   if [ -z "$LIVE_UPDATE" ]; then
-    if [ "$LIVE_RC" -ge 64 ] && [ "$LIVE_RC" -le 78 ]; then
-      LIVE_UPDATE="could not take the daily job's lock $DATA/data/immigration/.run-daily.lockf or the installed daily job's (lockf exit $LIVE_RC; its reason is in the lines above)"
-    else
-      LIVE_UPDATE="the live checkout update exited $LIVE_RC without saying why (see the lines above)"
-    fi
+    # Nothing from lockf: the update itself was killed or broke (lockf exits 70 for a child killed by a signal).
+    if [ -n "$LOCKF_WHY" ]; then LIVE_UPDATE="could not take a daily job's lock ($LOCKF_WHY)"
+    else LIVE_UPDATE="the live checkout update exited $LIVE_RC without saying why (see the lines above)"; fi
     LIVE_UPDATE="$LIVE_UPDATE; the fork main is at $MERGE_OID but the live checkout was not updated"
   fi
   case $LIVE_RC in

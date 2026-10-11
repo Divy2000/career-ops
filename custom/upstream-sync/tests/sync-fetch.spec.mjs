@@ -1345,7 +1345,8 @@ test('an update that left the running Control Center\'s dependencies alone says 
 test('a live update that cannot take the daily lock for a reason other than a timeout fails the run with a readable reason, naming the lock and the merged commit (R22-scripts-b-L1-01)', () => {
   const w = liveWorld();
   const lines = readFileSync(SYNC, 'utf8').split('\n');
-  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
+  // From the stderr capture set up just before the update, through the outcome.
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_ERR="$(mktemp '));
   const to = lines.findIndex((l, i) => i > from && l === '  esac');
   const block = lines.slice(from, to + 1).join('\n');
   // The lock's folder exists but cannot be written, so lockf cannot create the lock file and exits 73 (EX_CANTCREAT).
@@ -1361,13 +1362,35 @@ test('a live update that cannot take the daily lock for a reason other than a ti
     // The Control Center's parseDailyLog only records a `!!!` line with text after the marker.
     assert.match(problem, /^!!!\s+\S/, res.stdout);
     assert.ok(problem.includes(w.dailyLock), problem);
+    assert.match(problem, /lockf: cannot open .*Permission denied/);
     assert.ok(problem.includes(w.target), problem);
     assert.match(problem, /not updated/);
+    // lockf's own line still reaches stderr, the log.
+    assert.match(res.stderr, /lockf: cannot open /);
     assert.equal(w.head(), before);
   } finally {
     chmodSync(imm, 0o755);
     rmSync(w.base, { recursive: true, force: true });
   }
+});
+
+test('a live update killed while it holds the daily lock is reported as killed, not as a lock it could not take (R22-scripts-b-L1-01)', () => {
+  const w = liveWorld();
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_ERR="$(mktemp '));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  // git, first run inside the locked section, kills the shell lockf runs; lockf then exits 70 and prints nothing.
+  const killer = path.join(w.base, 'killer');
+  stub(killer, 'git', 'p=$PPID\nwhile [ "${p:-1}" -gt 1 ]; do\n  if ps -o args= -p "$p" | grep -q "live_update_locked \\"\\$4\\""; then kill -KILL "$p"; exit 1; fi\n  p="$(ps -o ppid= -p "$p" | tr -d " ")"\ndone\nexit 1');
+  try {
+    const res = bashLib(w.live, `notify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${killer}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target });
+    assert.equal(res.status, 1, res.stdout + res.stderr);
+    const problem = res.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    assert.match(problem, /^!!! the live checkout update exited 70 without saying why/, problem + res.stderr);
+    assert.doesNotMatch(problem, /could not take/);
+    assert.ok(problem.includes(w.target), problem);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
 test('a live update killed after it took the lock, with nothing printed, fails the run naming its exit, not blaming the lock (R22-scripts-b-L1-01)', () => {
