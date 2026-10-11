@@ -63,6 +63,21 @@ describe('GET /api/sponsorship/lookup', () => {
     }
   });
 
+  it('Given a company-alerts.tsv a sponsorship check created with bare rows (no header), Then its rows are matched by position, the first included (R18-srv-dom-b-L2-01)', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'immigration', 'company-alerts.tsv');
+    const before = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, '2026-10-05\tGlobex Payments\tglobex-payments\tpaused\tGlobex pauses sponsorship\thttps://news.example/globex-1\n2026-10-07\tGlobex Payments\tglobex-payments\tresumed\tGlobex resumes\thttps://news.example/globex-2\n');
+    try {
+      const body = (await lookup('Globex Payments')).json();
+      expect(body.alerts).toEqual([
+        { date: '2026-10-07', company: 'Globex Payments', slug: 'globex-payments', status: 'resumed', headline: 'Globex resumes', url: 'https://news.example/globex-2' },
+        { date: '2026-10-05', company: 'Globex Payments', slug: 'globex-payments', status: 'paused', headline: 'Globex pauses sponsorship', url: 'https://news.example/globex-1' },
+      ]);
+    } finally {
+      fs.writeFileSync(file, before);
+    }
+  });
+
   it('Given a staffing shop, Then the red flag and its share are passed through', async () => {
     const body = (await lookup('Vandelay Staffing Solutions LLC')).json();
     expect(body.check.friendlinessTier).toBe('staffing-shop');

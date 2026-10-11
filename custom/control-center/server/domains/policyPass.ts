@@ -102,11 +102,29 @@ export function preparePolicyPass(codeRoot: string, dataRoot: string, now = new 
   return { prompt, batch };
 }
 
-/** Acknowledges a done pass's batch; returns what to add to the turn's reason. */
-export async function ackPolicyPass(exec: Exec, codeRoot: string, dataRoot: string, batch: string): Promise<string> {
-  const r = await exec(process.execPath, [cliScriptPath(codeRoot, 'immigrationWatch'), '--ack', path.join(dataRoot, batch)], { cwd: codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: dataRoot, NO_COLOR: '1' } });
-  if (r.code !== 0) return `could not acknowledge the policy items it was given: ${(r.stderr || r.stdout).trim().slice(-200)}`;
-  return r.stdout.trim();
+/** A failed ack (pending.json.lock busy, a timeout) is tried this many times, waiting longer each time. */
+const ACK_ATTEMPTS = 3;
+const ACK_RETRY_MS = 250;
+
+/**
+ * Acknowledges a done pass's batch; returns what to add to the turn's reason. A failed attempt is tried again: the
+ * session lets go of its batch before this runs, so an ack lost here leaves the items queued for the next pass to send
+ * to Claude again. watch.mjs --ack is idempotent (it drops the batch's ids from the queue), so a retry is safe.
+ */
+export async function ackPolicyPass(exec: Exec, codeRoot: string, dataRoot: string, batch: string, opts: { retryMs?: number } = {}): Promise<string> {
+  const retryMs = opts.retryMs ?? ACK_RETRY_MS;
+  let failure = '';
+  for (let attempt = 1; attempt <= ACK_ATTEMPTS; attempt++) {
+    if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, retryMs * (attempt - 1)));
+    try {
+      const r = await exec(process.execPath, [cliScriptPath(codeRoot, 'immigrationWatch'), '--ack', path.join(dataRoot, batch)], { cwd: codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: dataRoot, NO_COLOR: '1' } });
+      if (r.code === 0) return r.stdout.trim();
+      failure = (r.stderr || r.stdout).trim().slice(-200) || `exit ${r.code}`;
+    } catch (err) {
+      failure = (err as Error).message;
+    }
+  }
+  return `could not acknowledge the policy items it was given: ${failure}`;
 }
 
 /**
