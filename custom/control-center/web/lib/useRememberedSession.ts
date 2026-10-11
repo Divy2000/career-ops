@@ -35,7 +35,8 @@ export function useRememberedSession(key: string) {
     return () => clearTimeout(t);
   }, [waiting, key, store]);
   const shown = id !== null || starts > 0;
-  const busy = waiting || (shown && !startFailed && (status === null || status === 'queued' || status === 'running'));
+  // A reply or fork reported as a start (marksTurnStarts) runs a session the stream still shows as finished.
+  const busy = waiting || startingHere || (shown && !startFailed && (status === null || status === 'queued' || status === 'running'));
   const onStatus = useCallback(
     (s: string) => {
       setStatus(s);

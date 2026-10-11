@@ -187,10 +187,12 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   }, []);
   // Counts the statuses the stream delivered, so a late answer to a turn POST cannot overwrite a newer one.
   const statusSeq = useRef(0);
+  const latestStatus = useRef(status);
   const rememberStatus = remembered.panel.onStatus;
   const onStatus = useCallback(
     (s: string) => {
       statusSeq.current += 1;
+      latestStatus.current = s;
       setStatus(s);
       rememberStatus(s);
       // Deleted elsewhere (or a stale id): its answers cannot be filled any more, so the form starts over like New draft.
@@ -262,15 +264,30 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
     setFillNote(null);
     setFilling(true);
     const seqAtClick = statusSeq.current;
+    // Marked like a reply in the panel: the draft reads as finished until its stream shows the fill turn, and a page
+    // mounted meanwhile must not offer New draft and a second apply session beside it.
+    const { onStarting, onSessionId: reported, onStartFailed } = remembered.panel;
+    const failed = () => {
+      onStartFailed();
+      // A turn refused because one started elsewhere meanwhile still runs: the status the stream gave is restated.
+      rememberStatus(latestStatus.current);
+    };
+    onStarting();
     try {
       const attach = pdf ? `attach the CV PDF ${pdf}${cover ? ` and use the cover letter text in ${cover}` : ''}` : 'attach the tailored CV';
       const meta = await sendTurn(sessionId, `The user confirmed these answers. Fill the real form with exactly these values, ${attach}, stop before Submit and report what you filled.${leave}\nThe values to fill:\n${JSON.stringify({ fields: confirmed })}`);
       // The turn is running from here on, but its running event over the stream may come later and the button would
       // wake up. A status the stream already delivered since the click is newer than this answer, so it stays.
-      if (statusSeq.current === seqAtClick) setStatus(meta.status);
+      if (statusSeq.current === seqAtClick) {
+        setStatus(meta.status);
+        rememberStatus(meta.status);
+      }
+      reported(meta.id);
       // A 202 can carry a turn that failed before it ran (no approved CLI, no token): nothing was sent.
+      if (meta.status === 'error') failed();
       setFillNote(meta.status === 'error' ? `Could not send the fill turn: ${meta.error ?? 'the turn failed to start'}` : 'Fill turn sent with your edited answers.');
     } catch (err) {
+      failed();
       setFillNote(`Could not send the fill turn: ${describeError(err)}`);
     } finally {
       setFilling(false);
@@ -354,7 +371,8 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
                     {/* While another mount's start is in flight, the remembered id is still the earlier, finished session. */}
-                    {livePdf?.id || (pdfSession.busy && !pdfSession.waiting && pdfId) ? (
+                    {/* Nor while this page's own start is in flight. */}
+                    {livePdf?.id || (pdfSession.busy && !pdfSession.waiting && !generating && pdfId) ? (
                       <span className="muted small">
                         {' '}
                         <Link to="/sessions/$id" params={{ id: livePdf?.id ?? pdfId! }}>
@@ -363,7 +381,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                         is still running.
                       </span>
                     ) : (
-                      pdfSession.waiting && <span className="muted small"> The tailored CV session is starting.</span>
+                      (pdfSession.waiting || generating) && <span className="muted small"> The tailored CV session is starting.</span>
                     )}
                   </div>
                 )}
@@ -389,7 +407,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
               <>
                 <AnswersForm fields={fields} onChange={setFields} />
                 <div className="row gap" style={{ marginTop: 12 }}>
-                  <button type="button" disabled={filling || !playwright || status === 'running' || status === 'queued'} title={playwright ? 'Sends the edited answers as the next turn; the browser stays headed and stops before Submit' : 'Disabled: Playwright MCP is not available on this machine'} onClick={() => void fill()}>
+                  <button type="button" disabled={filling || remembered.busy || !playwright || status === 'running' || status === 'queued'} title={playwright ? 'Sends the edited answers as the next turn; the browser stays headed and stops before Submit' : 'Disabled: Playwright MCP is not available on this machine'} onClick={() => void fill()}>
                     Fill real form
                   </button>
                   {!playwright && <span className="faint small">Drafting only on this machine.</span>}
@@ -401,8 +419,9 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
             )}
           </div>
         </div>
-        {remembered.waiting ? (
+        {remembered.waiting && sessionId === null ? (
           // Left mid-start: the draft is still being created, and a second Draft answers would start a second paid session.
+          // A draft that exists (a reply to it in flight) keeps its panel.
           <div className="card session" role="status">
             <h2 style={{ margin: 0 }}>
               Apply session <Pill tone="warn">Uses tokens</Pill>
@@ -412,21 +431,26 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
             </p>
           </div>
         ) : (
-          <SessionPanel
-            key={remembered.panelKey}
-            sessionId={sessionId}
-            mode="apply"
-            title="Apply session"
-            target={target}
-            initialPrompt={url ? `Read the application form at ${url}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.${chosen}` : ''}
-            startLabel="Draft answers"
-            onEnvelope={onEnvelope}
-            onStatus={onStatus}
-            onSessionId={onSessionId}
-            onStartFailed={remembered.panel.onStartFailed}
-            onStarting={remembered.panel.onStarting}
-            replyLabel="Send"
-          />
+          // Another mount's reply or Fill to this draft is in flight: a second one would be refused beside it, and the
+          // refusal would let go of the first one's start mark. Always wrapped, so holding it does not remount the panel.
+          <fieldset disabled={remembered.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <SessionPanel
+              key={remembered.panelKey}
+              sessionId={sessionId}
+              mode="apply"
+              title="Apply session"
+              target={target}
+              initialPrompt={url ? `Read the application form at ${url}, draft every answer from my CV and profile, and emit the answers envelope. Do not fill anything yet.${chosen}` : ''}
+              startLabel="Draft answers"
+              onEnvelope={onEnvelope}
+              onStatus={onStatus}
+              onSessionId={onSessionId}
+              onStartFailed={remembered.panel.onStartFailed}
+              onStarting={remembered.panel.onStarting}
+              marksTurnStarts
+              replyLabel="Send"
+            />
+          </fieldset>
         )}
       </div>
     </>

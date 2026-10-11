@@ -7,6 +7,7 @@ import { Link, Outlet, RouterProvider, createMemoryHistory, createRootRoute, cre
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DevChatPage, SESSION_CHECK_RETRY, validateDevSearch } from '@web/features/dev/DevChatPage';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
+import { START_REPORT_WINDOW_MS, lastSession } from '@web/lib/lastSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,6 +32,9 @@ const meta = { id: 's-7', mode: 'devchat', status: 'done', turns: [{ n: 1 }], ta
 let startReply: Record<string, unknown>;
 /** While set, POST /api/sessions waits for it, so a test can act while the start is in flight. */
 let startGate: Promise<void> | null;
+/** While set, a reply to s-7 (POST /api/sessions/s-7/turns) waits for it; `turnRefused` makes the server refuse it. */
+let turnGate: Promise<void> | null;
+let turnRefused: boolean;
 /** Meta fetches of the running session s-r; the first `failingReads` answer 500. */
 let runningMetaFetches: number;
 let failingReads: number;
@@ -57,6 +61,10 @@ async function open(entry: string) {
       if (init?.method === 'POST' && url === '/api/sessions') {
         if (startGate) await startGate;
         return json(startReply, 202);
+      }
+      if (init?.method === 'POST' && url === '/api/sessions/s-7/turns') {
+        if (turnGate) await turnGate;
+        return turnRefused ? json({ error: 'session s-7 is starting a turn' }, 409) : json({ ...meta, status: 'running', turns: [{ n: 1 }, { n: 2 }] }, 202);
       }
       if (init?.method === 'POST' && url === '/api/sessions/s-7/fork') return json({ ...meta, id: 's-8' }, 202);
       if (url === '/api/sessions/s-7') return json({ meta, events: stored() });
@@ -96,6 +104,8 @@ beforeEach(() => {
   changesFetched = [];
   startReply = meta;
   startGate = null;
+  turnGate = null;
+  turnRefused = false;
   streamStatus = 'done';
   runningMetaFetches = 0;
   failingReads = 2;
@@ -285,6 +295,93 @@ describe('Dev Chat session in the URL', () => {
     await until(() => router.state.location.search.session === 's-9' && host.querySelector('[role="alert"]')?.textContent?.includes('claude is not logged in'), 'the start error');
     expect(router.state.location.search).toEqual({ session: 's-9' });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('claude is not logged in');
+  });
+
+  // A reply starts a turn that edits files, but the conversation reads as finished until its stream shows the turn:
+  // New conversation, here or on a page mounted meanwhile, would start a second file-editing session beside it.
+  describe('given a reply to the finished conversation in flight', () => {
+    const newConversation = () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation');
+    async function sendReply() {
+      await until(newConversation, 'New conversation on the finished conversation');
+      const reply = host.querySelector<HTMLInputElement>('input[aria-label="Reply to the session"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(reply, 'Now add a test');
+        reply.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
+    }
+
+    it('then New conversation is not offered until the server answers, nor while the turn runs', async () => {
+      let release!: () => void;
+      turnGate = new Promise<void>((r) => (release = r));
+      await open('/dev?session=s-7');
+      await sendReply();
+      expect(newConversation()).toBeUndefined();
+      // The server has begun the turn by the time it answers: a read of the session from here on shows it running.
+      streamStatus = 'running';
+      await act(async () => release());
+      await settle();
+      expect(newConversation()).toBeUndefined();
+    });
+
+    it('when the user leaves for Runs and comes back, then New conversation is not offered until the reply reports', async () => {
+      let release!: () => void;
+      turnGate = new Promise<void>((r) => (release = r));
+      turnRefused = true;
+      await open('/dev?session=s-7');
+      await sendReply();
+      await act(async () => router.navigate({ to: '/runs' }));
+      await until(() => host.textContent?.includes('Runs page'), 'the Runs page');
+      await act(async () => router.navigate({ to: '/dev' }));
+      await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the conversation again');
+      await settle();
+      expect(newConversation()).toBeUndefined();
+      // A second reply from here would be refused beside the first, and the refusal would let go of its start mark.
+      expect(host.querySelector<HTMLInputElement>('input[aria-label="Reply to the session"]')!.closest('fieldset')?.disabled).toBe(true);
+      // The server refuses the reply: nothing started, and New conversation comes back.
+      await act(async () => release());
+      await until(newConversation, 'New conversation once the reply was refused');
+    });
+  });
+
+  it('given a reply mark left by a page that reloaded mid-reply, then New conversation comes back once the report window has passed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      sessionStorage.setItem('cc.devchat.session', 's-7');
+      sessionStorage.setItem('cc.devchat.session:starting', String(Date.now()));
+      await open('/dev');
+      await until(() => host.querySelector('input[aria-label="Reply to the session"]'), 'the conversation');
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'New conversation')).toBe(false);
+      await act(async () => vi.advanceTimersByTime(START_REPORT_WINDOW_MS + 1));
+      await until(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation'), 'New conversation once the mark expired');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given a reply this page sent that the server refused, when a page that reloaded mid-reply leaves its mark, then New conversation comes back once the report window has passed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await open('/dev?session=s-7');
+      await until(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation'), 'New conversation');
+      const reply = host.querySelector<HTMLInputElement>('input[aria-label="Reply to the session"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(reply, 'Now add a test');
+        reply.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      // Refused, so the session is still done and nothing is in flight from this page.
+      turnRefused = true;
+      await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
+      await until(() => host.querySelector('[role="alert"]'), 'the refusal');
+      await until(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation'), 'New conversation after the refusal');
+      // Another page of this tab marks a reply and reloads before it reports.
+      await act(async () => lastSession('cc.devchat.session').setStarting(true));
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'New conversation')).toBe(false);
+      await act(async () => vi.advanceTimersByTime(START_REPORT_WINDOW_MS + 1));
+      await until(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New conversation'), 'New conversation once the mark expired');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('given a fork from the panel, then the URL follows the fork and the panel is kept, not remounted', async () => {

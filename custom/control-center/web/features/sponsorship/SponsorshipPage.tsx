@@ -87,14 +87,18 @@ export function SponsorshipPage() {
       </div>
       <Message message={message} />
       {pass.shown && (
-        <SessionPanel
-          key={pass.panelKey}
-          {...pass.panel}
-          mode="immigration-policy"
-          title="AI policy pass"
-          // The server runs the pass on daily-prompt.md filled in with the queued items, and acknowledges them when it is done.
-          initialPrompt="Run the daily immigration policy pass."
-        />
+        <fieldset disabled={pass.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
+          <SessionPanel
+            key={pass.panelKey}
+            {...pass.panel}
+            marksTurnStarts
+            mode="immigration-policy"
+            title="AI policy pass"
+            // The server runs the pass on daily-prompt.md filled in with the queued items, and acknowledges them when it is done.
+            initialPrompt="Run the daily immigration policy pass."
+          />
+        </fieldset>
       )}
       <Tabs
         label="Sponsorship sections"
