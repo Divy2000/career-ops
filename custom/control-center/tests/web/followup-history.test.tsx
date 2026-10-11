@@ -17,8 +17,8 @@ afterEach(async () => {
 });
 
 describe('follow-up history', () => {
-  it('lists a legacy bullet follow-up without a Delete button, and deletes a table row by its number', async () => {
-    const deleted: number[] = [];
+  it('lists a legacy bullet follow-up without a Delete button, and deletes a table row by its number and cells', async () => {
+    const deleted: Array<{ num: number; appNum: number; date: string; channel: string; contact: string; notes: string }> = [];
     const followups: FollowupEntry[] = [
       { num: 4, appNum: 1, date: '2026-09-28', company: 'Acme', role: 'Eng', channel: 'Email', contact: 'Pat', notes: 'asked' },
       { num: null, appNum: 1, date: '2026-10-02', company: 'Acme', role: '', channel: 'Other', contact: '', notes: 'nudged' },
@@ -26,11 +26,11 @@ describe('follow-up history', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    await act(async () => root.render(createElement(FollowupHistory, { company: 'Acme', followups, onDelete: (n: number) => deleted.push(n) })));
+    await act(async () => root.render(createElement(FollowupHistory, { company: 'Acme', followups, onDelete: (row: { num: number; appNum: number; date: string; channel: string; contact: string; notes: string }) => deleted.push(row) })));
     const items = [...host.querySelectorAll('li')];
     expect(items.map((li) => li.textContent?.includes('2026-10-02'))).toEqual([false, true]);
     expect(items[1]!.querySelector('button')).toBeNull();
     await act(async () => items[0]!.querySelector('button')!.click());
-    expect(deleted).toEqual([4]);
+    expect(deleted).toEqual([{ num: 4, appNum: 1, date: '2026-09-28', channel: 'Email', contact: 'Pat', notes: 'asked' }]);
   });
 });

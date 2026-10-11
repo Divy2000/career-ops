@@ -68,14 +68,23 @@ function listMd(dir: string, rel: string, exclude: Set<string>): PrepDoc[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (err) {
+    // A missing folder is no documents; an unreadable one is a failed load, not an empty list.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
   }
   return entries
     .filter((e) => e.isFile() && e.name.endsWith('.md') && !exclude.has(e.name))
-    .map((e) => {
-      const st = fs.statSync(path.join(dir, e.name));
-      return { name: e.name, path: `${rel}/${e.name}`, mtimeMs: st.mtimeMs, size: st.size };
+    .flatMap((e) => {
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(path.join(dir, e.name));
+      } catch (err) {
+        // Deleted since the folder was listed (a session rewriting its notes): it is gone, not unreadable.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw err;
+      }
+      return [{ name: e.name, path: `${rel}/${e.name}`, mtimeMs: st.mtimeMs, size: st.size }];
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }

@@ -273,10 +273,40 @@ describe('follow-up writes', () => {
     expect(r.json()).toMatchObject({ num: 3 });
     const detail = (await get('/api/tracker/6')).json();
     expect(detail.timeline.followups.map((f: { num: number }) => f.num)).toContain(3);
-    const d = await del('/api/followups/log', { num: 3 });
+    const d = await del('/api/followups/log', { num: 3, appNum: 6, date: '2026-10-03', channel: 'Email', contact: 'HM', notes: 'sent deck' });
     expect(d.statusCode, d.body).toBe(200);
     expect((await get('/api/tracker/6')).json().timeline.followups.map((f: { num: number }) => f.num)).not.toContain(3);
-    expect((await del('/api/followups/log', { num: 99 })).statusCode).toBe(404);
+    expect((await del('/api/followups/log', { num: 99, appNum: 6, date: '2026-10-03', channel: 'Email', contact: 'HM', notes: 'sent deck' })).statusCode).toBe(404);
+  });
+  it('a delete from a stale view is refused with 409 once its num was reused by another application\'s follow-up (R23-srv-dom-a-L1-01)', async () => {
+    const first = await post('/api/followups/log', { appNum: 6, date: '2026-10-03', channel: 'Email', contact: '', notes: 'first' });
+    const num = first.json().num as number;
+    const firstRow = { num, appNum: 6, date: '2026-10-03', channel: 'Email', contact: '', notes: 'first' };
+    expect((await del('/api/followups/log', firstRow)).statusCode).toBe(200);
+    const reused = await post('/api/followups/log', { appNum: 1, date: '2026-10-04', channel: 'Email', contact: '', notes: 'reused' });
+    expect(reused.json().num).toBe(num);
+    const stale = await del('/api/followups/log', firstRow);
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json().error).toBe('stale');
+    expect((await get('/api/tracker/1')).json().timeline.followups.map((f: { num: number }) => f.num)).toContain(num);
+    expect((await del('/api/followups/log', { num })).statusCode).toBe(400);
+    // The row exactly as the cadence lists it to the page is the one a delete names.
+    const listed = (await get('/api/followups')).json().entries.flatMap((e: { followups: Array<{ num: number | null }> }) => e.followups).find((f: { num: number | null }) => f.num === num);
+    const { num: n, appNum, date, channel, contact, notes } = listed;
+    expect((await del('/api/followups/log', { num: n, appNum, date, channel, contact, notes })).statusCode).toBe(200);
+  });
+  it('deletes a hand-edited row whose cells the log form would not write, sending them as the page saw them', async () => {
+    const file = path.join(t.cfg.dataRoot, 'data', 'follow-ups.md');
+    const before = fs.readFileSync(file, 'utf8');
+    const notes = 'x'.repeat(12_000);
+    fs.writeFileSync(file, before.replace(/\n?$/, `\n| 90 | 6 | unknown | Vandelay | Eng | Email |  | ${notes} |\n`));
+    try {
+      const d = await del('/api/followups/log', { num: 90, appNum: 6, date: 'unknown', channel: 'Email', contact: '', notes });
+      expect(d.statusCode, d.body.slice(0, 300)).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).not.toContain('| 90 |');
+    } finally {
+      fs.writeFileSync(file, before);
+    }
   });
   it('pins and clears the next follow-up date', async () => {
     const r = await post('/api/followups/override', { appNum: 6, date: '2026-10-21' });

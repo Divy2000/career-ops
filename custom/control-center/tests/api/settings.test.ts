@@ -751,4 +751,34 @@ describe('contacts and interviews reads', () => {
     expect(interviews.json().active.kind).toBe('ok');
     expect(interviews.json().prepDocs.map((d: { name: string }) => d.name)).toContain('acme-robotics-prep.md');
   });
+  // chmod 000 does not stop root, so as root the folder stays readable and there is no EACCES to provoke.
+  it.skipIf(process.getuid?.() === 0)('an unreadable interview-prep folder is a failed load, not an empty list (R23-srv-dom-a-X-01)', async () => {
+    const dataRoot = path.join(tempDir('cc-interviews-eacces-'), 'root');
+    fs.cpSync(t.cfg.dataRoot, dataRoot, { recursive: true });
+    const own = await makeTestApp({ dataRoot });
+    const sessions = path.join(dataRoot, 'interview-prep', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.chmodSync(sessions, 0o000);
+    try {
+      const res = await own.app.inject({ method: 'GET', url: '/api/interviews', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(500);
+      expect(res.body).toMatch(/EACCES/);
+    } finally {
+      fs.chmodSync(sessions, 0o755);
+      await own.close();
+    }
+  });
+  it('a missing interview-prep folder still reads as no documents', async () => {
+    const dataRoot = path.join(tempDir('cc-interviews-missing-'), 'root');
+    fs.cpSync(t.cfg.dataRoot, dataRoot, { recursive: true });
+    fs.rmSync(path.join(dataRoot, 'interview-prep'), { recursive: true, force: true });
+    const own = await makeTestApp({ dataRoot });
+    try {
+      const res = await own.app.inject({ method: 'GET', url: '/api/interviews', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ prepDocs: [], sessions: [] });
+    } finally {
+      await own.close();
+    }
+  });
 });
