@@ -282,7 +282,11 @@ async function main() {
     ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title || s.url)}](${s.url}) - ${sponsorCell(s.sponsor)}`) : ['- none']),
     '',
   ].join('\n');
-  await writeFile(OUT, md);
+  // Through a temp file + rename like writeTiers: the Control Center's watcher reads shortlist.md on change, and an
+  // overlapping run (the daily job and the shortlist action) must not leave its tail behind a shorter table.
+  const tmp = `${OUT}.tmp-${process.pid}`;
+  await writeFile(tmp, md);
+  await rename(tmp, OUT);
   process.stdout.write(`shortlist: ${shortlist.length} kept, ${excluded.length} excluded, ${companies.length} companies (${looked} tier lookups) -> data/shortlist.md\n`);
 }
 

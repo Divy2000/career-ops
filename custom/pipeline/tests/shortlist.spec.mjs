@@ -469,3 +469,55 @@ test('an alert headline keeps its pipe and a nested link still parses (R17-scrip
   assert.ok(m[4].includes('update'), `nested link text kept: ${m[4]}`);
   assert.ok(!m[4].includes('H-1B / OPT'), `pipe is not rewritten to a slash: ${m[4]}`);
 });
+
+test('a reader during the shortlist write sees the previous complete shortlist, never a truncated one (R24-scripts-a-L1-02)', async () => {
+  const root = tempDir('shortlist-');
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
+  fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
+  const out = path.join(root, 'data', 'shortlist.md');
+  const previous = '# Shortlist - 2026-01-01\n\nthe previous complete shortlist\n';
+  fs.writeFileSync(out, previous);
+  const held = path.join(root, 'held');
+  const release = path.join(root, 'release');
+  // Writes any shortlist.md* file in two halves and holds between them, as a slow disk or a large table would.
+  const preload = path.join(root, 'slow-write.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.promises.writeFile;
+fs.promises.writeFile = async (file, data, ...rest) => {
+  if (!path.basename(String(file)).startsWith('shortlist.md')) return real(file, data, ...rest);
+  const text = String(data);
+  const fh = await fs.promises.open(file, 'w');
+  try {
+    await fh.write(text.slice(0, text.length >> 1));
+    fs.writeFileSync(${JSON.stringify(held)}, '');
+    while (!fs.existsSync(${JSON.stringify(release)})) await new Promise((r) => setTimeout(r, 20));
+    await fh.write(text.slice(text.length >> 1));
+  } finally {
+    await fh.close();
+  }
+};
+syncBuiltinESMExports();
+`);
+  const child = spawn(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root), stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr += d; });
+  const exit = new Promise((resolve) => child.on('exit', resolve));
+  let midWrite;
+  try {
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(held)) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the shortlist write\n${stderr}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    midWrite = fs.readFileSync(out, 'utf8');
+  } finally {
+    fs.writeFileSync(release, '');
+  }
+  assert.equal(await exit, 0, stderr);
+  assert.equal(midWrite, previous);
+  assert.match(fs.readFileSync(out, 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n[\s\S]*## Excluded by sponsorship alerts/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.startsWith('shortlist.md.')), []);
+});
