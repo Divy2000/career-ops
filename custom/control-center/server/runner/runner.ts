@@ -360,13 +360,17 @@ export class Runner {
     for (const meta of this.store.list()) this.reconcileRun(meta);
   }
 
-  /** One run another process left on disk, settled as at server start: adopted if queued, tracked, finalized or lost if running. */
+  /**
+   * One run another process left on disk, settled as at server start: adopted if queued; tracked, finalized or lost if
+   * running, or if cancelled before it exited (marked so at once, it ends only when its command does).
+   */
   private reconcileRun(meta: RunMeta): void {
     if (meta.status === 'queued') {
       this.adopt(meta);
       return;
     }
-    if (meta.status !== 'running' || this.active.has(meta.id)) return;
+    const unsettled = meta.status === 'running' || (meta.status === 'cancelled' && meta.endedAt === null);
+    if (!unsettled || this.active.has(meta.id)) return;
     const exit = this.store.readExit(meta.id);
     const wrapper = this.identity(meta.wrapperPid, meta.wrapperStartedAt);
     if (exit) {
@@ -674,6 +678,17 @@ export class Runner {
     this.envById.delete(meta.id);
     this.dropInputs(meta);
     this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId, exitCode: exit.code });
+  }
+
+  /**
+   * Whether a run that is no longer running has yet to record its end (a cancelled one ends when its command does).
+   * One nothing here tracks, left by a process that stopped, is taken over first: settled now or tracked until it exits.
+   */
+  ending(id: string): boolean {
+    if (this.active.has(id)) return true;
+    const meta = this.store.read(id);
+    if (meta?.status === 'cancelled' && meta.endedAt === null) this.reconcileRun(meta);
+    return this.active.has(id);
   }
 
   /**

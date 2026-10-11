@@ -137,17 +137,20 @@ function streamRun(runner: Runner, id: string, afterSeq: number, reply: FastifyR
       seq = l.seq;
       send('line', l, l.seq);
     }
-    const meta = runner.store.read(id);
-    if (meta && meta.status !== 'running' && meta.status !== 'queued') {
-      const tail = runner.store.readRaw(id, seq, offset);
-      for (const l of tail.lines) {
-        seq = l.seq;
-        send('line', l, l.seq);
-      }
-      send('run.done', { status: meta.status, exitCode: meta.exitCode, signal: meta.signal });
-      stop();
-      reply.raw.end();
+    const seen = runner.store.read(id);
+    if (!seen || seen.status === 'running' || seen.status === 'queued') return;
+    // Cancel marks a run cancelled before its command exits: keep tailing its shutdown output until it has really ended.
+    if (seen.endedAt === null && runner.ending(id)) return;
+    // Settling it may have just recorded its end.
+    const meta = runner.store.read(id) ?? seen;
+    const tail = runner.store.readRaw(id, seq, offset);
+    for (const l of tail.lines) {
+      seq = l.seq;
+      send('line', l, l.seq);
     }
+    send('run.done', { status: meta.status, exitCode: meta.exitCode, signal: meta.signal });
+    stop();
+    reply.raw.end();
   };
   const poll = setInterval(pull, 250);
   const heartbeat = setInterval(() => !closed && reply.raw.write(': ping\n\n'), 10_000);

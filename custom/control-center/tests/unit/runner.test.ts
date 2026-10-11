@@ -356,6 +356,23 @@ describe('Runner', () => {
     }
   });
 
+  it('a run cancelled by a server that stopped before the run exited is settled by the next server with its real exit (R18-srv-core-L3-01 review)', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const meta = first.start(req(['0', '20000']));
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt) && first.store.readRaw(meta.id).lines.length >= 3);
+    first.cancel(meta.id);
+    // Gone at once: marked cancelled, not yet settled.
+    first.close();
+    expect(first.store.read(meta.id)).toMatchObject({ status: 'cancelled', endedAt: null });
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    await until(() => Boolean(second.store.read(meta.id)?.endedAt));
+    expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', exitCode: 143 });
+  });
+
   it('a live wrapper is kept when ps says "no such process" but the PID still answers (they disagree): judged by liveness alone (seed review)', async () => {
     const root = tmpRoot();
     const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
