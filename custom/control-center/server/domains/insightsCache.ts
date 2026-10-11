@@ -101,11 +101,11 @@ export function inputsKey(dataRoot: string, trackerPath?: string): string {
 const CODE_FILE = /\.(mjs|json)$/;
 
 /**
- * The code a script runs: its own file, the shared modules and JSON beside it, and the states it maps statuses with. An
- * update changes a script's output or JSON shape without touching any data input.
+ * The code a script runs: its own file, the shared modules and JSON beside it, and the shipped templates it reads
+ * (states.yml, the benchmarks.yml fallback). An update changes a script's output or JSON shape without touching any data input.
  */
 export function codeKey(codeRoot: string, scriptPath: string): string {
-  return [`script:${mtimeOf(scriptPath)}`, `code/:${dirKey(codeRoot, CODE_FILE)}`, `code/lib/:${dirKey(path.join(codeRoot, 'lib'), CODE_FILE)}`, `code/templates/states.yml:${mtimeOf(path.join(codeRoot, 'templates', 'states.yml'))}`].join('|');
+  return [`script:${mtimeOf(scriptPath)}`, `code/:${dirKey(codeRoot, CODE_FILE)}`, `code/lib/:${dirKey(path.join(codeRoot, 'lib'), CODE_FILE)}`, `code/templates/:${dirKey(path.join(codeRoot, 'templates'))}`].join('|');
 }
 
 const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'data', 'control-center', 'insights', `${script}.json`);

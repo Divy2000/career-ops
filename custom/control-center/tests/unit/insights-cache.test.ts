@@ -212,23 +212,26 @@ describe('Company history with a second-lane CAREER_OPS_PORTALS in the server en
   });
 });
 
-describe('the insights cache after a code update (R18-srv-dom-a-L1-01)', () => {
-  // A checkout with only what readInsight loads itself; the scripts are never run (exec is a stub).
-  function codeRoot(): string {
-    const root = tempDir('cc-insights-code-');
-    fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
-    for (const rel of ['funnel-velocity.mjs', 'tracker-utils.mjs', 'lib/local-today.mjs', 'templates/states.yml']) {
-      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-      fs.writeFileSync(path.join(root, rel), '// v1\n');
-    }
-    return root;
-  }
+const CODE_FILES = ['funnel-velocity.mjs', 'tracker-utils.mjs', 'lib/local-today.mjs', 'templates/states.yml', 'templates/benchmarks.yml'];
 
-  for (const rel of ['funnel-velocity.mjs', 'tracker-utils.mjs', 'lib/local-today.mjs', 'templates/states.yml']) {
+// A checkout with only what readInsight loads itself; the scripts are never run (exec is a stub).
+function stubCodeRoot(): string {
+  const root = tempDir('cc-insights-code-');
+  fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
+  for (const rel of CODE_FILES) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), '// v1\n');
+  }
+  return root;
+}
+
+describe('the insights cache after a code update (R18-srv-dom-a-L1-01)', () => {
+  // funnel-velocity.mjs and company-history.mjs fall back to the shipped templates/benchmarks.yml.
+  for (const rel of CODE_FILES) {
     it(`recomputes the same day with unchanged data when ${rel} in the code checkout changes`, async () => {
       let runs = 0;
       const exec: Exec = async () => ((runs += 1), { code: 0, stdout: '{"ok":true}', stderr: '' });
-      const cfg = testConfig({ codeRoot: codeRoot() });
+      const cfg = testConfig({ codeRoot: stubCodeRoot() });
       await readInsight(cfg, exec, 'funnelVelocity');
       expect((await readInsight(cfg, exec, 'funnelVelocity')).fromCache).toBe(true);
       const later = new Date(Date.now() + 60_000);
@@ -238,3 +241,4 @@ describe('the insights cache after a code update (R18-srv-dom-a-L1-01)', () => {
     });
   }
 });
+
