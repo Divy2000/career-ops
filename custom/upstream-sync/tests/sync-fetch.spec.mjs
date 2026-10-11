@@ -1458,6 +1458,20 @@ test('a whitespace-only Keychain token stops the sync as a missing one, as the C
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('a Keychain token with whitespace around it is passed on trimmed, as the Control Center reads it (R22-scripts-b-L3-01)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('SECURITY_ERR="$(mktemp '));
+  const to = lines.findIndex((l, i) => i > from && l === 'fi');
+  const block = lines.slice(from, to + 1).join('\n');
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-token-'));
+  stub(dir, 'security', 'printf " \\ttok-123 \\n"');
+  try {
+    const r = spawnSync('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}\necho "[$TOKEN]"`], { encoding: 'utf8', env: { PATH: `${dir}:${process.env.PATH}` } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(r.stdout.trim(), '[tok-123]');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a security command that cannot run (exit 126) is named as the problem, not a locked Keychain (R22-scripts-b-L3-01)', () => {
   const w = makeWorld();
   const home = path.join(w.base, 'home');

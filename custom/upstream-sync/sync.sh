@@ -96,9 +96,11 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
 TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$SECURITY_ERR")"
 SECURITY_RC=$?
+TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
+TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
 SECURITY_WHY="$(tail -c 200 "$SECURITY_ERR" | tr '\n"\\' "  '" | sed 's/ *$//')"
 rm -f "$SECURITY_ERR"
-if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "${TOKEN//[[:space:]]/}" ]; }; then
+if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "$TOKEN" ]; }; then
   fail "Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w"
 elif [ "$SECURITY_RC" = 127 ]; then
   fail "Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin)."
