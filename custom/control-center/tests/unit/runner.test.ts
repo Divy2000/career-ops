@@ -419,6 +419,27 @@ describe('Runner', () => {
     expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
   }, 20_000);
 
+  it('a tracked run keeps the real exit of a wrapper that records it and quits while a tick checks it, instead of marking it lost', async () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'running', wrapperPid: 999_999, wrapperStartedAt: 1_700_000_000 });
+    let exiting = false;
+    // Alive at reconcile; then the wrapper writes its exit record and exits just as a tick probes its PID.
+    const kill = () => {
+      if (!exiting) return;
+      fs.writeFileSync(path.join(store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+      throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50, kill, procStart: () => 1_700_000_000 });
+    runners.push(runner);
+    runner.reconcile();
+    expect(runner.store.read(run.id)?.status).toBe('running');
+    exiting = true;
+    await until(() => Boolean(runner.store.read(run.id)?.endedAt));
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'done', exitCode: 0, error: null });
+  });
+
   it('a cancelled run whose wrapper vanished without an exit record before any server settled it still reads cancelled', () => {
     const root = tmpRoot();
     const store = new RunStore(root);

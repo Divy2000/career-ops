@@ -650,13 +650,15 @@ export class Runner {
           this.store.write(current);
         }
       }
+      const gone = !!current.wrapperPid && !this.ours(current.wrapperPid);
+      // Read after the wrapper check: a wrapper writes its exit before it exits, so one found gone has recorded it by now.
       const exit = this.store.readExit(meta.id);
       if (exit) {
         clearInterval(timer);
         this.active.delete(meta.id);
         this.finalize(current, exit);
         this.pump();
-      } else if (current.wrapperPid && !this.ours(current.wrapperPid)) {
+      } else if (gone) {
         clearInterval(timer);
         this.active.delete(meta.id);
         // One the user cancelled stays cancelled: it was meant to stop, and it has.
