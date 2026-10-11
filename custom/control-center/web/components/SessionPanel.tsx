@@ -187,6 +187,11 @@ export function SessionPanel(props: SessionPanelProps) {
   // Bumped when a reply or fork reported as a start fails: the host hears the status again, since a turn started
   // meanwhile from elsewhere keeps the session going.
   const [restated, setRestated] = useState(0);
+  // The latest turn the stream has shown, read by a reply that answers after the stream may have moved on.
+  const shownTurn = useRef(0);
+  useEffect(() => {
+    shownTurn.current = transcript.turns.reduce((max, t) => (t.n > max ? t.n : max), 0);
+  }, [transcript.turns]);
   useEffect(() => {
     // A session the server no longer has reports 'gone', so a host waiting on it does not wait forever.
     onStatus?.(gone ? 'gone' : transcript.status, gone ? null : transcript.reason);
@@ -243,7 +248,8 @@ export function SessionPanel(props: SessionPanelProps) {
         props.onSessionId?.(m.id);
       } else if (marks) {
         // The session is going again before its stream says so: the host must not read the old turn's end meanwhile.
-        props.onStatus?.(m.status, null);
+        // Once the stream has shown the turn, its own status (perhaps the turn's end already) is the one to keep.
+        if (m.turns.length > shownTurn.current) props.onStatus?.(m.status, null);
         props.onSessionId?.(m.id);
       }
       // A 202 can carry a turn that failed before it ran: nothing was started.

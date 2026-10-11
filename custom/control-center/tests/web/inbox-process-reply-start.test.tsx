@@ -33,7 +33,10 @@ class FakeEventSource {
   close() {}
   /** One stored event of the Process inbox run, as the server sends it on the app event stream. */
   static emit(seq: number, event: { type: string; [k: string]: unknown }) {
-    const data = JSON.stringify({ sessionId: DONE.id, stored: { seq, ts: '2026-10-10T10:01:00.000Z', event } });
+    const stored = { seq, ts: '2026-10-10T10:01:00.000Z', event };
+    // The server stores the event before it sends it: a later read of the session has it too.
+    events.push(stored);
+    const data = JSON.stringify({ sessionId: DONE.id, stored });
     for (const es of FakeEventSource.all) for (const fn of es.listeners.get('session.event') ?? []) fn(new MessageEvent('session.event', { data }));
   }
 }
@@ -49,16 +52,20 @@ const meta = (id: string, status: string): SessionMeta =>
     createdAt: '2026-10-10T10:00:00.000Z', updatedAt: '2026-10-10T10:00:00.000Z', turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error: null, reportNum: null, lastReason: null, policyVersion: 2,
   }) as SessionMeta;
 const DONE = meta('pipe-1', 'done');
+// The turn a reply begins: the server answers a reply only once the turn is recorded (manager.send after beginTurn).
+const TURN = { n: 1, runId: 'r-1', userText: 'carry on', startedAt: DONE.createdAt, endedAt: null, costUsd: 0, tokens: 0, permissionDenials: 0 };
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 let host: HTMLElement;
 let root: Root;
 let answer: ((r: Response) => void) | null;
 let posts: string[];
+let events: Array<{ seq: number; ts: string; event: { type: string; [k: string]: unknown } }>;
 
 beforeEach(async () => {
   answer = null;
   posts = [];
+  events = [{ seq: 1, ts: DONE.createdAt, event: { type: 'status', status: 'done' } }];
   sessionStorage.clear();
   sessionStorage.setItem('cc.pipeline.process', DONE.id);
   vi.stubGlobal('EventSource', FakeEventSource);
@@ -71,7 +78,7 @@ beforeEach(async () => {
       }
       if (url === '/api/pipeline') return Promise.resolve(json(200, READ));
       if (url === '/api/sessions') return Promise.resolve(json(200, [DONE]));
-      if (url === `/api/sessions/${DONE.id}`) return Promise.resolve(json(200, { meta: DONE, events: [{ seq: 1, ts: DONE.createdAt, event: { type: 'status', status: 'done' } }] }));
+      if (url === `/api/sessions/${DONE.id}`) return Promise.resolve(json(200, { meta: DONE, events: [...events] }));
       return Promise.resolve(json(200, []));
     }),
   );
@@ -102,6 +109,16 @@ async function type(text: string) {
 }
 
 describe('a reply or fork of a finished Process inbox run', () => {
+  it('given a reply whose turn the stream showed running and ended before the server answered, Evaluate visible comes back', async () => {
+    await type('carry on');
+    await act(async () => button('Send').click());
+    await act(async () => FakeEventSource.emit(2, { type: 'status', status: 'running', turn: 1 }));
+    await act(async () => FakeEventSource.emit(3, { type: 'status', status: 'done', turn: 1 }));
+    await act(async () => answer!(json(202, { ...DONE, status: 'running', turns: [TURN] })));
+    await until(() => !startMarked(), 'the start mark to clear once the server answered');
+    await until(() => !evaluate().disabled, 'Evaluate visible on again once the reply turn has ended');
+  });
+
   it('given Send refused because the run started from elsewhere meanwhile, Evaluate visible stays off while the run goes', async () => {
     await type('carry on');
     await act(async () => button('Send').click());
@@ -119,7 +136,7 @@ describe('a reply or fork of a finished Process inbox run', () => {
       expect(posts).toEqual([path]);
       expect(startMarked()).toBe(true);
       expect(evaluate().disabled).toBe(true);
-      await act(async () => answer!(json(202, label === 'Fork' ? meta('pipe-2', 'queued') : { ...DONE, status: 'queued' })));
+      await act(async () => answer!(json(202, label === 'Fork' ? meta('pipe-2', 'queued') : { ...DONE, status: 'running', turns: [TURN] })));
       await until(() => !startMarked(), 'the start mark to clear once the server answered');
       if (label === 'Fork') expect(sessionStorage.getItem('cc.pipeline.process')).toBe('pipe-2');
       // The run is going now, though neither its stream nor the sessions list has said so yet.
