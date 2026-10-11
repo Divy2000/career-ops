@@ -292,3 +292,17 @@ describe('Discover > AI search: add', () => {
     expect(panel!.sessionId ?? null).toBeNull();
   });
 });
+
+describe('Discover > AI search: result links (R23-feat-a-X-01)', () => {
+  it('an offer whose URL is not an http(s) posting URL shows its title as plain text, not a clickable link', async () => {
+    await act(async () => emitEnvelope!('offer', { url: 'javascript:alert(document.domain)', company: 'Evil Co', title: 'Click me' }, 1));
+    await act(async () => emitEnvelope!('offer', { url: 'https://jobs.example.com/ok', company: 'Good Co', title: 'SRE' }, 1));
+    const rows = [...host.querySelectorAll('tbody tr')];
+    const evil = rows.find((r) => r.textContent?.includes('Evil Co'))!;
+    expect(evil.textContent).toContain('Click me');
+    expect(evil.textContent).toContain('not a posting URL');
+    expect(evil.querySelector('a')).toBeNull();
+    const good = rows.find((r) => r.textContent?.includes('Good Co'))!;
+    expect(good.querySelector('a')?.getAttribute('href')).toBe('https://jobs.example.com/ok');
+  });
+});

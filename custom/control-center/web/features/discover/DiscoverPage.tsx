@@ -8,6 +8,7 @@ import { ActionButton, Message } from '../../components/ActionBar';
 import { DataState, Empty, Pill, Tabs, TableScroll } from '../../components/ui';
 import { AiSearchTab } from './AiSearchTab';
 import { addNote } from './addNote';
+import { PostingLink } from './PostingLink';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { lastSession } from '../../lib/lastSession';
 import type { RawLine } from '@shared/api';
@@ -385,9 +386,7 @@ export function NetworkScan() {
                       <tr key={p.url}>
                         <td>{p.company}</td>
                         <td>
-                          <a href={p.url} target="_blank" rel="noreferrer noopener">
-                            {p.title}
-                          </a>
+                          <PostingLink url={p.url}>{p.title}</PostingLink>
                         </td>
                         <td className="muted">{p.location ?? ''}</td>
                         <td className="mono muted">{p.postedAt ?? ''}</td>
@@ -413,7 +412,7 @@ export function NetworkScan() {
   );
 }
 
-function Fresh() {
+export function Fresh() {
   const q = useWhatsNew(7, 50);
   return (
     <DataState query={q}>
@@ -434,9 +433,7 @@ function Fresh() {
                 <tr key={o.url}>
                   <td>{o.company}</td>
                   <td>
-                    <a href={o.url} target="_blank" rel="noreferrer noopener">
-                      {o.title}
-                    </a>
+                    <PostingLink url={o.url}>{o.title}</PostingLink>
                   </td>
                   <td className="mono muted">{o.firstSeen}</td>
                 </tr>
