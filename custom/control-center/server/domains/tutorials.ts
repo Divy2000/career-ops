@@ -186,15 +186,28 @@ function realOrNull(p: string): string | null {
   }
 }
 
-type Resolved = { ok: true; abs: string; size: number } | { ok: false; reason: 'not found' | 'outside' };
+/** The errno code of a filesystem error (ELOOP, EACCES, EISDIR, ...); anything that is not one is rethrown. */
+function fsErrorCode(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (typeof code !== 'string') throw err;
+  return code;
+}
+
+type Resolved = { ok: true; abs: string; size: number } | { ok: false; reason: 'not found' | 'outside' | 'unreadable'; code?: string };
 
 /** A regular file reached from `folder` (already a realpath) that stays inside it after symlinks. */
 function resolveFile(folder: string, name: string): Resolved {
-  const real = realOrNull(path.join(folder, name));
-  if (real === null) return { ok: false, reason: 'not found' };
-  if (!inside(folder, real)) return { ok: false, reason: 'outside' };
-  const stat = fs.statSync(real);
-  return stat.isFile() ? { ok: true, abs: real, size: stat.size } : { ok: false, reason: 'not found' };
+  try {
+    const real = realOrNull(path.join(folder, name));
+    if (real === null) return { ok: false, reason: 'not found' };
+    if (!inside(folder, real)) return { ok: false, reason: 'outside' };
+    const stat = fs.statSync(real);
+    if (!stat.isFile()) return { ok: false, reason: 'not found' };
+    fs.accessSync(real, fs.constants.R_OK);
+    return { ok: true, abs: real, size: stat.size };
+  } catch (err) {
+    return { ok: false, reason: 'unreadable', code: fsErrorCode(err) };
+  }
 }
 
 export function tutorialsDir(dataRoot: string): string {
@@ -212,7 +225,8 @@ const mediaUrl = (id: string, file: string) => `/api/tutorials/${id}/media/${enc
 
 type GuideLoad = { ok: true; guide: TutorialGuide | null; docs: GuideDocs } | { ok: false; error: string };
 
-const refusal = (name: string, r: Extract<Resolved, { ok: false }>) => `"${name}" ${r.reason === 'outside' ? 'is outside the tutorial folder' : 'not found'}`;
+const refusal = (name: string, r: Extract<Resolved, { ok: false }>) =>
+  `"${name}" ${r.reason === 'outside' ? 'is outside the tutorial folder' : r.reason === 'unreadable' ? `cannot be read (${r.code})` : 'not found'}`;
 
 /** Reads and checks the guide a manifest names: every file it lists must exist inside the folder. All or nothing. */
 function loadGuide(folder: string, dir: string, manifest: TutorialManifest & { guide: string }): GuideLoad {
@@ -279,7 +293,7 @@ const partLabel = (p: TutorialPartManifest) => (p.duration === null ? '' : `part
 
 type SizedFile = TutorialFile & { bytes: number };
 
-/** An optional file of a tutorial: null when it is not named, or when it is missing or outside the folder (then with a warning). */
+/** An optional file of a tutorial: null when it is not named, or when it is missing, unreadable or outside the folder (then with a warning). */
 function optionalFile(dir: string, folder: string, kind: string, name: string | undefined, warnings: string[]): SizedFile | null {
   if (name === undefined) return null;
   const r = resolveFile(dir, name);
@@ -324,8 +338,14 @@ export function listTutorials(dataRoot: string): TutorialsRead {
   if (root === null) return result;
   const skip = (folder: string, message: string) => result.warnings.push({ folder, message });
   for (const folder of fs.readdirSync(root).filter((n) => !n.startsWith('.')).sort()) {
-    const dir = realOrNull(path.join(root, folder));
-    if (dir === null || !fs.statSync(dir).isDirectory()) continue;
+    let dir: string | null;
+    try {
+      dir = realOrNull(path.join(root, folder));
+      if (dir === null || !fs.statSync(dir).isDirectory()) continue;
+    } catch (err) {
+      skip(folder, `this folder cannot be read (${fsErrorCode(err)}), so it is skipped`);
+      continue;
+    }
     if (!inside(root, dir)) {
       skip(folder, 'this folder resolves outside the tutorials folder, so it is not read');
       continue;
@@ -335,8 +355,8 @@ export function listTutorials(dataRoot: string): TutorialsRead {
     try {
       raw = fs.readFileSync(manifestPath, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      skip(folder, 'no tutorial.json in this folder');
+      const code = fsErrorCode(err);
+      skip(folder, code === 'ENOENT' ? 'no tutorial.json in this folder' : `tutorial.json cannot be read (${code})`);
       continue;
     }
     let json: unknown;
@@ -394,7 +414,13 @@ export function openMedia(dataRoot: string, id: string, file: string): MediaOpen
   const type = MEDIA_TYPES[extOf(file)];
   if (!type) return { ok: false, status: 415, error: 'unsupported file type' };
   const root = realTutorialsRoot(dataRoot);
-  const folder = root === null ? null : realOrNull(path.join(root, id));
+  let folder: string | null;
+  try {
+    folder = root === null ? null : realOrNull(path.join(root, id));
+  } catch (err) {
+    fsErrorCode(err);
+    folder = null;
+  }
   if (root === null || folder === null || !inside(root, folder)) return { ok: false, status: 404, error: 'no such tutorial' };
   const found = resolveFile(folder, file);
   if (!found.ok) return { ok: false, status: 404, error: 'not found' };

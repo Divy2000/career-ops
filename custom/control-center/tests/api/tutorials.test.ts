@@ -220,6 +220,70 @@ describe('GET /api/tutorials', () => {
   });
 });
 
+describe('GET /api/tutorials with an unreadable tutorial folder', () => {
+  let t5: TestApp;
+  // Root reads a mode 000 file anyway, so the permission fixtures only exist for other users.
+  const asRoot = process.getuid?.() === 0;
+  const dir5 = () => path.join(t5.cfg.dataRoot, 'data', 'control-center', 'tutorials');
+  const get5 = (url: string) => t5.app.inject({ method: 'GET', url, headers: t5.authed });
+  const write5 = (folder: string, manifest: unknown, files: Record<string, string> = {}) => {
+    const d = path.join(dir5(), folder);
+    fs.mkdirSync(d, { recursive: true });
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(d, name), content);
+    if (manifest !== undefined) fs.writeFileSync(path.join(d, 'tutorial.json'), JSON.stringify(manifest));
+    return d;
+  };
+
+  beforeAll(async () => {
+    t5 = await makeTestApp();
+    write5('good', { id: 'good', title: 'Good', video: 'g.mp4' }, { 'g.mp4': 'x' });
+    fs.mkdirSync(path.join(write5('manifest-dir', undefined), 'tutorial.json'));
+    if (!asRoot) {
+      fs.chmodSync(path.join(write5('manifest-locked', { id: 'manifest-locked', title: 'Locked', video: 'l.mp4' }, { 'l.mp4': 'x' }), 'tutorial.json'), 0o000);
+      fs.chmodSync(path.join(write5('video-locked', { id: 'video-locked', title: 'Locked video', video: 'v.mp4' }, { 'v.mp4': 'x' }), 'v.mp4'), 0o000);
+      fs.chmodSync(path.join(write5('poster-locked', { id: 'poster-locked', title: 'Locked poster', video: 'p.mp4', poster: 'p.jpg' }, { 'p.mp4': 'x', 'p.jpg': 'x' }), 'p.jpg'), 0o000);
+    }
+    fs.symlinkSync('v.mp4', path.join(write5('video-loop', { id: 'video-loop', title: 'Loop', video: 'v.mp4' }), 'v.mp4'));
+    fs.symlinkSync('p.jpg', path.join(write5('poster-loop', { id: 'poster-loop', title: 'Poster loop', video: 'p.mp4', poster: 'p.jpg' }, { 'p.mp4': 'x' }), 'p.jpg'));
+    fs.symlinkSync('folder-loop', path.join(dir5(), 'folder-loop'));
+  });
+  afterAll(async () => {
+    if (!asRoot) for (const f of ['manifest-locked/tutorial.json', 'video-locked/v.mp4', 'poster-locked/p.jpg']) fs.chmodSync(path.join(dir5(), f), 0o644);
+    await t5.close();
+  });
+
+  it('lists the readable tutorials and names each unreadable folder in warnings', async () => {
+    const res = await get5('/api/tutorials');
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tutorials: Array<{ id: string }>; warnings: Array<{ folder: string; message: string }> };
+    expect(body.tutorials.map((x) => x.id)).toEqual(asRoot ? ['good', 'poster-loop'] : ['good', 'poster-locked', 'poster-loop']);
+    const byFolder = Object.fromEntries(body.warnings.map((w) => [w.folder, w.message]));
+    expect(byFolder['manifest-dir']).toMatch(/tutorial\.json.*EISDIR/);
+    if (!asRoot) {
+      expect(byFolder['manifest-locked']).toMatch(/tutorial\.json.*EACCES/);
+      expect(byFolder['video-locked']).toMatch(/video file .*v\.mp4.* cannot be read \(EACCES\)/);
+    }
+    expect(byFolder['video-loop']).toMatch(/video file .*v\.mp4.* cannot be read \(ELOOP\)/);
+    expect(byFolder['folder-loop']).toMatch(/ELOOP/);
+  });
+
+  it('drops an unreadable optional file with a warning and keeps the tutorial', async () => {
+    const entry = (await get5('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'poster-loop');
+    expect(entry.parts[0].poster).toBeNull();
+    expect(entry.warnings.join(' ')).toMatch(/poster file .*p\.jpg.* cannot be read \(ELOOP\), so it is ignored/);
+    if (asRoot) return;
+    const locked = (await get5('/api/tutorials')).json().tutorials.find((x: { id: string }) => x.id === 'poster-locked');
+    expect(locked.parts[0].poster).toBeNull();
+    expect(locked.warnings.join(' ')).toMatch(/poster file .*p\.jpg.* cannot be read \(EACCES\), so it is ignored/);
+  });
+
+  it('answers 404, not 500, for a media file that cannot be resolved', async () => {
+    expect((await get5('/api/tutorials/video-loop/media/v.mp4')).statusCode).toBe(404);
+    expect((await get5('/api/tutorials/folder-loop/media/v.mp4')).statusCode).toBe(404);
+    if (!asRoot) expect((await get5('/api/tutorials/poster-locked/media/p.jpg')).statusCode).toBe(404);
+  });
+});
+
 describe('GET /api/tutorials/:id/media/:file', () => {
   it('serves the whole file with range support advertised and the right type', async () => {
     const res = await media('demo', 'demo.mp4');
