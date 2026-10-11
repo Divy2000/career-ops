@@ -11,6 +11,7 @@
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const IMM = path.join('data', 'immigration');
@@ -18,6 +19,8 @@ const LIVE_SESSION = new Set(['queued', 'running', 'awaiting_user']);
 const STARTING_MS = 2 * 60_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
+// The recover guard lives for a stat and an rm, so one older than this was left by a claimant killed while breaking.
+const GUARD_STALE_MS = 2_000;
 
 export const claimFile = (dataRoot) => path.join(dataRoot, IMM, '.policy-pass.claim');
 
@@ -152,7 +155,7 @@ function sleep(ms) {
 const statOrNull = (dir) => fs.statSync(dir, { throwIfNoEntry: false }) ?? null;
 // The same directory, not one removed and made again at the path (pipeline-lock.mjs's sameLockDirectory).
 const sameLockDirectory = (a, b) => a.dev === b.dev && a.ino === b.ino && (a.ino !== 0 || a.birthtimeMs === b.birthtimeMs);
-const isStale = (stat) => Date.now() - stat.mtimeMs > LOCK_STALE_MS;
+const isStale = (stat, ms = LOCK_STALE_MS) => Date.now() - stat.mtimeMs > ms;
 
 /**
  * Breaks the lock when it is stale; true when it was removed. The verdict and the removal run under a recover guard,
@@ -167,9 +170,12 @@ function breakStale(lock) {
     fs.mkdirSync(guard);
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;
-    // A guard left by a claimant killed while breaking would block recovery for good; it ages out the same way.
+    // A guard left by a claimant killed while breaking would block recovery for good, so an old one is removed, once
+    // judged again: another claimant may have removed it meanwhile and taken a new one.
     const held = statOrNull(guard);
-    if (held && isStale(held)) fs.rmSync(guard, { recursive: true, force: true });
+    if (!held || !isStale(held, GUARD_STALE_MS)) return false;
+    const now = statOrNull(guard);
+    if (now && isStale(now, GUARD_STALE_MS) && sameLockDirectory(held, now)) fs.rmSync(guard, { recursive: true, force: true });
     return false;
   }
   try {
@@ -198,13 +204,21 @@ function locked(dataRoot, fn) {
       sleep(25);
     }
   }
-  const mine = statOrNull(lock);
+  // A token inside the lock names this claimant: one held so long it was broken as stale may now be another
+  // claimant's, even at the same inode (a file system that reuses inodes at once), and only this token proves it is not.
+  const token = randomUUID();
+  const owner = path.join(lock, 'owner');
+  fs.writeFileSync(owner, token);
   try {
     return fn();
   } finally {
-    // Only the lock this claimant made: one held so long it was broken as stale may now be another claimant's.
-    const now = statOrNull(lock);
-    if (mine && now && sameLockDirectory(mine, now)) fs.rmSync(lock, { recursive: true, force: true });
+    let held = null;
+    try {
+      held = fs.readFileSync(owner, 'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    if (held === token) fs.rmSync(lock, { recursive: true, force: true });
   }
 }
 

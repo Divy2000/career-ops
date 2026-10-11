@@ -220,6 +220,40 @@ test('many processes finding a crashed claimant\'s stale lock at once: exactly o
   }
 });
 
+test('a recover guard left by a claimant killed while breaking a stale lock does not block claims for long (R19-scripts-a-L1-02 review)', () => {
+  const r = root();
+  const lock = `${claimFile(r)}.lock`;
+  fs.mkdirSync(lock);
+  fs.mkdirSync(`${lock}.recover`);
+  const lockAge = new Date(Date.now() - 60_000);
+  const guardAge = new Date(Date.now() - 5_000);
+  fs.utimesSync(lock, lockAge, lockAge);
+  fs.utimesSync(`${lock}.recover`, guardAge, guardAge);
+  assert.deepEqual(tryClaim(r, { owner: 'session:s-1', batch: null }), { ok: true });
+  assert.equal(fs.existsSync(lock), false);
+  assert.equal(fs.existsSync(`${lock}.recover`), false);
+});
+
+test('a claimant whose lock was broken and taken by another while it held it leaves the other\'s lock in place (R19-scripts-a-L1-02 review)', () => {
+  const r = root();
+  const lock = `${claimFile(r)}.lock`;
+  const read = fs.readFileSync;
+  // While this claimant decides, another breaks its lock as stale and takes a new one at the same path.
+  fs.readFileSync = (file, ...rest) => {
+    if (file === claimFile(r)) {
+      fs.rmSync(lock, { recursive: true, force: true });
+      fs.mkdirSync(lock);
+    }
+    return read(file, ...rest);
+  };
+  try {
+    tryClaim(r, { owner: 'session:s-1', batch: null });
+  } finally {
+    fs.readFileSync = read;
+  }
+  assert.equal(fs.existsSync(lock), true, 'the other claimant\'s lock was removed');
+});
+
 test('a fork takes the claim from the paused session it forks, never from another live owner', () => {
   const r = root();
   session(r, 's-src', 'awaiting_user');
