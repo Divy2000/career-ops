@@ -100,14 +100,18 @@ describe('Danger zone delete', () => {
       return { ok: true };
     };
     function Page() {
-      useQuery({ queryKey: ['tracker', 'row', '4'], queryFn: read('row') });
-      useQuery({ queryKey: ['tracker', 'documents', 4], queryFn: read('documents') });
-      return createElement(DangerZone, { n: 4 });
+      const row = useQuery({ queryKey: ['tracker', 'row', '4'], queryFn: read('row') });
+      const documents = useQuery({ queryKey: ['tracker', 'documents', 4], queryFn: read('documents') });
+      return createElement('div', { 'data-loaded': String(row.isSuccess && documents.isSuccess) }, createElement(DangerZone, { n: 4 }));
     }
     // Real retry timing (main.tsx): a refetch of the deleted row that fails would wait a second before giving up.
     const qc = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
     await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(Page))));
-    await until(() => reads.length === 2, 'the page queries');
+    // A user deletes from a page that has finished loading. React Query delivers a finished fetch to the page on a
+    // later tick; waiting only for the fetches to start let that late render land after the delete, where it rebuilt
+    // the removed queries and fetched them again.
+    await until(() => host.querySelector('[data-loaded="true"]'), 'the page to finish loading');
+    expect(reads).toEqual(['row', 'documents']);
     await click('Preview delete (dry run)');
     reads.length = 0;
     await click('Confirm delete #4');
