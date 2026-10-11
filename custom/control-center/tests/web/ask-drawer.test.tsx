@@ -695,6 +695,62 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(navigations).toEqual([]);
   });
 
+  it('given the advisor names the company as the pipeline writes it (markdown-escaped), evaluates its postings (R21-shared-comp-L2-01)', async () => {
+    rows.push(row('https://jobs.acmelabs.example/1', 'Acme [Labs]'), row('https://jobs.acmelabs.example/2', 'Acme [Labs]'));
+    const item = await runProposal('Acme \\[Labs\\]');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acmelabs.example/1', 'https://jobs.acmelabs.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('given the advisor names the company in its plain spelling, evaluates its postings too (R21-shared-comp-L2-01)', async () => {
+    rows.push(row('https://jobs.acmelabs.example/1', 'Acme [Labs]'));
+    const item = await runProposal('Acme [Labs]');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acmelabs.example/1'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('given one pending row with a credential-bearing URL, evaluates the clean postings and says how many rows were left out (FU-askdrawer-creds)', async () => {
+    rows.push(row('https://user:secret@jobs.acme.example/9', 'Acme'));
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+    expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address');
+  });
+
+  it('given every clean posting is already being evaluated, the note still counts the rows left out (FU-askdrawer-creds review)', async () => {
+    rows.push(row('https://user:secret@jobs.acme.example/9', 'Acme'));
+    const listed = ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'].map((value, i) => ({ id: `s-active-${i}`, mode: 'oferta', status: 'running', target: { type: 'url', value } }));
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return json({ error: 'unexpected' }, 500);
+      }
+      if (String(url) === '/api/pipeline') return json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows });
+      if (String(url) === '/api/sessions') return json(listed);
+      return json([]);
+    });
+    await remountDrawer();
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('already being evaluated');
+    expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address');
+  });
+
+  it('given every pending row at the company has an unsendable URL, starts nothing and says why, without asking (FU-askdrawer-creds)', async () => {
+    rows.push(row('https://user:secret@jobs.initech.example/1', 'Initech'), row('ftp://jobs.initech.example/2', 'Initech'));
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('2 rows have a URL that is not a plain http(s) posting address');
+  });
+
   it('with no pending posting at that company, starts nothing and says so, without asking', async () => {
     await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Initech' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
