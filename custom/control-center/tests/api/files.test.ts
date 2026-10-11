@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { importCore } from '../../server/core/adapter.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -71,5 +72,34 @@ describe('user files', () => {
       expect(res.json().error).toMatch(/export it to PDF/);
     }
     expect(stored()).toEqual(before);
+  });
+
+  it('while an import or project save holds the article-digest.md lock, a Files editor PUT of articleDigest answers 503 busy with retry-after and writes nothing, then saves once it is free (R25-FU-01)', async () => {
+    const { acquirePipelineLock } = await importCore<{ acquirePipelineLock: (p: string, o?: { timeoutMs?: number }) => Promise<{ release(): void }> }>(t.cfg.codeRoot, 'pipeline-lock.mjs');
+    const file = path.join(t.cfg.dataRoot, 'article-digest.md');
+    const before = (await t.app.inject({ method: 'GET', url: '/api/files/user/articleDigest', headers: t.authed })).json();
+    const text = before.text;
+    const ifMatch = before.etag ?? '*';
+    const prior = process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+    process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = '300';
+    const lock = await acquirePipelineLock(file, { timeoutMs: 60_000 });
+    let released = false;
+    const put = () => t.app.inject({ method: 'PUT', url: '/api/files/user/articleDigest', headers: { ...t.authedWrite, 'if-match': ifMatch }, payload: { text: '# Digest from the editor\n' } });
+    try {
+      const busy = await put();
+      expect(busy.statusCode, busy.body).toBe(503);
+      expect(busy.headers['retry-after']).toBe('1');
+      expect(busy.json().error).toMatch(/busy.*try again/);
+      expect(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').toBe(text);
+      lock.release();
+      released = true;
+      const free = await put();
+      expect(free.statusCode, free.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toBe('# Digest from the editor\n');
+    } finally {
+      if (!released) lock.release();
+      if (prior === undefined) delete process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+      else process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = prior;
+    }
   });
 });
