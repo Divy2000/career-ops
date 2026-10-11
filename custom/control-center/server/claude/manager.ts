@@ -876,7 +876,15 @@ export class SessionManager {
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
       // SIGKILL: the turn is only over once the run has ended (its exit recorded), so the tracker waits for that instead
       // of finalizing a turn whose process is still writing the conversation.
-      if (!run || run.endedAt === null) return;
+      if (!run) {
+        // Its record is gone (a runs prune, a folder deleted by hand): nothing will ever record its exit, so the turn ends
+        // now, in error, and gives its report number back, as reconcile does for a run record missing after a restart.
+        stopRun();
+        clearInterval(timer);
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)).finally(() => this.active.delete(id));
+        return;
+      }
+      if (run.endedAt === null) return;
       clearInterval(timer);
       safePull();
       const ended = run;
