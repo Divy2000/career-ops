@@ -53,7 +53,8 @@ export function ShortlistScore({ score }: { score: number | null }) {
 }
 
 export function sponsorTone(tier: string | null | undefined): 'ok' | 'info' | 'neutral' | 'warn' | 'danger' {
-  switch ((tier ?? '').toLowerCase()) {
+  // A dol_tier line carries its counts after the tier word ("strong (120 LCAs FY2025)"): the leading word is the tier.
+  switch (/^[a-z-]*/.exec((tier ?? '').trim().toLowerCase())![0]) {
     case 'strong':
     case 'sponsoring':
       return 'ok';

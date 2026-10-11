@@ -25,4 +25,15 @@ describe('sponsor pill tone', () => {
   ])('a DOL tier %s keeps its tone %s', (tier, tone) => {
     expect(sponsorTone(tier)).toBe(tone);
   });
+
+  // A company file with no verdict yet falls back to its whole dol_tier line, which check.mjs writes as the tier plus
+  // its counts (custom/install/templates/_custom-sponsorship.md), so the tone comes from the leading tier word (R25-shared-comp-L2-02).
+  it.each([
+    ['staffing-shop (900 LCAs, 82% secondary)', 'danger'],
+    ['strong (120 LCAs FY2025)', 'ok'],
+    ['Moderate (40 LCAs)', 'info'],
+    ['weak (3 LCAs)', 'warn'],
+  ])('a dol_tier line %s reads as %s', (line, tone) => {
+    expect(sponsorTone(line)).toBe(tone);
+  });
 });
