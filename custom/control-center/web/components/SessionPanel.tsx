@@ -259,8 +259,8 @@ export function SessionPanel(props: SessionPanelProps) {
       }
       // A 202 can carry a turn that failed before it ran: nothing was started.
       if (marks && m.status === 'error') props.onStartFailed?.();
-      // Kept for another try once the setup is fixed.
-      if (!forkFailed) setReply('');
+      // Kept for another try once the setup is fixed: a turn that failed before it ran never recorded the text.
+      if (m.status !== 'error') setReply('');
     } catch (err) {
       if (marks) {
         props.onStartFailed?.();
