@@ -287,6 +287,13 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+# Seconds a Keychain read may wait (default 60), as in the daily job and the weekly sync: a locked login keychain can
+# make security wait on an unlock dialog nobody answers. perl's alarm wraps at 2^32, so the wait is capped at 3600.
+KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT-60}"
+if ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$KEYCHAIN_TIMEOUT" -gt 3600 ]; then
+  usage_error "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '$KEYCHAIN_TIMEOUT'."
+fi
+
 if [ -n "$DIR_ARG" ]; then
   DIR="$(abspath "$DIR_ARG")"
 elif [ -f "$SCRIPT_ROOT/doctor.mjs" ] && [ -e "$SCRIPT_ROOT/.git" ]; then
@@ -361,6 +368,51 @@ find_claude() {
 keychain_present() { security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; }
 
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
+
+# bounded <seconds> <command...>: runs the command and kills it when the alarm fires, exiting 124 as timeout(1) does
+# (stock macOS has none), the daily job's and the weekly sync's Keychain wait. The command stays in this process group.
+bounded() {
+  /usr/bin/perl -MPOSIX=WNOHANG -e '
+    my $limit = shift;
+    my $pid = fork;
+    die "cannot start $ARGV[0]: $!\n" unless defined $pid;
+    if ($pid == 0) {
+      exec { $ARGV[0] } @ARGV;
+      print STDERR "$ARGV[0]: $!\n";
+      exit($!{ENOENT} ? 127 : 126);
+    }
+    sub status { ($? & 127) ? 128 + ($? & 127) : $? >> 8 }
+    # The alarm can land just after the main waitpid reaped the command: only one still running is a timeout.
+    $SIG{ALRM} = sub {
+      my $reaped = $?;
+      my $r = waitpid $pid, WNOHANG;
+      if ($r == 0) { kill "KILL", $pid; waitpid $pid, 0; exit 124 }
+      exit status() if $r == $pid;
+      $? = $reaped;
+    };
+    alarm $limit;
+    waitpid $pid, 0;
+    alarm 0;
+    exit status();
+  ' "$@"
+}
+
+# keychain_problem <exit> <stderr> <retry>: why a Keychain read that failed did, worded as the weekly sync words it.
+# Only exit 44 (errSecItemNotFound) means the item is missing; any other failure leaves a stored token that is fine.
+keychain_problem() {
+  local why="${2:+: $2}" read="Could not read Keychain item $KEYCHAIN_SERVICE"
+  case "$1" in
+    44) printf '%s' "Keychain item $KEYCHAIN_SERVICE not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s $KEYCHAIN_SERVICE -w" ;;
+    124) printf '%s' "$read: security did not answer within $KEYCHAIN_TIMEOUT s. The login keychain is probably locked and waiting at an unlock prompt nobody answered. Unlock it with: security unlock-keychain, then $3." ;;
+    127) printf '%s' "$read: the security command was not found on PATH (it ships with macOS in /usr/bin)." ;;
+    126) printf '%s' "$read: the security command could not be run (exit 126$why); check that /usr/bin/security is the one first on PATH." ;;
+    # errSecAuthFailed: Deny at the Keychain prompt, or the item's access control refuses security.
+    51) printf '%s' "$read: security failed (exit 51$why). Access to it was denied: answer Always Allow when the Keychain prompt appears, or add /usr/bin/security to the item's access control in Keychain Access, then $3." ;;
+    # errSecInteractionNotAllowed: locked, with no way to prompt.
+    36) printf '%s' "$read: security failed (exit 36$why). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then $3." ;;
+    *) printf '%s' "$read: security failed (exit $1$why)." ;;
+  esac
+}
 
 # Whether the Control Center is already running on this data root, read from its
 # supervisor.lock (the file the supervisor keeps via acquireInstanceLock). Running
@@ -1168,7 +1220,31 @@ else
       if [ "$headless_ready" = 1 ] && [ "$recheck_identity" != "$gate_identity" ]; then
         say "  Claude Code changed while onboarding was being prepared (approved: $gate_identity; now: ${recheck_identity:--}); nothing was run."
         pending "Re-run with --onboard headless once Claude Code has finished updating. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
-      elif [ "$headless_ready" = 1 ]; then
+        headless_ready=0
+      fi
+      if [ "$headless_ready" = 1 ]; then
+        # Read as the Control Center, the daily job and the weekly sync read it: bounded, trimmed, and an empty token or
+        # a failed read refuses the run instead of starting Claude without the credential this step says it uses.
+        token_rc=0
+        token_why=""
+        token_err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || token_err=""
+        # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
+        headless_token="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${token_err:-/dev/null}" || exit "$?")" || token_rc=$?
+        headless_token="$(trim "$headless_token")"
+        if [ -n "$token_err" ]; then
+          token_why="$(tail -c 200 "$token_err" | tr '\n' ' ' | sed 's/ *$//')"
+          rm -f "$token_err"
+        fi
+        if [ "$token_rc" = 0 ] && [ -z "$headless_token" ]; then token_rc=44; fi
+        if [ "$token_rc" != 0 ]; then
+          headless_token=""
+          say "  $(keychain_problem "$token_rc" "$token_why" "re-run with --onboard headless")"
+          say "  Headless onboarding did not run."
+          pending "Fix the Keychain item as described above, then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+          headless_ready=0
+        fi
+      fi
+      if [ "$headless_ready" = 1 ]; then
         say "  Running a restricted headless Claude (reads your documents, writes drafts only to $draft). This uses your Claude subscription."
         # The token lives only in the child's environment; it is never echoed, logged or placed on a command line.
         # As in the Control Center's sessions, SUBPROCESS_ENV_SCRUB keeps it out of hook and tool children, and
@@ -1176,7 +1252,7 @@ else
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
-        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w)" ANTHROPIC_API_KEY="" \
+        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$headless_token" ANTHROPIC_API_KEY="" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
           "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
@@ -1189,6 +1265,7 @@ else
         else
           warn "  The headless run did not finish cleanly; review any drafts in $draft."
         fi
+        headless_token=""
         say "  Review the drafts, then finish interactively (nothing live was written):"
         say "    cd $QDIR && claude $(shell_quote 'Read custom/install/ONBOARDING.md and follow it.')"
       fi

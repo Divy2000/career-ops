@@ -1371,6 +1371,67 @@ test('--onboard headless without the Keychain item is a pending action (exit 3) 
   assert.match(r.out, /Keychain/);
 });
 
+// The Keychain token as headless onboarding reads it: trimmed, and with the security exit code checked, as the
+// Control Center, the daily job and the weekly sync read the same item (R23-scripts-b-L2-01, R23-scripts-b-L3-01).
+function headlessRun(env) {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env });
+  const ran = w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env'));
+  assert.doesNotMatch(r.out, /unexpected failure/, 'a refused Keychain read is not a crash');
+  return { w, r, ran };
+}
+
+test('--onboard headless hands claude the Keychain token trimmed, as the Control Center and the daily job read it (R23-scripts-b-L2-01)', () => {
+  const { w, r } = headlessRun({ FAKE_SECURITY_TOKEN: ` ${SECRET} \r` });
+  assert.ok(w.log().includes(`claude-token-len ${SECRET.length}`), `${w.log().join('\n')}\n${r.out}`);
+  assert.ok(!r.out.includes(SECRET));
+});
+
+test('--onboard headless with a Keychain item it cannot read (locked, exit 36) never starts claude and says to unlock it (R23-scripts-b-L3-01)', () => {
+  const { r, ran } = headlessRun({ FAKE_SECURITY_READ_EXIT: '36' });
+  assert.equal(ran, false, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security failed \(exit 36: security: SecKeychainSearchCopyNext: User interaction is not allowed\.\)\. The login keychain is probably locked or cannot prompt \(for example over SSH or before login\)\. Unlock it with: security unlock-keychain, then re-run with --onboard headless\./);
+  assert.doesNotMatch(r.out, /did not finish cleanly/);
+  assert.doesNotMatch(r.out, /not found/);
+});
+
+test('--onboard headless with access to the Keychain item denied (exit 51) never starts claude and says how to allow it (R23-scripts-b-L3-01)', () => {
+  const { r, ran } = headlessRun({ FAKE_SECURITY_READ_EXIT: '51' });
+  assert.equal(ran, false, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security failed \(exit 51[^)]*\)\. Access to it was denied: answer Always Allow when the Keychain prompt appears, or add \/usr\/bin\/security to the item's access control in Keychain Access, then re-run with --onboard headless\./);
+});
+
+test('--onboard headless whose Keychain read finds no item (exit 44) or only whitespace never starts claude and says to store the token (R23-scripts-b-L2-01)', () => {
+  for (const env of [{ FAKE_SECURITY_READ_EXIT: '44' }, { FAKE_SECURITY_TOKEN: ' \t ' }]) {
+    const { r, ran } = headlessRun(env);
+    assert.equal(ran, false, r.out);
+    assert.equal(r.status, 3, r.out);
+    assert.match(r.out, /Keychain item career-ops-claude-token not found\. Run: claude setup-token, then security add-generic-password -U -a "\$USER" -s career-ops-claude-token -w/);
+    assert.doesNotMatch(r.out, /Could not read/);
+  }
+});
+
+test('--onboard headless gives a Keychain read that waits on an unanswered unlock prompt CC_KEYCHAIN_TIMEOUT seconds, then refuses (R23-scripts-b-L3-01)', () => {
+  const { r, ran } = headlessRun({ FAKE_SECURITY_READ_HANG: '30', CC_KEYCHAIN_TIMEOUT: '1' });
+  assert.equal(ran, false, r.out);
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security did not answer within 1 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run with --onboard headless\./);
+});
+
+test('a CC_KEYCHAIN_TIMEOUT that is not 1 to 3600 whole seconds is a usage error before anything changes', () => {
+  for (const value of ['0', 'abc', '3601', '1.5', '']) {
+    const { w, D } = fresh({ keychain: true });
+    const before = w.snapshot();
+    const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CC_KEYCHAIN_TIMEOUT: value } });
+    assert.equal(r.status, 2, `${value}: ${r.out}`);
+    assert.match(r.out, new RegExp(`CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '${value.replace('.', '\\.')}'\\.`));
+    assert.deepEqual(w.snapshot(), before, value);
+  }
+});
+
 // ---------------------------------------------------------------- launchd, health, start
 
 test('launchd is skipped while onboarding is incomplete and the follow-up command is printed', () => {
