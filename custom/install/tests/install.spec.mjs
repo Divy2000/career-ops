@@ -880,6 +880,46 @@ test('--no-h1b-index skips it, and answering n on a terminal skips it too', () =
   assert.equal(b.w.calls('h1b-install').length, 0);
 });
 
+// The plugin (plugins/h1b-sponsor/lib/index.mjs indexPath) trims H1B_INDEX_PATH, refuses a blank one, and runs from the checkout.
+test('a relative H1B_INDEX_PATH is found in the checkout, not in the directory the installer was started from (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { 'data/h1b/shared.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+  assert.ok(r.out.includes(`index already installed: ${path.join(D, 'data/h1b/shared.gz')}`), r.out);
+});
+
+test('a relative H1B_INDEX_PATH that exists only under the starting directory is not taken as installed (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D);
+  fs.mkdirSync(path.join(w.cwd, 'data/h1b'), { recursive: true });
+  fs.writeFileSync(path.join(w.cwd, 'data/h1b/shared.gz'), 'x');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.doesNotMatch(r.out, /index already installed/, r.out);
+  assert.equal(w.calls('h1b-install').length, 1, r.out);
+});
+
+test('an H1B_INDEX_PATH with surrounding spaces is trimmed like the plugin trims it (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D);
+  const idx = path.join(w.T, 'shared', 'index.ndjson.gz');
+  w.write('shared/index.ndjson.gz', 'x');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: `  ${idx}  ` } });
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+  assert.ok(r.out.includes(`index already installed: ${idx}\n`), r.out);
+});
+
+test('a blank H1B_INDEX_PATH is the plugin\'s misconfiguration, not the default index: a pending action, nothing downloaded (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { 'data/h1b/index.ndjson.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: '   ' } });
+  assert.equal(r.status, 3, r.out);
+  assert.doesNotMatch(r.out, /index already installed/, r.out);
+  assert.match(r.out, /H1B_INDEX_PATH is set but empty/, r.out);
+  assert.equal(w.calls('plugins').length, 0, r.out);
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+});
+
 // ---------------------------------------------------------------- onboarding
 
 test('by default without a TTY onboarding is not started: the interactive command is printed with the copied paths and claude is not called', () => {

@@ -885,10 +885,23 @@ fi
 # ---------------------------------------------------------------- H-1B index
 
 step "8/11 H-1B sponsor index"
-H1B_INDEX="${H1B_INDEX_PATH:-$DIR/data/h1b/index.ndjson.gz}"
+# Resolved as the plugin's indexPath() does: trimmed, set-but-blank is an error, and a relative path is taken from the
+# checkout, which is where the plugin runs.
+H1B_INDEX="$DIR/data/h1b/index.ndjson.gz"
+H1B_BLANK=0
+if [ -n "${H1B_INDEX_PATH+set}" ]; then
+  H1B_INDEX="$(trim "$H1B_INDEX_PATH")"
+  case "$H1B_INDEX" in
+    '') H1B_BLANK=1 ;;
+    /*) ;;
+    *) H1B_INDEX="$DIR/$H1B_INDEX" ;;
+  esac
+fi
 H1B_CMD="cd $QDIR && node plugins.mjs enable h1b-sponsor --confirm && node plugins/h1b-sponsor/install-h1b-index.mjs"
 if [ "$NO_H1B" = 1 ]; then
   say "  skipped (--no-h1b-index); install later: $H1B_CMD"
+elif [ "$H1B_BLANK" = 1 ]; then
+  pending "H1B_INDEX_PATH is set but empty, so the h1b-sponsor plugin cannot read the H-1B index. Unset it to use the default index location, then run: $H1B_CMD"
 elif [ -f "$H1B_INDEX" ]; then
   say "  index already installed: $H1B_INDEX"
 elif [ "$DRY_RUN" = 1 ]; then
