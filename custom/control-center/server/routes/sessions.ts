@@ -294,13 +294,21 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       }
       userPrompt = pass.prompt;
     }
+    // A pass that does not start leaves no batch behind; a session that was created keeps it (dropUnheldPolicyBatch).
+    const dropBatch = () => {
+      if (pass) manager.dropUnheldPolicyBatch(pass.batch);
+    };
     try {
-      if (starting && !policyClaim.take(opts.cfg.dataRoot, starting, { batch: pass?.batch ?? null }).ok) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}` });
+      if (starting && !policyClaim.take(opts.cfg.dataRoot, starting, { batch: pass?.batch ?? null }).ok) {
+        dropBatch();
+        return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}` });
+      }
       const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: null, policyBatch: pass?.batch ?? null });
       if (starting && !handOver(starting, meta)) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}`, session: manager.cancel(meta.id) });
       return reply.code(202).send(meta);
     } catch (err) {
       if (starting) policyClaim.release(opts.cfg.dataRoot, starting);
+      dropBatch();
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
       throw err;
     }
