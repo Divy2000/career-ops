@@ -104,8 +104,11 @@ elif [ "$SECURITY_RC" = 127 ]; then
   fail "Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin)."
 elif [ "$SECURITY_RC" = 126 ]; then
   fail "Could not read Keychain item career-ops-claude-token: the security command could not be run (exit 126${SECURITY_WHY:+: $SECURITY_WHY}); check that /usr/bin/security is the one first on PATH."
-elif [ "$SECURITY_RC" = 36 ] || [ "$SECURITY_RC" = 51 ]; then
-  # errSecInteractionNotAllowed and errSecAuthFailed: locked with no way to prompt, or access denied at the prompt.
+elif [ "$SECURITY_RC" = 51 ]; then
+  # errSecAuthFailed: Deny at the Keychain prompt, or the item's access control refuses security.
+  fail "Could not read Keychain item career-ops-claude-token: security failed (exit 51${SECURITY_WHY:+: $SECURITY_WHY}). Access to it was denied: answer Always Allow when the Keychain prompt appears, or add /usr/bin/security to the item's access control in Keychain Access, then re-run."
+elif [ "$SECURITY_RC" = 36 ]; then
+  # errSecInteractionNotAllowed: locked, with no way to prompt.
   fail "Could not read Keychain item career-ops-claude-token: security failed (exit $SECURITY_RC${SECURITY_WHY:+: $SECURITY_WHY}). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then re-run."
 elif [ "$SECURITY_RC" != 0 ]; then
   fail "Could not read Keychain item career-ops-claude-token: security failed (exit $SECURITY_RC${SECURITY_WHY:+: $SECURITY_WHY})."

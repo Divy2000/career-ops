@@ -1500,15 +1500,15 @@ test('a Keychain read failing for a reason that is not a lock (security exit 50,
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
-test('a Keychain read refused for another reason (security exit 51) names the exit code without the setup-token advice (R22-scripts-b-L3-01)', () => {
+test('a Keychain read refused at the prompt (security exit 51) names the exit code and says access was denied, without the setup-token or unlock advice (R22-scripts-b-L3-01)', () => {
   const w = makeWorld();
   const home = path.join(w.base, 'home');
   mkdirSync(home);
   try {
     const res = runSync(w, { home, security: 'exit 51' });
     assert.equal(res.status, 1, res.log);
-    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 51\)\. .*security unlock-keychain/m);
-    assert.doesNotMatch(res.log, /not found|setup-token/);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 51\)\. Access to it was denied/m);
+    assert.doesNotMatch(res.log, /not found|setup-token|probably locked/);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
