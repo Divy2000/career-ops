@@ -36,13 +36,29 @@ const POLICY_ACK_RETRY_MS = 60_000;
 const POLICY_ACK_RETRY_CAP_MS = 30 * 60_000;
 
 const KEYCHAIN_HELP = 'Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
+/** errSecItemNotFound: the only `security find-generic-password` exit that means the item is absent (as supervisor/preflight.ts reads it). */
+const SECURITY_ITEM_NOT_FOUND = 44;
+const KEYCHAIN_TIMEOUT_MS = 5000;
 
-/** Reads the OAuth token from the Keychain at spawn time; the value never leaves the process except into the child's env. */
+function keychainUnreadable(why: string): string {
+  return `Could not read Keychain item career-ops-claude-token: ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
+}
+
+/**
+ * Reads the OAuth token from the Keychain at spawn time; the value never leaves the process except into the child's env.
+ * Only an absent (exit 44) or empty token asks for a new one: any other failure (a locked keychain, no UI to prompt, a
+ * timeout, no security command) leaves a stored token that is fine.
+ */
 export function keychainTokenReader(exec: Exec): TokenReader {
   return async () => {
     if (process.env.NODE_ENV === 'test' && process.env.CC_FAKE_TOKEN) return process.env.CC_FAKE_TOKEN;
-    const r = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { timeoutMs: 5000 });
-    if (r.code !== 0 || !r.stdout.trim()) throw new Error(KEYCHAIN_HELP);
+    const r = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { timeoutMs: KEYCHAIN_TIMEOUT_MS });
+    if (r.timedOut) throw new Error(keychainUnreadable(`security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s`));
+    if (r.code === SECURITY_ITEM_NOT_FOUND) throw new Error(KEYCHAIN_HELP);
+    // execNoShell's note for a command it could not spawn (ENOENT).
+    if (r.code !== 0 && /(?:^|\n)security: not found$/.test(r.stderr.trim())) throw new Error('Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin).');
+    if (r.code !== 0) throw new Error(keychainUnreadable(`security failed (exit ${r.code}${r.stderr.trim() ? `: ${r.stderr.trim().slice(-200)}` : ''})`));
+    if (!r.stdout.trim()) throw new Error(KEYCHAIN_HELP);
     return r.stdout.trim();
   };
 }
