@@ -55,8 +55,8 @@ export interface PreflightInput {
   claudeBin: string;
   nodeVersion: string;
   env: NodeJS.ProcessEnv;
-  /** Injected runner: an exit code, or the code and stdout (`claude --version` needs its output). */
-  exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string }>;
+  /** Injected runner: an exit code, or the code and stdout (`claude --version` needs its output), plus stderr and a timeout when known. */
+  exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string; stderr?: string; timedOut?: boolean }>;
   /** Per-attempt limit for `claude --version`; a cold first start can self-update before it answers. */
   claudeTimeoutMs?: number;
   /** Every claude binary found on this machine; more than one is a warning, since the first is pinned for the server. */
@@ -85,6 +85,16 @@ export interface PreflightResult {
   warnings: string[];
 }
 
+/** errSecItemNotFound: the only `security find-generic-password` exit that means the item is absent. */
+const SECURITY_ITEM_NOT_FOUND = 44;
+const KEYCHAIN_TIMEOUT_MS = 8000;
+
+/** Any other failure (locked keychain, no UI to prompt, a timeout) leaves a stored token that is fine. */
+function keychainUnreadable(r: { code: number; stderr?: string; timedOut?: boolean }): string {
+  const why = r.timedOut ? `security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s` : `security failed (exit ${r.code}${r.stderr?.trim() ? `: ${r.stderr.trim().slice(-200)}` : ''})`;
+  return `Could not read Keychain item "career-ops-claude-token": ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
+}
+
 export const KEYCHAIN_HELP =
   'Keychain item "career-ops-claude-token" is missing. Run: claude setup-token, then\n  security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
 
@@ -105,9 +115,9 @@ function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   });
 }
 
-async function exitCode(cmd: string, args: string[]): Promise<number | { code: number; stdout: string }> {
-  const r = await probe(cmd, args, 8000);
-  return r.enoent ? 127 : r.code;
+async function exitCode(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+  const r = await probe(cmd, args, KEYCHAIN_TIMEOUT_MS);
+  return { code: r.enoent ? 127 : r.code, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut };
 }
 
 const CLAUDE_FALLBACKS = ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
@@ -307,8 +317,10 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
   // Tests point CC_CLAUDE_BIN at the fake and must not depend on this machine's Keychain.
   const skipKeychain = input.env.NODE_ENV === 'test' && input.env.CC_SKIP_KEYCHAIN !== '0';
   if (!skipKeychain) {
-    const r = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w']);
-    if ((typeof r === 'number' ? r : r.code) !== 0) errors.push(KEYCHAIN_HELP);
+    const out = await exec('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w']);
+    const r: { code: number; stderr?: string; timedOut?: boolean } = typeof out === 'number' ? { code: out } : out;
+    if (r.code === SECURITY_ITEM_NOT_FOUND && !r.timedOut) errors.push(KEYCHAIN_HELP);
+    else if (r.code !== 0 || r.timedOut) errors.push(keychainUnreadable(r));
   }
   errors.push(...(await managedSettingsProblems(input.managedSettings)));
   const others = (input.claudeCandidates ?? []).filter((c) => c !== input.claudeBin);
