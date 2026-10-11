@@ -70,6 +70,8 @@ beforeEach(() => {
   document.body.append(host);
 });
 afterEach(async () => {
+  // A start a failed test left held would count as in flight in the next test.
+  await act(async () => (hold as { release: () => void } | null)?.release());
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
@@ -150,6 +152,19 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     sessions = [pipelineSession('s-pipe', 'running')];
     await act(async () => startThem.click());
     await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the note');
+    expect(posts).toEqual([]);
+  });
+
+  it('given a Process inbox that reported its id while the confirm was open but is not listed yet, Start them starts nothing', async () => {
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    const startThem = await until(() => button('Start them'), 'the confirm');
+    const { lastSession } = await import('@web/lib/lastSession');
+    act(() => lastSession('cc.pipeline.process').write('s-pipe'));
+    await act(async () => startThem.click());
+    await until(() => host.textContent?.includes('A Process inbox run started meanwhile'), 'the message');
     expect(posts).toEqual([]);
   });
 

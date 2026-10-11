@@ -89,16 +89,29 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
     setBusy(true);
     setMessage(null);
+    // From here until the sessions list has the started sessions, a Process inbox on the Inbox tab waits for this one.
+    markBatchStarting(true);
+    try {
+      await launch();
+    } finally {
+      await queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined);
+      markBatchStarting(false);
+      setBusy(false);
+    }
+  };
+  const launch = async () => {
     // A Process inbox can start while the confirm is open: the sessions list is read again before anything starts. It is
     // also the list from before the start, so a failure part way can tell which sessions it started.
     const now = await sessions.refetch();
-    if (now.isError || !now.data || livePipelineId(now.data) !== null || processStore.starting()) {
-      setBusy(false);
+    if (now.isError || !now.data || livePipelineId(now.data) !== null) return;
+    // One that reported its id after that read began is in no list yet. An id the read before the confirm already
+    // found unlisted is a session the server no longer has.
+    const remembered = processStore.read();
+    if (processStore.starting() || (remembered !== null && remembered !== readFor && !now.data.some((x) => x.id === remembered))) {
+      setMessage({ tone: 'danger', text: 'A Process inbox run started meanwhile, so no evaluation was started.' });
       return;
     }
-    const before = new Set(now.data.map((s) => s.id));
-    // A fan-out in flight is in no sessions list yet: marked, so a Process inbox on the Inbox tab waits for it.
-    markBatchStarting(true);
+    const before = new Set(now.data.map((x) => x.id));
     try {
       const r = await fanOut('oferta', list);
       const outcome = fanoutOutcome(r);
@@ -119,11 +132,6 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
         note = ' Check Sessions for any that started before retrying.';
       }
       setMessage({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}${note ? `.${note}` : ''}` });
-    } finally {
-      // The mark goes once the sessions list has the started sessions, so a page left meanwhile does not read an older one.
-      await queryClient.invalidateQueries({ queryKey: ['sessions'], exact: true, refetchType: 'all' }).catch(() => undefined);
-      markBatchStarting(false);
-      setBusy(false);
     }
   };
   return (
