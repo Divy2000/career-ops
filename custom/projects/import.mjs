@@ -155,7 +155,7 @@ const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
 function publish(tmp, base, merge) {
   try {
     if (base === null) {
-      const created = () => new Error(`article-digest.md was created while importing (the Control Center may have saved a project); nothing written, ${merge ? 'rerun to merge into the current library' : 'rerun with --merge'}`);
+      const created = () => new Error(`article-digest.md was created while importing (edited outside the import lock, such as in the file editor or by add-entry.mjs); nothing written, ${merge ? 'rerun to merge into the current library' : 'rerun with --merge'}`);
       try {
         linkSync(tmp, TARGET);
       } catch (err) {
@@ -178,7 +178,7 @@ function publish(tmp, base, merge) {
       return;
     }
     if ((existsSync(TARGET) ? readFileSync(TARGET, 'utf8') : null) !== base) {
-      throw new Error(`article-digest.md changed while importing (the Control Center may have saved a project); nothing written, rerun to merge into the current library`);
+      throw new Error(`article-digest.md changed while importing (edited outside the import lock, such as in the file editor or by add-entry.mjs); nothing written, rerun to merge into the current library`);
     }
     renameSync(tmp, TARGET);
   } finally {
