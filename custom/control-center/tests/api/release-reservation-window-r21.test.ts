@@ -110,4 +110,37 @@ describe('Release report numbers while a session is about to record its number (
       await app.close();
     }
   });
+
+  it('given a release that passed its check and is still running, when a Batch evaluate reserves meanwhile, then the number it takes is not released', async () => {
+    const ref = {} as { app: TestApp };
+    let fanning: Promise<{ json(): unknown }> | null = null;
+    let reservedDuringRelease = false;
+    // The release has passed its check; a Batch evaluate starts before the release subprocess runs.
+    const exec: Exec = async (bin, args, opts) => {
+      if (args.includes('--release') && fanning === null) {
+        fanning = call(ref.app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/fu-d'] });
+        await until(() => fs.readdirSync(path.join(ref.app.cfg.dataRoot, 'reports')).some((f) => f.endsWith('-RESERVED.md') && f !== '005-RESERVED.md'), 'the fan-out reservation', 1500).then(
+          () => (reservedDuringRelease = true),
+          () => undefined,
+        );
+      }
+      return execNoShell(bin, args, opts);
+    };
+    const app = (ref.app = await makeTestApp({}, { exec }));
+    process.env.FAKE_CLAUDE_SCENARIO = scenarioFile();
+    try {
+      const res = await call(app, 'POST', '/api/actions/pipeline.releaseReportNums', { params: { range: '8-50' } });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(fanning).not.toBeNull();
+      const fan = (await fanning!).json() as { sessions: Meta[]; reserved: number[] };
+      const n = fan.reserved[0]!;
+      expect(n).toBeGreaterThanOrEqual(8);
+      expect(n).toBeLessThanOrEqual(50);
+      expect(await settleOn(app, fan.sessions[0]!.id)).toMatchObject({ status: 'awaiting_user', reportNum: n });
+      expect(fs.existsSync(sentinel(app, n)), `reserved during the release: ${reservedDuringRelease}`).toBe(true);
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCENARIO;
+      await app.close();
+    }
+  });
 });

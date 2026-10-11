@@ -39,6 +39,8 @@ export interface ActionContext {
   dailyRunning?: () => Promise<boolean>;
   /** The live holder of the AI policy pass claim, if any (the daily job runs the same pass). */
   policyPassRunning?: () => { owner: string } | null;
+  /** Called once the request has settled (a sync action's run ended); a check that holds something until then adds here. */
+  onSettled?: Array<() => void>;
 }
 
 /** A check's refusal: a reason (400), or a reason with its own status (409 for a conflict with what is running). */
@@ -163,12 +165,26 @@ function auditBaseline(dataRoot: string, runId: string): { json?: string; proble
  * Release report numbers reads the session records to refuse a number a session holds, so it consults this too:
  * a fan-out records its sessions one at a time, and a re-reservation records its number after taking it.
  */
-const unrecordedReservations = new Map<string, { taking: number; nums: Set<number> }>();
+interface UnrecordedReservations {
+  taking: number;
+  nums: Set<number>;
+  /** Releases that passed the check and have not ended: a reservation waits for them, or one could free what it takes. */
+  releasing: Set<Promise<void>>;
+}
+const unrecordedReservations = new Map<string, UnrecordedReservations>();
 
-export function unrecordedFor(dataRoot: string): { taking: number; nums: Set<number> } {
+export function unrecordedFor(dataRoot: string): UnrecordedReservations {
   const key = path.resolve(dataRoot);
   let entry = unrecordedReservations.get(key);
-  if (!entry) unrecordedReservations.set(key, (entry = { taking: 0, nums: new Set() }));
+  if (!entry) unrecordedReservations.set(key, (entry = { taking: 0, nums: new Set(), releasing: new Set() }));
+  return entry;
+}
+
+/** Marks a reservation as being taken, once no release is running (a forced release removes whatever sentinel it finds). */
+export async function beginTakingReportNums(dataRoot: string): Promise<UnrecordedReservations> {
+  const entry = unrecordedFor(dataRoot);
+  while (entry.releasing.size > 0) await Promise.all(entry.releasing);
+  entry.taking += 1;
   return entry;
 }
 
@@ -322,7 +338,18 @@ export const ACTIONS: ActionDef[] = [
       const sessions = heldReportNums(ctx.dataRoot);
       if ('unreadable' in sessions) return { status: 409, error: `Session ${sessions.unreadable} cannot be read (${sessions.why}), so it may hold one of these numbers. Nothing was released.` };
       const held = sessions.held.filter((h) => h.num >= first! && h.num <= last!);
-      if (held.length === 0) return null;
+      if (held.length === 0) {
+        // Until the release has run, a reservation waits rather than take a number it is about to remove.
+        const entry = unrecordedFor(ctx.dataRoot);
+        let ended!: () => void;
+        const releasing = new Promise<void>((resolve) => (ended = resolve));
+        entry.releasing.add(releasing);
+        (ctx.onSettled ??= []).push(() => {
+          entry.releasing.delete(releasing);
+          ended();
+        });
+        return null;
+      }
       return { status: 409, error: `Report ${held.map((h) => `${h.num} is held by session ${h.sessionId}`).join(', ')}. Cancel or finish that session first; it releases its own number.` };
     },
     build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]),

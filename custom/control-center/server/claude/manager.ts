@@ -23,7 +23,7 @@ import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchAckable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { localDate } from '../../shared/local-date.js';
-import { unrecordedFor } from '../actions/registry.js';
+import { beginTakingReportNums, unrecordedFor } from '../actions/registry.js';
 
 export type TokenReader = () => Promise<string>;
 
@@ -385,8 +385,7 @@ export class SessionManager {
    * them to recordedReportNums, once a session record holds them or they went back to the pool.
    */
   private async takeReportNums(count: number): Promise<{ r: Awaited<ReturnType<Exec>>; nums: number[] }> {
-    const unrecorded = unrecordedFor(this.cfg.dataRoot);
-    unrecorded.taking += 1;
+    const unrecorded = await beginTakingReportNums(this.cfg.dataRoot);
     try {
       const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(count)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
       const nums = r.code === 0 ? parseReservedRange(r.stdout) : [];

@@ -32,57 +32,61 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     }
     const daily = opts.daily;
     const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined, policyPassRunning: opts.policyPass };
-    const problem = await action.check?.(parsed.data, ctx);
-    if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });
-    const cmd = action.build(parsed.data, ctx);
-    if (!action.sync) {
-      const startRequest = {
-        actionId: action.id,
-        label: action.label,
-        cost: action.cost,
-        resources: action.resources,
-        claude: action.claude,
-        params: parsed.data,
-        cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
-        env: { ...coreEnv, ...cmd.env },
-        tmpInputs: ctx.tmpInputs,
-        ...(action.exitMeaning ? { exitMeaning: action.exitMeaning } : {}),
-      };
-      if (action.single) {
-        const started = runner.startUnlessPending(startRequest);
-        if ('pending' in started) {
-          removeTmpInputs(cfg.dataRoot, ctx.tmpInputs);
-          return reply.code(409).send({ error: action.single(started.pending) });
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined, policyPassRunning: opts.policyPass, onSettled: [] as Array<() => void> };
+    try {
+      const problem = await action.check?.(parsed.data, ctx);
+      if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });
+      const cmd = action.build(parsed.data, ctx);
+      if (!action.sync) {
+        const startRequest = {
+          actionId: action.id,
+          label: action.label,
+          cost: action.cost,
+          resources: action.resources,
+          claude: action.claude,
+          params: parsed.data,
+          cmd: { bin: cmd.bin, args: cmd.args, cwd: cmd.cwd },
+          env: { ...coreEnv, ...cmd.env },
+          tmpInputs: ctx.tmpInputs,
+          ...(action.exitMeaning ? { exitMeaning: action.exitMeaning } : {}),
+        };
+        if (action.single) {
+          const started = runner.startUnlessPending(startRequest);
+          if ('pending' in started) {
+            removeTmpInputs(cfg.dataRoot, ctx.tmpInputs);
+            return reply.code(409).send({ error: action.single(started.pending) });
+          }
+          return reply.code(202).send({ runId: started.id });
         }
-        return reply.code(202).send({ runId: started.id });
+        const meta = runner.start(startRequest);
+        return reply.code(202).send({ runId: meta.id });
       }
-      const meta = runner.start(startRequest);
-      return reply.code(202).send({ runId: meta.id });
-    }
-    let r: Awaited<ReturnType<Exec>>;
-    try {
-      r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: { ...coreEnv, ...cmd.env } });
+      let r: Awaited<ReturnType<Exec>>;
+      try {
+        r = await exec(cmd.bin, cmd.args, { cwd: cmd.cwd, timeoutMs: SYNC_TIMEOUT_MS, env: { ...coreEnv, ...cmd.env } });
+      } finally {
+        removeTmpInputs(cfg.dataRoot, ctx.tmpInputs);
+      }
+      let result: unknown = r.stdout;
+      try {
+        result = JSON.parse(r.stdout);
+      } catch {
+        /* plain text output */
+      }
+      // A timeout's exit code is the runner's, not the action's, so neither findings nor exitMap may read it.
+      if (r.timedOut) return reply.code(504).send({ error: `${action.label} timed out after ${SYNC_TIMEOUT_MS / 1000} s`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
+      if (r.code !== 0) {
+        const findings = action.findings?.(r);
+        if (findings) return { result, stderr: r.stderr.slice(-4000), findings };
+        const explained = action.explainFailure?.(r);
+        if (explained) return reply.code(explained.status).send({ error: explained.error, exit: r.code, result });
+        const status = action.exitMap?.[r.code] ?? 500;
+        return reply.code(status).send({ error: `${action.id} exited ${r.code}`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
+      }
+      return { result, stderr: r.stderr.slice(-4000) };
     } finally {
-      removeTmpInputs(cfg.dataRoot, ctx.tmpInputs);
+      for (const settle of ctx.onSettled) settle();
     }
-    let result: unknown = r.stdout;
-    try {
-      result = JSON.parse(r.stdout);
-    } catch {
-      /* plain text output */
-    }
-    // A timeout's exit code is the runner's, not the action's, so neither findings nor exitMap may read it.
-    if (r.timedOut) return reply.code(504).send({ error: `${action.label} timed out after ${SYNC_TIMEOUT_MS / 1000} s`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
-    if (r.code !== 0) {
-      const findings = action.findings?.(r);
-      if (findings) return { result, stderr: r.stderr.slice(-4000), findings };
-      const explained = action.explainFailure?.(r);
-      if (explained) return reply.code(explained.status).send({ error: explained.error, exit: r.code, result });
-      const status = action.exitMap?.[r.code] ?? 500;
-      return reply.code(status).send({ error: `${action.id} exited ${r.code}`, exit: r.code, result, stderr: r.stderr.slice(-4000) });
-    }
-    return { result, stderr: r.stderr.slice(-4000) };
   });
 
   app.get('/api/runs', async () => runner.store.list());
