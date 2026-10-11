@@ -1,5 +1,6 @@
 // Static action registry: the only way the client runs anything. Every entry
 // builds an argv array; the client never sends a command string.
+import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
@@ -17,6 +18,7 @@ import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { STATUS_NOTE_MAX } from '../../shared/tracker-status.js';
 import { writeTmpInput } from './tmp-inputs.js';
 import { replyWatchRefused } from '../domains/replyCandidates.js';
+import { SessionStore, sessionsDir } from '../claude/sessions.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | `immigration:${string}`;
 
@@ -156,6 +158,27 @@ function auditBaseline(dataRoot: string, runId: string): { json?: string; proble
   return { problem: `Run ${runId} did not print the audit rows as JSON, so it cannot be the baseline.` };
 }
 
+/**
+ * The reserved report numbers this data root's sessions hold (a session keeps its number until its turn settles and
+ * clears it), or the session whose meta.json cannot be read: that one might hold any number.
+ */
+function heldReportNums(dataRoot: string): { held: Array<{ num: number; sessionId: string }> } | { unreadable: string; why: string } {
+  // The guard root only locates a session's policy files; reading a session's meta needs the data root alone.
+  const store = new SessionStore(dataRoot, '');
+  const held: Array<{ num: number; sessionId: string }> = [];
+  for (const entry of fs.readdirSync(sessionsDir(dataRoot), { withFileTypes: true })) {
+    // Only session folders, as SessionStore.list takes them.
+    if (!entry.isDirectory() || !/^[\w-]+$/.test(entry.name)) continue;
+    try {
+      const meta = store.read(entry.name);
+      if (meta && meta.reportNum !== null) held.push({ num: meta.reportNum, sessionId: meta.id });
+    } catch (err) {
+      return { unreadable: entry.name, why: (err as Error).message };
+    }
+  }
+  return { held };
+}
+
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
 const CONTACTS_VCF = 'custom/control-center/server/actions/contacts-vcf.mjs';
 const PLUGIN_AUDIT_ALL = 'custom/control-center/server/actions/plugin-audit-all.mjs';
@@ -259,7 +282,26 @@ export const ACTIONS: ActionDef[] = [
     build: (p, ctx) => node(ctx, 'shortlist', [...opt(p.minRank, '--min-rank'), ...opt(p.top, '--top')]),
   }),
   define({ id: 'pipeline.reserveReportNums', label: 'Reserve report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ count: positive.max(50) }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--count', String(p.count)]) }),
-  define({ id: 'pipeline.releaseReportNums', label: 'Release report numbers', cost: 'free', resources: ['tracker'], claude: false, sync: true, params: z.object({ range: z.string().regex(/^\d+(-\d+)?$/, 'one number (12) or one range (12-14), as reserve-report-num.mjs --release takes') }), build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]) }),
+  define({
+    id: 'pipeline.releaseReportNums',
+    label: 'Release report numbers',
+    cost: 'free',
+    resources: ['tracker'],
+    claude: false,
+    sync: true,
+    params: z.object({ range: z.string().regex(/^\d+(-\d+)?$/, 'one number (12) or one range (12-14), as reserve-report-num.mjs --release takes') }),
+    // reserve-report-num.mjs --release removes a sentinel whoever owns it, so a number a session was told is reserved
+    // (Batch evaluate, or one awaiting a reply) would be handed out again: refused while any session holds it.
+    check: (p, ctx) => {
+      const [first, last] = p.range.includes('-') ? p.range.split('-').map(Number) : [Number(p.range), Number(p.range)];
+      const sessions = heldReportNums(ctx.dataRoot);
+      if ('unreadable' in sessions) return { status: 409, error: `Session ${sessions.unreadable} cannot be read (${sessions.why}), so it may hold one of these numbers. Nothing was released.` };
+      const held = sessions.held.filter((h) => h.num >= first! && h.num <= last!);
+      if (held.length === 0) return null;
+      return { status: 409, error: `Report ${held.map((h) => `${h.num} is held by session ${h.sessionId}`).join(', ')}. Cancel or finish that session first; it releases its own number.` };
+    },
+    build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]),
+  }),
   // Batch evaluation is not an action: batch/batch-runner.sh runs its workers outside any guard, so Pipeline > Batch
   // starts one confined session per URL through POST /api/sessions/fanout instead.
   // ---- scan ----

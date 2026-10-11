@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { findAction } from '../../server/actions/registry.js';
 import { RunStore } from '../../server/runner/store.js';
+import { SessionStore } from '../../server/claude/sessions.js';
 import type { RunMeta } from '../../server/runner/store.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -346,6 +347,52 @@ describe('Release report numbers', () => {
     // A sentinel outside the released range stays.
     expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', '005-RESERVED.md'))).toBe(true);
     expect((await post('pipeline.releaseReportNums', { range: '8,9' })).statusCode).toBe(400);
+  });
+
+  it('refuses a range that holds a number a Batch evaluate session still holds, and releases nothing of it (R21-srv-core-L3-01)', async () => {
+    const reserved = await post('pipeline.reserveReportNums', { count: 2 });
+    expect(reserved.statusCode, reserved.body).toBe(200);
+    const range = String(reserved.json().result).match(/(\d+)(?:\s*-\s*(\d+))?/)!;
+    const [first, last] = [Number(range[1]), Number(range[2] ?? range[1])];
+    // What manager.fanOut records: a session told its reserved number, whose first turn is still running.
+    const sessions = new SessionStore(t.cfg.dataRoot, tempDir('cc-guard-'));
+    const holder = sessions.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://example.com/jobs/1' }, model: null, reportNum: last });
+    sessions.setStatus(holder.id, 'running');
+    const sentinel = (n: number) => path.join(t.cfg.dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`);
+    try {
+      const res = await post('pipeline.releaseReportNums', { range: `${first}-${last}` });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toContain(String(last));
+      expect([fs.existsSync(sentinel(first)), fs.existsSync(sentinel(last))]).toEqual([true, true]);
+      // A number no session holds still releases.
+      expect((await post('pipeline.releaseReportNums', { range: String(first) })).statusCode).toBe(200);
+      expect(fs.existsSync(sentinel(first))).toBe(false);
+      // Once the session lets the number go (finalize clears it), the release goes through.
+      sessions.setReportNum(holder.id, null);
+      expect((await post('pipeline.releaseReportNums', { range: String(last) })).statusCode).toBe(200);
+      expect(fs.existsSync(sentinel(last))).toBe(false);
+    } finally {
+      sessions.setReportNum(holder.id, null);
+      sessions.setStatus(holder.id, 'done');
+    }
+  });
+
+  it('refuses the release when a session record cannot be read, since that session may hold the number (R21-srv-core-L3-01)', async () => {
+    const reserved = await post('pipeline.reserveReportNums', { count: 1 });
+    expect(reserved.statusCode, reserved.body).toBe(200);
+    const num = Number(String(reserved.json().result).match(/\d+/)![0]);
+    const torn = path.join(t.cfg.dataRoot, 'data', 'control-center', 'sessions', 'torn-session-r21');
+    fs.mkdirSync(torn, { recursive: true });
+    fs.writeFileSync(path.join(torn, 'meta.json'), '{"id": "torn');
+    try {
+      const res = await post('pipeline.releaseReportNums', { range: String(num) });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toContain('torn-session-r21');
+      expect(fs.existsSync(path.join(t.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`))).toBe(true);
+    } finally {
+      fs.rmSync(torn, { recursive: true, force: true });
+      await post('pipeline.releaseReportNums', { range: String(num) });
+    }
   });
 });
 
