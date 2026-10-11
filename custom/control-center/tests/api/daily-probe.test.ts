@@ -129,17 +129,19 @@ describe('the daily job probe on real processes', () => {
       const root = path.join(T, 'root');
       const data = path.join(T, 'data');
       const bin = path.join(T, 'bin');
+      const tmp = path.join(T, 'tmp');
       fs.mkdirSync(path.join(root, 'custom', 'immigration'), { recursive: true });
       fs.mkdirSync(data);
       fs.mkdirSync(bin);
+      fs.mkdirSync(tmp);
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'custom', 'immigration', 'run-daily.sh'), path.join(root, 'custom', 'immigration', 'run-daily.sh'));
       fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'path-resolver.mjs'), path.join(root, 'path-resolver.mjs'));
       // It outlasts the test timeout, so afterEach's kill of the job's process group ends it, not the host's load; a
       // worker that dies before afterEach still leaves nothing behind for longer than ten minutes.
       fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nexec /bin/sleep 600\n', { mode: 0o755 });
       // The longest Keychain wait run-daily.sh allows, so its own bound never ends the job before the test does.
-      const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, CAREER_OPS_ROOT: data, CC_KEYCHAIN_TIMEOUT: '3600' };
-      return { root, data, env };
+      const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_KEYCHAIN_TIMEOUT: '3600' };
+      return { root, data, tmp, env };
     }
     // Waits for the pidfile for as long as the job is alive, not a fixed number of polls: under heavy load the job's
     // startup (node resolving the data root, the lockf re-exec) takes seconds, and a probe before it reads not running.
@@ -151,17 +153,27 @@ describe('the daily job probe on real processes', () => {
       }
       return probeOf(data).runningNow();
     };
+    // afterEach's SIGKILL skips the job's EXIT trap, so the Keychain error file it made is left where it was made: it
+    // has to be in this test's own temp dir, which the suite removes, not in /tmp, which the leak guard never sees.
+    const keychainTempIn = async (tmp: string, pid: number) => {
+      const job = children.find((c) => c.pid === pid)!;
+      const made = () => fs.readdirSync(tmp).filter((f) => f.startsWith('run-daily-keychain.'));
+      while (made().length === 0 && job.exitCode === null && job.signalCode === null) await new Promise((r) => setTimeout(r, 50));
+      return made();
+    };
 
     it('counts a run started from the checkout as bash custom/immigration/run-daily.sh', async () => {
       const w = world();
       const pid = await started('/bin/bash', ['custom/immigration/run-daily.sh'], { cwd: w.root, argv0: 'bash', env: w.env });
       expect(await runningSoon(w.data, pid)).toBe(true);
+      expect(await keychainTempIn(w.tmp, pid)).toHaveLength(1);
     });
 
     it('counts a run started from custom/immigration as bash run-daily.sh', async () => {
       const w = world();
       const pid = await started('/bin/bash', ['run-daily.sh'], { cwd: path.join(w.root, 'custom', 'immigration'), argv0: 'bash', env: w.env });
       expect(await runningSoon(w.data, pid)).toBe(true);
+      expect(await keychainTempIn(w.tmp, pid)).toHaveLength(1);
     });
   });
 });
