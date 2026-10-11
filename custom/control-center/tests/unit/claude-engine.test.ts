@@ -90,6 +90,13 @@ describe('invocation builder', () => {
     expect(text).not.toMatch(/intake\.mjs --text/);
   });
 
+  it('given a reserved report number below 100, when the preamble is built, then it names the number 3-digit zero-padded like reserve-report-num.mjs and the reports/ filenames', () => {
+    const rule10 = (reportNum: number) => buildPreamble({ policy: getModePolicy('oferta')!, outputLanguage: 'en', reportNum }).split('\n').find((l) => l.startsWith('10. '))!;
+    expect(rule10(42)).toContain('Report number 042 is reserved');
+    expect(rule10(7)).toContain('Report number 007 is reserved');
+    expect(rule10(1234)).toContain('Report number 1234 is reserved');
+  });
+
   it('writes a preamble that names the scope, the router context and the envelope contract, with no em dash', () => {
     const text = buildPreamble({ policy: getModePolicy('apply')!, outputLanguage: 'en', reportNum: 12 });
     expect(text).toContain('headless');
@@ -911,6 +918,16 @@ describe('guard hook', () => {
     expect(r.status).toBe(0);
     const lines = fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { path: string });
     expect(lines.at(-1)!.path).toBe('reports/002-new.md');
+  });
+
+  it('given files.ndjson ends in a torn line (a hook killed mid-append), when the next write is recorded, then its record starts a line of its own', () => {
+    const log = path.join(sessionDir, 'files.ndjson');
+    fs.appendFileSync(log, '{"path":"reports/torn.md","ab');
+    const r = hookRun(sessionDir, policy, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: path.join(realRoot, 'reports', '004-after-torn.md') }, tool_response: {}, cwd: realRoot });
+    expect(r.status).toBe(0);
+    const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    expect(lines.at(-2)).toBe('{"path":"reports/torn.md","ab');
+    expect((JSON.parse(lines.at(-1)!) as { path: string }).path).toBe('reports/004-after-torn.md');
   });
 });
 

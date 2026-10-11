@@ -26,6 +26,26 @@ function snapshot(sessionDir, abs) {
   else fs.writeFileSync(`${key}.absent`, '');
 }
 
+/** True when the file exists, is non-empty and its last byte is not a newline. */
+function endsTorn(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (size === 0) return false;
+    const last = Buffer.alloc(1);
+    fs.readSync(fd, last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function main() {
   const payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const policyFile = process.env.CC_POLICY_FILE;
@@ -50,7 +70,13 @@ async function main() {
       const found = typeof target === 'string' ? locate(policy, target) : null;
       // The bytes this write left, hashed now: a revert later refuses to overwrite anything that differs.
       const sha256 = found && fs.existsSync(found.abs) ? crypto.createHash('sha256').update(fs.readFileSync(found.abs)).digest('hex') : null;
-      if (found) fs.appendFileSync(path.join(sessionDir, 'files.ndjson'), JSON.stringify({ path: found.rel, abs: found.abs, root: found.root, tool, sha256, ts: new Date().toISOString() }) + '\n');
+      if (found) {
+        const log = path.join(sessionDir, 'files.ndjson');
+        // A hook killed mid-append leaves a line with no newline; this record must not join it, or it is lost to a line
+        // a turn offset (a raw line count) already gave the turn before.
+        const lead = endsTorn(log) ? '\n' : '';
+        fs.appendFileSync(log, `${lead}${JSON.stringify({ path: found.rel, abs: found.abs, root: found.root, tool, sha256, ts: new Date().toISOString() })}\n`);
+      }
     }
     process.exit(0);
   }

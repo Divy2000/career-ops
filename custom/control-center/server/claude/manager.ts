@@ -125,6 +125,8 @@ export class SessionManager {
   private fanningOut = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
   private cancelledBeforeSpawn = new Set<string>();
+  /** Sessions whose own turn is being prepared and not yet spawned (`sending` also holds a fork's source). */
+  private preparing = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
   private policyAckTimer: NodeJS.Timeout | null = null;
@@ -379,8 +381,10 @@ export class SessionManager {
   cancel(id: string): SessionMeta {
     const meta = this.must(id);
     const turn = meta.turns.at(-1);
-    if (!turn && meta.status === 'queued' && this.sending.has(id)) {
-      // Its first turn is still preparing (the CLI version probe, the Keychain read): it ends before Claude is spawned.
+    if (this.preparing.has(id)) {
+      // A turn still preparing (the CLI version probe, a later turn's re-reservation, the Keychain read) ends before
+      // Claude is spawned.
+      if (this.cancelledBeforeSpawn.has(id)) return meta;
       this.cancelledBeforeSpawn.add(id);
       this.store.setStatus(id, 'cancelled');
       this.emit(id, { type: 'status', status: 'cancelled', reason: 'cancel requested' });
@@ -654,15 +658,20 @@ export class SessionManager {
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     const claimed = !this.sending.has(meta.id);
     if (claimed) this.sending.add(meta.id);
+    this.preparing.add(meta.id);
     try {
       return await this.prepareAndSpawn(meta, policy, prompt, opts);
     } finally {
       if (claimed) this.sending.delete(meta.id);
+      this.preparing.delete(meta.id);
       this.cancelledBeforeSpawn.delete(meta.id);
     }
   }
 
-  /** A turn cancelled before its run started: a first turn's report reservation goes back to the pool, as for one that cannot start. */
+  /**
+   * A turn cancelled before its run started: a first turn's report reservation goes back to the pool and a later turn's
+   * stays with the session, as for one that cannot start.
+   */
   private async endCancelledBeforeSpawn(meta: SessionMeta): Promise<SessionMeta> {
     const num = this.store.read(meta.id)?.reportNum ?? null;
     if (num !== null && meta.turns.length === 0) {
@@ -730,6 +739,8 @@ export class SessionManager {
     }
     // Checked after the last await: no cancel can land between here and the spawn.
     if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
+    // From here a cancel stops the run like any other.
+    this.preparing.delete(meta.id);
     let run: RunMeta;
     try {
       run = this.runner.start({
