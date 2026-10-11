@@ -121,7 +121,7 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
-  /** The postings (mode and URL) a fan-out is starting right now, before their sessions exist. */
+  /** The postings (mode and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
@@ -187,20 +187,21 @@ export class SessionManager {
     const policy = this.turnPolicy(input.mode);
     const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null, policyBatch: input.policyBatch ?? null });
     onCreated?.(meta);
-    return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
+    return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed, original: true });
   }
 
   /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
   isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
-    return target.type === 'url' && !!target.value && this.fanningOut.has(`${mode}\0${target.value}`);
+    const key = postingKey(target);
+    return key !== null && this.fanningOut.has(`${mode}\0${key}`);
   }
 
   /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
-  liveEvaluationFor(mode: string, target: SessionMeta['target']): string | null {
+  liveEvaluationFor(mode: string, target: SessionMeta['target'], exceptId?: string): string | null {
     const key = postingKey(target);
     if (key === null) return null;
     for (const m of this.readableSessions()) {
-      if (m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
+      if (m.id !== exceptId && m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
     }
     return null;
   }
@@ -210,33 +211,88 @@ export class SessionManager {
     assertCurrentPolicy(meta);
     const policy = this.turnPolicy(meta.mode);
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
-    if (this.sending.has(id)) throw new BusyError(`session ${id} is starting a turn`);
-    if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${id} is ${meta.status}`);
-    // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a reply now
-    // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
-    if (this.active.has(id)) throw new BusyError(`session ${id} is still finishing its previous turn`);
+    this.assertIdle(meta);
     this.sending.add(id);
     try {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
-      return await this.runTurn(meta, policy, prompt, { resume: this.hasConversation(meta) || forkPending, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
+      const resume = this.hasConversation(meta) || forkPending;
+      const unclaim = resume ? () => {} : this.claimReplay(meta);
+      try {
+        return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
+      } finally {
+        unclaim();
+      }
     } finally {
       this.sending.delete(id);
     }
   }
 
   async fork(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
-    const src = this.must(id);
-    assertCurrentPolicy(src);
-    const policy = this.turnPolicy(src.mode);
-    // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
-    if (!this.hasConversation(src)) {
-      const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
-      return this.runTurn(fresh, policy, prompt, { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+    const first = this.must(id);
+    assertCurrentPolicy(first);
+    const policy = this.turnPolicy(first.mode);
+    // A source with a turn starting or running would get a second paid run beside it, on the conversation it is writing.
+    this.assertIdle(first, { finishing: false });
+    this.sending.add(id);
+    try {
+      // A cancelled turn still stopping may yet start the conversation, or write the report a replayed request would.
+      await this.untilFinished(id);
+      const src = this.must(id);
+      // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
+      if (!this.hasConversation(src)) {
+        // Not excluded from the check: a source still waiting for the user evaluates the posting beside the copy.
+        const unclaim = this.claimReplay(src, null);
+        try {
+          const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
+          return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed, original: true });
+        } finally {
+          unclaim();
+        }
+      }
+      const forked = this.store.fork(id);
+      return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+    } finally {
+      this.sending.delete(id);
     }
-    const forked = this.store.fork(id);
-    return this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
+  }
+
+  /**
+   * Refuses a session with a turn being prepared or running, and (unless `finishing` is false) one whose ended turn is
+   * still finishing (its process may live until SIGKILL, and its finalize is still to run).
+   */
+  private assertIdle(meta: SessionMeta, opts: { finishing?: boolean } = {}): void {
+    if (this.sending.has(meta.id)) throw new BusyError(`session ${meta.id} is starting a turn`);
+    if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${meta.id} is ${meta.status}`);
+    // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a new turn now
+    // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
+    if (opts.finishing !== false && this.active.has(meta.id)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+  }
+
+  /** Waits (up to RUN_END_WAIT_MS) for a session's ended turn to finish stopping and finalizing; refused when it does not. */
+  private async untilFinished(id: string): Promise<void> {
+    const deadline = Date.now() + RUN_END_WAIT_MS;
+    while (this.active.has(id)) {
+      if (Date.now() > deadline) throw new BusyError(`session ${id} is still finishing its previous turn`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  /**
+   * A replayed original request starts the posting's evaluation again: refused while another session evaluates it, and
+   * claimed (as a starting fan-out claims its URLs) until its turn is running, so no start slips in while it prepares.
+   * `exceptId` is the session doing the replay, which does not count against itself. Returns the release.
+   */
+  private claimReplay(meta: SessionMeta, exceptId: string | null = meta.id): () => void {
+    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another evaluation is already starting ${meta.target.value}`);
+    const live = this.liveEvaluationFor(meta.mode, meta.target, exceptId ?? undefined);
+    if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
+    const posting = postingKey(meta.target);
+    if (posting === null) return () => {};
+    const key = `${meta.mode}\0${posting}`;
+    this.fanningOut.add(key);
+    return () => this.fanningOut.delete(key);
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
@@ -246,7 +302,7 @@ export class SessionManager {
     // reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const live = new Map<string, string>();
     for (const m of this.readableSessions()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
-    const key = (url: string) => `${input.mode}\0${url}`;
+    const key = (url: string) => `${input.mode}\0${postingKey({ type: 'url', value: url })}`;
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
     for (const url of input.urls) {
@@ -450,6 +506,36 @@ export class SessionManager {
     return conversationStarted(meta) || transcriptFiles(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId).some((f) => fs.existsSync(f));
   }
 
+  private originalRequestPath(id: string): string {
+    return path.join(this.store.guardDirOf(id), 'original-request.txt');
+  }
+
+  /** Kept from the session's first turn on: the route adds the target to that message only, so a later fresh start needs it. */
+  private recordOriginalRequest(id: string, prompt: string): void {
+    const file = this.originalRequestPath(id);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      fs.writeFileSync(file, prompt, { flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+
+  /**
+   * A turn that starts a fresh conversation after the first one never reached Claude (it failed before spawn, or died
+   * before the CLI saved anything) would otherwise carry only the reply: the original request and its target go first.
+   */
+  private withOriginalRequest(meta: SessionMeta, prompt: string): string {
+    let original: string | undefined;
+    try {
+      original = fs.readFileSync(this.originalRequestPath(meta.id), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      original = meta.turns[0]?.userText;
+    }
+    return original ? `${original}\n\n${prompt}` : prompt;
+  }
+
   private must(id: string): SessionMeta {
     const meta = this.read(id);
     if (!meta) throw new NotFoundError(`no session ${id}`);
@@ -501,7 +587,62 @@ export class SessionManager {
     return this.store.read(meta.id)!;
   }
 
-  private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean }): Promise<SessionMeta> {
+  /**
+   * A later turn of a session that holds a reserved number, which it may have waited on for hours: the stale-sentinel
+   * GC (verify-pipeline.mjs, reserve-report-num.mjs --gc) frees a sentinel by age alone, and the next reservation hands
+   * the number out again. A sentinel still its own (written no later than the session got the number) is refreshed; a
+   * lost one is replaced by a fresh reservation, or by none when that fails (the turn then numbers its report itself).
+   */
+  private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
+    const num = meta.reportNum;
+    if (num === null || meta.creditedReport?.num === num) return meta;
+    const sentinel = path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    const createdAt = readSentinelCreatedAt(sentinel);
+    if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
+      const now = new Date();
+      try {
+        fs.utimesSync(sentinel, now, now);
+        // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
+        if (readSentinelCreatedAt(sentinel) === createdAt) return meta;
+      } catch (err) {
+        // Collected between the read and the refresh: the number is lost like any other.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+    }
+    // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
+    this.store.setReportNum(meta.id, null);
+    const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', '1'], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+    const fresh = r.code === 0 ? parseReservedRange(r.stdout) : [];
+    if (fresh.length === 1) {
+      // Recorded first: a number held without its record would read as lost on the next turn. One that cannot be
+      // recorded goes straight back to the pool, and the turn fails holding none.
+      try {
+        fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
+      } catch (err) {
+        await this.releaseReportNum(fresh[0]!, false);
+        throw err;
+      }
+      this.store.setReportNum(meta.id, fresh[0]!);
+    } else console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
+    return this.store.read(meta.id)!;
+  }
+
+  private reservationPath(id: string): string {
+    return path.join(this.store.guardDirOf(id), 'reservation.json');
+  }
+
+  /** When the session got `num`: a fan-out reserves before it creates the session; a later re-reservation is recorded. */
+  private reservedAt(meta: SessionMeta, num: number): number {
+    try {
+      const r = JSON.parse(fs.readFileSync(this.reservationPath(meta.id), 'utf8')) as { num?: unknown; at?: unknown };
+      if (r.num === num && typeof r.at === 'number') return r.at;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    }
+    return Date.parse(meta.createdAt);
+  }
+
+  private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
     const sessionDir = this.store.guardDirOf(meta.id);
     const n = meta.turns.length + 1;
@@ -515,9 +656,12 @@ export class SessionManager {
     try {
       const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
       const deny = blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
+      // Only a session's own first message: a replay of one that was never kept must not record the bare reply as it.
+      if (opts.original === true) this.recordOriginalRequest(meta.id, prompt);
       assertRootsConfinable(this.cfg.codeRoot, this.cfg.dataRoot, this.deps.home ?? os.homedir());
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
+      if (n > 1) meta = await this.reassertReservation(meta);
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
@@ -905,6 +1049,17 @@ function postingKey(target: SessionMeta['target']): string | null {
     if (jd !== null) return `jds\0${jd}`;
   }
   return null;
+}
+
+/** When a reservation sentinel was claimed (reserve-report-num writes created_at), or null when it is gone or unreadable. */
+function readSentinelCreatedAt(sentinel: string): number | null {
+  try {
+    const at = Date.parse((JSON.parse(fs.readFileSync(sentinel, 'utf8')) as { created_at?: string }).created_at ?? '');
+    return Number.isNaN(at) ? null : at;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    return null;
+  }
 }
 
 /** The minimal policy reconcile uses to finish a turn whose mode no longer resolves (removed or renamed upstream): finalize only reads its class. */

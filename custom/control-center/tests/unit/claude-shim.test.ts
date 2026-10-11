@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CLAUDE_SHIM_PATH, confinedArgv } from '../../server/claude/claude-shim.mjs';
 import { claudeVersionGate } from '../../server/claude/confinement.mjs';
+import { neutralizeFileMentions } from '../../server/claude/invocation.js';
 import { CONTRACT } from '../../server/core/adapter.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -53,6 +54,21 @@ describe('claude shim: argv rewriting', () => {
     expect(confinedArgv(['-p', 'x', '--allowedTools=Bash'])).toEqual({ reason: expect.stringContaining('--allowedTools') });
   });
 
+  it('given posting text with an @-mention in the prompt, the mention reaches the CLI inert, exactly as a session prompt does (R19-claude-L2-01)', () => {
+    const prompt = 'id: 0\ntitle: Staff Engineer (@.env)\n@.git/config [@~/.ssh/id_rsa] "@x" https://medium.com/@acme a@b.example';
+    const out = confinedArgv(['-p', prompt, '--model', 'sonnet']);
+    expect(out.argv?.[1]).toBe(neutralizeFileMentions(prompt));
+    expect(out.argv?.[1]).toContain('(@\u2060.env)');
+    expect(out.argv?.[1]).toContain('https://medium.com/@acme');
+    // Every character class edge the session rule has: the shim's copy must agree on all of them.
+    const corpus = ['@x', '(@/etc/passwd)', '"@x"', "'@x'", '[@x]', '{@x}', '<@x>', 'a,@x', 'a;@x', 'a!@x', 'a|@x', 'a\\@x', 'line\n@x', 'tab\t@x', 'cr\r@x', '@\u2060x', '@@x', 'a@b.com', 'first.last+tag@example.co', 'user-1@x.io', 'scheme:@x', 'https://x.example/%@y', 'https://x.example/q?@z', 'https://x.example/a=@b&@c', 'https://medium.com/@acme/x', 'mailto:me@example.com', 'é@x', '_@x', '9@x', '\u00a0@x'];
+    const replaceLine = (file: string) => fs.readFileSync(file, 'utf8').match(/return text\.replace\(.*\);/g);
+    const sessionRule = replaceLine(path.join(path.dirname(CLAUDE_SHIM_PATH), 'invocation.ts'));
+    expect(sessionRule).toHaveLength(1);
+    expect(replaceLine(CLAUDE_SHIM_PATH)).toEqual(sessionRule);
+    for (const text of corpus) expect(confinedArgv(['-p', `${text} ${text}`]).argv?.[1], JSON.stringify(text)).toBe(neutralizeFileMentions(`${text} ${text}`));
+  });
+
   it('wraps only print-mode calls and needs a value for a value flag', () => {
     expect(confinedArgv(['hello'])).toEqual({ reason: expect.stringMatching(/print mode/) });
     expect(confinedArgv(['-p', 'x', '--model'])).toEqual({ reason: expect.stringMatching(/--model needs a value/) });
@@ -67,6 +83,14 @@ describe('claude shim: running the real binary', () => {
     expect(r.stdout).toBe('[{"id":0,"score":4,"reason":"fits"}]');
     expect(real.calls()).toEqual([{ argv: ['-p', 'rank these', '--model', 'sonnet', ...CONFINED], autoupdater: '1', token: 'tok' }]);
     expect(shim(['-p', 'x'], { CC_CLAUDE_BIN: realClaude(APPROVED, { exit: 7 }).bin }).status).toBe(7);
+  });
+
+  it('a ranked posting titled "(@.env)" reaches the real claude with the mention inert (R19-claude-L2-01)', () => {
+    const real = realClaude(APPROVED);
+    const r = shim(['-p', 'title: Staff Engineer (@.env)', '--model', 'sonnet'], { CC_CLAUDE_BIN: real.bin });
+    expect(r.status, r.stderr).toBe(0);
+    const [call] = real.calls();
+    expect(call!.argv).toEqual(['-p', 'title: Staff Engineer (@\u2060.env)', '--model', 'sonnet', ...CONFINED]);
   });
 
   it('an unapproved Claude Code never runs the call: exit 3 with the reason', () => {
