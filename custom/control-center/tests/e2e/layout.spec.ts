@@ -68,7 +68,13 @@ for (const viewport of VIEWPORTS) {
       const policy = page.locator('.card', { has: page.getByRole('heading', { name: 'Policy today' }) });
       await expect(policy).not.toContainText('**');
       await expect(policy).not.toContainText('https://');
-      expect(await policy.getByRole('list', { name: 'Policy highlights' }).getByRole('listitem').count()).toBeLessThanOrEqual(4);
+      // The stress digest's newest section has five bullets, each led by a bold sentence: the summary keeps the first
+      // four leads and drops the fifth.
+      const highlights = policy.getByRole('list', { name: 'Policy highlights' }).getByRole('listitem');
+      await expect(highlights).toHaveCount(4);
+      await expect(highlights.first()).toHaveText('Backfill run (official items from 2026-01 to 2026-09).');
+      await expect(highlights.last()).toHaveText('Public charge rule changed and a new Form I-485 is required.');
+      await expect(policy).not.toContainText('Fifth bullet');
       await expect(policy.getByRole('link', { name: 'Read full digest' })).toHaveAttribute('href', /\/sponsorship/);
     });
 
