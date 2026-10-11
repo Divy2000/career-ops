@@ -96,4 +96,21 @@ describe('palette mode launch while its start is in flight', () => {
     expect(document.body.querySelector('.dialog__title')?.textContent).toBe('Start a research session');
     expect(navigated).toEqual([]);
   });
+
+  it('given a start in flight, when the user moves to another page, then the late answer does not navigate away from it', async () => {
+    const onClose = vi.fn();
+    window.history.pushState(null, '', '/today');
+    await startInFlight(onClose);
+    window.history.pushState(null, '', '/tracker');
+    await act(async () => answerStart!(new Response(JSON.stringify({ id: 's-deep', mode: 'deep', status: 'queued', target: { type: 'none', value: '' } }), { status: 202, headers: { 'content-type': 'application/json' } })));
+    expect(navigated).toEqual([]);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('given a start in flight on the same page, when it answers, then it opens the session', async () => {
+    window.history.pushState(null, '', '/today');
+    await startInFlight(() => undefined);
+    await act(async () => answerStart!(new Response(JSON.stringify({ id: 's-deep', mode: 'deep', status: 'queued', target: { type: 'none', value: '' } }), { status: 202, headers: { 'content-type': 'application/json' } })));
+    expect(navigated).toEqual([{ to: '/sessions/$id', params: { id: 's-deep' } }]);
+  });
 });

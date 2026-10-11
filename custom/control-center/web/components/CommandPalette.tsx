@@ -197,6 +197,8 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
   }, []);
   const start = async () => {
     setBusy(true);
+    // The palette's Go to stays live over this dialog: a start answered after the user moved on does not pull them back.
+    const startedOn = window.location.pathname;
     try {
       setError(null);
       const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
@@ -212,7 +214,7 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
       }
       toast.success(`Started ${mode} session`);
       onClose();
-      await navigate({ to: '/sessions/$id', params: { id: meta.id } });
+      if (window.location.pathname === startedOn) await navigate({ to: '/sessions/$id', params: { id: meta.id } });
     } catch (err) {
       if (mounted.current) setError(describeError(err));
       else toast.error(`The ${mode} session failed to start: ${describeError(err)}`);
