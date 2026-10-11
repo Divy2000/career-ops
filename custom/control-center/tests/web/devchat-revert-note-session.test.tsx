@@ -73,4 +73,13 @@ describe('Dev Chat Changes revert note', () => {
     await until(() => host.textContent?.includes('No files changed.'), "session B's changes");
     expect(note()).toBeNull();
   });
+
+  it('does not show the old note again on coming back to session A after B', async () => {
+    await revertInA();
+    await render('B');
+    await until(() => host.textContent?.includes('No files changed.'), "session B's changes");
+    await render('A');
+    await until(() => button('Revert file'), "session A's changes");
+    expect(note()).toBeNull();
+  });
 });

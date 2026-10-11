@@ -65,8 +65,14 @@ function statusTone(s: FileDiff['status']): 'ok' | 'warn' | 'danger' | 'neutral'
 
 export function ChangesPanel({ sessionId, live }: { sessionId: string | null; live: boolean }) {
   const qc = useQueryClient();
-  // DevChatPage keeps this panel across a session switch: a note shows only beside the session whose revert it reports.
+  // DevChatPage keeps this panel across a session switch: a note shows only beside the session whose revert it reports,
+  // and a switch drops it, so coming back to that session does not bring a stale one back.
   const [noted, setNoted] = useState<{ sessionId: string; text: string } | null>(null);
+  const [notedFor, setNotedFor] = useState(sessionId);
+  if (notedFor !== sessionId) {
+    setNotedFor(sessionId);
+    setNoted(null);
+  }
   const note = noted && noted.sessionId === sessionId ? noted.text : null;
   const q = useQuery({ queryKey: ['dev', 'changes', sessionId], queryFn: () => apiGet<Changes>(`/api/dev/changes/${sessionId}`), enabled: Boolean(sessionId), refetchInterval: live ? 1000 : false });
   // The turn's last writes can land after the final poll; refresh once more when the session settles.
