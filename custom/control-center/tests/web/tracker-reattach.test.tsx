@@ -33,7 +33,8 @@ const trackerRow = (num: number, company: string, url: string | null): TrackerRo
   notes: '', location: null, url, posted: null, lastContact: null, summary: null, reportState: 'none',
 }) as TrackerRow;
 let url: string | null;
-const detail = (): ApplicationDetail => ({ row: trackerRow(7, 'Acme Robotics', url), report: { kind: 'none' }, timeline: { statusLog: [], followups: [], pin: null }, companyHistory: [], sponsorship: { companyFile: null, alert: null, error: null } });
+const applications: Record<number, string> = { 7: 'Acme Robotics', 8: 'Globex Robotics' };
+const detail = (num: number): ApplicationDetail => ({ row: trackerRow(num, applications[num]!, url), report: { kind: 'none' }, timeline: { statusLog: [], followups: [], pin: null }, companyHistory: [], sponsorship: { companyFile: null, alert: null, error: null } });
 
 async function render(element: ReturnType<typeof createElement>) {
   root = createRoot(host);
@@ -49,11 +50,11 @@ async function openTab(label: string) {
   await until(() => tab(label), `the ${label} tab`);
   await act(async () => tab(label)!.click());
 }
-async function openApplication() {
+async function openApplication(num = 7) {
   const { ApplicationPage } = await import('@web/features/tracker/ApplicationPage');
   const rootRoute = createRootRoute();
   const page = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage });
-  const router = createRouter({ routeTree: rootRoute.addChildren([page]), history: createMemoryHistory({ initialEntries: ['/tracker/7'] }) });
+  const router = createRouter({ routeTree: rootRoute.addChildren([page]), history: createMemoryHistory({ initialEntries: [`/tracker/${num}`] }) });
   await render(createElement(RouterProvider, { router }));
   await until(() => tab('Outreach'), 'the application');
 }
@@ -64,11 +65,12 @@ beforeEach(() => {
   sessionStorage.clear();
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (u: string) =>
-      u === '/api/tracker/7'
-        ? new Response(JSON.stringify(detail()), { status: 200, headers: { 'content-type': 'application/json' } })
-        : new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } }),
-    ),
+    vi.fn(async (u: string) => {
+      const num = Number(/^\/api\/tracker\/(\d+)$/.exec(u)?.[1]);
+      return applications[num]
+        ? new Response(JSON.stringify(detail(num)), { status: 200, headers: { 'content-type': 'application/json' } })
+        : new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } });
+    }),
   );
   host = document.createElement('div');
   document.body.append(host);
@@ -109,9 +111,18 @@ describe('an application page', () => {
     await openApplication();
     await openTab('Outreach');
     expect(panels.some((p) => p.mode === 'cover' && p.sessionId === 'cover-1')).toBe(true);
-    // Another application's launcher does not show it.
+    // The same application's other launchers do not show it.
+    panels = [];
     await openTab('Interview');
-    expect(panels.some((p) => p.sessionId === 'cover-1' && p.mode !== 'cover')).toBe(false);
+    expect(panels.some((p) => p.sessionId === 'cover-1')).toBe(false);
+
+    // Another application's Outreach launcher does not show it.
+    await leave();
+    await openApplication(8);
+    await openTab('Outreach');
+    expect(host.textContent).toContain('Globex Robotics');
+    expect(button('Open prompt')).toBeDefined();
+    expect(panels.some((p) => p.sessionId === 'cover-1')).toBe(false);
   });
 });
 

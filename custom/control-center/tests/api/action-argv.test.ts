@@ -300,12 +300,20 @@ describe('checks that ran and found something (server-7 minor wording)', () => {
   it('Tracker sync check on a tracker with a problem answers 200 with the findings and its output, not a failure', async () => {
     const file = path.join(t.cfg.dataRoot, 'data', 'applications.md');
     const before = fs.readFileSync(file, 'utf8');
+    // A row as merge-tracker.mjs writes it into this tracker's columns: an empty Via is an em dash.
+    const row = (status: string) => `| 9 | 2026-10-01 | Bad Row | \u2014 | Engineer | 4.0/5 | ${status} | ❌ | - | x |\n`;
     try {
-      fs.appendFileSync(file, '| 9 | 2026-10-01 | Bad Row | Engineer | 4.0/5 | NotAState | ❌ | - | x |\n');
+      // The same row with a canonical status is clean, so the finding below is about its status.
+      fs.appendFileSync(file, row('Applied'));
+      const canonical = await post('tracker.syncCheck', {});
+      expect(canonical.statusCode, canonical.body).toBe(200);
+      expect(canonical.json().findings).toBeUndefined();
+      fs.writeFileSync(file, before + row('NotAState'));
       const res = await post('tracker.syncCheck', {});
       expect(res.statusCode, res.body).toBe(200);
       expect(res.json().findings).toMatch(/found problems/);
       expect(res.json().stderr).toContain('Corruption detected');
+      expect(res.json().stderr).toContain('1 non-canonical status(es)');
     } finally {
       fs.writeFileSync(file, before);
     }
