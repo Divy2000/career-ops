@@ -268,3 +268,22 @@ for (const clock of [{}, ...NEAR_MIDNIGHT]) test(`with no successful pass record
   w.setFeeds({});
   assert.equal(w.watch().news_since, daysBefore(w.today, 3));
 });
+
+for (const file of ['pending.json', 'seen.json']) test(`a ${file} write that fails leaves no temp file behind in data/immigration/ (R25-scripts-a-L1-01)`, () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', 'Modernizing H-1B Requirements')] });
+  const preload = path.join(w.root, 'rename-fails.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.promises.rename;
+fs.promises.rename = async (from, to) => {
+  if (String(to).endsWith(${JSON.stringify(file)})) { const err = new Error('disk full'); err.code = 'ENOSPC'; throw err; }
+  return real(from, to);
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', path.join(w.root, 'feeds.mjs'), '--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8', timeout: 60_000 });
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.match(r.stderr, /disk full/);
+  assert.deepEqual(fs.readdirSync(w.imm).filter((f) => f.includes('.tmp-')), []);
+});

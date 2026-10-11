@@ -542,3 +542,21 @@ syncBuiltinESMExports();
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.startsWith('shortlist.md')), []);
 });
+
+test('a tier cache write that fails leaves no temp file behind in data/immigration/ (R25-scripts-a-L1-01)', () => {
+  const root = rankedRoot();
+  const preload = path.join(root, 'rename-fails.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.promises.rename;
+fs.promises.rename = async (from, to) => {
+  if (String(to).endsWith('sponsor-tiers.json')) { const err = new Error('disk full'); err.code = 'ENOSPC'; throw err; }
+  return real(from, to);
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /disk full/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data', 'immigration')).filter((f) => f.includes('.tmp-')), []);
+});
