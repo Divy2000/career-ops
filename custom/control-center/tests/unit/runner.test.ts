@@ -502,6 +502,22 @@ describe('Runner', () => {
     }
   });
 
+  it('reconcile keeps the real exit of a wrapper that records it and quits while reconcile checks it, instead of marking the run lost', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'running', wrapperPid: 999_999, wrapperStartedAt: 1_700_000_000 });
+    // The wrapper writes its exit record and exits just as reconcile probes its PID.
+    const kill = () => {
+      fs.writeFileSync(path.join(store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+      throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    };
+    const runner = new Runner(root, new EventBus(), { pollMs: 50, kill });
+    runners.push(runner);
+    runner.reconcile();
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'done', exitCode: 0, error: null });
+  });
+
   it('a PID that answers kill(pid, 0) only with EPERM is never our run, whatever its recorded start: reconcile marks the run lost as reused (EPERM review)', async () => {
     const root = tmpRoot();
     const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
