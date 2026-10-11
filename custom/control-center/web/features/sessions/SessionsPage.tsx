@@ -28,11 +28,6 @@ export function SessionsPage() {
   const [newMode, setNewMode] = useState('oferta');
   const [targetValue, setTargetValue] = useState('');
   const [open, setOpen] = useState(false);
-  const target = targetFor(targetValue, newMode);
-  // The panel has started a session, so the target no longer reaches the route: its controls stay usable.
-  const [started, setStarted] = useState(false);
-  // The session route refuses a url target that is not a plain posting URL; said here, before a start is sent.
-  const badUrl = !started && target.type === 'url' && !plainPostingUrl(target.value);
   const rows = (sessions.data ?? []).filter((s) => (!filter.mode || s.mode === filter.mode) && (!filter.status || s.status === filter.status));
   return (
     <section aria-labelledby="page-title">
@@ -48,14 +43,7 @@ export function SessionsPage() {
           <div className="row gap">
             <label>
               Mode{' '}
-              <select
-                aria-label="New session mode"
-                value={newMode}
-                onChange={(e) => {
-                  setNewMode(e.target.value);
-                  setStarted(false);
-                }}
-              >
+              <select aria-label="New session mode" value={newMode} onChange={(e) => setNewMode(e.target.value)}>
                 {(modes.data ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.id} ({m.policyClass})
@@ -68,15 +56,7 @@ export function SessionsPage() {
               <input aria-label="New session target" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder={newMode === 'projects-ingest' ? 'projects/my-project.pdf' : 'optional'} />
             </label>
           </div>
-          {badUrl && (
-            <p role="alert" className="danger-text">
-              Not a plain http(s) job posting URL: remove spaces and credentials, or enter a company name or row number instead.
-            </p>
-          )}
-          {/* Always wrapped, so a target being fixed does not remount the panel and drop the typed prompt. */}
-          <fieldset disabled={badUrl} className="turn-hold">
-            <SessionPanel key={newMode} mode={newMode} target={target} placeholder="What should this session do?" onSessionId={() => setStarted(true)} />
-          </fieldset>
+          <NewSessionPanel key={newMode} mode={newMode} target={targetFor(targetValue, newMode)} />
         </div>
       )}
       <div className="toolbar row gap">
@@ -144,6 +124,26 @@ export function SessionsPage() {
         )}
       </DataState>
     </section>
+  );
+}
+
+/** The New session panel, held back while its target is a URL the session route would refuse. */
+function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['target'] }) {
+  // Once this panel has started a session the target no longer reaches the route, so its controls stay usable.
+  const [started, setStarted] = useState(false);
+  const badUrl = !started && target.type === 'url' && !plainPostingUrl(target.value);
+  return (
+    <>
+      {badUrl && (
+        <p role="alert" className="danger-text">
+          Not a plain http(s) job posting URL: remove spaces and credentials, or enter a company name or row number instead.
+        </p>
+      )}
+      {/* Always wrapped, so a target being fixed does not remount the panel and drop the typed prompt. */}
+      <fieldset disabled={badUrl} className="turn-hold">
+        <SessionPanel mode={mode} target={target} placeholder="What should this session do?" onSessionId={() => setStarted(true)} />
+      </fieldset>
+    </>
   );
 }
 

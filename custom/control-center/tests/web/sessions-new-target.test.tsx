@@ -117,4 +117,17 @@ describe('Sessions > New session: a URL target the server refuses', () => {
     await act(async () => type(document.querySelector<HTMLInputElement>('input[aria-label="New session target"]')!, 'https://jobs.example.com/1 Senior Engineer'));
     expect(cancel.matches(':disabled')).toBe(false);
   });
+
+  it('given a session started and the New session card closed and reopened, when a refused URL is typed, then Start session is off again', async () => {
+    accept = true;
+    await openNewSession('https://jobs.example.com/1');
+    await act(async () => button('Start session')!.click());
+    await until(() => button('Cancel'), 'the running session Cancel');
+    await act(async () => button('New session')!.click());
+    expect(button('Cancel')).toBeUndefined();
+    await act(async () => button('New session')!.click());
+    await act(async () => type(document.querySelector<HTMLInputElement>('input[aria-label="New session target"]')!, 'HTTPS://user:secret@jobs.example.com/1'));
+    await act(async () => type((await until(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt for oferta"]'), 'a fresh prompt'))!, 'Evaluate this posting'));
+    expect(button('Start session')!.matches(':disabled')).toBe(true);
+  });
 });
