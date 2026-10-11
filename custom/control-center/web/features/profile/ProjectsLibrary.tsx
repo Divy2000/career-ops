@@ -1,7 +1,7 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
 // parser session for PDF) and a rank preview against a pasted JD.
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -75,6 +75,22 @@ function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
         : `article-digest.md changed on disk since it was loaded. ${renamed}Its changes to this entry are now in the form, with yours on top; review them, then save again.`,
     ],
   };
+}
+
+/**
+ * A form whose draft moved on during a save: it now edits the saved version, with the newer text on top. The saved
+ * entry is found where the write put it, not by content (the library stores fields normalized): a POST answers with
+ * its id, and a PUT keeps the entry at its index in the version the save was pinned to.
+ */
+function onSaved(e: Editing, sent: ProjectDraft, saved: { etag: string; id?: string }, pinned: { posted: boolean; origin: EntryOrigin | null }, list: ProjectsRead | undefined): Editing {
+  // Without a list of this version to read the entry from, a POST's id still keeps the next save from adding it again.
+  const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false, ...(pinned.posted && saved.id ? { id: saved.id, origin: null } : {}) };
+  if (!list || list.etag !== saved.etag) return next;
+  const now = pinned.posted ? list.entries.find((x) => x.id === saved.id) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
+  if (!now) return next;
+  // Fields untouched since the save take the stored (normalized) value, so the draft differs from its base only where the user typed.
+  const stored = draftFromEntry(now);
+  return { ...next, id: now.id, draft: rebaseDraft(sent, e.draft, stored).draft, base: stored, tagline: now.tagline, source: now.source, origin: { ids: list.entries.map((x) => x.id), index: list.entries.indexOf(now), bullets: now.bullets } };
 }
 
 export function ProjectsLibrary() {
@@ -251,6 +267,9 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
   );
 }
 
+/** The field a form had focus in when it unmounted: an open form that moves (into the list, or to a renamed entry) remounts, and takes it back. */
+let heldFocus: { token: number; label: string; start: number | null; end: number | null } | null = null;
+
 function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }: { editing: Editing; liveEtag: string | null; onDiskTitles: string[]; update: Dispatch<SetStateAction<Editing | null>>; isOpen: (token: number) => boolean; onDone: () => void }) {
   const qc = useQueryClient();
   const [saving, setSaving] = useState(false);
@@ -263,6 +282,25 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
   const setBullet = (i: number, value: string) => patch((e) => ({ ...e, draft: { ...e.draft, bullets: e.draft.bullets.map((b, j) => (j === i ? value : b)) } }));
   const say = (m: string[]) => patch((e) => ({ ...e, messages: m }));
   const label = editing.id === null ? 'Add a project' : `Edit ${draft.title || 'project'}`;
+  const formRef = useRef<HTMLFormElement>(null);
+  // Layout effects: the cleanup runs while the old form is still in the document, the setup before the user can type.
+  useLayoutEffect(() => {
+    const form = formRef.current;
+    const held = heldFocus?.token === mine ? heldFocus : null;
+    heldFocus = null;
+    const field = held ? form?.querySelector<HTMLElement>(`[aria-label="${CSS.escape(held.label)}"]`) : null;
+    if (held && field && (document.activeElement === null || document.activeElement === document.body)) {
+      field.focus();
+      if ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) && held.start !== null && held.end !== null) field.setSelectionRange(held.start, held.end);
+    }
+    return () => {
+      const active = document.activeElement;
+      const name = active?.getAttribute('aria-label');
+      if (!form || !name || !(active instanceof HTMLElement) || active === form || !form.contains(active)) return;
+      const text = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+      heldFocus = { token: mine, label: name, start: text ? active.selectionStart : null, end: text ? active.selectionEnd : null };
+    };
+  }, [mine]);
 
   const save = async (asNew: boolean) => {
     const problems = draftProblems(draft);
@@ -273,11 +311,14 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
     setSaving(true);
     try {
       const body = entryFromDraft(draft, { tagline: editing.tagline, source: editing.source });
-      if (editing.id === null || asNew) await apiSend('POST', '/api/projects', body, ifMatch(editing.baseEtag));
-      else await apiSend('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
+      const posted = editing.id === null || asNew;
+      const saved = posted
+        ? await apiSend<{ etag: string; id?: string }>('POST', '/api/projects', body, ifMatch(editing.baseEtag))
+        : await apiSend<{ etag: string; id?: string }>('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
       toast.success(`Saved ${body.title}`);
       await qc.invalidateQueries({ queryKey: QUERY_KEY });
-      update((prev) => (prev?.token === mine ? null : prev));
+      // The form closes only if its draft is still what was saved; text typed during the save stays as unsaved edits.
+      update((prev) => (prev?.token !== mine ? prev : JSON.stringify(prev.draft) === JSON.stringify(draft) ? null : onSaved(prev, draft, saved, { posted, origin: editing.origin }, qc.getQueryData<ProjectsRead>(QUERY_KEY))));
     } catch (err) {
       if (err instanceof ApiError && err.status === 422) say((err.body as { errors?: string[] }).errors ?? [describeError(err)]);
       // The route answers a PUT for an id the library no longer has (renamed or removed on disk) with 404, before it
@@ -322,7 +363,7 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
   };
 
   return (
-    <form className="project-form" aria-label={label} onSubmit={submit} noValidate>
+    <form ref={formRef} className="project-form" aria-label={label} onSubmit={submit} noValidate>
       <h3 className="project-form__title">{editing.id === null ? 'New project' : `Editing ${editing.draft.title || 'project'}`}</h3>
       <div className="project-form__grid">
         <label className="project-field project-field--wide">

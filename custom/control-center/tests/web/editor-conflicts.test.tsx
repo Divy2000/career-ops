@@ -507,6 +507,206 @@ describe('projects library form (Profile & CV > Projects)', () => {
   });
 });
 
+describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)', () => {
+  const entry = { id: 'event-router', title: 'Event Router', url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['One.'], line: 1, editProblem: null, inCv: false };
+  beforeEach(() => {
+    files = { '/api/projects': { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [entry] } };
+  });
+
+  /** Holds the first write until released and, as the real routes do, writes its body into the library (the id comes from the title; a POST answers with it). */
+  function holdFirstPutAndApply(opts: { otherWriteAfterPost?: boolean } = {}) {
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let first = true;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const method = init?.method;
+      if (method !== 'PUT' && method !== 'POST') return real(input, init);
+      if (first) {
+        first = false;
+        await held;
+      }
+      const res = await real(input, init);
+      if (!res.ok) return res;
+      const sent = JSON.parse(String(init!.body)) as typeof entry;
+      // The library stores each field on one line, as the real serializer does.
+      const oneLine = (v: string) => v.replace(/\s+/g, ' ').trim();
+      const body = { ...sent, title: oneLine(sent.title), tags: sent.tags.map(oneLine), bullets: sent.bullets.map(oneLine) };
+      const savedId = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const doc = files['/api/projects']!;
+      const list = doc.entries as Array<typeof entry>;
+      if (method === 'POST') {
+        doc.entries = [...list, { ...entry, ...body, id: savedId }];
+        const answer = { ...((await res.json()) as object), id: savedId };
+        if (opts.otherWriteAfterPost) doc.etag = 'e-other';
+        return json(200, answer);
+      }
+      const id = String(input).split('/').pop();
+      doc.entries = list.map((e) => (e.id === id ? { ...e, ...body, id: savedId } : e));
+      return res;
+    });
+    return () => act(async () => release());
+  }
+
+  it('given a save on its way, when the user edits the title meanwhile, then the form stays open with that edit and the next save updates the saved version', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLTextAreaElement>('Bullet 1'), 'the bullet field'), 'One, reworded.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Title')!, 'Event Router v2');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Event Router v2');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')!.value).toBe('One, reworded.');
+    expect(alerts()).toBe('');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-router', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Router v2', bullets: ['One, reworded.'] }) }));
+  });
+
+  it('given a save that renames the entry, when the user edits a bullet meanwhile, then the next save updates the entry under its new id', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'One, reworded.');
+    await act(async () => labelled<HTMLTextAreaElement>('Bullet 1')!.focus());
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')?.value).toBe('One, reworded.');
+    // The form moved to the renamed entry's row; the field being typed in keeps the focus.
+    expect(document.activeElement).toBe(labelled('Bullet 1'));
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Routing', bullets: ['One, reworded.'] }) }));
+  });
+
+  it('given a renaming save whose bullet the library stores normalized, when the user edits the title meanwhile, then the next save still finds the entry under its new id', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Built   the API.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Title')!, 'Event Routing v2');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Event Routing v2');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Routing v2' }) }));
+  });
+
+  it('given a new project saving, when the user edits it meanwhile, then the form stays open on the added entry and the next save updates it', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks   kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Dates')?.value).toBe('2024');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Kite Tracker', dates: '2024' }) }));
+  });
+
+  it('given a new project saving, when another write lands before the list reloads, then the next save updates the added entry instead of adding it twice', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks kites.');
+    const release = holdFirstPutAndApply({ otherWriteAfterPost: true });
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker' }));
+  });
+
+  it('given the user typing in a field while a new project saves, when the form moves into the list, then that field keeps the focus and caret', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    const dates = labelled<HTMLInputElement>('Dates')!;
+    await type(dates, '2024');
+    await act(async () => {
+      dates.focus();
+      dates.setSelectionRange(2, 2);
+    });
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(document.querySelector('.project-row--editing')).not.toBeNull();
+    const focused = document.activeElement as HTMLInputElement;
+    expect(focused.getAttribute('aria-label')).toBe('Dates');
+    expect(focused).toBe(labelled('Dates'));
+    expect([focused.selectionStart, focused.selectionEnd]).toEqual([2, 2]);
+  });
+
+  it('given the Kind menu focused while a new project saves, when the form moves into the list, then the menu keeps the focus', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await act(async () => labelled<HTMLSelectElement>('Kind')!.focus());
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(document.querySelector('.project-row--editing')).not.toBeNull();
+    expect(document.activeElement).toBe(labelled('Kind'));
+  });
+
+  it('given a field the library stores normalized, when the save that sent it finishes mid-edit, then the form shows the stored value and a later conflict does not name that field', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks   kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')!.value).toBe('Tracks kites.');
+    const entries = files['/api/projects']!.entries as Array<{ id: string; bullets: string[] }>;
+    await changeOnDisk('/api/projects', { etag: 'e3', entries: entries.map((e) => (e.id === 'kite-tracker' ? { ...e, bullets: ['Tracks kites.', 'Added elsewhere.'] } : e)) });
+    await until(() => /changed on disk since you opened this form/.test(alerts()), 'the changed-on-disk note');
+    await click(button('Save project')!);
+    await until(() => /changed on disk since it was loaded/.test(alerts()), 'the conflict message');
+    expect(alerts()).not.toMatch(/changed both here and on disk/);
+    expect(labelled<HTMLTextAreaElement>('Bullet 2')!.value).toBe('Added elsewhere.');
+    expect(labelled<HTMLInputElement>('Dates')!.value).toBe('2024');
+  });
+
+  it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    await click(button('Save project')!);
+    await until(() => labelled('Title') === null, 'the form to close');
+    expect(writes()).toHaveLength(1);
+  });
+});
+
 describe('projects library: a save still on its way after Cancel (R20-feat-b-L1-01)', () => {
   const entry = (id: string, title: string) => ({ id, title, url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['One.'], line: 1, editProblem: null, inCv: false });
   beforeEach(() => {
