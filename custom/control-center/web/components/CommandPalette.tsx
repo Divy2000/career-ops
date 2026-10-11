@@ -208,7 +208,8 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
     }
   };
   return (
-    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+    // The start cannot be called back once sent, so closing waits for its answer instead of letting it land on another screen.
+    <Dialog.Root open onOpenChange={(o) => !o && !busy && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog__overlay" />
         <Dialog.Content className="dialog" aria-describedby={undefined}>
@@ -227,7 +228,7 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
             </p>
           )}
           <div className="row gap dialog__actions">
-            <button type="button" onClick={onClose}>
+            <button type="button" disabled={busy} onClick={onClose}>
               Cancel
             </button>
             <button type="button" className="button--primary" disabled={busy || !prompt.trim()} onClick={() => void start()}>
