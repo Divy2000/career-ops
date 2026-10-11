@@ -264,13 +264,17 @@ jobTest('the pass runs only on an approved Claude Code, asked with the autoupdat
 
 jobTest('an unapproved Claude Code skips the pass, not the job: a clear log line, a dated digest note, nothing acknowledged, the other steps run', () => {
   const w = dailyWorld();
-  const today = new Date().toLocaleDateString('en-CA');
+  // The job dates the digest by its own local day, which can be the next one if the run spans midnight.
+  const dayBefore = new Date().toLocaleDateString('en-CA');
   const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)' });
+  const dayAfter = new Date().toLocaleDateString('en-CA');
   assert.equal(r.calls.length, 0, 'an unprobed CLI never runs the pass');
   assert.equal(r.status, 0, r.log);
   assert.match(r.log, /policy pass skipped: Claude Code 2\.1\.290 is not approved for the confined pass \(approved: /);
   assert.doesNotMatch(r.log, /!!! step failed: policy watch/);
-  assert.match(r.digest, new RegExp(`^# Immigration policy digest\\n\\n## ${today}\\n- AI policy pass skipped: Claude Code 2\\.1\\.290 is not approved`));
+  const dated = r.digest?.match(/^# Immigration policy digest\n\n## (\d{4}-\d{2}-\d{2})\n- AI policy pass skipped: Claude Code 2\.1\.290 is not approved/);
+  assert.ok(dated, r.digest);
+  assert.ok(dated[1] >= dayBefore && dated[1] <= dayAfter, `the digest is dated ${dated[1]}, not the run's local day (${dayBefore}..${dayAfter})`);
   assert.doesNotMatch(r.steps, /^watch --ack/m, 'the official items stay pending for the next run');
   assert.match(r.steps, /^scan\.mjs/m);
   // The scheduled rank calls Claude too: it is skipped the same way, not failed.
