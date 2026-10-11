@@ -130,22 +130,27 @@ test.describe('Dev Chat', () => {
   });
 
   test('a transcript taller than its box scrolls with the keyboard (axe: scrollable-region-focusable)', async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 420 });
-    await page.goto(`/auth?t=${E2E_TOKEN}`);
-    await page.goto('/dev');
-    await page.getByLabel('Prompt for devchat').fill('Add a scoring rule for a short window');
-    await page.getByRole('button', { name: 'Send', exact: true }).first().click();
-    await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
-    const transcript = page.getByLabel('Transcript for devchat');
-    await expect.poll(() => transcript.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-    await expect(transcript).toHaveAttribute('tabindex', '0');
-    expect(await transcript.evaluate((el) => el.scrollTop)).toBe(0);
-    await transcript.focus();
-    await expect(transcript).toBeFocused();
-    await page.keyboard.press('PageDown');
-    await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-    const axe = await (await axeBuilder(page)).analyze();
-    expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    const restore = keepTurnFiles();
+    try {
+      await page.setViewportSize({ width: 1280, height: 420 });
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/dev');
+      await page.getByLabel('Prompt for devchat').fill('Add a scoring rule for a short window');
+      await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+      await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
+      const transcript = page.getByLabel('Transcript for devchat');
+      await expect.poll(() => transcript.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      await expect(transcript).toHaveAttribute('tabindex', '0');
+      expect(await transcript.evaluate((el) => el.scrollTop)).toBe(0);
+      await transcript.focus();
+      await expect(transcript).toBeFocused();
+      await page.keyboard.press('PageDown');
+      await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+      const axe = await (await axeBuilder(page)).analyze();
+      expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    } finally {
+      restore();
+    }
   });
 
   test('the supervisor serves the reload status and the recovery page behind the session cookie', async ({ page, request }) => {
