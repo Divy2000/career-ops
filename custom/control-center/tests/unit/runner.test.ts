@@ -419,6 +419,23 @@ describe('Runner', () => {
     expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
   }, 20_000);
 
+  it('a command that ignores SIGTERM is still killed once the grace ends when another server already tracked its run before the cancelling server stopped', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = first.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt) && first.store.readRaw(meta.id).lines.length >= 1);
+    // Blue/green: the new server picks the run up while it is still running, then the old one cancels it and stops.
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    first.cancel(meta.id);
+    first.close();
+    await until(() => Boolean(second.store.read(meta.id)?.endedAt), 15_000);
+    expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
+  }, 20_000);
+
   it('a tracked run keeps the real exit of a wrapper that records it and quits while a tick checks it, instead of marking it lost', async () => {
     const root = tmpRoot();
     const store = new RunStore(root);

@@ -120,7 +120,8 @@ export function processStartTime(pid: number, ps: (pid: number) => string = runP
 export class Runner {
   readonly store: RunStore;
   private queue: Array<{ meta: RunMeta; env: NodeJS.ProcessEnv }> = [];
-  private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout }>();
+  /** killArmed: a SIGKILL for the run's command is armed here, by its cancel or once this process saw it cancelled. */
+  private active = new Map<string, { meta: RunMeta; timer: NodeJS.Timeout; killArmed: boolean }>();
   private envById = new Map<string, NodeJS.ProcessEnv>();
   /** Queued runs another process left, being rebuilt (their token read) before they join the queue. */
   private adopting = new Set<string>();
@@ -642,6 +643,12 @@ export class Runner {
   private track(meta: RunMeta): void {
     const timer = setInterval(() => {
       const current = this.store.read(meta.id) ?? meta;
+      // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
+      const entry = this.active.get(meta.id);
+      if (entry && current.status === 'cancelled' && !entry.killArmed) {
+        entry.killArmed = true;
+        this.afterGrace(() => this.killRecordedCommand(meta.id));
+      }
       if (!current.childPid) {
         const w = this.store.readWrapper(meta.id);
         if (w) {
@@ -670,7 +677,8 @@ export class Runner {
       }
     }, this.opts.pollMs ?? 250);
     timer.unref();
-    this.active.set(meta.id, { meta, timer });
+    // Tracked already cancelled: reconcileRun arms its SIGKILL.
+    this.active.set(meta.id, { meta, timer, killArmed: meta.status === 'cancelled' });
   }
 
   private finalize(meta: RunMeta, exit: { code: number | null; signal: string | null; endedAt: string }): void {
@@ -746,6 +754,8 @@ export class Runner {
     }
     const marked: RunMeta = { ...meta, status: 'cancelled' };
     this.store.write(marked);
+    const tracked = this.active.get(id);
+    if (tracked) tracked.killArmed = true;
     const signalGroup = child === true || (child === null && wrapper !== true);
     if (childPid && signalGroup) {
       try {
