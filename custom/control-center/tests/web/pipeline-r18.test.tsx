@@ -309,6 +309,20 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
     expect(router.state.location.pathname).toBe('/sessions/s-jd');
   });
 
+  it('Evaluate JD moves a user who stayed on the page to the session even when its row went from the list meanwhile', async () => {
+    holdUrl = '/api/sessions';
+    const router = await mount();
+    const jd = await until(() => host.querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]:not(:disabled)'), 'Evaluate JD');
+    await act(async () => jd.click());
+    await until(() => hold, 'the start sent');
+    read = { ...read, rows: read.kind === 'ok' ? read.rows.filter((r) => r.company !== 'Acme') : [] } as PipelineRead;
+    await act(async () => queryClient.invalidateQueries({ queryKey: ['pipeline'] }));
+    await until(() => !host.querySelector('button[aria-label="Evaluate JD for Acme"]'), 'the row gone');
+    await act(async () => hold!.release());
+    await settle();
+    expect(router.state.location.pathname).toBe('/sessions/s-jd');
+  });
+
   it('Evaluate visible does not move a user who went elsewhere to Sessions', async () => {
     holdUrl = '/api/sessions/fanout';
     const router = await mount();

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useMemo, useState } from 'react';
-import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { useRef, useMemo, useState } from 'react';
+import { getRouteApi, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useShortlist } from '../../lib/queries';
 import { apiSend } from '../../lib/api';
@@ -287,24 +287,20 @@ function Inbox() {
 /** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
 function EvaluateJd({ reference, label, running, checking }: { reference: string; label: string; running: boolean; checking: boolean }) {
   const navigate = useNavigate();
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A start can answer after the user left the page: only a still-mounted one moves them to the session.
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   const go = async () => {
     const jd = localJdPath(reference);
     if (jd === null) return;
     setBusy(true);
     setError(null);
+    // A start can answer after the user left the page: only one still on it moves them to the session. The page, not
+    // this row's button, which a filter or a refreshed list can take away while the user stays.
+    const page = router.state.location.pathname;
     try {
       const m = await startSavedJdSession(reference, jd);
-      if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
+      if (router.state.location.pathname === page) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {
       setError(`Could not start the evaluation: ${describeError(err)}`);
     } finally {
