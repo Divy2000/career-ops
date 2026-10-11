@@ -13,8 +13,10 @@ export const DOMAIN_KEYS: Record<string, string[][]> = {
   // interview-prep/story-bank.md is also a Profile user file.
   interviews: [['tracker', 'interviews'], ['insights'], ['config', 'user-file']],
   documents: [['tracker', 'documents'], ['apply', 'documents']],
+  jds: [['tracker', 'documents'], ['apply', 'documents'], ['insights']],
   followups: [['followups'], ['tracker'], ['insights']],
   config: [['config'], ['system'], ['insights'], ['followups']],
+  insights: [['insights']],
   runs: [['runs']],
   sessions: [['sessions']],
 };
