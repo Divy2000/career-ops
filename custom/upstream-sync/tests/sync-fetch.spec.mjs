@@ -1342,6 +1342,186 @@ test('an update that left the running Control Center\'s dependencies alone says 
   assert.match(r.stdout, /continued$/m);
 });
 
+test('a live update that cannot take the daily lock for a reason other than a timeout fails the run with a readable reason, naming the lock and the merged commit (R22-scripts-b-L1-01)', () => {
+  const w = liveWorld();
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  // From the stderr capture set up just before the update, through the outcome.
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  // The lock file is a symlink to itself, so lockf cannot open it (as root too) and exits 73 (EX_CANTCREAT).
+  mkdirSync(path.dirname(w.dailyLock), { recursive: true });
+  symlinkSync(path.basename(w.dailyLock), w.dailyLock);
+  try {
+    const before = w.head();
+    // As in sync.sh, stderr goes to the day log.
+    const log = path.join(w.base, 'day.log');
+    writeFileSync(log, '!!! an earlier line\nlockf: from an earlier run of the day\n');
+    const res = bashLib(w.live, `exec 2>>"$LOG"\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; notify "$1 (log: x)"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${path.join(w.base, 'bin')}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target, LOG: log });
+    assert.equal(res.status, 1, res.stdout + res.stderr);
+    assert.doesNotMatch(res.stdout, /continued/);
+    const problem = res.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    // The Control Center's parseDailyLog only records a `!!!` line with text after the marker.
+    assert.match(problem, /^!!!\s+\S/, res.stdout);
+    assert.ok(problem.includes(w.dailyLock), problem);
+    assert.match(problem, /lockf: cannot open .*Too many levels of symbolic links/);
+    assert.ok(problem.includes(w.target), problem);
+    assert.match(problem, /not updated/);
+    assert.doesNotMatch(problem, /earlier run/);
+    assert.match(readFileSync(log, 'utf8'), /^lockf: cannot open /m);
+    assert.equal(w.head(), before);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a live update killed while it holds the daily lock is reported as killed, not as a lock it could not take (R22-scripts-b-L1-01)', () => {
+  const w = liveWorld();
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  // git, first run inside the locked section, kills the shell lockf runs; lockf then exits 70 and prints nothing.
+  const killer = path.join(w.base, 'killer');
+  stub(killer, 'git', 'p=$PPID\nwhile [ "${p:-1}" -gt 1 ]; do\n  if ps -o args= -p "$p" | grep -q "live_update_locked \\"\\$4\\""; then kill -KILL "$p"; exit 1; fi\n  p="$(ps -o ppid= -p "$p" | tr -d " ")"\ndone\nexit 1');
+  try {
+    const log = path.join(w.base, 'day.log');
+    writeFileSync(log, 'lockf: from an earlier run of the day\n');
+    const res = bashLib(w.live, `exec 2>>"$LOG"\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${killer}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target, LOG: log });
+    assert.equal(res.status, 1, res.stdout + res.stderr);
+    const problem = res.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    assert.match(problem, /^!!! the live checkout update exited 70 without saying why/, problem + res.stderr);
+    assert.doesNotMatch(problem, /could not take/);
+    assert.ok(problem.includes(w.target), problem);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a live update killed after it took the lock, with nothing printed, fails the run naming its exit, not blaming the lock (R22-scripts-b-L1-01)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  const r = spawnSync('bash', ['-c', `update_live_checkout() { return 143; }\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\nDATA=/d\nMERGE_OID=abc123\n${block}\necho continued`], { encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stdout);
+  const problem = r.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+  assert.match(problem, /^!!! the live checkout update exited 143 without saying why/, problem);
+  assert.match(problem, /the fork main is at abc123 but the live checkout was not updated/);
+  assert.doesNotMatch(problem, /could not take/);
+});
+
+test('a live update whose lockf ran out of wait is not reported as a lock it could not take, though lockf said already locked (R22-scripts-b-L1-01)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-live-'));
+  const log = path.join(dir, 'day.log');
+  writeFileSync(log, '');
+  try {
+    const r = spawnSync('bash', ['-c', `exec 2>>"$LOG"\nupdate_live_checkout() { echo "lockf: $1: already locked" >&2; return 75; }\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\nDATA=/d\nMERGE_OID=abc123\n${block}\necho continued`], { encoding: 'utf8', env: { PATH: process.env.PATH, LOG: log } });
+    const problem = r.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    assert.match(problem, /^!!! the live checkout update exited 75 without saying why/, r.stdout);
+    assert.doesNotMatch(problem, /could not take/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+const KEYCHAIN_LOCKED = 'echo "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2; exit 36';
+
+test('a Keychain item that does not exist (security exit 44) stops the sync with the setup-token advice (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2; exit 44' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Keychain item career-ops-claude-token not found\. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w$/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('an empty Keychain token stops the sync as a missing one, before anything is replaced (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'echo ""' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Keychain item career-ops-claude-token not found\. Run: claude setup-token/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a whitespace-only Keychain token stops the sync as a missing one, as the Control Center trims it (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'printf "  \\t \\n"' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Keychain item career-ops-claude-token not found\. Run: claude setup-token/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a Keychain token with whitespace around it is passed on trimmed, as the Control Center reads it (R22-scripts-b-L3-01)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('SECURITY_ERR="$(mktemp '));
+  const to = lines.findIndex((l, i) => i > from && l === 'fi');
+  const block = lines.slice(from, to + 1).join('\n');
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-token-'));
+  stub(dir, 'security', 'printf " \\ttok-123 \\n"');
+  try {
+    const r = spawnSync('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}\necho "[$TOKEN]"`], { encoding: 'utf8', env: { PATH: `${dir}:${process.env.PATH}` } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(r.stdout.trim(), '[tok-123]');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a security command that cannot run (exit 126) is named as the problem, not a locked Keychain (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'exit 126' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: the security command could not be run \(exit 126\)/m);
+    assert.doesNotMatch(res.log, /unlock-keychain|not found|setup-token/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a locked Keychain (security exit 36) stops the sync saying the token could not be read, never that it is missing (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: KEYCHAIN_LOCKED });
+    assert.equal(res.status, 1, res.log);
+    const problem = res.log.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    assert.match(problem, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 36: security: SecKeychainSearchCopyNext: User interaction is not allowed\.\)\. /, res.log);
+    assert.match(problem, /Unlock it with: security unlock-keychain, then re-run/);
+    assert.doesNotMatch(res.log, /not found|setup-token/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a Keychain read failing for a reason that is not a lock (security exit 50, no such keychain) names the code and security\'s reason without guessing a fix (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'echo "security: SecKeychainSearchCopyNext: The specified keychain could not be found." >&2; exit 50' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 50: security: SecKeychainSearchCopyNext: The specified keychain could not be found\.\)\.?$/m);
+    assert.doesNotMatch(res.log, /unlock-keychain|setup-token/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('a Keychain read refused at the prompt (security exit 51) names the exit code and says access was denied, without the setup-token or unlock advice (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'exit 51' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security failed \(exit 51\)\. Access to it was denied/m);
+    assert.doesNotMatch(res.log, /not found|setup-token|probably locked/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 // ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----
 
 /**

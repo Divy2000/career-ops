@@ -90,8 +90,30 @@ BEHIND="$(git rev-list --count origin/main..upstream/main)"
 [[ "$BEHIND" =~ ^[0-9]+$ ]] || fail "could not count commits between origin/main and upstream/main"
 echo "fork is $BEHIND commit(s) behind upstream/main"
 
-if ! TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>/dev/null)"; then
-  fail "Keychain item career-ops-claude-token not found"
+# Only exit 44 (errSecItemNotFound) or an empty token means the item is missing, as the Control Center reads it: any
+# other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine, so it never asks for a new one.
+# No double quotes in these messages: notify passes them to osascript inside a quoted string.
+SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
+TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$SECURITY_ERR")"
+SECURITY_RC=$?
+TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
+TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
+SECURITY_WHY="$(tail -c 200 "$SECURITY_ERR" | tr '\n"\\' "  '" | sed 's/ *$//')"
+rm -f "$SECURITY_ERR"
+if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "$TOKEN" ]; }; then
+  fail "Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w"
+elif [ "$SECURITY_RC" = 127 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin)."
+elif [ "$SECURITY_RC" = 126 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: the security command could not be run (exit 126${SECURITY_WHY:+: $SECURITY_WHY}); check that /usr/bin/security is the one first on PATH."
+elif [ "$SECURITY_RC" = 51 ]; then
+  # errSecAuthFailed: Deny at the Keychain prompt, or the item's access control refuses security.
+  fail "Could not read Keychain item career-ops-claude-token: security failed (exit 51${SECURITY_WHY:+: $SECURITY_WHY}). Access to it was denied: answer Always Allow when the Keychain prompt appears, or add /usr/bin/security to the item's access control in Keychain Access, then re-run."
+elif [ "$SECURITY_RC" = 36 ]; then
+  # errSecInteractionNotAllowed: locked, with no way to prompt.
+  fail "Could not read Keychain item career-ops-claude-token: security failed (exit $SECURITY_RC${SECURITY_WHY:+: $SECURITY_WHY}). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then re-run."
+elif [ "$SECURITY_RC" != 0 ]; then
+  fail "Could not read Keychain item career-ops-claude-token: security failed (exit $SECURITY_RC${SECURITY_WHY:+: $SECURITY_WHY})."
 fi
 # The binary that gets the token, checked before anything is replaced: the first build that keeps the token out of
 # hooks and tools (install.sh's headless onboarding also needs --restricted, so its CLAUDE_HEADLESS_MIN is higher).
@@ -233,8 +255,22 @@ if [ -z "$BLOCKERS" ]; then
   cd "$LIVE" || fail "live checkout missing"
   # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
   # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
+  # lockf says why it could not take a lock on stderr only, so in the log: read back from this point if the update says
+  # nothing. Its timeout (75) is update_live_checkout's own to explain.
+  LIVE_LOG_FROM="$(wc -c < "$LOG" | tr -d ' ')" || LIVE_LOG_FROM=""
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
-  case $? in
+  LIVE_RC=$?
+  if [ -z "$LIVE_UPDATE" ]; then
+    LOCKF_WHY=""
+    if [ "$LIVE_RC" != 75 ] && [[ "$LIVE_LOG_FROM" =~ ^[0-9]+$ ]]; then
+      LOCKF_WHY="$(tail -c +"$((LIVE_LOG_FROM + 1))" "$LOG" | grep -m 1 '^lockf: ' | tr '"\\' "''")"
+    fi
+    # No line from lockf: the update itself was killed or broke (lockf exits 70 for a child killed by a signal).
+    if [ -n "$LOCKF_WHY" ]; then LIVE_UPDATE="could not take a daily job's lock ($LOCKF_WHY)"
+    else LIVE_UPDATE="the live checkout update exited $LIVE_RC without saying why (see the lines above)"; fi
+    LIVE_UPDATE="$LIVE_UPDATE; the fork main is at $MERGE_OID but the live checkout was not updated"
+  fi
+  case $LIVE_RC in
     # A running Control Center keeps its old dependencies (update_live_checkout says so after the first "; ").
     0)
       echo "$LIVE_UPDATE"
