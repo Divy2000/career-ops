@@ -279,8 +279,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled. Read fresh,
           // not from the 5 s poll: Apply's own start never enters the cached list, and the confirm may have been open a while.
           const list = await apiGet<SessionMeta[]>('/api/sessions');
-          // Compared as numbers, as the server reads a row (" 12" and "012" are row 12).
-          const live = list.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && Number(s.target.value) === Number(n));
+          // Read as the server reads a row: " 12" and "012" are row 12, "12.0" is not.
+          const live = list.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.type === 'app' && /^\s*\d+\s*$/.test(s.target.value ?? '') && Number(s.target.value) === Number(n));
           if (live) {
             await router.navigate({ to: '/sessions/$id', params: { id: live.id } });
             break;
