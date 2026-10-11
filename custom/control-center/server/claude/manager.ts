@@ -212,17 +212,17 @@ export class SessionManager {
 
   /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
   isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
-    const key = postingKey(target);
+    const key = postingKey(mode, target);
     return key !== null && this.fanningOut.has(`${evaluationClass(mode)}\0${key}`);
   }
 
   /** Id of a live session of this mode's evaluation class already evaluating this posting, if any: a second start would write a second report. */
   liveEvaluationFor(mode: string, target: SessionMeta['target'], exceptId?: string): string | null {
-    const key = postingKey(target);
+    const key = postingKey(mode, target);
     if (key === null) return null;
     const cls = evaluationClass(mode);
     for (const m of this.store.list()) {
-      if (m.id !== exceptId && evaluationClass(m.mode) === cls && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
+      if (m.id !== exceptId && evaluationClass(m.mode) === cls && LIVE_STATUSES.has(m.status) && postingKey(m.mode, m.target) === key) return m.id;
     }
     return null;
   }
@@ -314,10 +314,10 @@ export class SessionManager {
    * `exceptId` is the session doing the replay, which does not count against itself. Returns the release.
    */
   private claimReplay(meta: SessionMeta, exceptId: string | null = meta.id): () => void {
-    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another evaluation is already starting ${meta.target.value}`);
+    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(meta.target.type === 'company' ? `another sponsorship check is already starting for ${meta.target.value?.trim()}` : `another evaluation is already starting ${meta.target.value}`);
     const live = this.liveEvaluationFor(meta.mode, meta.target, exceptId ?? undefined);
-    if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
-    const posting = postingKey(meta.target);
+    if (live) throw new BusyError(`session ${live} is already ${liveWorkOn(meta.target)}`);
+    const posting = postingKey(meta.mode, meta.target);
     if (posting === null) return () => {};
     const key = `${evaluationClass(meta.mode)}\0${posting}`;
     this.fanningOut.add(key);
@@ -332,7 +332,7 @@ export class SessionManager {
     const cls = evaluationClass(input.mode);
     const live = new Map<string, string>();
     for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
-    const key = (url: string) => `${cls}\0${postingKey({ type: 'url', value: url })}`;
+    const key = (url: string) => `${cls}\0${postingKey(input.mode, { type: 'url', value: url })}`;
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
     for (const url of input.urls) {
@@ -1194,14 +1194,26 @@ function owesReport(meta: SessionMeta): boolean {
   return isReportGated(meta.mode) && meta.creditedReport === undefined;
 }
 
-/** The dedupe key of a posting a session evaluates: its URL, or the saved JD a local:jds/ text target names (as finalize keys it). */
-function postingKey(target: SessionMeta['target']): string | null {
+/**
+ * The dedupe key of what a session writes for: a posting's URL, the saved JD a local:jds/ text target names (as finalize
+ * keys it), or the company a sponsorship check writes data/immigration/companies/** for (trimmed, case-insensitive).
+ */
+function postingKey(mode: string, target: SessionMeta['target']): string | null {
   if (target.type === 'url' && target.value) return `url\0${target.value}`;
+  if (target.type === 'company' && mode === 'sponsorship-check') {
+    const company = target.value?.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (company) return `company\0${company}`;
+  }
   if (target.type === 'text' && target.value) {
     const jd = localJdPath(target.value);
     if (jd !== null) return `jds\0${jd}`;
   }
   return null;
+}
+
+/** What a live duplicate session is doing to `target`, for the refusal that names it. */
+export function liveWorkOn(target: SessionMeta['target']): string {
+  return target.type === 'company' ? `running a sponsorship check for ${target.value?.trim()}` : `evaluating ${target.value}`;
 }
 
 /** When a reservation sentinel was claimed (reserve-report-num writes created_at), or null when it is gone or unreadable. */

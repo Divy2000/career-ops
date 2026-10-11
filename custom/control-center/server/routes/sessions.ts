@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
-import { BusyError, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
+import { BusyError, liveWorkOn, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
 import { englishModeOf, listLaunchableModeIds } from '../claude/modes.js';
 import { isReportGated } from '../claude/honesty.js';
 import type { SessionMeta } from '../claude/sessions.js';
@@ -240,9 +240,9 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       parsed.data.target = { type: 'url', value: url || null };
     }
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
-    if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: `another batch evaluate is already starting ${parsed.data.target.value}` });
+    if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: parsed.data.target.type === 'company' ? `another sponsorship check is already starting for ${parsed.data.target.value?.trim()}` : `another batch evaluate is already starting ${parsed.data.target.value}` });
     const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
-    if (liveId) return reply.code(409).send({ error: `session ${liveId} is already evaluating ${parsed.data.target.value}` });
+    if (liveId) return reply.code(409).send({ error: `session ${liveId} is already ${liveWorkOn(parsed.data.target)}` });
     const inboxHeld = isProcessInbox(parsed.data.mode) ? evaluationsHold() : parsed.data.target.type === 'url' && parsed.data.target.value ? processInboxHolds(parsed.data.mode, [parsed.data.target.value]) : null;
     if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     const cvRow = tailoredCvRow(parsed.data.mode, parsed.data.target);
