@@ -234,10 +234,15 @@ export class RunStore {
     }
   }
 
-  /** Keep the newest `retention` finished runs; queued runs and ones whose command may still be running are never pruned. */
+  /**
+   * Keep the `retention` most recently ended runs; queued runs and ones whose command may still be running are never pruned.
+   * Ranked by end, not creation: a long run that ends after many newer quick ones is among the newest finished runs.
+   */
   prune(): number {
-    const all = this.list();
-    const finished = all.filter((r) => r.status !== 'queued' && !unended(r));
+    const endKey = (r: RunMeta) => r.endedAt ?? r.createdAt;
+    const finished = this.list()
+      .filter((r) => r.status !== 'queued' && !unended(r))
+      .sort((a, b) => (endKey(a) < endKey(b) ? 1 : endKey(a) > endKey(b) ? -1 : 0));
     let removed = 0;
     for (const old of finished.slice(this.retention)) {
       fs.rmSync(this.dirOf(old.id), { recursive: true, force: true });

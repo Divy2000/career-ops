@@ -110,6 +110,23 @@ describe('RunStore', () => {
     expect(fs.existsSync(store.dirOf(ended.id))).toBe(false);
   });
 
+  it('keeps a long run that just ended even when retention-many newer runs ended before it (R19-srv-core-L1-01)', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root, 2);
+    const base = { actionId: 'a', label: 'a', cost: 'free' as const, resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+    const long = store.create(base);
+    store.write({ ...long, status: 'running', startedAt: '2026-01-01T00:00:00.000Z' });
+    const quick1 = store.create(base);
+    store.write({ ...quick1, status: 'done', endedAt: '2026-01-01T00:01:00.000Z' });
+    const quick2 = store.create(base);
+    store.write({ ...quick2, status: 'done', endedAt: '2026-01-01T00:02:00.000Z' });
+    store.write({ ...long, status: 'done', endedAt: '2026-01-01T00:10:00.000Z' });
+    store.create(base);
+    expect(fs.existsSync(store.dirOf(long.id))).toBe(true);
+    expect(fs.existsSync(store.dirOf(quick2.id))).toBe(true);
+    expect(fs.existsSync(store.dirOf(quick1.id))).toBe(false);
+  });
+
   it('ignores stray entries in the runs folder: Finder\'s .DS_Store and a plain file with a run-like name (SW-server-01)', () => {
     const root = tmpRoot();
     const store = new RunStore(root, 1);

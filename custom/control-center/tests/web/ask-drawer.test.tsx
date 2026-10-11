@@ -249,6 +249,16 @@ describe('Ask drawer: the confirm gate on proposed writes (SW-tests-15)', () => 
     expect(item.textContent).toContain('at most 300 characters');
     expect(posts).toEqual([]);
   });
+
+  it('a setStatus note over 500 characters fails before asking, matching the server limit (R19-shared-comp-L2-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 3, state: 'Applied', note: 'x'.repeat(501) } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('at most 500 characters');
+    expect(posts).toEqual([]);
+  });
 });
 
 describe('Ask drawer: remembering a fact the profile already holds (SW3-tests-25)', () => {
@@ -451,6 +461,42 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');
     expect(item.textContent).toContain('already starting');
+  });
+
+  it('opens a pdf session the Apply page started after the drawer last polled, instead of starting a second (R19-shared-comp-L1-01)', async () => {
+    // The drawer's sessions list loaded empty; Apply then starts row 2's CV and never adds it to that cached list.
+    listed = [{ id: 's-apply', mode: 'pdf', status: 'queued', target: { type: 'app', value: '2' } }];
+    await run();
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-apply' } }]);
+  });
+
+  it('opens a live pdf session whose row was named with leading zeros or spaces, as the server reads it', async () => {
+    listed = [{ id: 's-zero', mode: 'pdf', status: 'running', target: { type: 'app', value: ' 02' } }];
+    await run();
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-zero' } }]);
+  });
+
+  it('starts a CV beside a live session whose row only reads as a number in another notation, as the server does', async () => {
+    listed = [
+      { id: 's-dec', mode: 'pdf', status: 'running', target: { type: 'app', value: '2.0' } },
+      { id: 's-text', mode: 'pdf', status: 'running', target: { type: 'text', value: '2' } },
+    ];
+    await run();
+    expect(posts).toHaveLength(1);
+  });
+
+  it('starts nothing when the sessions list cannot be read at run time (R19-shared-comp-L1-01)', async () => {
+    // Only the sessions read fails; the drawer's other reads answer as before.
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) =>
+      url === '/api/sessions' && !init?.method ? new Response(JSON.stringify({ error: 'sessions unreadable' }), { status: 500, headers: { 'content-type': 'application/json' } }) : answer(url, init),
+    );
+    const item = await run();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('sessions unreadable');
   });
 
   it('a row with surrounding whitespace opens the live pdf session for that row (R18-shared-comp-L2-01)', async () => {
