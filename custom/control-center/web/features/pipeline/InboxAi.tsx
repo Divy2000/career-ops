@@ -228,7 +228,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
         </div>
       )}
       {open &&
-        (!process.shown && (sessions.isPending || livePipeline !== null) ? (
+        (!process.shown && (process.waiting || sessions.isPending || livePipeline !== null) ? (
           <p role="status" className="muted small">
             Checking for a Process inbox already running.
           </p>
