@@ -30,14 +30,23 @@ class FakeEventSource {
 const UNSAFE = 'javascript:alert(document.domain)';
 let host: HTMLElement;
 let root: Root;
+let added: Array<{ offers: Array<{ url: string }> }>;
 
 beforeEach(() => {
   FakeEventSource.all = [];
   sessionStorage.clear();
+  added = [];
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/pipeline/add') {
+        const body = JSON.parse(String(init?.body)) as { offers: Array<{ url: string }> };
+        added.push(body);
+        // Like the route: one URL that is not an http(s) posting URL fails the whole body.
+        const bad = body.offers.some((o) => !/^https?:/.test(o.url));
+        return new Response(JSON.stringify(bad ? { error: 'invalid body' } : { added: body.offers.length, skipped: 0 }), { status: bad ? 400 : 200, headers: { 'content-type': 'application/json' } });
+      }
       const body =
         url === '/api/actions/scan.network'
           ? { runId: 'r1' }
@@ -90,5 +99,24 @@ describe('Discover: posting links from external sources', () => {
     expect(row('Evil Co').textContent).toContain('Click me');
     expect(row('Evil Co').querySelector('a')).toBeNull();
     expect(row('Good Co').querySelector('a')?.getAttribute('href')).toBe('https://jobs.example.com/ok');
+  });
+
+  it('Network scan Add all leaves out a non-http(s) posting URL, so the route does not refuse the real ones with it', async () => {
+    await render('NetworkScan');
+    await act(async () => host.querySelector<HTMLFormElement>('form[aria-label="Network scan filters"]')!.requestSubmit());
+    const stream = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events'), 'the run stream');
+    const offers = [
+      { company: 'Evil Co', title: 'Click me', url: UNSAFE, source: 'greenhouse' },
+      { company: 'Good Co', title: 'SRE', url: 'https://jobs.example.com/ok', source: 'lever' },
+    ];
+    await act(async () => stream.emit('line', { line: JSON.stringify({ companiesScanned: 2, offers }), stream: 'stdout', seq: 1, ts: 't' }));
+    await until(() => host.textContent?.includes('Evil Co'), 'the results');
+    expect(row('Evil Co').textContent).toContain('not a posting URL');
+    expect(row('Evil Co').querySelector('button')).toBeNull();
+    const addAll = [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Add all'))!;
+    expect(addAll.textContent).toContain('(1)');
+    await act(async () => addAll.click());
+    await until(() => added.length === 1 && (host.textContent?.includes('Added') ?? false), 'the add result');
+    expect(added[0]!.offers.map((o) => o.url)).toEqual(['https://jobs.example.com/ok']);
   });
 });

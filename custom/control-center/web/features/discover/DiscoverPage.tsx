@@ -13,6 +13,7 @@ import { ModeLauncher } from '../../components/ModeLauncher';
 import { lastSession } from '../../lib/lastSession';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
+import { postingUrl } from '@shared/posting-url';
 import { NETWORK_SCAN_SOURCES, type NetworkScanSource } from '@shared/network-scan';
 
 const route = getRouteApi('/discover');
@@ -332,6 +333,8 @@ export function NetworkScan() {
   };
   const degraded = summary ? scanDegradations(summary) : { notes: [], noData: false };
   const visible = (summary?.postings ?? []).filter((p) => !filter || `${p.company} ${p.title} ${p.location ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
+  // One URL POST /api/pipeline/add refuses fails the whole body, so such a posting is never sent.
+  const addable = visible.filter((p) => postingUrl(p.url) !== null);
   return (
     <div className="stack">
       <form
@@ -412,8 +415,8 @@ export function NetworkScan() {
             <>
               <div className="toolbar">
                 <input type="search" aria-label="Filter results" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                <button type="button" disabled={adding} onClick={() => void add(visible)}>
-                  Add all ({visible.length})
+                <button type="button" disabled={adding || addable.length === 0} onClick={() => void add(addable)}>
+                  Add all ({addable.length})
                 </button>
               </div>
               <TableScroll label="Network scan results">
@@ -443,9 +446,13 @@ export function NetworkScan() {
                           <Pill>{p.source ?? ''}</Pill>
                         </td>
                         <td>
-                          <button type="button" aria-label={`Add ${p.company} ${p.title}`} disabled={adding} onClick={() => void add([p])}>
-                            Add
-                          </button>
+                          {postingUrl(p.url) === null ? (
+                            <Pill tone="warn">not a posting URL</Pill>
+                          ) : (
+                            <button type="button" aria-label={`Add ${p.company} ${p.title}`} disabled={adding} onClick={() => void add([p])}>
+                              Add
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
