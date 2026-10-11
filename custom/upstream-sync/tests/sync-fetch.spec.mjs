@@ -1526,11 +1526,11 @@ test('a Keychain read that never answers (locked keychain, unlock prompt nobody 
   const w = makeWorld();
   const home = path.join(w.base, 'home');
   mkdirSync(home);
-  // A security that waits forever, as one blocked on an unanswered unlock dialog does, with a child of its own.
-  const childPid = path.join(w.base, 'security-child.pid');
+  // A security that waits forever, as one blocked on an unanswered unlock dialog does (one process, as security is).
+  const childPid = path.join(w.base, 'security.pid');
   try {
     const started = Date.now();
-    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: '2' }, security: `sleep 100000 &\necho $! > "${childPid}"\nwait` });
+    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: '2' }, security: `echo $$ > "${childPid}"\nexec /bin/sleep 100000` });
     assert.ok(Date.now() - started < 30_000, `the sync waited ${Date.now() - started} ms for the Keychain`);
     assert.equal(res.status, 1, res.log);
     assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security did not answer within 2 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run\.$/m);
@@ -1541,17 +1541,44 @@ test('a Keychain read that never answers (locked keychain, unlock prompt nobody 
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
-test('a Keychain wait that is not a whole number of seconds stops the sync before the Keychain is read', () => {
-  const w = makeWorld();
-  const home = path.join(w.base, 'home');
-  mkdirSync(home);
-  const read = path.join(w.base, 'security-ran');
+// 4294967296 wraps to alarm(0) in perl, which would wait forever: the wait is capped at an hour.
+for (const value of ['0', 'soon', '3601', '4294967296']) {
+  test(`a Keychain wait of '${value}' (not a whole number of seconds from 1 to 3600) stops the sync before the Keychain is read`, () => {
+    const w = makeWorld();
+    const home = path.join(w.base, 'home');
+    mkdirSync(home);
+    const read = path.join(w.base, 'security-ran');
+    try {
+      const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: value }, security: `touch "${read}"\necho tok-123` });
+      assert.equal(res.status, 1, res.log);
+      assert.match(res.log, new RegExp(`^!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not ${value}\\.$`, 'm'));
+      assert.equal(existsSync(read), false);
+    } finally { rmSync(w.base, { recursive: true, force: true }); }
+  });
+}
+
+test('a sync stopped while the Keychain read waits (launchd stop, signal to the job group) stops the security it started too', async () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('SECURITY_ERR="$(mktemp '));
+  const to = lines.findIndex((l) => l.startsWith('SECURITY_RC=$?'));
+  const block = lines.slice(from, to + 1).join('\n');
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-cancel-'));
+  const securityPid = path.join(dir, 'security.pid');
+  stub(dir, 'security', `echo $$ > "${securityPid}"\nexec /bin/sleep 100000`);
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   try {
-    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: 'soon' }, security: `touch "${read}"\necho tok-123` });
-    assert.equal(res.status, 1, res.log);
-    assert.match(res.log, /^!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not soon\.$/m);
-    assert.equal(existsSync(read), false);
-  } finally { rmSync(w.base, { recursive: true, force: true }); }
+    const child = spawn('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}`], { env: { PATH: `${dir}:${process.env.PATH}` }, stdio: 'ignore', detached: true });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    for (let i = 0; i < 600 && !existsSync(securityPid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(existsSync(securityPid), 'the Keychain read never started');
+    const pid = Number(readFileSync(securityPid, 'utf8'));
+    process.kill(-child.pid, 'SIGTERM');
+    await exited;
+    for (let i = 0; i < 100 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    const left = alive(pid);
+    if (left) process.kill(pid, 'SIGKILL');
+    assert.equal(left, false, 'the security the stopped sync started is still running');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----

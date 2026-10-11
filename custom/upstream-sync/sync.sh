@@ -96,21 +96,21 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
 # A locked login keychain can make security wait on an unlock dialog that an unattended run never answers, holding the
 # sync lock all the while: the read gets CC_KEYCHAIN_TIMEOUT seconds (default 60). Stock macOS has no timeout(1), so
-# perl runs security in its own process group and kills that group when the alarm fires, exiting 124 as timeout(1) does.
+# perl runs security and kills it when the alarm fires, exiting 124 as timeout(1) does. security stays in the job's
+# process group, so a cancel signalled to the group stops it too. perl's alarm wraps at 2^32, so the wait is capped at 3600.
 KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
-[[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { rm -f "$SECURITY_ERR"; fail "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not ${KEYCHAIN_TIMEOUT//[\"\\]/}."; }
+{ [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] && [ "$KEYCHAIN_TIMEOUT" -le 3600 ]; } || { rm -f "$SECURITY_ERR"; fail "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not ${KEYCHAIN_TIMEOUT//[\"\\]/}."; }
 bounded() {
   /usr/bin/perl -e '
     my $limit = shift;
     my $pid = fork;
     die "cannot start $ARGV[0]: $!\n" unless defined $pid;
     if ($pid == 0) {
-      setpgrp(0, 0);
       exec { $ARGV[0] } @ARGV;
       print STDERR "$ARGV[0]: $!\n";
       exit($!{ENOENT} ? 127 : 126);
     }
-    $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid $pid, 0; exit 124 };
+    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid $pid, 0; exit 124 };
     alarm $limit;
     waitpid $pid, 0;
     alarm 0;
