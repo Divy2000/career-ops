@@ -1,8 +1,9 @@
 // `claude` for calls the daily job makes through scripts it cannot change: run-daily.sh puts a wrapper for this file
 // first on PATH for the rank step, so rank-pipeline.mjs (upstream) gets a confined claude. A wrapped call keeps its
-// prompt and model and runs with no tools, no MCP servers and dontAsk, on an approved Claude Code with the autoupdater
-// off; a flag that could widen it refuses the call. The real binary is CC_CLAUDE_BIN (absolute, never this file);
-// with CC_CLAUDE_EXPECT (real path @ version, as the job's own check saw it) a binary changed since never runs.
+// prompt (its @-mentions made inert) and model and runs with no tools, no MCP servers and dontAsk, on an approved
+// Claude Code with the autoupdater off; a flag that could widen it refuses the call. The real binary is CC_CLAUDE_BIN
+// (absolute, never this file); with CC_CLAUDE_EXPECT (real path @ version, as the job's own check saw it) a binary
+// changed since never runs.
 // With CC_SHIM_REFUSALS, every refusal also appends its reason to that file: rank-pipeline.mjs catches a failed call
 // and still exits 0, so the job reads the file to fail the step.
 // Dev Chat cannot edit it (server/claude/** is protected).
@@ -22,6 +23,14 @@ const DROP = new Set(['--dangerously-skip-permissions']);
 const NO_TOOLS = 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Agent,Task,PowerShell';
 
 /**
+ * The prompt is untrusted posting text, and an @-mention attaches a file before any tool or hook runs: the same rule as
+ * neutralizeFileMentions in invocation.ts (which this plain .mjs cannot import; a test keeps the two identical).
+ */
+function neutralizeFileMentions(text) {
+  return text.replace(/(^|[^\w.+\-/:=?&%])@(?!\u2060)/g, '$1@\u2060');
+}
+
+/**
  * The confined argv for one wrapped call, or why it is refused. Any flag outside KEEP and DROP refuses the call:
  * permission flags such as --allowedTools take any number of values, so dropping one could swallow the prompt.
  * `--tools ""` (no tools) is followed by another flag, which ends its value list.
@@ -32,7 +41,7 @@ export function confinedArgv(argv) {
     const a = argv[i];
     if (DROP.has(a)) continue;
     if (!a.startsWith('-')) {
-      kept.push(a);
+      kept.push(neutralizeFileMentions(a));
       continue;
     }
     const eq = a.indexOf('=');
