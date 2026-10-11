@@ -100,7 +100,19 @@ describe('Evaluate visible and a pending URL with credentials (R21-feat-b-L3-01)
   it('given a pending row whose URL carries credentials, Evaluate visible leaves it out, says so and sends only the clean URL', async () => {
     await mount('inbox');
     await until(() => button('Evaluate visible (1)') && !button('Evaluate visible (1)')!.disabled, 'Evaluate visible enabled');
-    expect(host.textContent).toContain('1 row has a URL that is not a plain http(s) posting address (credentials or another scheme) and is left out of Evaluate visible');
+    expect(host.textContent).toContain('1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out of Evaluate visible');
+    await act(async () => button('Evaluate visible (1)')!.click());
+    await settle();
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.example.com/free'] } }]);
+  });
+});
+
+describe('Evaluate visible and a pending URL with a space in it (R22-feat-b-L2-01)', () => {
+  it('given a hand-edited pending row whose URL cell runs into the role, Evaluate visible leaves it out, says so and sends only the clean URL', async () => {
+    read = { kind: 'ok', path: 'data/pipeline.md', etag: 'e', rows: [row('https://jobs.example.com/free', 'Free Co', 3), row('https://jobs.acme.com/123 Senior Engineer', '', 4)] };
+    await mount('inbox');
+    await until(() => button('Evaluate visible (1)') && !button('Evaluate visible (1)')!.disabled, 'Evaluate visible enabled');
+    expect(host.textContent).toContain('1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out of Evaluate visible');
     await act(async () => button('Evaluate visible (1)')!.click());
     await settle();
     expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.example.com/free'] } }]);

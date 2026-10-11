@@ -16,7 +16,7 @@ import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass
 import crypto from 'node:crypto';
 import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
-import { postingUrl } from '../../shared/posting-url.js';
+import { plainPostingUrl } from '../../shared/posting-url.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
 
@@ -24,12 +24,6 @@ const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
-/**
- * The pipeline write routes' rule: a URL with credentials would put them in the session's prompt, and another scheme
- * starts an evaluation the liveness and fetch path cannot read. Whitespace inside is refused too (the URL parser
- * encodes a space), so free text cannot ride into the prompt in the URL slot.
- */
-const plainPostingUrl = (u: string): boolean => postingUrl(u) === u && !/\s/.test(u);
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

@@ -13,7 +13,7 @@ import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@share
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
-import { postingUrl } from '@shared/posting-url';
+import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
@@ -75,9 +75,9 @@ async function pendingUrlsAt(company: string): Promise<{ urls: string[]; leftOut
   const names = new Set([company.toLowerCase(), unescapeMarkdownCell(company).toLowerCase()]);
   const evaluable = (pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && names.has(r.company.trim().toLowerCase()));
   // The fan-out refuses a whole body over one URL that is not a plain posting address, so such a row is left out and counted.
-  const unsendable = evaluable.filter((r) => postingUrl(r.url) !== r.url).length;
-  const leftOut = unsendable === 0 ? null : `${unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials or another scheme) and is left out.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials or another scheme) and are left out.`} Fix it in data/pipeline.md.`;
-  const urls = [...new Set(evaluable.filter((r) => postingUrl(r.url) === r.url).map((r) => r.url))];
+  const unsendable = evaluable.filter((r) => !plainPostingUrl(r.url)).length;
+  const leftOut = unsendable === 0 ? null : `${unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and are left out.`} Fix it in data/pipeline.md.`;
+  const urls = [...new Set(evaluable.filter((r) => plainPostingUrl(r.url)).map((r) => r.url))];
   if (urls.length === 0) throw new Error(leftOut ? `No pending Inbox posting at ${company} can be evaluated. ${leftOut}` : `No pending Inbox posting at ${company}.`);
   if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
   return { urls, leftOut };
@@ -130,7 +130,7 @@ function invalidParams(p: { action: string; params: Record<string, unknown> }): 
   if (p.action === 'navigate' && (!String(p.params.to).trim().startsWith('/') || /^\/[/\\]/.test(String(p.params.to).trim()))) return `navigate needs "to", an app path such as /tracker/12`;
   // The shared posting URL rule, as Evaluate company applies it: a URL with credentials would reach the session's prompt.
   // That rule lets a space through (URL encodes it), so one word-separated URL cannot carry free text into the prompt.
-  if (p.action === 'evaluate' && (postingUrl(p.params.url) === null || /\s/.test(String(p.params.url).trim()))) return 'evaluate needs "url", a plain http(s) job posting URL (no credentials, at most 2048 characters)';
+  if (p.action === 'evaluate' && !plainPostingUrl(postingUrl(p.params.url))) return 'evaluate needs "url", a plain http(s) job posting URL (no credentials, at most 2048 characters)';
   // The /api/memory route refuses a fact over 300 characters, so a longer one fails before the user approves it.
   if (p.action === 'remember' && String(p.params.fact ?? '').length > 300) return 'remember needs "fact", at most 300 characters';
   // tracker.setStatus's schema refuses a note over STATUS_NOTE_MAX characters, the same way.

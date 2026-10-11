@@ -18,3 +18,12 @@ export function postingUrl(raw: unknown): string | null {
   if (!u.hostname || u.username || u.password) return null;
   return s;
 }
+
+/**
+ * A URL the fan-out and session routes take as a posting target: exactly what postingUrl returns, with no whitespace
+ * inside. The URL parser encodes a space, so postingUrl alone passes a hand-edited `URL Role` cell, and free text would
+ * ride into the session's prompt in the URL slot.
+ */
+export function plainPostingUrl(raw: unknown): raw is string {
+  return typeof raw === 'string' && postingUrl(raw) === raw && !/\s/.test(raw);
+}

@@ -8,23 +8,11 @@ import { apiGet } from '../../lib/api';
 import type { SessionMeta } from '@shared/api';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
+import { plainPostingUrl } from '@shared/posting-url';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
 import { endBatchStarting, livePipelineId, markBatchStarting, useBatchStarting, withinSessionsReadLimit } from './InboxAi';
-
-// Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
-// server/domains/inboxSkip.ts): a saved JD (local:jds/) or another scheme would start a paid session on the liveness
-// and fetch path, which cannot read it, and a URL carrying credentials would put them in the session's prompt.
-const postingLike = (s: string): boolean => {
-  if (s.length > 2048) return false;
-  try {
-    const u = new URL(s);
-    return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname) && !u.username && !u.password;
-  } catch {
-    return false;
-  }
-};
 
 /** The URLs of oferta sessions the server lists now and did not list in `before`: what a fan-out that failed part way did start. */
 async function startedSince(urls: string[], before: Set<string>): Promise<Set<string>> {
@@ -44,7 +32,9 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const [message, setMessage] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const list = [...new Set(urls.split(/\s+/).filter(Boolean))];
   const tooMany = list.length > BATCH_MAX_URLS;
-  const refused = list.filter((u) => !postingLike(u));
+  // Only what the fan-out route takes (plainPostingUrl): a saved JD (local:jds/) or another scheme would start a paid session
+  // on the liveness and fetch path, which cannot read it, and a URL carrying credentials would put them in the prompt.
+  const refused = list.filter((u) => !plainPostingUrl(u));
   // Process inbox evaluates every pending row, so an evaluation of one of them beside it would evaluate, report and bill
   // it a second time: Batch is off while one is starting or live, and until the sessions list tells there is none.
   const sessions = useSessions();
@@ -144,7 +134,8 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     <div className="card stack">
       <h2>Batch evaluate</h2>
       <p className="muted">Each URL becomes one evaluation in its own session, under the Claude slot cap. Paste one URL per line (at most {BATCH_MAX_URLS} URLs).</p>
-      <textarea aria-label="Batch URLs" rows={6} value={urls} onChange={(e) => setUrls(e.target.value)} />
+      {/* Locked while a fan-out runs: its answer rewrites the box from the URLs it sent, which would drop any typed meanwhile. */}
+      <textarea aria-label="Batch URLs" rows={6} value={urls} disabled={busy} onChange={(e) => setUrls(e.target.value)} />
       <div className="row gap">
         <button type="button" disabled={busy || blocked || list.length === 0 || tooMany || refused.length > 0} onClick={() => void start()}>
           Batch evaluate <Pill tone="warn">Uses tokens</Pill>

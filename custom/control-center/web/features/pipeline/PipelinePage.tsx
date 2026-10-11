@@ -10,7 +10,7 @@ import { InboxAi, watchLeavingInbox } from './InboxAi';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { BatchTab } from './BatchTab';
 import { localJdPath } from '@shared/local-jd';
-import { postingUrl } from '@shared/posting-url';
+import { plainPostingUrl } from '@shared/posting-url';
 import { startSavedJdSession, useSessions } from '../../lib/sessions';
 import { evaluatingTargets } from './evaluating';
 
@@ -158,9 +158,9 @@ function Inbox() {
   // The pending posting rows Evaluate visible can take: a saved JD (local:jds/) is evaluated from its own row, and a row
   // waiting for its JD could not be fetched, so an evaluation would hit the same wall.
   const evaluable = visible.filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null);
-  // The fan-out takes only what the pipeline write routes take: a URL with credentials would put them in the prompt.
-  const unsendable = evaluable.filter((r) => postingUrl(r.url) !== r.url).length;
-  const sendable = evaluable.filter((r) => postingUrl(r.url) === r.url);
+  // The fan-out refuses a whole body over one URL that is not a plain posting address (credentials, spaces, another scheme).
+  const unsendable = evaluable.filter((r) => !plainPostingUrl(r.url)).length;
+  const sendable = evaluable.filter((r) => plainPostingUrl(r.url));
   return (
     <>
       {/* Outside the data state: Add URLs is how a first pipeline gets created (appendToPipeline makes the file). */}
@@ -185,7 +185,7 @@ function Inbox() {
         />
         {unsendable > 0 && (
           <p role="alert" className="danger-text small">
-            {unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials or another scheme) and is left out of Evaluate visible.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials or another scheme) and are left out of Evaluate visible.`} Fix it in data/pipeline.md.
+            {unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out of Evaluate visible.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and are left out of Evaluate visible.`} Fix it in data/pipeline.md.
           </p>
         )}
         {skipError && (

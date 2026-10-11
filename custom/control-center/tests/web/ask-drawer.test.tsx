@@ -731,6 +731,14 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address');
   });
 
+  it('given one pending row whose URL cell runs into the role (a space in it), evaluates the clean postings and counts it as left out (R22-feat-b-L2-01)', async () => {
+    rows.push(row('https://jobs.acme.example/9 Senior Engineer', 'Acme'));
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+    expect(item.textContent).toContain('1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme)');
+  });
+
   it('given every clean posting is already being evaluated, the note still counts the rows left out (FU-askdrawer-creds review)', async () => {
     rows.push(row('https://user:secret@jobs.acme.example/9', 'Acme'));
     const listed = ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'].map((value, i) => ({ id: `s-active-${i}`, mode: 'oferta', status: 'running', target: { type: 'url', value } }));
