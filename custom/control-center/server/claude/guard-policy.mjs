@@ -185,8 +185,10 @@ export function checkSearch(policy, tool, input, cwd) {
   if (typeof value !== 'string') return `${tool}: ${key} must be a string`;
   const syntax = checkSearchPattern(policy, value, `${tool} ${key}`);
   if (syntax) return syntax;
-  // A search pattern that itself names a secret file (`.env`, `**/.env`, `*.pem`, `id_rsa*`, `.git/config`, ...) is
-  // refused: the pattern is what Glob/Grep match, so an explicit secret-targeting glob would list or read its contents.
+  // A search pattern that literally names a secret file (`.env`, `**/.env`, `*.pem`, `id_rsa*`, `.git/config`, ...) is
+  // refused as an explicit secret-targeting search. This is a literal-text check only: Grep's contents are protected by
+  // the excludes narrowGrepInput appends, while a wildcard Glob (`*`, `.e?v`) can still list a secret file's name,
+  // never its contents (an accepted residual).
   const readDeny = policy.readDeny ?? [];
   const hit = readDeny.find((g) => matches(value, [g]));
   if (hit) return `${tool} ${key}: ${value} can match ${hit}, a protected secret file (.env, keys, credentials); sessions never read them`;
