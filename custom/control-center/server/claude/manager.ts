@@ -273,9 +273,10 @@ export class SessionManager {
           unclaim();
         }
       }
-      // A copy of an evaluation that still owes its report writes one of its own: refused beside any live evaluation of
-      // the posting, the source included while it waits for the user.
-      const unclaim = owesReport(src) ? this.claimReplay(src, null) : () => {};
+      // A copy of an evaluation that still owes its report writes one of its own, and a copy of a sponsorship check
+      // writes its company's files again: refused beside any live session doing the same, the source included while it
+      // waits for the user.
+      const unclaim = owesReport(src) || src.mode === 'sponsorship-check' ? this.claimReplay(src, null) : () => {};
       try {
         const forked = this.store.fork(id);
         return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
