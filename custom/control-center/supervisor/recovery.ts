@@ -323,6 +323,10 @@ export function revertFile(turnDir: string, abs: string, ctx: RevertContext): Re
 
 /** All or nothing: every file of the turn is checked before any is written. */
 export function revertTurn(sessionDir: string, meta: MetaLike, n: number, ctx: RevertContext): Array<{ abs: string; result: RevertResult }> {
+  return planTurnRevert(sessionDir, meta, n, ctx).map((p) => ({ abs: p.abs, result: applyRevert(p) }));
+}
+
+function planTurnRevert(sessionDir: string, meta: MetaLike, n: number, ctx: RevertContext): RevertPlan[] {
   const turn = changesByTurn(sessionDir, meta).find((t) => t.n === n);
   if (!turn) return [];
   const turnDir = path.join(sessionDir, 'turns', String(n));
@@ -340,7 +344,7 @@ export function revertTurn(sessionDir: string, meta: MetaLike, n: number, ctx: R
     }
   }
   if (first) throw new RevertRefused(409, conflicts.length > 1 ? `${conflicts.join(', ')} changed after turn ${n} or cannot be verified; nothing was reverted` : first.message, conflicts);
-  return plans.map((p) => ({ abs: p.abs, result: applyRevert(p) }));
+  return plans;
 }
 
 /** The recovery page's POSTs carry the app origin and X-CC: 1 (sent by its inline script), like every mutating API call. */
@@ -469,8 +473,9 @@ export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
 /** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
 export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null; serverRunning?: boolean }): { status: number; text: string } {
   const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
-  if (!meta || !Number.isInteger(opts.turn)) return { status: 404, text: 'unknown session or turn' };
+  if (!meta || !Number.isInteger(opts.turn) || !(Array.isArray(meta.turns) && meta.turns.some((t) => t.n === opts.turn))) return { status: 404, text: 'unknown session or turn' };
   const sessionDir = guardSessionDir(opts.guardRoot, meta.id);
+  let markLost = false;
   if (meta.status === 'running' || meta.status === 'queued') {
     // A running server tracks and finalizes the session itself. With none (it cannot start), a session left running by
     // a supervisor that stopped mid-turn stays so until a server reconciles it, so once its run has ended the turn is
@@ -480,19 +485,23 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     if (!last || !runEnded(opts.ctx.dataRoot, last.runId, processStartTime, false) || !sessionRunsEnded(opts.ctx.dataRoot, meta.id, processStartTime, false)) {
       return { status: 409, text: 'the session is still running (one of its runs has not ended); wait for it to finish before reverting' };
     }
-    // A queued run is over only because no server will start it: mark it lost so the next server does not re-run it.
-    markQueuedRunsLost(opts.ctx.dataRoot, meta.id);
+    markLost = true;
     const offset = turnOffset(sessionDir, last.n);
     if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
   }
   try {
+    let plans: RevertPlan[];
     if (opts.abs) {
       const known = changesByTurn(sessionDir, meta).find((t) => t.n === opts.turn)?.records.some((r) => r.abs === opts.abs);
       if (!known) return { status: 404, text: 'that file was not changed in that turn' };
-      const result = revertFile(path.join(sessionDir, 'turns', String(opts.turn)), opts.abs, opts.ctx);
-      return { status: 200, text: `${path.basename(opts.abs)}: ${result}` };
+      plans = [planRevert(path.join(sessionDir, 'turns', String(opts.turn)), opts.abs, opts.ctx)];
+    } else {
+      plans = planTurnRevert(sessionDir, meta, opts.turn, opts.ctx);
     }
-    const results = revertTurn(sessionDir, meta, opts.turn, opts.ctx);
+    // A queued run is over only because no server will start it: once the revert is sure to go ahead, mark it lost so
+    // the next server does not re-run it over the revert. A refused revert leaves it queued for that server to run.
+    if (markLost) markQueuedRunsLost(opts.ctx.dataRoot, meta.id);
+    const results = plans.map((p) => ({ abs: p.abs, result: applyRevert(p) }));
     return { status: 200, text: results.map((r) => `${path.basename(r.abs)}: ${r.result}`).join('\n') || 'nothing to revert' };
   } catch (err) {
     if (err instanceof RevertRefused) return { status: err.status, text: err.message };

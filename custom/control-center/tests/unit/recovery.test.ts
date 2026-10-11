@@ -484,6 +484,45 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(neverStarts.revert(false).status).toBe(200);
   });
 
+  it('a refused revert leaves a queued run with no server queued, so the next server still runs it (R18-supervisor-L1-01)', () => {
+    const request = JSON.stringify({ env: {}, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] });
+    const queuedStatus = (t: ReturnType<typeof stalled>) => JSON.parse(fs.readFileSync(path.join(t.runsDir, 'r20261006000000-abcdef', 'meta.json'), 'utf8')).status;
+    const conflict = stalled((dir) => {
+      runMeta(dir, { status: 'queued', params: { sessionId: 's1', turn: 1 } });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+    });
+    fs.writeFileSync(conflict.file, 'edited after the turn\n');
+    expect(conflict.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/changed after turn 1/) });
+    expect(fs.readFileSync(conflict.file, 'utf8')).toBe('edited after the turn\n');
+    expect(queuedStatus(conflict)).toBe('queued');
+    const unknownFile = stalled((dir) => {
+      runMeta(dir, { status: 'queued', params: { sessionId: 's1', turn: 1 } });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+    });
+    const sessionsDir = path.join(path.dirname(unknownFile.runsDir), 'sessions');
+    const root = path.dirname(path.dirname(path.dirname(unknownFile.runsDir)));
+    const guardRoot = path.dirname(path.dirname(path.dirname(unknownFile.turnDir)));
+    expect(recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: root, dataRoot: root }, sessionId: 's1', turn: 1, abs: '/etc/hosts', serverRunning: false }).status).toBe(404);
+    expect(queuedStatus(unknownFile)).toBe('queued');
+    const forSession = (t: ReturnType<typeof stalled>, turn: number) => {
+      const root = path.dirname(path.dirname(path.dirname(t.runsDir)));
+      return recoveryRevert({ sessionsDir: path.join(path.dirname(t.runsDir), 'sessions'), guardRoot: path.dirname(path.dirname(path.dirname(t.turnDir))), ctx: { codeRoot: root, dataRoot: root }, sessionId: 's1', turn, serverRunning: false });
+    };
+    const queuedRun = (dir: string) => {
+      runMeta(dir, { status: 'queued', params: { sessionId: 's1', turn: 1 } });
+      fs.writeFileSync(path.join(dir, 'request.json'), request);
+    };
+    // A turn the session does not have is refused like an unknown file, so the run stays queued.
+    const unknownTurn = stalled(queuedRun);
+    expect(forSession(unknownTurn, 7)).toMatchObject({ status: 404, text: 'unknown session or turn' });
+    expect(queuedStatus(unknownTurn)).toBe('queued');
+    // A turn that changed nothing goes ahead with nothing to put back: the revert was allowed, so the run is no longer one to start.
+    const empty = stalled(queuedRun);
+    fs.writeFileSync(path.join(path.dirname(path.dirname(empty.turnDir)), 'files.ndjson'), '');
+    expect(forSession(empty, 1)).toMatchObject({ status: 200, text: 'nothing to revert' });
+    expect(queuedStatus(empty)).toBe('lost');
+  });
+
   it('a run still going is never reverted under it, nor one that cannot be shown to have ended, nor any while a server runs', () => {
     const alive = stalled((dir) => runMeta(dir, { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid) }));
     expect(alive.revert(false)).toMatchObject({ status: 409, text: expect.stringMatching(/still running/) });
