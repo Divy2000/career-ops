@@ -121,12 +121,12 @@ test('given a role heading and a Projects entry with the same name, when run wit
   assert.match(res.stderr, /= Career-Ops matches cv\.md line 12\n/);
 });
 
-test('given two Projects sections, when a heading entry ends its section, then it is compared without the next section\'s lines', () => {
-  const cv = '# CV\n\n## Projects\n\n### Foo\n\n- Built foo.\n\n## Experience\n\n- Worked.\n\n## Open Source Projects\n\n- **Bar** -- Built bar.\n';
+test('given a role named like a project and two Projects sections, when the project heading ends its section, then it is compared with its own lines only', () => {
+  const cv = '# CV\n\n## Experience\n\n### Foo -- Lead\n\n- Led.\n\n## Projects\n\n### Foo\n\n- Built foo.\n\n## Skills\n\n- Python.\n\n## Open Source Projects\n\n- **Bar** -- Built bar.\n';
   const root = dataRoot({ cv });
   const res = run(root, [input(root, 'p.json', [{ name: 'Foo', description: 'Built foo.' }]), '--dry-run']);
   assert.equal(res.status, 0, res.stderr);
-  assert.match(res.stderr, /= Foo matches cv\.md line 5\n/);
+  assert.match(res.stderr, /= Foo matches cv\.md line 11\n/);
 });
 
 test('given no article-digest.md, when run with --write, then it creates a valid library', () => {
