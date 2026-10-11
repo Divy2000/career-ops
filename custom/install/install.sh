@@ -465,11 +465,12 @@ DAILY_LOCKFS=()
 # The lock that daily_lock_take could not take, for the caller's message.
 DAILY_LOCK_FAILED=""
 
-# The lock folders a daily job may be running under: this run's data root, and the installed job's.
+# The lock folders a daily job may be running under: this run's data root, and the installed job's when it runs this
+# checkout. Another checkout's job runs that checkout's code, which nothing here changes, as cc_running treats it.
 daily_lock_dirs() {
   local root
   printf '%s\n' "$DATA/data/immigration"
-  root="$(installed_job_root)"
+  root="$(installed_job_root own)"
   if [ -n "$root" ]; then printf '%s\n' "$root/data/immigration"; fi
 }
 
