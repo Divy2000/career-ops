@@ -18,6 +18,7 @@ let markStatus: number;
 let statusFails: boolean;
 let shareOutput: string;
 let askable: string[] | 'fail';
+let markGate: Promise<void> | null;
 
 const ROW: TrackerRow = {
   num: 6, date: '2026-09-30', company: 'Vandelay Systems', role: 'Senior Python Engineer', score: 4.1, scoreRaw: '4.1/5', status: 'Offer',
@@ -34,6 +35,7 @@ beforeEach(async () => {
   statusFails = false;
   shareOutput = 'ok';
   askable = ['012'];
+  markGate = null;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -46,6 +48,7 @@ beforeEach(async () => {
       if (url === '/api/actions/tracker.hiredShare') return json(200, { result: shareOutput });
       // hired-share.mjs --mark: a line on stdout when it records the answer; exit 1 and the reason on stderr when the row is
       // not Hired (no exit map, so a 500 carrying stderr).
+      if (url === '/api/actions/tracker.hiredMark' && markGate) await markGate;
       if (url === '/api/actions/tracker.hiredMark')
         return markStatus === 200
           ? json(200, { result: 'report #012 marked "later".\n', stderr: '' })
@@ -95,6 +98,19 @@ describe('Hired Wall dialog', () => {
     await act(async () => button('Not now').click());
     const mark = posts.find((p) => p.url === '/api/actions/tracker.hiredMark')!;
     expect(mark.body.params).toEqual({ report: '012', mark: 'later' });
+  });
+
+  it('sends one answer at a time: a second click while hired-share.mjs is still writing is not sent (R25-feat-c-L1-01)', async () => {
+    let release!: () => void;
+    markGate = new Promise((r) => (release = r));
+    await act(async () => button('Not now').click());
+    expect(button('No, never ask again').disabled).toBe(true);
+    expect(button('Draft story').disabled).toBe(true);
+    await act(async () => button('No, never ask again').click());
+    await act(async () => button('Draft story').click());
+    expect(posts.filter((p) => p.url.startsWith('/api/actions/tracker.hired') && p.url !== '/api/actions/tracker.hiredStatus').map((p) => p.body.params)).toEqual([{ report: '012', mark: 'later' }]);
+    await act(async () => release());
+    await until(() => !dialog(), 'the dialog to close');
   });
 
   it('can be closed when the script refuses the answer', async () => {
