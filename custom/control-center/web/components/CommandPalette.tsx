@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Command } from 'cmdk';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useNavigate } from '@tanstack/react-router';
@@ -188,11 +188,23 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
   const [error, setError] = useState<string | null>(null);
   // Each click starts a paid session, so the button waits for the first start to answer.
   const [busy, setBusy] = useState(false);
+  // The palette can launch another mode over this one mid-start (Cmd+K stays live): this dialog is then gone, and its
+  // late answer must not close the new dialog or navigate away, so it only reports in a toast.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => void (mounted.current = false);
+  }, []);
   const start = async () => {
     setBusy(true);
     try {
       setError(null);
       const meta = await startSession({ mode, target: targetFor(target, mode), prompt });
+      if (!mounted.current) {
+        if (meta.status === 'error') toast.error(`The ${mode} session failed to start: ${meta.error ?? 'unknown error'}`);
+        else toast.success(`Started ${mode} session`);
+        return;
+      }
       // A 202 can carry a session that failed before its turn ran (no approved CLI, no token): say why and stay for a retry.
       if (meta.status === 'error') {
         setError(meta.error ?? 'session failed to start');
@@ -202,9 +214,10 @@ export function ModeLaunchDialog({ mode, onClose }: { mode: string; onClose: () 
       onClose();
       await navigate({ to: '/sessions/$id', params: { id: meta.id } });
     } catch (err) {
-      setError(describeError(err));
+      if (mounted.current) setError(describeError(err));
+      else toast.error(`The ${mode} session failed to start: ${describeError(err)}`);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
   return (
@@ -327,7 +340,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </Command.Group>
         </Command.List>
       </Command.Dialog>
-      {launch && <ModeLaunchDialog mode={launch} onClose={() => setLaunch(null)} />}
+      {launch && <ModeLaunchDialog key={launch} mode={launch} onClose={() => setLaunch(null)} />}
       {outputOf && output !== null && <ActionOutputDialog label={outputOf} text={output} onClose={() => setOutputOf(null)} />}
       {withParams && <ActionParamsDialog action={withParams} error={message?.tone === 'danger' ? message.text : null} onClose={() => setWithParams(null)} onRun={(p) => execute(withParams, p, true)} />}
     </>
