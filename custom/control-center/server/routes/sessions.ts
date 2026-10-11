@@ -7,6 +7,7 @@ import { isReportGated } from '../claude/honesty.js';
 import type { SessionMeta } from '../claude/sessions.js';
 import { readPipeline } from '../domains/pipeline.js';
 import { localJdPath } from '../../shared/local-jd.js';
+import { dedupUrlKey } from '../../shared/dedup-url.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
@@ -141,10 +142,13 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   const LIVE = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
   const isProcessInbox = (mode: string) => englishModeOf(mode) === 'pipeline';
   const liveSessions = (): SessionMeta[] => manager.list().filter((m) => LIVE.has(m.status));
-  /** The posting URLs of the pending Inbox rows Process inbox works on; it leaves saved-JD (local:jds/) rows out. */
-  const pendingInboxUrls = (): Set<string> => {
+  /**
+   * The posting URLs of the pending Inbox rows Process inbox works on, by the key POST /api/pipeline/add dedups them on
+   * (two spellings of one posting are one row); it leaves saved-JD (local:jds/) rows out.
+   */
+  const pendingInboxUrls = (): Map<string, string> => {
     const read = readPipeline(opts.cfg.dataRoot);
-    return new Set(read.kind === 'ok' ? read.rows.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url) : []);
+    return new Map(read.kind === 'ok' ? read.rows.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => [dedupUrlKey(r.url), r.url]) : []);
   };
   // A reply to a finished session carries it on over its rows, but the session reads done until its turn begins.
   const turnsStarting = new Set<string>();
@@ -159,7 +163,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const pipe = liveOrStarting().find((m) => isProcessInbox(m.mode));
     if (!pipe) return null;
     const pending = pendingInboxUrls();
-    const held = urls.find((u) => pending.has(u));
+    const held = urls.find((u) => pending.has(dedupUrlKey(u)));
     return held ? `Process inbox (session ${pipe.id}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
   };
   /** The first session of a run's fork lineage (the id of a deleted ancestor where the chain breaks). */
@@ -183,10 +187,10 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const other = sessions.find((m) => isProcessInbox(m.mode) && !(m.status === 'awaiting_user' && runRoot(m) === ownRoot));
     if (other) return `Process inbox (session ${other.id}) is already processing the pending Inbox rows, and a second run would evaluate them again. Try again once it ends.`;
     const pending = pendingInboxUrls();
-    const live = sessions.find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
+    const live = sessions.find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(dedupUrlKey(m.target.value ?? '')));
     if (live) return `session ${live.id} is evaluating the pending Inbox row ${live.target.value}, and Process inbox would evaluate it a second time. Try again once it ends.`;
     const evaluationModes = listLaunchableModeIds().filter(isReportGated);
-    for (const url of pending) {
+    for (const url of pending.values()) {
       if (evaluationModes.some((m) => manager.isStartingInBatch(m, { type: 'url', value: url }))) return `a Batch evaluate is starting the pending Inbox row ${url}, and Process inbox would evaluate it a second time. Try again once it ends.`;
     }
     return null;

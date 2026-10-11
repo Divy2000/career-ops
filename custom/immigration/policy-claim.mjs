@@ -235,8 +235,12 @@ function locked(dataRoot, fn) {
 function write(dataRoot, claim) {
   const file = claimFile(dataRoot);
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(claim));
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(claim));
+    fs.renameSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 /**

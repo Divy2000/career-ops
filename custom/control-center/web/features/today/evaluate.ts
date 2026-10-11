@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { localJdPath } from '@shared/local-jd';
+import { dedupUrlKey } from '@shared/dedup-url';
 import type { SessionMeta } from '@shared/api';
 import { startEvaluateSession, startSavedJdSession, useSessions } from '../../lib/sessions';
 
@@ -18,11 +19,18 @@ const ACTIVE = new Set(['queued', 'running', 'awaiting_user']);
  */
 export function useActiveEvaluation() {
   const sessions = useSessions();
-  return (ref: string): SessionMeta | undefined => sessions.data?.find((s) => s.mode === 'oferta' && ACTIVE.has(s.status) && s.target.value === ref);
+  return (ref: string): SessionMeta | undefined => {
+    const key = postingRefKey(ref);
+    return sessions.data?.find((s) => s.mode === 'oferta' && ACTIVE.has(s.status) && s.target.value !== null && postingRefKey(s.target.value) === key);
+  };
 }
 
-// Starts still waiting on POST /api/sessions, by posting reference: a second Evaluate of the same posting meanwhile
-// (its shortlist row and Quick evaluate) joins the first instead of sending another.
+/** A posting URL by the key POST /api/pipeline/add dedups it on (two spellings of one posting are one); a saved JD as is. */
+const postingRefKey = (ref: string) => (localJdPath(ref) === null ? dedupUrlKey(ref) : ref);
+
+// Starts still waiting on POST /api/sessions, by posting reference (its dedup key): a second Evaluate of the same
+// posting meanwhile (its shortlist row and Quick evaluate, or another spelling of its URL) joins the first instead of
+// sending another.
 const starting = new Map<string, Promise<SessionMeta>>();
 
 /**
@@ -33,7 +41,8 @@ const starting = new Map<string, Promise<SessionMeta>>();
 export function useStartEvaluation() {
   const qc = useQueryClient();
   return (ref: string): Promise<SessionMeta> => {
-    const pending = starting.get(ref);
+    const key = postingRefKey(ref);
+    const pending = starting.get(key);
     if (pending) return pending;
     const jd = localJdPath(ref);
     const start = (jd === null ? startEvaluateSession(ref) : startSavedJdSession(ref, jd))
@@ -43,8 +52,8 @@ export function useStartEvaluation() {
         qc.setQueryData<SessionMeta[]>(['sessions'], (prev) => [m, ...(prev ?? []).filter((s) => s.id !== m.id)]);
         return m;
       })
-      .finally(() => starting.delete(ref));
-    starting.set(ref, start);
+      .finally(() => starting.delete(key));
+    starting.set(key, start);
     return start;
   };
 }

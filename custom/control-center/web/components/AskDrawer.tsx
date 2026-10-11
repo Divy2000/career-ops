@@ -13,6 +13,7 @@ import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@share
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
+import { dedupUrlKey } from '@shared/dedup-url';
 import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
@@ -86,7 +87,8 @@ async function pendingUrlsAt(company: string): Promise<{ urls: string[]; leftOut
 /** Whether a posting is a pending Inbox row, which a running Process inbox session is evaluating. */
 async function isPendingInboxRow(url: string): Promise<boolean> {
   const pipeline = await apiGet<PipelineRead>('/api/pipeline');
-  return pipeline.kind === 'ok' && pipeline.rows.some((r) => !r.done && r.url === url);
+  const key = dedupUrlKey(url);
+  return pipeline.kind === 'ok' && pipeline.rows.some((r) => !r.done && dedupUrlKey(r.url) === key);
 }
 
 const PROCESS_INBOX_RUNNING = 'Process inbox is evaluating the pending rows: an evaluation started now would evaluate, report and bill them a second time. Try again once it ends.';

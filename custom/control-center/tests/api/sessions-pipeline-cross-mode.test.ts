@@ -357,3 +357,61 @@ describe('the forks of one Process inbox run', () => {
     });
   }
 });
+
+describe('another spelling of a pending Inbox row URL (R25-shared-comp-L2-01)', () => {
+  // The same posting as INBOX_URL by the key POST /api/pipeline/add dedups on: a tracking param and a trailing slash.
+  const RESPELLED = 'https://jobs.example.com/acme/123/?utm_source=linkedin';
+
+  it('an evaluation of it while Process inbox is live is refused with 409 naming the Process inbox session, and nothing starts', async () => {
+    await withApp(async (app) => {
+      const pipe = livePipeline(app);
+      const res = await call(app, '/api/sessions', { mode: 'oferta', target: { type: 'url', value: RESPELLED }, prompt: 'evaluate' });
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(pipe.id);
+      expect(count(app, 'oferta')).toBe(0);
+    });
+  });
+
+  it('a Process inbox start while an evaluation of it runs is refused with 409 naming the evaluation, and nothing starts', async () => {
+    await withApp(async (app) => {
+      const live = evaluation(app, RESPELLED);
+      const res = await call(app, '/api/sessions', { mode: 'pipeline', prompt: 'Process the pending pipeline rows' });
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(live.id);
+      expect(count(app, 'pipeline')).toBe(0);
+    });
+  });
+
+  it('a second evaluation of it while an evaluation of the row runs is refused with 409 naming that evaluation, and nothing starts', async () => {
+    await withApp(async (app) => {
+      const live = evaluation(app, INBOX_URL);
+      const res = await call(app, '/api/sessions', { mode: 'oferta', target: { type: 'url', value: RESPELLED }, prompt: 'evaluate' });
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(live.id);
+      expect(count(app, 'oferta')).toBe(1);
+    });
+  });
+
+  it('a Batch evaluate of it while an evaluation of the row runs starts nothing for it and reserves no number for it', async () => {
+    await withApp(async (app) => {
+      const live = evaluation(app, INBOX_URL);
+      const res = await call(app, '/api/sessions/fanout', { mode: 'oferta', urls: [RESPELLED, OUTSIDE_URL] });
+      expect(res.statusCode).toBe(202);
+      const fan = res.json() as { sessions: Array<{ status: string; error?: string; target: { value: string } }>; reserved: number[] };
+      expect(fan.reserved).toHaveLength(1);
+      expect(fan.sessions.filter((s) => s.status !== 'error').map((s) => s.target.value)).toEqual([OUTSIDE_URL]);
+      expect(fan.sessions.find((s) => s.target.value === RESPELLED)!.error).toContain(live.id);
+    });
+  });
+
+  it('a Batch evaluate naming it twice, spelled two ways, starts one evaluation and reserves one number', async () => {
+    await withApp(async (app) => {
+      const res = await call(app, '/api/sessions/fanout', { mode: 'oferta', urls: [OUTSIDE_URL, `${OUTSIDE_URL}/?utm_source=linkedin`] });
+      expect(res.statusCode).toBe(202);
+      const fan = res.json() as { sessions: Array<{ status: string; error?: string; target: { value: string } }>; reserved: number[] };
+      expect(fan.reserved).toHaveLength(1);
+      expect(fan.sessions.filter((s) => s.status !== 'error').map((s) => s.target.value)).toEqual([OUTSIDE_URL]);
+      expect(fan.sessions.find((s) => s.status === 'error')!.error).toContain(OUTSIDE_URL);
+    });
+  });
+});

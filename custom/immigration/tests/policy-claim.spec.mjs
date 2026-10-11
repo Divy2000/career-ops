@@ -322,3 +322,15 @@ test('a fork takes the claim from the paused session it forks, never from anothe
   plant(r, { owner: 'session:s-other', batch: null, at: new Date().toISOString() });
   assert.equal(tryClaim(r, { owner: 'starting:fork2', batch: null, takeFrom: 'session:s-src' }).ok, false);
 });
+
+test('given the claim cannot be renamed into place (ENOSPC), when a claim is taken, then it fails loudly and leaves no temp file beside the claim (R25-scripts-a-L1-01b)', (t) => {
+  const r = root();
+  const rename = fs.renameSync;
+  t.after(() => { fs.renameSync = rename; });
+  fs.renameSync = () => { const err = new Error('no space left on device'); err.code = 'ENOSPC'; throw err; };
+  assert.throws(() => tryClaim(r, { owner: 'session:s-1' }), /no space left/);
+  fs.renameSync = rename;
+  const dir = path.dirname(claimFile(r));
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('.tmp-')), []);
+  assert.equal(readClaim(r), null);
+});

@@ -20,6 +20,7 @@ import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
+import { dedupUrlKey } from '../../shared/dedup-url.js';
 import { sponsorCheckCompany } from '../../shared/company-slug.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass, donePolicyBatches, dropPolicyBatch, dropUnreadablePolicyBatch, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
@@ -333,16 +334,22 @@ export class SessionManager {
     // A second evaluation of a posting a live session of the mode's class evaluates (one waiting for the user's reply
     // too: the reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const cls = evaluationClass(input.mode);
-    const live = new Map<string, string>();
-    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
     const key = (url: string) => `${cls}\0${postingKey(input.mode, { type: 'url', value: url })}`;
+    const live = new Map<string, string>();
+    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(key(m.target.value), m.id);
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
+    // Two spellings of one posting in this batch (a tracking param, a trailing slash) are one evaluation: the first starts.
+    const batch = new Map<string, string>();
     for (const url of input.urls) {
-      const holder = live.get(url);
-      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
+      const holder = live.get(key(url));
+      const twin = batch.get(key(url));
+      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : twin ? `not started: ${twin} in this batch is the same posting` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
       if (why) refused.push(unstartedMeta(input.mode, { type: 'url', value: url }, input.model ?? null, why));
-      else urls.push(url);
+      else {
+        urls.push(url);
+        batch.set(key(url), url);
+      }
     }
     if (urls.length === 0) return { sessions: refused, reserved: [] };
     for (const url of urls) this.fanningOut.add(key(url));
@@ -463,6 +470,10 @@ export class SessionManager {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
+    const credited = num !== null && meta?.creditedReport?.num === num;
+    // Taken before the delete removes the record of when the session got the number. A credited report holds the
+    // number, so no other reservation can have claimed it.
+    const owns = num !== null && !credited ? this.reservationOwnership(meta!, num) : undefined;
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
     let deleted: boolean;
@@ -470,8 +481,8 @@ export class SessionManager {
       deleted = this.store.delete(id);
     } finally {
       if (num !== null) {
-        const released = await this.releaseReportNum(num, meta?.creditedReport?.num === num);
-        if (released.startsWith('could not')) console.warn(`[sessions] session ${id} deleted: ${released}`);
+        const released = await this.releaseReportNum(num, credited, owns);
+        if (released.startsWith('could not') || released.includes('already lost')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
     if (deleted && batch !== null) this.dropUnheldPolicyBatch(batch);
@@ -511,8 +522,9 @@ export class SessionManager {
         this.store.setStatus(meta.id, 'error', reason);
         // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
         if (meta.reportNum !== null) {
+          const owns = this.reservationOwnership(meta, meta.reportNum);
           this.store.setReportNum(meta.id, null);
-          void this.releaseReportNum(meta.reportNum, false);
+          void this.releaseReportNum(meta.reportNum, false, owns);
         }
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
@@ -682,7 +694,7 @@ export class SessionManager {
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
     if (num === null || meta.creditedReport?.num === num) return meta;
-    const sentinel = path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    const sentinel = this.sentinelPath(num);
     const createdAt = readSentinelCreatedAt(sentinel);
     if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
       const now = new Date();
@@ -718,6 +730,34 @@ export class SessionManager {
       console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     }
     return this.store.read(meta.id)!;
+  }
+
+  private sentinelPath(num: number): string {
+    return path.join(this.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+  }
+
+  /**
+   * Tells whether `num`'s sentinel is still the session's: written no later than the session got the number. A sentinel
+   * the stale GC collected is gone, or belongs to whichever reservation claimed the number next, and is not the
+   * session's to release. One that cannot be read is not released either: a release removes whatever is there.
+   */
+  private reservationOwnership(meta: SessionMeta, num: number): () => boolean {
+    let since: number;
+    try {
+      since = this.reservedAt(meta, num);
+    } catch (err) {
+      console.warn(`[sessions] session ${meta.id}: could not read when it got report number ${num}: ${(err as Error).message}`);
+      return () => false;
+    }
+    return () => {
+      try {
+        const createdAt = readSentinelCreatedAt(this.sentinelPath(num));
+        return createdAt !== null && createdAt <= since;
+      } catch (err) {
+        console.warn(`[sessions] session ${meta.id}: could not read the reservation for report number ${num}: ${(err as Error).message}`);
+        return false;
+      }
+    };
   }
 
   private reservationPath(id: string): string {
@@ -1157,10 +1197,12 @@ export class SessionManager {
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
   /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
   /** A failed attempt is tried again (the tracker lock may be busy): nothing else would drop the RESERVED file before a gc. */
-  private async releaseReportNum(num: number, used: boolean | null): Promise<string> {
+  /** `owns`, when given, is asked before every attempt: a sentinel lost to the stale GC in between is not released. */
+  private async releaseReportNum(num: number, used: boolean | null, owns?: () => boolean): Promise<string> {
     let failure = '';
     for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
       if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
+      if (owns && !owns()) return `report number ${num} was already lost (its reservation was collected), so it is not released`;
       failure = await this.tryReleaseReportNum(num);
       if (!failure) break;
     }
@@ -1198,11 +1240,12 @@ function owesReport(meta: SessionMeta): boolean {
 }
 
 /**
- * The dedupe key of what a session writes for: a posting's URL, the saved JD a local:jds/ text target names (as finalize
- * keys it), or the company a sponsorship check writes data/immigration/companies/** for (by its company-file slug).
+ * The dedupe key of what a session writes for: a posting's URL (by its dedup key, so two spellings of one posting are
+ * one), the saved JD a local:jds/ text target names (as finalize keys it), or the company a sponsorship check writes
+ * data/immigration/companies/** for (by its company-file slug).
  */
 function postingKey(mode: string, target: SessionMeta['target']): string | null {
-  if (target.type === 'url' && target.value) return `url\0${target.value}`;
+  if (target.type === 'url' && target.value) return `url\0${dedupUrlKey(target.value)}`;
   if (target.type === 'company' && mode === 'sponsorship-check') {
     if (target.value?.trim()) return `company\0${sponsorCheckCompany(target.value)}`;
   }
