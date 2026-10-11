@@ -134,7 +134,8 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     <div className="card stack">
       <h2>Batch evaluate</h2>
       <p className="muted">Each URL becomes one evaluation in its own session, under the Claude slot cap. Paste one URL per line (at most {BATCH_MAX_URLS} URLs).</p>
-      <textarea aria-label="Batch URLs" rows={6} value={urls} onChange={(e) => setUrls(e.target.value)} />
+      {/* Locked while a fan-out runs: its answer rewrites the box from the URLs it sent, which would drop any typed meanwhile. */}
+      <textarea aria-label="Batch URLs" rows={6} value={urls} disabled={busy} onChange={(e) => setUrls(e.target.value)} />
       <div className="row gap">
         <button type="button" disabled={busy || blocked || list.length === 0 || tooMany || refused.length > 0} onClick={() => void start()}>
           Batch evaluate <Pill tone="warn">Uses tokens</Pill>
