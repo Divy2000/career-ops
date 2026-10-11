@@ -235,7 +235,14 @@ if [ -z "$BLOCKERS" ]; then
   # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
   case $? in
-    0) echo "$LIVE_UPDATE"; notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
+    # A running Control Center keeps its old dependencies (update_live_checkout says so after the first "; ").
+    0)
+      echo "$LIVE_UPDATE"
+      case "$LIVE_UPDATE" in
+        *"; "*) notify "Merged upstream ($BEHIND commits) and updated career-ops, but ${LIVE_UPDATE#*; }" ;;
+        *) notify "Merged upstream ($BEHIND commits) and updated career-ops" ;;
+      esac
+      ;;
     3) echo "$LIVE_UPDATE"; notify "Merged upstream, but in the live checkout ${LIVE_UPDATE#*, but }" ;;
     10) echo "live checkout not updated: $LIVE_UPDATE"; notify "Merged upstream; $LIVE_UPDATE, so it was not updated. Run: git switch main && git pull --ff-only" ;;
     *) fail "$LIVE_UPDATE" ;;

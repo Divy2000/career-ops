@@ -880,6 +880,151 @@ test('--no-h1b-index skips it, and answering n on a terminal skips it too', () =
   assert.equal(b.w.calls('h1b-install').length, 0);
 });
 
+// The plugin (plugins/h1b-sponsor/lib/index.mjs indexPath) trims H1B_INDEX_PATH, refuses a blank one, and runs from the checkout.
+test('a relative H1B_INDEX_PATH is found in the checkout, not in the directory the installer was started from (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { 'data/h1b/shared.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+  assert.ok(r.out.includes(`index already installed: ${path.join(D, 'data/h1b/shared.gz')}`), r.out);
+});
+
+test('a relative H1B_INDEX_PATH that exists only under the starting directory is not taken as installed (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D);
+  fs.mkdirSync(path.join(w.cwd, 'data/h1b'), { recursive: true });
+  fs.writeFileSync(path.join(w.cwd, 'data/h1b/shared.gz'), 'x');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.doesNotMatch(r.out, /index already installed/, r.out);
+  assert.equal(w.calls('h1b-install').length, 1, r.out);
+});
+
+test('an H1B_INDEX_PATH with surrounding spaces is trimmed like the plugin trims it (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D);
+  const idx = path.join(w.T, 'shared', 'index.ndjson.gz');
+  w.write('shared/index.ndjson.gz', 'x');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: `  ${idx}  ` } });
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+  assert.ok(r.out.includes(`index already installed: ${idx}\n`), r.out);
+});
+
+test('an H1B_INDEX_PATH other than the default is a pending action when the daily job this run installs lacks the default index, since it does not inherit the variable (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /the daily job does not inherit H1B_INDEX_PATH/, r.out);
+  assert.ok(r.out.includes(path.join(D, 'data/h1b/index.ndjson.gz')), r.out);
+});
+
+test('an H1B_INDEX_PATH other than the default leaves nothing pending when the default index is there too, with --no-h1b-index, or with --no-launchd (R18-scripts-b-L2-01 review)', () => {
+  const cases = [
+    { name: 'default index present', files: { 'data/h1b/index.ndjson.gz': 'x' }, flags: [] },
+    { name: '--no-h1b-index', files: {}, flags: ['--no-h1b-index'] },
+    // This run leaves launchd alone, and an installed job may run another checkout, so nothing about it is claimed.
+    { name: '--no-launchd', files: {}, flags: ['--no-launchd'], plist: true },
+  ];
+  for (const c of cases) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x', ...c.files } });
+    if (c.plist) w.write('home/Library/LaunchAgents/com.career-ops.immigration-watch.plist', '<plist/>\n');
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none', ...c.flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+    assert.equal(r.status, 0, `${c.name}\n${r.out}`);
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, c.name);
+  }
+});
+
+test('an H1B_INDEX_PATH other than the default leaves nothing pending in a core-only install, which never installs a daily job (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--core-only', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
+test('an absolute H1B_INDEX_PATH through the real folder of a symlinked checkout names the default index before data/h1b exists (R18-scripts-b-L2-01 review)', () => {
+  const { w } = fresh({ keychain: true });
+  const real = path.join(w.T, 'real-checkout');
+  const D = path.join(w.T, 'linked-checkout');
+  w.makeCheckout(real, { files: READY_FILES });
+  fs.symlinkSync(real, D);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(real, 'data/h1b/index.ndjson.gz') } });
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+  assert.equal(r.status, 0, r.out);
+});
+
+test('an H1B_INDEX_PATH other than the default raises no daily-job note when this run does not install the job: onboarding unfinished, or a dry run (R18-scripts-b-L2-01 review)', () => {
+  for (const [name, files, flags] of [['onboarding unfinished', {}, []], ['dry run', READY_FILES, ['--dry-run']]]) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...files, 'data/h1b/shared.gz': 'x' } });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none', ...flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, `${name}\n${r.out}`);
+  }
+});
+
+test('declining the H-1B index on a terminal raises no daily-job note, as --no-h1b-index does not (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-start', '--onboard', 'none'], { tty: 'y\nn\ny\n', env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+  assert.equal(w.calls('launchd-install').length, 1, r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
+test('an H1B_INDEX_PATH through the target of a dangling data/h1b symlink names the default index (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const target = path.join(w.T, 'unmounted', 'idx');
+  fs.mkdirSync(path.join(D, 'data'), { recursive: true });
+  fs.symlinkSync(target, path.join(D, 'data/h1b'));
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(target, 'index.ndjson.gz') } });
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
+test('an H1B_INDEX_PATH whose .. leaves a symlinked data/h1b names another file than the default, as the kernel resolves it (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  w.write('store/h1b/index.ndjson.gz', 'x');
+  fs.mkdirSync(path.join(w.T, 'store/idx-2024'), { recursive: true });
+  fs.mkdirSync(path.join(D, 'data'), { recursive: true });
+  fs.symlinkSync(path.join(w.T, 'store/idx-2024'), path.join(D, 'data/h1b'));
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/../h1b/index.ndjson.gz' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
+for (const spelling of ['data/h1b/index.ndjson.gz', './data//h1b/index.ndjson.gz']) {
+  test(`an H1B_INDEX_PATH naming the default index (${spelling}) leaves nothing pending (R18-scripts-b-L2-01 review)`, () => {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/index.ndjson.gz': 'x' } });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: spelling } });
+    assert.equal(r.status, 0, r.out);
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+    assert.match(r.out, /index already installed/, r.out);
+  });
+}
+
+test('an H1B_INDEX_PATH spelling the default index on a checkout with no data/h1b folder yet leaves nothing pending (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: './data//h1b/../h1b/index.ndjson.gz' } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+  assert.equal(w.calls('h1b-install').length, 1, r.out);
+});
+
+test('a blank H1B_INDEX_PATH is the plugin\'s misconfiguration, not the default index: a pending action, nothing downloaded (R18-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/index.ndjson.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: '   ' } });
+  assert.equal(r.status, 3, r.out);
+  assert.doesNotMatch(r.out, /index already installed/, r.out);
+  assert.match(r.out, /H1B_INDEX_PATH is set but empty/, r.out);
+  assert.equal(w.calls('plugins').length, 0, r.out);
+  assert.equal(w.calls('h1b-install').length, 0, r.out);
+});
+
 // ---------------------------------------------------------------- onboarding
 
 test('by default without a TTY onboarding is not started: the interactive command is printed with the copied paths and claude is not called', () => {

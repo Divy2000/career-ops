@@ -884,16 +884,76 @@ fi
 
 # ---------------------------------------------------------------- H-1B index
 
+# lexical_path <absolute-path>: the path with empty, . and .. parts folded, without touching the filesystem.
+lexical_path() {
+  local part parts out=()
+  IFS=/ read -ra parts <<< "$1"
+  for part in ${parts[@]+"${parts[@]}"}; do
+    case "$part" in
+      '' | .) ;;
+      ..) if [ "${#out[@]}" -gt 0 ]; then unset 'out[${#out[@]}-1]'; fi ;;
+      *) out+=("$part") ;;
+    esac
+  done
+  if [ "${#out[@]}" -eq 0 ]; then printf '/'; else printf '/%s' "${out[@]}"; fi
+}
+
+# physical_path <absolute-path> [depth]: the path as the kernel would resolve it, even before it exists: its deepest
+# existing folder with symlinks resolved (a dangling one followed to its target), then the rest folded lexically.
+physical_path() {
+  local head tail="" target depth="${2:-0}"
+  head="$(dirname "$1")"
+  while [ ! -d "$head" ]; do
+    # Bounded, so a dangling symlink loop ends.
+    if [ -L "$head" ] && [ "$depth" -lt 40 ]; then
+      target="$(readlink "$head")"
+      case "$target" in /*) ;; *) target="$(dirname "$head")/$target" ;; esac
+      physical_path "$target$tail/${1##*/}" $((depth + 1))
+      return
+    fi
+    tail="/${head##*/}$tail"
+    head="$(dirname "$head")"
+  done
+  lexical_path "$(cd -P "$head" && pwd -P)$tail/${1##*/}"
+}
+
+# same_file_path <a> <b>: whether two absolute paths name one file, however spelled (./, //, .., symlinked folders).
+same_file_path() {
+  [ "$1" = "$2" ] || [ "$1" -ef "$2" ] || [ "$(physical_path "$1")" = "$(physical_path "$2")" ]
+}
+
 step "8/11 H-1B sponsor index"
-H1B_INDEX="${H1B_INDEX_PATH:-$DIR/data/h1b/index.ndjson.gz}"
+# Resolved as the plugin's indexPath() does: trimmed, set-but-blank is an error, and a relative path is taken from the
+# checkout, which is where the plugin runs.
 H1B_CMD="cd $QDIR && node plugins.mjs enable h1b-sponsor --confirm && node plugins/h1b-sponsor/install-h1b-index.mjs"
+H1B_DEFAULT="$DIR/data/h1b/index.ndjson.gz"
+H1B_INDEX="$H1B_DEFAULT"
+H1B_BLANK=0
+if [ -n "${H1B_INDEX_PATH+set}" ]; then
+  H1B_INDEX="$(trim "$H1B_INDEX_PATH")"
+  case "$H1B_INDEX" in
+    '') H1B_BLANK=1 ;;
+    /*) ;;
+    *) H1B_INDEX="$DIR/$H1B_INDEX" ;;
+  esac
+fi
+# The launchd plist does not carry H1B_INDEX_PATH, so the daily job always reads the default index; step 10 raises this
+# once it has installed the job and the default index is still not there.
+H1B_DAILY_NOTE=""
+if [ "$NO_H1B" = 0 ] && [ "$H1B_BLANK" = 0 ] && ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
+  H1B_DAILY_NOTE="H1B_INDEX_PATH points at $H1B_INDEX, but the daily job does not inherit H1B_INDEX_PATH and reads $H1B_DEFAULT. Copy the index there, or unset H1B_INDEX_PATH and run: $H1B_CMD"
+fi
 if [ "$NO_H1B" = 1 ]; then
   say "  skipped (--no-h1b-index); install later: $H1B_CMD"
+elif [ "$H1B_BLANK" = 1 ]; then
+  pending "H1B_INDEX_PATH is set but empty, so the h1b-sponsor plugin cannot read the H-1B index. Unset it to use the default index location, then run: $H1B_CMD"
 elif [ -f "$H1B_INDEX" ]; then
   say "  index already installed: $H1B_INDEX"
 elif [ "$DRY_RUN" = 1 ]; then
   dry "enable the h1b-sponsor plugin and download the index (about 8 MiB from github.com)"
 elif [ "$PROMPT_OK" = 1 ] && ! ask "Enable the h1b-sponsor plugin and download the H-1B index (about 8 MiB from github.com)?" y; then
+  # Declined like --no-h1b-index, so the daily job's index is left unmentioned too.
+  H1B_DAILY_NOTE=""
   say "  skipped; install later: $H1B_CMD"
 elif (cd "$DIR" && run_logged node plugins.mjs enable h1b-sponsor --confirm) && (cd "$DIR" && run_logged node plugins/h1b-sponsor/install-h1b-index.mjs); then
   say "  H-1B index installed"
@@ -1059,6 +1119,8 @@ else
         pending "A launchd job is running right now, so it was left as it was. Once it finishes, run: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
       elif [ "$rc" != 0 ]; then
         pending "The launchd install failed. Retry: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
+      elif [ -n "$H1B_DAILY_NOTE" ] && [ ! -f "$H1B_DEFAULT" ]; then
+        pending "$H1B_DAILY_NOTE"
       fi
     fi
   fi

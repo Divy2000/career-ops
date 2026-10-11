@@ -1137,6 +1137,18 @@ test('sync.sh updates the live checkout through update_live_checkout and fails t
   assert.doesNotMatch(failed.stdout, /continued/);
 });
 
+test('an update that left the running Control Center\'s dependencies alone says so in the notification, with the command to run (R18-scripts-b-L3-02)', () => {
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  const deferred = "the Control Center is running, so its dependencies were not reinstalled; stop it, run 'npm --prefix custom/control-center ci', then start it again";
+  const r = spawnSync('bash', ['-c', `update_live_checkout() { echo "live checkout now at abc; ${deferred}"; return 0; }\nnotify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; exit 1; }\nBEHIND=2\n${block}\necho continued`], { encoding: 'utf8' });
+  const notice = r.stdout.split('\n').find((l) => l.startsWith('NOTIFY: ')) ?? '';
+  assert.equal(notice, `NOTIFY: Merged upstream (2 commits) and updated career-ops, but ${deferred}`, r.stdout);
+  assert.match(r.stdout, /continued$/m);
+});
+
 // ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----
 
 /**
