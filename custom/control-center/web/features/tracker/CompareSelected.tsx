@@ -33,7 +33,7 @@ export function CompareSelected({ rows, onClear }: { rows: TrackerRow[]; onClear
         </div>
       )}
       {compare.shown && (
-        <fieldset disabled={compare.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <fieldset disabled={compare.waiting} className="turn-hold">
           {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
           <SessionPanel
             key={compare.panelKey}

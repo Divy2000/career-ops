@@ -247,12 +247,19 @@ input[type='checkbox'] {
   flex-direction: column;
   gap: var(--space-4);
 }
+/* A host's hold around its session panel: a fieldset that only disables the panel, so it is spaced as the panel's card. */
+.turn-hold {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
 /* Boxed blocks placed one after another directly in a page keep one spacing step between them (inside a .stack the gap does it). */
-.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) + :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) {
+.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid, .turn-hold) + :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid, .turn-hold) {
   margin-top: var(--space-4);
 }
 /* A tab row after a card (a session panel above the page tabs) keeps the same step. */
-.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid) + .tabs {
+.shell__main > section > :is(.card, .tile, .table-wrap, .grid-2, .split, .tiles, .stack, .apply-grid, .turn-hold) + .tabs {
   margin-top: var(--space-4);
 }
 .row {

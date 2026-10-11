@@ -125,7 +125,7 @@ export function AiSearchTab() {
           </p>
         </div>
       ) : (
-        <fieldset disabled={remembered.waiting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <fieldset disabled={remembered.waiting} className="turn-hold">
           {/* Another mount's reply is in flight: a second one would be refused, and the refusal would let go of its start mark. */}
           <SessionPanel key={`${remembered.panelKey}-${fresh}`} {...remembered.panel} onStatus={onStatus} marksTurnStarts mode="ai-search" title="AI search" placeholder="Describe the role you want (seniority, stack, location, visa needs)" onEnvelope={onEnvelope} startLabel="Search" />
         </fieldset>
