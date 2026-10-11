@@ -239,10 +239,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     // A URL target reaches the session's prompt, so it is held to the fan-out's posting URL rule.
-    if (parsed.data.target.type === 'url' && parsed.data.target.value?.trim()) {
+    // Every later use (duplicate checks, inbox holds, the stored target) sees the trimmed value; a blank one names no URL.
+    if (parsed.data.target.type === 'url' && parsed.data.target.value !== null) {
       const url = parsed.data.target.value.trim();
-      if (!plainPostingUrl(url)) return reply.code(400).send({ error: 'a url target must be a plain http(s) job posting URL: no credentials, no spaces, at most 2048 characters' });
-      parsed.data.target = { type: 'url', value: url };
+      if (url && !plainPostingUrl(url)) return reply.code(400).send({ error: 'a url target must be a plain http(s) job posting URL: no credentials, no spaces, at most 2048 characters' });
+      parsed.data.target = { type: 'url', value: url || null };
     }
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: `another batch evaluate is already starting ${parsed.data.target.value}` });

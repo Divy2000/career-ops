@@ -38,6 +38,12 @@ describe('POST /api/sessions with a URL target', () => {
     expect(res.json().target).toEqual({ type: 'url', value: 'https://jobs.example.com/synthetic/5' });
   });
 
+  it('given a URL that is only whitespace, starts the session with no URL as its target', async () => {
+    const res = await start('   ');
+    expect(res.statusCode, res.body).toBe(202);
+    expect(res.json().target).toEqual({ type: 'url', value: null });
+  });
+
   it('given no URL yet (null), starts the session as before', async () => {
     const res = await start(null);
     expect(res.statusCode, res.body).toBe(202);
