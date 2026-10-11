@@ -507,6 +507,132 @@ describe('projects library form (Profile & CV > Projects)', () => {
   });
 });
 
+describe('projects library: a save still on its way after Cancel (R20-feat-b-L1-01)', () => {
+  const entry = (id: string, title: string) => ({ id, title, url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['One.'], line: 1, editProblem: null, inCv: false });
+  beforeEach(() => {
+    files = { '/api/projects': { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [entry('event-router', 'Event Router'), entry('kite-tracker', 'Kite Tracker')] } };
+  });
+
+  /** Saves entry A with its PUT held and an answer chosen by the test, cancels A, then opens B and types into it. */
+  async function cancelASaveThenEditB(answer: (real: () => Promise<Response>) => Promise<Response>) {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let answered = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (init?.method !== 'PUT' || answered) return real(input, init);
+      await held;
+      answered = true;
+      return answer(() => real(input, init));
+    });
+    await click(button('Save project')!);
+    await click(button('Cancel')!);
+    await click(await until(() => (button('Edit Kite Tracker')?.disabled === false ? button('Edit Kite Tracker') : undefined), 'the edit button for B'));
+    await type(await until(() => labelled<HTMLInputElement>('Dates'), 'the dates field of B'), '2024');
+    await act(async () => release());
+    await until(() => answered, 'the answer to the PUT of A');
+    // Lets the late answer and any refetch it triggers settle.
+    await act(async () => new Promise((r) => setTimeout(r, 100)));
+  }
+
+  it('given A saved then cancelled, when its PUT succeeds while B is open, then B stays open with its edits', async () => {
+    await cancelASaveThenEditB((real) => real());
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Kite Tracker');
+    expect(labelled<HTMLInputElement>('Dates')?.value).toBe('2024');
+  });
+
+  it('given A saved then cancelled, when its PUT is refused with 422, then A\'s errors never show on B', async () => {
+    await cancelASaveThenEditB(async () => json(422, { errors: ['A title problem from the first form'] }));
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Kite Tracker');
+    expect(alerts()).not.toMatch(/A title problem from the first form/);
+  });
+
+  it('given A saved then cancelled, when its PUT gets the 409, then B shows no conflict and keeps the version it opened on', async () => {
+    // The 409 means another writer moved the file on: the server is at e2 by the time it answers.
+    await cancelASaveThenEditB(async () => {
+      files['/api/projects'] = { ...files['/api/projects']!, etag: 'e2' };
+      return json(409, { error: 'the file changed since you loaded it' });
+    });
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Kite Tracker');
+    expect(alerts()).not.toMatch(/changed on disk since it was loaded/);
+    await click(button('Save project')!);
+    await until(() => writes().length === 1, 'the save of B');
+    expect(writes()[0]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker', headers: expect.objectContaining({ 'If-Match': 'e1' }) }));
+  });
+
+  it('given A cancelled while its conflict reload is on its way, when that reload answers after a newer version loaded, then the list keeps the newer version', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    // Another writer moved the file on without a watcher event yet: A's save gets the 409 and reloads the library.
+    files['/api/projects'] = { ...files['/api/projects']!, etag: 'e2' };
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let conflicted = false;
+    let reloadHeld = false;
+    let reloaded = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const res = await real(input, init);
+      if (res.status === 409) conflicted = true;
+      else if (conflicted && !reloadHeld && String(input) === '/api/projects' && (init?.method ?? 'GET') === 'GET') {
+        reloadHeld = true;
+        await held;
+        reloaded = true;
+      }
+      return res;
+    });
+    await click(button('Save project')!);
+    await until(() => reloadHeld, 'the conflict reload of A');
+    await click(button('Cancel')!);
+    const entries = files['/api/projects']!.entries as Array<Record<string, unknown>>;
+    await changeOnDisk('/api/projects', { etag: 'e3', entries: [...entries, { ...entries[0], id: 'third-thing', title: 'Third Thing' }] });
+    await until(() => button('Edit Third Thing'), 'the newer version in the list');
+    await act(async () => release());
+    await until(() => reloaded, 'the late reload of A');
+    await act(async () => new Promise((r) => setTimeout(r, 100)));
+    expect(button('Edit Third Thing')).toBeDefined();
+  });
+
+  it('given a form whose conflict reload is on its way, when that reload answers after a newer version loaded, then the form rebases on the newer version', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Router v2');
+    files['/api/projects'] = { ...files['/api/projects']!, etag: 'e2' };
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let conflicted = false;
+    let reloadHeld = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const res = await real(input, init);
+      if (res.status === 409) conflicted = true;
+      else if (conflicted && !reloadHeld && String(input) === '/api/projects' && (init?.method ?? 'GET') === 'GET') {
+        reloadHeld = true;
+        await held;
+      }
+      return res;
+    });
+    await click(button('Save project')!);
+    await until(() => reloadHeld, 'the conflict reload');
+    const entries = files['/api/projects']!.entries as Array<Record<string, unknown>>;
+    await changeOnDisk('/api/projects', { etag: 'e3', entries: [...entries, { ...entries[0], id: 'third-thing', title: 'Third Thing' }] });
+    await until(() => button('Edit Third Thing'), 'the newer version in the list');
+    await act(async () => release());
+    await until(() => /changed on disk since it was loaded/.test(alerts()), 'the rebase message');
+    expect(button('Edit Third Thing')).toBeDefined();
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]!.headers['If-Match']).toBe('e3');
+  });
+});
+
 describe('blacklist editor (Settings)', () => {
   beforeEach(() => {
     files = { '/api/blacklist': { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', rows: [{ company: 'Initech', since: '2026-01-01', scope: 'company', reason: '' }], preamble: null, postamble: '', extraColumns: [] } };

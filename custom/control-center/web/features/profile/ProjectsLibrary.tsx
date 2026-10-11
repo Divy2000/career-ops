@@ -1,7 +1,7 @@
 // Profile > Projects: the projects library (article-digest.md) as a list with
 // badges, a one-entry form, validation, import (paste, file, or a read-only
 // parser session for PDF) and a rank preview against a pasted JD.
-import { useCallback, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -21,6 +21,8 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const ifMatch = (etag: string | null | undefined): Record<string, string> => (etag ? { 'If-Match': etag } : {});
 
 interface Editing {
+  /** Which opening of the form this is: a save still on its way after Cancel answers only the form it was started from. */
+  token: number;
   id: string | null;
   draft: ProjectDraft;
   /** The entry as the form opened on it (or last rebased on): what the user's edits are measured against after a 409. */
@@ -42,7 +44,8 @@ interface Editing {
 const FIELD_LABELS: Record<DraftField, string> = { title: 'Title', url: 'Link', tags: 'Tags', kind: 'Kind', dates: 'Dates', bullets: 'Bullets' };
 const fieldLabel = (f: DraftField) => FIELD_LABELS[f];
 
-const newEditing = (fields: Pick<Editing, 'id' | 'draft' | 'tagline' | 'source' | 'baseEtag' | 'origin'>): Editing => ({ ...fields, base: fields.draft, messages: [], onDisk: null, orphaned: false });
+let openings = 0;
+const newEditing = (fields: Pick<Editing, 'id' | 'draft' | 'tagline' | 'source' | 'baseEtag' | 'origin'>): Editing => ({ ...fields, token: ++openings, base: fields.draft, messages: [], onDisk: null, orphaned: false });
 
 /** The form rebased on the library as it is now after a 409, so a second save never quietly undoes another writer's edit. */
 function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
@@ -79,6 +82,12 @@ export function ProjectsLibrary() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<Editing | null>(null);
+  // Which form is open now, for a form's late answers that act outside the form state (the list cache).
+  const openToken = useRef<number | null>(null);
+  useEffect(() => {
+    openToken.current = editing?.token ?? null;
+  }, [editing]);
+  const isOpen = useCallback((token: number) => openToken.current === token, []);
   useUnsaved('the open project form', editing !== null && JSON.stringify(editing.draft) !== JSON.stringify(editing.base));
   const data = q.data;
   // A form left with nothing to update (its entry renamed or removed on disk) is rebased again on every new version of
@@ -152,7 +161,7 @@ export function ProjectsLibrary() {
         <DataState query={q} editable>
           {data && <ValidationPanel validation={data.validation} />}
           {/* A new project, or an entry removed on disk while its form was open: the form stays up, above the list. */}
-          {editing && (editing.id === null || !data?.entries.some((e) => e.id === editing.id)) && <ProjectForm editing={editing} liveEtag={data?.etag ?? null} onDiskTitles={data?.entries.map((e) => e.title) ?? []} update={setEditing} onDone={() => setEditing(null)} />}
+          {editing && (editing.id === null || !data?.entries.some((e) => e.id === editing.id)) && <ProjectForm key={editing.token} editing={editing} liveEtag={data?.etag ?? null} onDiskTitles={data?.entries.map((e) => e.title) ?? []} update={setEditing} isOpen={isOpen} onDone={() => setEditing(null)} />}
           {data && data.entries.length === 0 && editing === null && (
             <Empty>{data.kind === 'missing' ? 'No article-digest.md yet. Add a project or import a list below; the file is created on the first save.' : 'The library has no entries yet.'}</Empty>
           )}
@@ -161,7 +170,7 @@ export function ProjectsLibrary() {
               {data.entries.map((entry) =>
                 editing?.id === entry.id ? (
                   <li key={entry.id} className="project-row project-row--editing">
-                    <ProjectForm editing={editing} liveEtag={data.etag} onDiskTitles={data.entries.map((e) => e.title)} update={setEditing} onDone={() => setEditing(null)} />
+                    <ProjectForm editing={editing} liveEtag={data.etag} onDiskTitles={data.entries.map((e) => e.title)} update={setEditing} isOpen={isOpen} onDone={() => setEditing(null)} />
                   </li>
                 ) : (
                   <ProjectRow key={entry.id} entry={entry} disabled={editing !== null} onEdit={() => setEditing(newEditing({ id: entry.id, draft: draftFromEntry(entry), tagline: entry.tagline, source: entry.source, baseEtag: data.etag, origin: { ids: data.entries.map((e) => e.id), index: data.entries.indexOf(entry), bullets: entry.bullets } }))} onDelete={() => void remove(entry)} />
@@ -242,12 +251,14 @@ function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView;
   );
 }
 
-function ProjectForm({ editing, liveEtag, onDiskTitles, update, onDone }: { editing: Editing; liveEtag: string | null; onDiskTitles: string[]; update: Dispatch<SetStateAction<Editing | null>>; onDone: () => void }) {
+function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }: { editing: Editing; liveEtag: string | null; onDiskTitles: string[]; update: Dispatch<SetStateAction<Editing | null>>; isOpen: (token: number) => boolean; onDone: () => void }) {
   const qc = useQueryClient();
   const [saving, setSaving] = useState(false);
   const { draft, messages, onDisk } = editing;
-  // Every change goes through the latest state: typing during a save is not overwritten by what the save captured.
-  const patch = (fn: (e: Editing) => Editing) => update((prev) => (prev ? fn(prev) : prev));
+  // Every change goes through the latest state: typing during a save is not overwritten by what the save captured. A
+  // change from this form is dropped once the form it was made in is closed, so it never lands on the next one opened.
+  const mine = editing.token;
+  const patch = (fn: (e: Editing) => Editing) => update((prev) => (prev?.token === mine ? fn(prev) : prev));
   const set = (p: Partial<ProjectDraft>) => patch((e) => ({ ...e, draft: { ...e.draft, ...p } }));
   const setBullet = (i: number, value: string) => patch((e) => ({ ...e, draft: { ...e.draft, bullets: e.draft.bullets.map((b, j) => (j === i ? value : b)) } }));
   const say = (m: string[]) => patch((e) => ({ ...e, messages: m }));
@@ -266,7 +277,7 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, onDone }: { edit
       else await apiSend('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
       toast.success(`Saved ${body.title}`);
       await qc.invalidateQueries({ queryKey: QUERY_KEY });
-      onDone();
+      update((prev) => (prev?.token === mine ? null : prev));
     } catch (err) {
       if (err instanceof ApiError && err.status === 422) say((err.body as { errors?: string[] }).errors ?? [describeError(err)]);
       // The route answers a PUT for an id the library no longer has (renamed or removed on disk) with 404, before it
@@ -286,6 +297,7 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, onDone }: { edit
   };
 
   const rebase = async () => {
+    const loads = qc.getQueryState(QUERY_KEY)?.dataUpdateCount ?? 0;
     let fresh: ProjectsRead;
     try {
       fresh = await apiGet<ProjectsRead>('/api/projects');
@@ -294,6 +306,17 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, onDone }: { edit
       return;
     }
     // The form's state first, then the list: the list refresh can move the form, and its state lives in the parent.
+    // A form closed meanwhile may have been outlived by a newer version in the list: its reload is not written over it.
+    if (!isOpen(mine)) return;
+    // The list loaded again while this reload was on its way (the watcher's refetch), and which of the two answers is
+    // newer is unknown: a refetch started now is newer than both, so the form rebases on that.
+    if ((qc.getQueryState(QUERY_KEY)?.dataUpdateCount ?? 0) !== loads) {
+      await qc.invalidateQueries({ queryKey: QUERY_KEY });
+      if (!isOpen(mine)) return;
+      const latest = qc.getQueryData<ProjectsRead>(QUERY_KEY) ?? fresh;
+      patch((e) => rebaseOn(e, latest));
+      return;
+    }
     patch((e) => rebaseOn(e, fresh));
     qc.setQueryData(QUERY_KEY, fresh);
   };
