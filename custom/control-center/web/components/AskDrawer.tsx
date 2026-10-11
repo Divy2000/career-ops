@@ -13,6 +13,7 @@ import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@share
 import { fanoutOutcome } from '../lib/fanoutOutcome';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { localJdPath } from '@shared/local-jd';
+import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { useTracker } from '../lib/queries';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -119,8 +120,8 @@ function invalidParams(p: { action: string; params: Record<string, unknown> }): 
   if (p.action === 'evaluate' && !/^https?:\/\/\S+$/i.test(String(p.params.url).trim())) return 'evaluate needs "url", the job posting URL';
   // The /api/memory route refuses a fact over 300 characters, so a longer one fails before the user approves it.
   if (p.action === 'remember' && String(p.params.fact ?? '').length > 300) return 'remember needs "fact", at most 300 characters';
-  // tracker.setStatus's schema refuses a note over 500 characters, the same way.
-  if (p.action === 'setStatus' && String(p.params.note ?? '').length > 500) return 'setStatus takes a "note" of at most 500 characters';
+  // tracker.setStatus's schema refuses a note over STATUS_NOTE_MAX characters, the same way.
+  if (p.action === 'setStatus' && String(p.params.note ?? '').length > STATUS_NOTE_MAX) return `setStatus takes a "note" of at most ${STATUS_NOTE_MAX} characters`;
   return null;
 }
 

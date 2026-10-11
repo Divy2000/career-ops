@@ -7,6 +7,7 @@ import { pinnedNodeBin } from '../../server/system/schedule.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
 import type { RunMeta } from '../../server/runner/store.js';
+import { STATUS_NOTE_MAX } from '../../shared/tracker-status.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -89,6 +90,14 @@ describe('action registry', () => {
     const row = tracker.rows.find((r: { num: number }) => r.num === 3);
     expect(row.status).toBe('Interview');
     expect(row.notes).toContain('--> phone screen Tue');
+  });
+
+  it('refuses a status note over the shared limit before running set-status, and takes one at the limit', async () => {
+    const over = await post('/api/actions/tracker.setStatus', { params: { row: 3, state: 'Offer', note: 'x'.repeat(STATUS_NOTE_MAX + 1) } });
+    expect(over.statusCode).toBe(400);
+    expect((await get('/api/tracker')).json().rows.find((r: { num: number }) => r.num === 3).notes).not.toContain('x'.repeat(STATUS_NOTE_MAX));
+    const at = await post('/api/actions/tracker.setStatus', { params: { row: 3, state: 'Offer', note: 'y'.repeat(STATUS_NOTE_MAX) } });
+    expect(at.statusCode, at.body).toBe(200);
   });
 
   it('maps set-status exit codes to HTTP statuses', async () => {
