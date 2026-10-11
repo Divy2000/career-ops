@@ -47,10 +47,18 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   // Process inbox evaluates every pending row, so an evaluation of one of them beside it would evaluate, report and bill
   // it a second time: Batch is off while one is starting or live, and until the sessions list tells there is none.
   const sessions = useSessions();
-  const processStarting = useRememberedSession('cc.pipeline.process').waiting;
+  const process = useRememberedSession('cc.pipeline.process');
   const processStore = useMemo(() => lastSession('cc.pipeline.process'), []);
-  const pipelineLive = processStarting || livePipelineId(sessions.data) !== null;
-  const blocked = pipelineLive || sessions.isPending || sessions.isError;
+  // A Process inbox start that reported its id after the list was read is not in it yet: the list is read again, and
+  // Batch stays off until it answers. An id the server no longer lists stops blocking once that read is done.
+  const processId = process.panel.sessionId;
+  const processUnlisted = processId !== null && sessions.data !== undefined && !sessions.data.some((s) => s.id === processId);
+  const { refetch } = sessions;
+  useEffect(() => {
+    if (processUnlisted) void refetch();
+  }, [processUnlisted, processId, refetch]);
+  const pipelineLive = process.waiting || livePipelineId(sessions.data) !== null;
+  const blocked = pipelineLive || sessions.isPending || sessions.isError || (processUnlisted && sessions.isFetching);
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
   const asking = useRef(false);
   // A start can answer after the user left the page: only a still-mounted one moves them to the session.

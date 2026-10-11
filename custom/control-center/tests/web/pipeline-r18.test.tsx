@@ -146,6 +146,42 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the note');
     expect(posts).toEqual([]);
   });
+
+  // The Process inbox panel reported its id, but the sessions list read so far predates it: the next read is held.
+  const heldSecondList = () => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    let reads = 0;
+    let release: (() => void) | null = null;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && !init?.method && ++reads > 1 && !release) await new Promise<void>((r) => (release = r));
+      return inner(input as string, init);
+    });
+    return () => release;
+  };
+
+  it('given a Process inbox start that reported its id before the sessions list shows it, Batch evaluate stays off', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-pipe');
+    const released = heldSecondList();
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => released(), 'the sessions list read again');
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+    sessions = [pipelineSession('s-pipe', 'running')];
+    await act(async () => released()!());
+    await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the note');
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+  });
+
+  it('given a remembered Process inbox id the server no longer lists, Batch evaluate comes back once the list is read again', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-gone');
+    const released = heldSecondList();
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => released(), 'the sessions list read again');
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+    await act(async () => released()!());
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+  });
 });
 
 describe('A finished Process inbox run beside evaluations of its rows (R18-feat-b-L3-02)', () => {
