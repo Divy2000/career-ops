@@ -31,7 +31,7 @@ const READS: Record<string, unknown> = {
   '/api/config/profile': { key: 'profile', path: 'config/profile.yml', kind: 'ok', raw: 'language:\n  output: en\n', etag: 'pr1', doc: { language: { output: 'en' } }, parseError: null } satisfies ConfigRead,
   '/api/followups/cadence': { kind: 'ok', etag: 'pr1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days', 'applied_subsequent_days', 'applied_max_followups', 'responded_initial_days', 'responded_subsequent_days', 'interview_thankyou_days'], parseError: null } satisfies CadenceRead,
   '/api/settings/app': { logos: false, retention: 500, claudeConcurrency: 2, modelDefault: '', usageBudgets: { fiveHourTokens: null, sevenDayTokens: 2000000 }, problem: null } satisfies AppSettingsRead,
-  '/api/system/status': { node: 'v24.0.0', claude: { bin: '/usr/local/bin/claude', version: '2.1.0', error: null, approved: true, problem: null }, roots: { code: '/code', data: '/data' }, keychainTokenPresent: true, anthropicApiKeySet: false, careerOps: { version: '1.0.0' } } satisfies SystemStatus,
+  '/api/system/status': { node: 'v24.0.0', claude: { bin: '/usr/local/bin/claude', version: '2.1.0', error: null, approved: true, problem: null }, roots: { code: '/code', data: '/data' }, keychainTokenPresent: true, keychainToken: { state: 'present', reason: null }, anthropicApiKeySet: false, careerOps: { version: '1.0.0' } } satisfies SystemStatus,
   '/api/sessions/engine': { playwrightAvailable: false, modes: [] },
   '/api/usage': { kind: 'ok', dir: '/home/.claude/projects', fiveHour: window0, sevenDay: window0, files: 0, computedAt: '2026-10-06T12:00:00.000Z', budgets: { fiveHourTokens: null, sevenDayTokens: 2000000 } } satisfies UsageResponse,
 };

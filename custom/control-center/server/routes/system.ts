@@ -4,12 +4,16 @@ import type { ServerConfig } from '../config.js';
 import { childEnv } from '../system/child-env.js';
 import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../claude/cli-version.js';
 
+export type KeychainTokenStatus = { state: 'present' | 'missing'; reason: null } | { state: 'unreadable'; reason: string };
+
 export interface SystemStatus {
   node: string;
   /** `approved`: sessions may run on this version; `problem` says why not when claude runs but is not approved. */
   claude: { bin: string; version: string | null; error: string | null; approved: boolean; problem: string | null };
   roots: { code: string; data: string };
   keychainTokenPresent: boolean;
+  /** `unreadable`: the reader failed for a reason other than an absent token (a locked keychain, a timeout), given in `reason`. */
+  keychainToken: KeychainTokenStatus;
   anthropicApiKeySet: boolean;
   careerOps: { version: string | null };
 }
@@ -37,14 +41,7 @@ export const execNoShell: Exec = (cmd, args, { cwd, timeoutMs, env }) =>
  * whether a token is stored. The token value is discarded and never leaves this process.
  */
 export async function readSystemStatus(cfg: ServerConfig, readToken: () => Promise<string>, exec: Exec = execNoShell): Promise<SystemStatus> {
-  const [claude, tokenStored, version] = await Promise.all([
-    exec(cfg.claudeBin, ['--version'], { timeoutMs: 8000 }),
-    readToken().then(
-      (token) => token.length > 0,
-      () => false,
-    ),
-    readCareerOpsVersion(cfg),
-  ]);
+  const [claude, keychainToken, version] = await Promise.all([exec(cfg.claudeBin, ['--version'], { timeoutMs: 8000 }), readKeychainToken(readToken), readCareerOpsVersion(cfg)]);
   const approvedList = approvedClaudeVersions(cfg.nodeEnv);
   const parsed = claude.code === 0 ? parseClaudeVersion(claude.stdout) : null;
   const approved = parsed !== null && approvedList.includes(parsed);
@@ -58,10 +55,24 @@ export async function readSystemStatus(cfg: ServerConfig, readToken: () => Promi
       problem: claude.code !== 0 || approved ? null : parsed ? unapprovedWarning(parsed, approvedList) : `could not read the Claude Code version from ${JSON.stringify(claude.stdout.trim().slice(0, 80))}; sessions are refused until it reports an approved version.`,
     },
     roots: { code: cfg.codeRoot, data: cfg.dataRoot },
-    keychainTokenPresent: tokenStored,
+    keychainTokenPresent: keychainToken.state === 'present',
+    keychainToken,
     anthropicApiKeySet: Boolean(process.env.ANTHROPIC_API_KEY),
     careerOps: { version },
   };
+}
+
+/**
+ * The reader's own error tells an absent token from one it could not read (keychainTokenReader in server/claude/manager.ts):
+ * only an absent or empty token's error says to run claude setup-token. Any other error is the reason the read failed.
+ */
+async function readKeychainToken(readToken: () => Promise<string>): Promise<KeychainTokenStatus> {
+  try {
+    return (await readToken()).length > 0 ? { state: 'present', reason: null } : { state: 'missing', reason: null };
+  } catch (err) {
+    const message = (err instanceof Error ? err.message : String(err)).trim() || 'the token reader failed without saying why';
+    return message.includes('claude setup-token') ? { state: 'missing', reason: null } : { state: 'unreadable', reason: message };
+  }
 }
 
 async function readCareerOpsVersion(cfg: ServerConfig): Promise<string | null> {
