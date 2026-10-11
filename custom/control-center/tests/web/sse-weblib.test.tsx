@@ -74,6 +74,7 @@ beforeEach(async () => {
   await until(() => fetches.storyBank === 1 && fetches.insights === 1 && fetches.followups === 1 && fetches.whatsNew === 1, 'the first fetches');
 });
 afterEach(async () => {
+  vi.useRealTimers();
   await act(async () => root.unmount());
   host.remove();
   Object.assign(APP_STREAM_RETRY, retry);
@@ -148,9 +149,11 @@ describe('a stream the browser closed for good (R13-weblib-L1-01, R13-weblib-L3-
   });
 
   it('stops trying once its last subscriber leaves', async () => {
+    // Fake timers hold the backoff until the unmount is done: on real ones a loaded machine could run it first.
+    vi.useFakeTimers();
     await act(async () => latest().fail());
     await act(async () => root.unmount());
-    await act(async () => new Promise((r) => setTimeout(r, 40)));
+    await act(async () => vi.advanceTimersByTime(APP_STREAM_RETRY.maxMs * 2));
     expect(FakeEventSource.all).toHaveLength(1);
     root = createRoot(host);
   });

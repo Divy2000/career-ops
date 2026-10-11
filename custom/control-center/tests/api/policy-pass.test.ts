@@ -233,13 +233,17 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
 
   it('a cancelled pass keeps the claim until its Claude process has really exited (SW8-server-01 review)', async () => {
     writePending([item(6)]);
-    // A CLI that ignores SIGTERM, sleeping in short steps so the SIGKILL that ends it lands between them.
-    const stubborn = [INIT, { __ignoreSigterm: true }, ...Array.from({ length: 200 }, () => ({ __sleep: 100 })), result('Pass done.')];
+    // A CLI that ignores SIGTERM, sleeping in short steps so the SIGKILL that ends it lands between them. The text it
+    // prints once it ignores SIGTERM is what the cancel waits for: a SIGTERM sent before that ends the CLI at once.
+    const stubborn = [INIT, { __ignoreSigterm: true }, { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Ignoring SIGTERM. ' } } }, ...Array.from({ length: 200 }, () => ({ __sleep: 100 })), result('Pass done.')];
     const res = await withScenario({ events: stubborn }, start);
     expect(res.statusCode, res.body).toBe(202);
     const id = res.json().id as string;
     const runId = () => (t.sessions.read(id)!.turns.at(-1)!.runId);
     for (let i = 0; i < 100 && !t.runner.store.read(runId())?.childPid; i++) await wait(50);
+    const ignoring = () => t.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta');
+    for (let i = 0; i < 200 && !ignoring(); i++) await wait(50);
+    expect(ignoring()).toBe(true);
     expect((await t.app.inject({ method: 'POST', url: `/api/sessions/${id}/cancel`, headers: t.authedWrite, payload: {} })).statusCode).toBe(200);
     await wait(500);
     // The process is still running (the runner sends SIGKILL after 5 s): the pass still holds the queue.
