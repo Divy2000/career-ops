@@ -99,6 +99,40 @@ describe('browser egress proxy', () => {
     expect((await viaProxy(p.port, 'ftp://jobs.example.test/')).status).toBe(400);
   });
 
+  it('tries each checked address in turn, so a site whose first address is unreachable still loads', async () => {
+    const port = await serve((_req, res) => res.end('second address'));
+    // The server listens on 127.0.0.1 only, so ::1 refuses the connection; both addresses are allowed and checked.
+    const dual: Lookup = async () => [{ address: '::1', family: 6 }, { address: '127.0.0.1', family: 4 }];
+    const p = await proxy(dual, (ip) => ip === '127.0.0.1' || ip === '::1');
+    expect(await viaProxy(p.port, `http://jobs.example.test:${port}/`)).toEqual({ status: 200, body: 'second address' });
+    const echo = net.createServer((s) => s.end('tunnel'));
+    await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve));
+    open.push({ close: () => new Promise((resolve) => echo.close(resolve)) });
+    const t = await connectVia(p.port, `jobs.example.test:${(echo.address() as net.AddressInfo).port}`);
+    expect(t.status).toBe(200);
+    expect(await new Promise<string>((resolve) => t.socket.once('data', (d) => resolve(String(d))))).toBe('tunnel');
+    t.socket.destroy();
+  });
+
+  it('refuses an https URL sent as a plain proxy request; https goes through a CONNECT tunnel', async () => {
+    let hits = 0;
+    const port = await serve((_req, res) => {
+      hits++;
+      res.end('cleartext');
+    });
+    const p = await proxy(fixed({ 'jobs.example.test': '127.0.0.1' }));
+    expect((await viaProxy(p.port, `https://jobs.example.test:${port}/`)).status).toBe(400);
+    expect(hits).toBe(0);
+  });
+
+  it('judges a literal address by the same rule as a resolved one', async () => {
+    const port = await serve((_req, res) => res.end('literal'));
+    const p = await proxy(fixed({}));
+    expect(await viaProxy(p.port, `http://127.0.0.1:${port}/`)).toEqual({ status: 200, body: 'literal' });
+    const strict = await proxy(fixed({}), () => false);
+    expect((await viaProxy(strict.port, `http://127.0.0.1:${port}/`)).status).toBe(403);
+  });
+
   it('refuses when the name cannot be resolved', async () => {
     const p = await proxy(fixed({}));
     const r = await viaProxy(p.port, 'http://nowhere.example.test/');
@@ -127,8 +161,11 @@ describe('browser egress proxy', () => {
   // The R25-claude-L3-01 trigger: the session navigates to an allowed page, and the page sends the browser on to a
   // private one by a redirect, a meta refresh or a link the session clicks. Every load goes through the proxy.
   it('a browser using the proxy never loads a private page a public one redirects, refreshes or links to', async () => {
-    // The private page is a real server on ::1, reached through a name, so only the address check stands in the way.
-    const hidden = await serve((_req, res) => res.end(`<html><body>${SECRET}</body></html>`), '::1');
+    // The private page is a real server on a loopback address other than 127.0.0.1 (::1, or 127.0.0.2 on a host
+    // without IPv6), reached through a name, so only the address check stands in the way.
+    const secretPage: http.RequestListener = (_req, res) => res.end(`<html><body>${SECRET}</body></html>`);
+    let hiddenHost = '::1';
+    const hidden = await serve(secretPage, hiddenHost).catch(() => serve(secretPage, (hiddenHost = '127.0.0.2')));
     const privateUrl = `http://intranet.example.test:${hidden}/`;
     const front = await serve((req, res) => {
       if (req.url === '/redirect') {
@@ -140,33 +177,40 @@ describe('browser egress proxy', () => {
       if (req.url === '/subresource') return res.end(`<html><body>page<iframe src="${privateUrl}"></iframe></body></html>`);
       res.end(`<html><body><a href="${privateUrl}">Benefits</a></body></html>`);
     });
-    const p = await proxy(fixed({ 'jobs.example.test': '127.0.0.1', 'intranet.example.test': '::1' }));
+    const p = await proxy(fixed({ 'jobs.example.test': '127.0.0.1', 'intranet.example.test': hiddenHost }));
     const browser = await chromium.launch({ proxy: { server: `http://127.0.0.1:${p.port}` } });
     open.unshift({ close: () => browser.close() });
     const page = await browser.newPage();
     const base = `http://jobs.example.test:${front}`;
-    const sawSecret = async () => (await Promise.all([page.content(), ...page.frames().map((f) => f.content().catch(() => ''))])).join('').includes(SECRET);
+    const loaded = async () => (await Promise.all([page.content(), ...page.frames().map((f) => f.content().catch(() => ''))])).join('');
+    // Each case waits until the browser has asked for the private page and shows the proxy's refusal, so a check
+    // that read the page too early could not pass on a leak.
+    const refusedPrivatePage = async () => {
+      await expect.poll(loaded, { timeout: 10_000 }).toContain('Blocked by the career-ops guard');
+      const html = await loaded();
+      expect(html).not.toContain(SECRET);
+    };
 
     await page.goto(`${base}/`);
     expect(await page.content()).toContain('Benefits');
-    await page.click('text=Benefits');
-    await page.waitForLoadState().catch(() => undefined);
-    expect(await sawSecret()).toBe(false);
+    await Promise.all([page.waitForURL(privateUrl), page.click('text=Benefits')]);
+    await refusedPrivatePage();
 
-    await page.goto(`${base}/redirect`).catch(() => undefined);
-    expect(await sawSecret()).toBe(false);
+    await page.goto(`${base}/redirect`);
+    expect(page.url()).toBe(privateUrl);
+    await refusedPrivatePage();
 
-    await page.goto(`${base}/refresh`).catch(() => undefined);
-    await page.waitForTimeout(1000);
-    expect(await sawSecret()).toBe(false);
+    await page.goto(`${base}/refresh`);
+    await page.waitForURL(privateUrl);
+    await refusedPrivatePage();
 
     await page.goto(`${base}/subresource`);
-    await page.waitForTimeout(500);
-    expect(await sawSecret()).toBe(false);
+    await refusedPrivatePage();
 
     // A literal loopback address goes through the proxy too, though Chromium would bypass a proxy for it by default.
-    await page.goto(`http://[::1]:${hidden}/`).catch(() => undefined);
-    expect(await sawSecret()).toBe(false);
+    const literal = hiddenHost === '::1' ? `http://[::1]:${hidden}/` : `http://127.0.0.2:${hidden}/`;
+    await page.goto(literal);
+    await refusedPrivatePage();
   });
 });
 

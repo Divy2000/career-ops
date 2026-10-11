@@ -1,24 +1,35 @@
 // The proxy every request of a session's Playwright browser goes through (playwright-mcp-launcher.mjs starts it). The
 // guard checks only the URL a navigate call names; a redirect, a meta refresh, a clicked link, a frame or a script can
 // send the browser anywhere else. Here each request and tunnel is checked as it is made: the host must pass the same
-// rules as a WebFetch URL, it is resolved once, every address must be public, and the connection goes to the address
-// that was checked, so a name that resolves differently a second time (DNS rebinding) cannot reach a private one.
-// Playwright sends loopback through the proxy too (it adds <-loopback> to Chromium's bypass list).
+// rules as a WebFetch URL, it is resolved once, every address must be public, and the connection goes only to the
+// addresses that were checked, so a name that resolves differently a second time (DNS rebinding) cannot reach a
+// private one. Playwright sends loopback through the proxy too (it adds <-loopback> to Chromium's bypass list). This
+// covers what Chromium sends through a proxy (HTTP, HTTPS and WebSockets); WebRTC's UDP is not proxied, but a page
+// cannot read a private web page through it.
 import dns from 'node:dns';
 import http from 'node:http';
 import net from 'node:net';
 import { checkUrlLiteral, DNS_BUDGET_MS, isPublicAddress } from './guard-policy.mjs';
 
 const LABEL = 'browser';
+const CONNECT_TIMEOUT_MS = 10_000;
 const defaultLookup = (host) => dns.promises.lookup(host, { all: true, verbatim: true });
 const HOP_BY_HOP = new Set(['proxy-connection', 'proxy-authorization', 'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
 
-/** { address } to connect to, or { status, reason } when the destination is refused. */
+/** { addresses } to connect to, in order, or { status, reason } when the destination is refused. */
 async function destination(raw, opts) {
-  const literal = checkUrlLiteral(raw, LABEL);
-  if (literal) return { status: /only http and https|not a valid URL|has no host/.test(literal) ? 400 : 403, reason: literal };
-  const host = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
-  if (net.isIP(host)) return opts.allow(host) ? { address: host } : { status: 403, reason: `${LABEL}: ${host} is a private, loopback or link-local address` };
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return { status: 400, reason: `${LABEL}: ${raw} is not a valid URL` };
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { status: 400, reason: `${LABEL}: only http and https may be requested (${u.protocol})` };
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) return { status: 400, reason: `${LABEL}: ${raw} has no host` };
+  if (net.isIP(host)) return opts.allow(host) ? { addresses: [host] } : { status: 403, reason: `${LABEL}: ${host} is a private, loopback or link-local address` };
+  const local = checkUrlLiteral(raw, LABEL);
+  if (local) return { status: 403, reason: local };
   let addrs;
   let timer;
   try {
@@ -36,7 +47,30 @@ async function destination(raw, opts) {
   if (!Array.isArray(addrs) || addrs.length === 0) return { status: 403, reason: `${LABEL}: could not resolve ${host} (no addresses); refused` };
   const bad = addrs.map((a) => a && a.address).find((a) => typeof a !== 'string' || !opts.allow(a));
   if (bad !== undefined) return { status: 403, reason: `${LABEL}: ${host} resolves to ${bad}, a private, loopback or link-local address` };
-  return { address: addrs[0].address };
+  return { addresses: addrs.map((a) => a.address) };
+}
+
+/** A socket connected to the first of `addresses` (all checked) that answers; each gets CONNECT_TIMEOUT_MS. */
+function connectFirst(addresses, port) {
+  return new Promise((resolve, reject) => {
+    let last;
+    const attempt = (i) => {
+      if (i >= addresses.length) return reject(last ?? new Error('no address'));
+      const socket = net.connect({ host: addresses[i], port });
+      socket.setTimeout(CONNECT_TIMEOUT_MS, () => socket.destroy(new Error(`no answer from ${addresses[i]} within ${CONNECT_TIMEOUT_MS} ms`)));
+      socket.once('error', (err) => {
+        last = err;
+        attempt(i + 1);
+      });
+      socket.once('connect', () => {
+        socket.removeAllListeners('error');
+        socket.removeAllListeners('timeout');
+        socket.setTimeout(0);
+        resolve(socket);
+      });
+    };
+    attempt(0);
+  });
 }
 
 function refuse(res, status, reason) {
@@ -52,12 +86,21 @@ function refuseTunnel(socket, status, reason) {
 
 async function forward(req, res, opts) {
   const dest = await destination(req.url ?? '', opts);
-  if (!dest.address) return refuse(res, dest.status, dest.reason);
+  if (!dest.addresses) return refuse(res, dest.status, dest.reason);
   const u = new URL(req.url);
+  // A browser asks for https through a CONNECT tunnel; forwarding this one would send it in the clear.
+  if (u.protocol !== 'http:') return refuse(res, 400, `${LABEL}: ${u.protocol} is requested through a CONNECT tunnel, not forwarded`);
+  let socket;
+  try {
+    socket = await connectFirst(dest.addresses, Number(u.port || 80));
+  } catch (err) {
+    return refuse(res, 502, `${LABEL}: ${u.host} could not be reached (${err.message})`);
+  }
+  if (res.destroyed) return socket.destroy();
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) if (!HOP_BY_HOP.has(k)) headers[k] = v;
   headers.host = u.host;
-  const upstream = http.request({ host: dest.address, port: u.port || 80, method: req.method, path: `${u.pathname}${u.search}`, headers, setHost: false, agent: false }, (up) => {
+  const upstream = http.request({ createConnection: () => socket, method: req.method, path: `${u.pathname}${u.search}`, headers, setHost: false }, (up) => {
     const out = {};
     for (const [k, v] of Object.entries(up.headers)) if (!HOP_BY_HOP.has(k)) out[k] = v;
     res.writeHead(up.statusCode ?? 502, up.statusMessage, out);
@@ -73,19 +116,21 @@ async function tunnel(req, client, head, opts) {
   const target = req.url ?? '';
   if (!/^[^/?#@\s]+:\d+$/.test(target)) return refuseTunnel(client, 400, `${LABEL}: ${target} is not a host and port`);
   const dest = await destination(`https://${target}/`, opts);
-  if (!dest.address) return refuseTunnel(client, dest.status, dest.reason);
+  if (!dest.addresses) return refuseTunnel(client, dest.status, dest.reason);
   const port = Number(new URL(`https://${target}/`).port || 443);
-  const upstream = net.connect({ host: dest.address, port });
-  let open = false;
-  upstream.on('error', (err) => (open ? client.destroy() : refuseTunnel(client, 502, `${LABEL}: ${target} could not be reached (${err.message})`)));
+  let upstream;
+  try {
+    upstream = await connectFirst(dest.addresses, port);
+  } catch (err) {
+    return refuseTunnel(client, 502, `${LABEL}: ${target} could not be reached (${err.message})`);
+  }
+  if (client.destroyed) return upstream.destroy();
+  upstream.on('error', () => client.destroy());
   client.on('close', () => upstream.destroy());
-  upstream.on('connect', () => {
-    open = true;
-    client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-    if (head && head.length) upstream.write(head);
-    upstream.pipe(client);
-    client.pipe(upstream);
-  });
+  client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+  if (head && head.length) upstream.write(head);
+  upstream.pipe(client);
+  client.pipe(upstream);
 }
 
 /**
