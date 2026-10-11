@@ -338,6 +338,90 @@ process.exit(live !== null && (start === null || live === "unknown" || live === 
 ' "$lock"
 }
 
+# The daily job's lock: run-daily.sh holds <data root>/data/immigration/.run-daily.lockf for its whole run. A re-run
+# takes it, as the weekly sync's update_live_checkout does, around what changes the code or dependencies that job runs
+# (the pull, the installs, the launchd reinstall), and names its holder in .live-update.pid beside it, so a daily start
+# that finds the lock held waits for the installer instead of skipping the day. Seconds to wait for a running job.
+DAILY_WAIT="${CAREER_OPS_INSTALL_DAILY_WAIT:-120}"
+[[ "$DAILY_WAIT" =~ ^[0-9]+$ ]] || DAILY_WAIT=120
+DAILY_HOLDERS=()
+DAILY_LOCKFS=()
+# The lock that daily_lock_take could not take, for the caller's message.
+DAILY_LOCK_FAILED=""
+
+# The lock folders a daily job may be running under: this run's data root, and the one the installed job writes its
+# launchd logs under (<root>/data/immigration/logs), which differs when that install had CAREER_OPS_ROOT exported or
+# this run moves the data root with --data-root.
+daily_lock_dirs() {
+  local out
+  printf '%s\n' "$DATA/data/immigration"
+  # No installed job, or no plutil, is no second folder. The || stays inside $(...), where the ERR trap would see it.
+  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null || true)"
+  case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/logs/launchd.out.log}" ;; esac
+}
+
+# daily_lock_take: returns 0 holding every daily lock, skipping a folder no job has run in yet (run-daily.sh creates
+# it before it locks); 75 when a job still holds one after DAILY_WAIT seconds; another nonzero code when lockf failed
+# otherwise, after showing its error. Either failure releases what it took and names the lock in DAILY_LOCK_FAILED.
+# Decided by lockf, not MAC_FEATURES: a --core-only re-run on a Mac an earlier full install scheduled the job on still
+# needs it. Each holder also ends when this installer exits, so a failure that never reaches daily_lock_release leaves
+# no lock behind.
+daily_lock_take() {
+  local dir seen=" " id rc
+  DAILY_LOCK_FAILED=""
+  if [ ! -x /usr/bin/lockf ] || [ "$DRY_RUN" = 1 ]; then return 0; fi
+  while IFS= read -r dir; do
+    [ -d "$dir" ] || continue
+    # One folder reached by two spellings is locked once: a second lock on it would wait on the first.
+    id="$(stat -f '%d:%i' "$dir")"
+    case "$seen" in *" $id "*) continue ;; esac
+    seen="$seen$id "
+    rc=0
+    daily_lock_take_one "$dir/.run-daily.lockf" || rc=$?
+    if [ "$rc" != 0 ]; then
+      DAILY_LOCK_FAILED="$dir/.run-daily.lockf"
+      daily_lock_release
+      return "$rc"
+    fi
+  done <<<"$(daily_lock_dirs)"
+}
+
+daily_lock_take_one() {
+  local lock="$1" ready errs lockf_pid rc=0 polls=0 line
+  ready="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
+  errs="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
+  # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
+  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'trap "rm -f \"\$1\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2; done' \
+    daily-lock "${lock%/*}/.live-update.pid" "$ready" "$$" </dev/null >/dev/null 2>"$errs" 3<&- 4>&- &
+  lockf_pid=$!
+  until [ -s "$ready" ]; do
+    if ! kill -0 "$lockf_pid" 2>/dev/null; then
+      wait "$lockf_pid" || rc=$?
+      if [ "$rc" = 0 ]; then rc=1; fi
+      # A timeout is the caller's to explain; any other failure shows lockf's own reason (an unreadable lock file).
+      if [ "$rc" != 75 ]; then
+        while IFS= read -r line || [ -n "$line" ]; do warn "$line"; done < "$errs"
+      fi
+      rm -f "$ready" "$errs"
+      return "$rc"
+    fi
+    polls=$((polls + 1))
+    if [ "$polls" = 10 ]; then say "  The daily job is running; waiting up to ${DAILY_WAIT}s for it to finish."; fi
+    sleep 0.1
+  done
+  DAILY_HOLDERS+=("$(cat "$ready")")
+  DAILY_LOCKFS+=("$lockf_pid")
+  rm -f "$ready" "$errs"
+}
+
+daily_lock_release() {
+  local pid
+  for pid in ${DAILY_HOLDERS[@]+"${DAILY_HOLDERS[@]}"}; do kill "$pid" 2>/dev/null || true; done
+  for pid in ${DAILY_LOCKFS[@]+"${DAILY_LOCKFS[@]}"}; do wait "$pid" 2>/dev/null || true; done
+  DAILY_HOLDERS=()
+  DAILY_LOCKFS=()
+}
+
 # CAREER_OPS_ROOT, else CAREER_OPS_DATA_DIR, each trimmed like path-resolver.mjs does; empty when neither is set.
 env_data_root() {
   local v
@@ -574,6 +658,13 @@ update_checkout() {
 }
 
 step "3/11 Checkout"
+rc=0
+daily_lock_take || rc=$?
+if [ "$rc" = 75 ]; then
+  die 1 "the daily job is running right now (it holds $DAILY_LOCK_FAILED), so the checkout and its dependencies were left as they are. Re-run this script once it finishes."
+elif [ "$rc" != 0 ]; then
+  die 1 "could not take the daily job's lock $DAILY_LOCK_FAILED (see the lockf error above); nothing in the checkout was changed. Fix that, then re-run this script."
+fi
 if [ -e "$DIR/.git" ]; then
   origin="$(git -C "$DIR" remote get-url origin 2>/dev/null)" || die 1 "$DIR is a git checkout with no origin remote; expected the fork $FORK_URL."
   lib same-repo "$origin" "$FORK_URL" || die 1 "origin of $DIR is $origin, not the fork $FORK_URL. Pick another --dir, or fix the remote."
@@ -626,6 +717,8 @@ else
     fi
   fi
 fi
+
+daily_lock_release
 
 # ---------------------------------------------------------------- user layer
 
@@ -951,8 +1044,17 @@ else
       say "  skipped; install later: $DAILY_CMD"
     else
       rc=0
-      run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs" || rc=$?
-      if [ "$rc" = 4 ]; then
+      lock_rc=0
+      daily_lock_take || lock_rc=$?
+      if [ "$lock_rc" = 0 ]; then
+        run_logged bash "$DIR/custom/launchd/install.sh" --jobs "$jobs" || rc=$?
+        daily_lock_release
+      fi
+      if [ "$lock_rc" = 75 ]; then
+        pending "The daily job is running right now, so it was left as it was. Once it finishes, run: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
+      elif [ "$lock_rc" != 0 ]; then
+        pending "Could not take the daily job's lock $DAILY_LOCK_FAILED (see the lockf error above), so the launchd job was left as it was. Fix that, then run: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
+      elif [ "$rc" = 4 ]; then
         # launchd/install.sh never boots out a job mid-run: it changed nothing.
         pending "A launchd job is running right now, so it was left as it was. Once it finishes, run: bash $(shell_quote "$DIR/custom/launchd/install.sh") --jobs $jobs"
       elif [ "$rc" != 0 ]; then
