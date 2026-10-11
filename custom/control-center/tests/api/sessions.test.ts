@@ -1788,3 +1788,129 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 });
+
+describe('r18 manager fixes', () => {
+  const freshApp = async (deps: Parameters<typeof makeTestApp>[1] = {}) => makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, deps);
+  const reserve = (app: TestApp, num: number) => {
+    const sentinel = path.join(app.cfg.dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
+    return sentinel;
+  };
+
+  it('a second Evaluate JD on the same local:jds/ text target is refused while the first is live (R18-claude-L1-01)', async () => {
+    const app = await freshApp();
+    try {
+      const ref = 'local:jds/acme-pm.md';
+      const ask = scenarioFile({ events: [INIT, result('Which of these two JD copies do you mean?', 0.01)] });
+      const first = await withScenario(ask, async () => (await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'text', value: ref }, prompt: 'Evaluate the job description saved at jds/acme-pm.md following the mode file.' })).json());
+      expect((await settleOn(app, first.id)).meta.status).toBe('awaiting_user');
+      // A second tab (or a raw POST) starts the same saved JD while the first is still live: refused, not a second paid evaluation.
+      const second = await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'text', value: ref }, prompt: 'Evaluate the job description saved at jds/acme-pm.md following the mode file.' });
+      expect(second.statusCode, second.body).toBe(409);
+      expect(second.json().error).toMatch(new RegExp(`session ${first.id} is already evaluating`));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('cancel after the run ended but before finalize leaves the completed turn for finalize, not cancelled (R18-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      // A turn that finished cleanly with output (a result event), so its own outcome is "done".
+      const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', `process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'Done.',total_cost_usd:0.01,usage:{},num_turns:1,is_error:false})+'\\n')`], cwd: PACKAGE_ROOT } });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      // The turn's guard folder, as runTurn creates it before the run exists.
+      fs.mkdirSync(path.join(app.sessions.store.guardDirOf(meta.id), 'turns', '1'), { recursive: true });
+      // The run ended, but no tracker finalized the session yet: it still reads running, and Cancel is shown.
+      await until(() => app.runner.store.read(run.id)!.endedAt !== null);
+      expect(app.sessions.read(meta.id)!.status).toBe('running');
+      // Cancel lands after the run ended but before finalize: it must not mark the completed turn cancelled.
+      expect(app.sessions.cancel(meta.id).status).toBe('running');
+      app.sessions.reconcile();
+      await until(() => app.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+      expect(app.sessions.read(meta.id)!.status).toBe('done');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('cancel that finds the run already exited when it stops it leaves the completed turn for finalize (R18-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      const run = app.runner.store.create({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT }, params: { sessionId: meta.id, turn: 1 } });
+      app.runner.store.write({ ...run, status: 'running', endedAt: null });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      // Another process records the run's clean exit between cancel's read of the run and its stop request.
+      vi.spyOn(app.runner, 'cancel').mockImplementation((id: string) => {
+        const ended = { ...app.runner.store.read(id)!, status: 'done' as const, exitCode: 0, endedAt: new Date().toISOString() };
+        app.runner.store.write(ended);
+        return ended;
+      });
+      expect(app.sessions.cancel(meta.id).status).toBe('running');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('cancel that finds the exit on disk before the runner recorded it leaves the completed turn for finalize (R18-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      const run = app.runner.store.create({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT }, params: { sessionId: meta.id, turn: 1 } });
+      app.runner.store.write({ ...run, status: 'running', endedAt: null });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      // The wrapper wrote its clean exit, but the runner's poll has not copied it into the run record yet.
+      fs.writeFileSync(path.join(app.runner.store.dirOf(run.id), 'exit.json'), JSON.stringify({ code: 0, signal: null, endedAt: new Date().toISOString() }));
+      expect(app.runner.store.read(run.id)!.status).toBe('running');
+      expect(app.sessions.cancel(meta.id).status).toBe('running');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('runEnded waits for a recorded exit, not a non-running status (R18-claude-L1-03)', async () => {
+    const app = await freshApp();
+    const runEnded = (app.sessions as unknown as { runEnded: (id: string) => Promise<boolean> }).runEnded.bind(app.sessions);
+    try {
+      // A cancelled run whose process has not exited yet: runner.cancel marks it cancelled at once, but no exit is recorded.
+      const run = app.runner.store.create({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT }, params: {} });
+      app.runner.store.write({ ...run, status: 'cancelled', endedAt: null });
+      let done = false;
+      const waiting = runEnded(run.id).then((v) => (done = v));
+      // The status left running, but the run has not ended: runEnded must not report it ended on status alone.
+      await wait(300);
+      expect(done).toBe(false);
+      // Its exit is recorded (the process ended): only now is the run over.
+      app.runner.store.write({ ...app.runner.store.read(run.id)!, endedAt: new Date().toISOString() });
+      expect(await waiting).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('reconcile finalizes a live session whose mode no longer resolves, instead of leaving it running (R18-claude-L3-02)', async () => {
+    const app = await freshApp();
+    try {
+      const sentinel = reserve(app, 72);
+      const meta = app.sessions.store.create({ mode: 'removed-mode', policyClass: 'read-only', target: { type: 'none', value: null }, model: null, reportNum: 72 });
+      const run = app.runner.start({ actionId: 'session.removed-mode', label: 'Removed: turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT } });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'Go' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      // The mode was removed or renamed upstream: it no longer resolves to a policy.
+      expect(app.sessions.effectivePolicy('removed-mode')).toBeNull();
+      app.sessions.reconcile();
+      await until(() => app.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+      const settled = app.sessions.read(meta.id)!;
+      expect(settled.status).not.toBe('running');
+      expect(settled.turns[0]!.endedAt).not.toBeNull();
+      // Its reserved report number went back to the pool.
+      expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+});

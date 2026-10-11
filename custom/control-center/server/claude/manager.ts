@@ -15,7 +15,7 @@ import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { conversationStarted, sessionsDir, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy } from './modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
@@ -185,9 +185,10 @@ export class SessionManager {
 
   /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
   liveEvaluationFor(mode: string, target: SessionMeta['target']): string | null {
-    if (target.type !== 'url' || !target.value) return null;
+    const key = postingKey(target);
+    if (key === null) return null;
     for (const m of this.readableSessions()) {
-      if (m.mode === mode && m.target.type === 'url' && m.target.value === target.value && LIVE_STATUSES.has(m.status)) return m.id;
+      if (m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
     }
     return null;
   }
@@ -314,7 +315,16 @@ export class SessionManager {
     const meta = this.must(id);
     const turn = meta.turns.at(-1);
     if (turn && (meta.status === 'running' || meta.status === 'queued')) {
-      this.runner.cancel(turn.runId);
+      // A turn whose run already ended is being finalized (or about to be): marking it cancelled here would turn a
+      // completed turn into "cancelled", keep its pipeline row pending, leave its policy batch unacknowledged and let
+      // the claim go mid-finalize. The run's exit (its endedAt, or the exit file the runner has not copied in yet)
+      // proves the turn is over, so the cancel is a no-op.
+      const run = this.runner.store.read(turn.runId);
+      if ((run && run.endedAt !== null) || this.runner.store.readExit(turn.runId) !== null) return meta;
+      // Its exit can land (from another process) between that read and the stop: a run cancel finds done or failed ended
+      // on its own, and the same no-op applies.
+      const stopped = this.runner.cancel(turn.runId);
+      if (stopped && (stopped.status === 'done' || stopped.status === 'failed')) return this.store.read(id)!;
       this.store.setStatus(id, 'cancelled');
       this.emit(id, { type: 'status', status: 'cancelled', turn: turn.n, reason: 'cancel requested' });
       this.bus.publish('session.status', { sessionId: id, status: 'cancelled', mode: meta.mode });
@@ -352,8 +362,7 @@ export class SessionManager {
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
       }
-      const policy = this.effectivePolicy(meta.mode);
-      if (!policy) continue;
+      const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
       const state = this.readTurnState(meta.id, turn.n);
       this.track(meta.id, turn.n, run.id, policy, state, '');
     }
@@ -662,12 +671,14 @@ export class SessionManager {
     }
   }
 
-  /** Waits (up to RUN_END_WAIT_MS) for a run to leave queued and running; false when it has not. */
+  /** Waits (up to RUN_END_WAIT_MS) for a run to record its exit; false when it has not. */
   private async runEnded(runId: string): Promise<boolean> {
     const deadline = Date.now() + RUN_END_WAIT_MS;
     for (;;) {
-      const status = this.runner.store.read(runId)?.status;
-      if (status !== 'queued' && status !== 'running') return true;
+      // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
+      // SIGKILL: only a recorded exit (endedAt) proves it can no longer write its report. A missing record proves nothing.
+      const run = this.runner.store.read(runId);
+      if (run !== null && run.endedAt !== null) return true;
       if (Date.now() > deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -812,6 +823,21 @@ export class SessionManager {
 
 /** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
 const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
+
+/** The dedupe key of a posting a session evaluates: its URL, or the saved JD a local:jds/ text target names (as finalize keys it). */
+function postingKey(target: SessionMeta['target']): string | null {
+  if (target.type === 'url' && target.value) return `url\0${target.value}`;
+  if (target.type === 'text' && target.value) {
+    const jd = localJdPath(target.value);
+    if (jd !== null) return `jds\0${jd}`;
+  }
+  return null;
+}
+
+/** The minimal policy reconcile uses to finish a turn whose mode no longer resolves (removed or renamed upstream): finalize only reads its class. */
+function policyForClass(policyClass: PolicyClass): ModePolicy {
+  return { id: '', title: 'removed mode', policyClass, writeGlobs: [], network: [], scripts: [], bashRules: [], bashPrefixes: [], allowsTask: false };
+}
 
 function unstartedMeta(mode: string, target: SessionMeta['target'], model: string | null, error: string): SessionMeta {
   const now = new Date().toISOString();
