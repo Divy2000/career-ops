@@ -70,8 +70,9 @@ export function SponsorshipPage() {
   const actions = useActions();
   const { run, message } = useRunAction();
   // The pass is a paid session that acks its queued items only when it ends done: coming back to the page re-attaches
-  // the last one, and the button stays off while it is queued or running, so the same items are not sent twice.
-  const pass = useRememberedSession('cc.sponsorship.policyPass');
+  // the last one, and the button stays off while it is queued, running or waiting for a reply (a waiting pass still holds
+  // the server's one-pass claim, so a new one would be refused and this one lost from the page).
+  const pass = useRememberedSession('cc.sponsorship.policyPass', { holdWhileAwaiting: true });
   return (
     <section aria-labelledby="page-title">
       <div className="page-header">
@@ -81,7 +82,7 @@ export function SponsorshipPage() {
             Check official feeds now
           </ActionButton>
           <button type="button" onClick={pass.start} disabled={pass.busy}>
-            {pass.busy ? 'Policy pass running' : 'Run AI policy pass'} <Pill tone="warn">Uses tokens</Pill>
+            {pass.awaitingReply ? 'Policy pass needs your reply' : pass.busy ? 'Policy pass running' : 'Run AI policy pass'} <Pill tone="warn">Uses tokens</Pill>
           </button>
         </div>
       </div>
