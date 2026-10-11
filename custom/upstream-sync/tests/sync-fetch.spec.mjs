@@ -1349,10 +1349,9 @@ test('a live update that cannot take the daily lock for a reason other than a ti
   const from = lines.findIndex((l) => l.startsWith('  LIVE_LOG_FROM='));
   const to = lines.findIndex((l, i) => i > from && l === '  esac');
   const block = lines.slice(from, to + 1).join('\n');
-  // The lock's folder exists but cannot be written, so lockf cannot create the lock file and exits 73 (EX_CANTCREAT).
-  const imm = path.dirname(w.dailyLock);
-  mkdirSync(imm, { recursive: true });
-  chmodSync(imm, 0o555);
+  // The lock file is a symlink to itself, so lockf cannot open it (as root too) and exits 73 (EX_CANTCREAT).
+  mkdirSync(path.dirname(w.dailyLock), { recursive: true });
+  symlinkSync(path.basename(w.dailyLock), w.dailyLock);
   try {
     const before = w.head();
     // As in sync.sh, stderr goes to the day log.
@@ -1365,16 +1364,13 @@ test('a live update that cannot take the daily lock for a reason other than a ti
     // The Control Center's parseDailyLog only records a `!!!` line with text after the marker.
     assert.match(problem, /^!!!\s+\S/, res.stdout);
     assert.ok(problem.includes(w.dailyLock), problem);
-    assert.match(problem, /lockf: cannot open .*Permission denied/);
+    assert.match(problem, /lockf: cannot open .*Too many levels of symbolic links/);
     assert.ok(problem.includes(w.target), problem);
     assert.match(problem, /not updated/);
     assert.doesNotMatch(problem, /earlier run/);
     assert.match(readFileSync(log, 'utf8'), /^lockf: cannot open /m);
     assert.equal(w.head(), before);
-  } finally {
-    chmodSync(imm, 0o755);
-    rmSync(w.base, { recursive: true, force: true });
-  }
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
 test('a live update killed while it holds the daily lock is reported as killed, not as a lock it could not take (R22-scripts-b-L1-01)', () => {
