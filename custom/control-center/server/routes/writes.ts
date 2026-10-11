@@ -122,17 +122,17 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === n) : undefined;
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
-    return readDocuments(cfg.dataRoot, row.report, row.company);
+    return readDocuments(cfg.codeRoot, cfg.dataRoot, row.report, row.company);
   });
 
   app.get<{ Querystring: { n?: string } }>('/api/apply/documents', async (req, reply) => {
-    if (req.query.n === undefined) return readApplyDocuments(cfg.dataRoot, null);
+    if (req.query.n === undefined) return readApplyDocuments(cfg.codeRoot, cfg.dataRoot, null);
     const n = Number(req.query.n);
     if (!Number.isInteger(n) || n <= 0) return reply.code(400).send({ error: 'row number must be a positive integer' });
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
     const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === n) : undefined;
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
-    return readApplyDocuments(cfg.dataRoot, row);
+    return readApplyDocuments(cfg.codeRoot, cfg.dataRoot, row);
   });
 
   app.get('/api/system/daily', async () => opts.daily.status());

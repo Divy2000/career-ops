@@ -6,7 +6,6 @@ import { PACKAGE_ROOT, type ServerConfig } from './config.js';
 import { systemRoutes } from './routes/system.js';
 import { readRoutes } from './routes/read.js';
 import { actionRoutes } from './routes/actions.js';
-import { importCore } from './core/adapter.js';
 import { EventBus } from './watch/bus.js';
 import { startWatcher } from './watch/watcher.js';
 import { Runner } from './runner/runner.js';
@@ -18,6 +17,7 @@ import { execNoShell, type Exec } from './routes/system.js';
 import { SessionManager, keychainTokenReader, type TokenReader } from './claude/manager.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { policyClaim } from './domains/policyPass.js';
+import { resolveTrackerFile } from './domains/trackerPath.js';
 import { fileRoutes } from './routes/files.js';
 import { projectRoutes } from './routes/projects.js';
 import { sponsorshipRoutes } from './routes/sponsorship.js';
@@ -119,15 +119,8 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   await app.register(settingsRoutes, { cfg, bus, exec, schedule, applySettings, daily });
 
   if (cfg.watch) {
-    const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
-    // Relative to the code root, the cwd the tracker scripts run in; set-status.mjs writes its status log beside the realpath.
-    const tracker = path.resolve(cfg.codeRoot, rawTrackerPath(cfg.dataRoot));
-    let real = tracker;
-    try {
-      real = fs.realpathSync(tracker);
-    } catch {
-      // Not created yet (or unresolvable): watched at its lexical path, where the tracker scripts will write it.
-    }
+    // Watched at both spellings: the lexical path the tracker scripts write, and the realpath set-status.mjs writes its status log beside.
+    const { lexical: tracker, canonical: real } = await resolveTrackerFile(cfg.codeRoot, cfg.dataRoot);
     const watcher = startWatcher(cfg.dataRoot, bus, undefined, [tracker, real]);
     closers.push(() => watcher.close());
   }

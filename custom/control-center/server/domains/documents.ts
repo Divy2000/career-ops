@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { inside } from '../lib/paths.js';
+import { resolveTrackerFile } from './trackerPath.js';
 
 export interface DocumentFile {
   /** Path relative to the data root (servable through /api/files/serve). */
@@ -47,17 +48,17 @@ export function parsePdfIndex(text: string): PdfIndexRow[] {
 /**
  * Where generate-pdf.mjs writes the manifest: tracker-utils.mjs resolvePdfIndexPath(rawTrackerPath(dataRoot)), that is
  * CAREER_OPS_PDF_INDEX, else data/pdf-index.tsv in the tracker's workspace (CAREER_OPS_TRACKER may move it out of the
- * data root). A synchronous port, kept in step by tests/unit/documents-index.test.ts.
+ * data root). The scripts run with the code root as their cwd, so a relative value of either is resolved against it.
+ * Kept in step by tests/unit/documents-index.test.ts.
  */
-export function pdfIndexPath(dataRoot: string): string {
-  return path.resolve(process.env.CAREER_OPS_PDF_INDEX || path.join(trackerWorkspace(dataRoot), 'data', 'pdf-index.tsv'));
+export async function pdfIndexPath(codeRoot: string, dataRoot: string): Promise<string> {
+  const env = process.env.CAREER_OPS_PDF_INDEX;
+  return env ? path.resolve(codeRoot, env) : path.join(await trackerWorkspace(codeRoot, dataRoot), 'data', 'pdf-index.tsv');
 }
 
 /** tracker-utils.mjs resolveWorkspaceRoot(path-resolver.mjs rawTrackerPath(dataRoot)): the folder above the tracker's data/. */
-function trackerWorkspace(dataRoot: string): string {
-  const env = process.env.CAREER_OPS_TRACKER?.trim();
-  const tracker = env || (fs.existsSync(path.join(dataRoot, 'data', 'applications.md')) ? path.join(dataRoot, 'data', 'applications.md') : path.join(dataRoot, 'applications.md'));
-  const dir = path.dirname(path.resolve(tracker));
+async function trackerWorkspace(codeRoot: string, dataRoot: string): Promise<string> {
+  const dir = path.dirname((await resolveTrackerFile(codeRoot, dataRoot)).lexical);
   return path.basename(dir) === 'data' ? path.dirname(dir) : dir;
 }
 
@@ -65,10 +66,10 @@ function trackerWorkspace(dataRoot: string): string {
  * The manifest's rows with their paths made relative to the data root (the writer stores them relative to the tracker
  * workspace); a row whose PDF lies outside the data root cannot be served and is left out.
  */
-function loadPdfIndex(dataRoot: string): { present: boolean; rows: PdfIndexRow[] } {
-  const indexPath = pdfIndexPath(dataRoot);
+async function loadPdfIndex(codeRoot: string, dataRoot: string): Promise<{ present: boolean; rows: PdfIndexRow[] }> {
+  const indexPath = await pdfIndexPath(codeRoot, dataRoot);
   if (!fs.existsSync(indexPath)) return { present: false, rows: [] };
-  const workspace = trackerWorkspace(dataRoot);
+  const workspace = await trackerWorkspace(codeRoot, dataRoot);
   const root = path.resolve(dataRoot);
   const toDataRoot = (rel: string): string | null => {
     if (!rel) return rel;
@@ -83,8 +84,8 @@ function loadPdfIndex(dataRoot: string): { present: boolean; rows: PdfIndexRow[]
   return { present: true, rows };
 }
 
-export function readPdfIndex(dataRoot: string): PdfIndexRow[] {
-  return loadPdfIndex(dataRoot).rows;
+export async function readPdfIndex(codeRoot: string, dataRoot: string): Promise<PdfIndexRow[]> {
+  return (await loadPdfIndex(codeRoot, dataRoot)).rows;
 }
 
 const BUNDLE = /^output\/(\d+)-[^/]+\//;
@@ -134,8 +135,8 @@ function mtime(dataRoot: string, rel: string): number {
 }
 
 /** PDFs from the index for the row's report first, then output/ files matching the company, newest first. pdf-index.tsv and jds/ are keyed by report number, never by tracker row. */
-export function readDocuments(dataRoot: string, report: number | null, company: string): DocumentsRead {
-  const { present: indexPresent, rows } = loadPdfIndex(dataRoot);
+export async function readDocuments(codeRoot: string, dataRoot: string, report: number | null, company: string): Promise<DocumentsRead> {
+  const { present: indexPresent, rows } = await loadPdfIndex(codeRoot, dataRoot);
   const files: DocumentFile[] = [];
   const seen = new Set<string>();
   for (const r of report === null ? [] : rows.filter((x) => x.report === report)) {
@@ -233,8 +234,8 @@ function walkOutput(dataRoot: string): string[] {
  * What the Apply page can attach: every CV PDF and text cover under output/, plus a suggestion for one tracker row.
  * Everything about that row is keyed by its report number (pdf-index.tsv and the application bundles), never by the row number.
  */
-export function readApplyDocuments(dataRoot: string, row: { report: number | null; company: string } | null): ApplyDocuments {
-  const index = readPdfIndex(dataRoot);
+export async function readApplyDocuments(codeRoot: string, dataRoot: string, row: { report: number | null; company: string } | null): Promise<ApplyDocuments> {
+  const index = await readPdfIndex(codeRoot, dataRoot);
   // The generator's manifest records the kind it rendered; the name is only the fallback, as in generate-pdf.mjs.
   const manifestKind = new Map(index.map((r) => [r.pdf, r.kind]));
   const files = walkOutput(dataRoot).sort((a, b) => mtime(dataRoot, b) - mtime(dataRoot, a));
