@@ -294,6 +294,51 @@ describe('how a change is animated', () => {
   });
 });
 
+describe('a change requested while a reveal is still pending', () => {
+  /** The browser runs the view-transition callback a frame or more later; hold reveal commits until flushed. */
+  async function loadWithDeferredReveal() {
+    const pending: (() => void)[] = [];
+    vi.doMock('@web/lib/theme-transition', () => ({
+      runThemeChange: (commit: () => void, kind: string) => {
+        if (kind === 'reveal') pending.push(commit);
+        else commit();
+      },
+    }));
+    const t = await loadTheme();
+    vi.doUnmock('@web/lib/theme-transition');
+    return { t, flush: () => pending.splice(0).forEach((c) => c()) };
+  }
+
+  it('given dark then light chosen before the dark reveal commits, when it commits, then the page and storage both end light', async () => {
+    installSystemTheme(false);
+    const data = installStorage({ 'cc.theme': 'light' });
+    const { t, flush } = await loadWithDeferredReveal();
+    t.initTheme();
+    t.setThemeMode('dark');
+    t.setThemeMode('light');
+    flush();
+    expect(data.get('cc.theme')).toBe('light');
+    expect(t.getThemeState()).toMatchObject({ mode: 'light', resolved: 'light' });
+    expect(root().dataset.theme).toBe('light');
+  });
+
+  it('given the OS flips while a dark reveal is pending, when Auto is chosen later, then it follows the new OS value', async () => {
+    const sys = installSystemTheme(false);
+    installStorage();
+    const { t, flush } = await loadWithDeferredReveal();
+    const stop = t.watchSystemAndStorage();
+    t.setThemeMode('dark');
+    sys.set(true);
+    flush();
+    expect(t.getThemeState()).toMatchObject({ mode: 'dark', resolved: 'dark' });
+    t.setThemeMode('auto');
+    flush();
+    expect(t.getThemeState()).toMatchObject({ mode: 'auto', resolved: 'dark' });
+    expect(root().dataset.theme).toBe('dark');
+    stop();
+  });
+});
+
 describe('theme-boot.js (the pre-paint script) agrees with resolveTheme', () => {
   const TABLE: Array<[stored: string | null | 'throws', systemDark: boolean | 'unsupported']> = [
     [null, true],

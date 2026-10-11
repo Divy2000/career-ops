@@ -41,7 +41,11 @@ function systemPrefersDark(): boolean {
   return typeof window.matchMedia === 'function' ? window.matchMedia(DARK_QUERY).matches : true;
 }
 
+type ThemeInputs = { mode: ThemeMode; systemDark: boolean };
+
 let state: (ThemeState & { systemDark: boolean }) | null = null;
+/** The latest requested inputs. A reveal commits a frame or more later, so a change asked for meanwhile builds on this, not on `state`. */
+let target: ThemeInputs | null = null;
 const listeners = new Set<() => void>();
 
 function current() {
@@ -51,6 +55,10 @@ function current() {
     state = { mode, systemDark, resolved: resolveTheme(mode, systemDark) };
   }
   return state;
+}
+
+function requested(): ThemeInputs {
+  return target ?? current();
 }
 
 /** The snapshot is replaced, never mutated, so useSyncExternalStore sees a stable reference between changes. */
@@ -79,17 +87,22 @@ function applyToDocument({ mode, resolved }: ThemeState): void {
   applyMetas(mode, resolved);
 }
 
-function update(next: { mode: ThemeMode; systemDark: boolean }, kind: ThemeChangeKind, origin?: RevealOrigin): void {
+/** Applies the latest requested inputs, so a commit that runs late never restores values asked for before a newer change. */
+function commit(): void {
+  const { mode, systemDark } = requested();
   const prev = current();
-  const resolved = resolveTheme(next.mode, next.systemDark);
-  if (prev.mode === next.mode && prev.resolved === resolved && prev.systemDark === next.systemDark) return;
-  const commit = () => {
-    state = { ...next, resolved };
-    applyToDocument(state);
-    for (const l of [...listeners]) l();
-  };
-  // Only a change of the resolved theme is visible; a mode label or an ignored system flip needs no motion.
-  if (resolved === prev.resolved) commit();
+  if (prev.mode === mode && prev.systemDark === systemDark) return;
+  state = { mode, systemDark, resolved: resolveTheme(mode, systemDark) };
+  applyToDocument(state);
+  for (const l of [...listeners]) l();
+}
+
+function update(next: ThemeInputs, kind: ThemeChangeKind, origin?: RevealOrigin): void {
+  const pending = requested();
+  if (pending.mode === next.mode && pending.systemDark === next.systemDark) return;
+  target = { mode: next.mode, systemDark: next.systemDark };
+  // Only a change of the resolved theme on screen is visible; a mode label or an ignored system flip needs no motion.
+  if (resolveTheme(next.mode, next.systemDark) === current().resolved) commit();
   else runThemeChange(commit, kind, origin);
 }
 
@@ -100,7 +113,7 @@ export function initTheme(): void {
 
 export function setThemeMode(mode: ThemeMode, origin?: RevealOrigin): void {
   // Read the state before the write: a lazily created state would otherwise pick up the new stored value and see no change.
-  const { systemDark } = current();
+  const { systemDark } = requested();
   writeStoredMode(mode);
   update({ mode, systemDark }, 'reveal', origin);
 }
@@ -108,14 +121,14 @@ export function setThemeMode(mode: ThemeMode, origin?: RevealOrigin): void {
 /** Live OS changes (they only matter in Auto) and changes made in another tab. Returns the cleanup. */
 export function watchSystemAndStorage(): () => void {
   const mql = typeof window.matchMedia === 'function' ? window.matchMedia(DARK_QUERY) : null;
-  const onSystem = () => update({ mode: current().mode, systemDark: systemPrefersDark() }, 'fade');
+  const onSystem = () => update({ mode: requested().mode, systemDark: systemPrefersDark() }, 'fade');
   const onStorage = (e: StorageEvent) => {
-    if (e.key === THEME_KEY || e.key === null) update({ mode: asMode(e.key === null ? null : e.newValue), systemDark: current().systemDark }, 'none');
+    if (e.key === THEME_KEY || e.key === null) update({ mode: asMode(e.key === null ? null : e.newValue), systemDark: requested().systemDark }, 'none');
   };
   mql?.addEventListener('change', onSystem);
   window.addEventListener('storage', onStorage);
   // The system may have flipped between the first render and now, before any listener existed.
-  update({ mode: current().mode, systemDark: systemPrefersDark() }, 'none');
+  update({ mode: requested().mode, systemDark: systemPrefersDark() }, 'none');
   return () => {
     mql?.removeEventListener('change', onSystem);
     window.removeEventListener('storage', onStorage);
