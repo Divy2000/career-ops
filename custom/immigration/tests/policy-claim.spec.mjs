@@ -53,14 +53,37 @@ test('a live owner keeps the claim: a running, queued or paused session, or the 
   assert.deepEqual(tryClaim(r, { owner: 'session:s-awaiting_user', batch: null }), { ok: true });
 });
 
-/** A bash running a script named run-daily.sh, as launchd starts the job; stopped by the returned function. */
+/**
+ * A bash running a script named run-daily.sh, as launchd starts the job; stopped by the returned function. The job runs
+ * in its own process group so stopping it also kills the sleep bash forks, not bash alone.
+ */
 function fakeDailyJob() {
   const dir = tempDir('policy-claim-job-');
   const script = path.join(dir, 'run-daily.sh');
   fs.writeFileSync(script, 'sleep 30\n');
-  const job = spawn('/bin/bash', [script], { stdio: 'ignore' });
-  return { pid: job.pid, stop: () => job.kill('SIGKILL') };
+  const job = spawn('/bin/bash', [script], { stdio: 'ignore', detached: true });
+  return { pid: job.pid, stop: () => { try { process.kill(-job.pid, 'SIGKILL'); } catch { /* already gone */ } } };
 }
+
+test('the fake daily job leaves no process running once stopped', async () => {
+  const job = fakeDailyJob();
+  const childrenOf = (pid) => spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map(Number);
+  let children = [];
+  try {
+    for (let i = 0; i < 100 && children.length === 0; i++) {
+      spawnSync('sleep', ['0.02']);
+      children = childrenOf(job.pid);
+    }
+    assert.notDeepEqual(children, [], 'the job never started its sleep');
+  } finally {
+    job.stop();
+  }
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const tree = [job.pid, ...children];
+  // Awaited, so node reaps the stopped bash rather than leaving a zombie that still answers kill(pid, 0).
+  for (let i = 0; i < 100 && tree.some(alive); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(tree.filter(alive), [], 'the job left a process running');
+});
 
 test('the running daily job keeps the claim; its pid reused by another process does not (SW8-server-01 review)', () => {
   const r = root();
