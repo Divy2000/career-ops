@@ -187,7 +187,7 @@ export class SessionManager {
     const policy = this.turnPolicy(input.mode);
     const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null, policyBatch: input.policyBatch ?? null });
     onCreated?.(meta);
-    return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed });
+    return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed, original: true });
   }
 
   /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
@@ -246,7 +246,7 @@ export class SessionManager {
         const unclaim = this.claimReplay(src, null);
         try {
           const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
-          return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+          return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed, original: true });
         } finally {
           unclaim();
         }
@@ -642,7 +642,7 @@ export class SessionManager {
     return Date.parse(meta.createdAt);
   }
 
-  private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean }): Promise<SessionMeta> {
+  private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
     const sessionDir = this.store.guardDirOf(meta.id);
     const n = meta.turns.length + 1;
@@ -656,7 +656,8 @@ export class SessionManager {
     try {
       const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
       const deny = blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
-      if (n === 1 && !opts.resume) this.recordOriginalRequest(meta.id, prompt);
+      // Only a session's own first message: a replay of one that was never kept must not record the bare reply as it.
+      if (opts.original === true) this.recordOriginalRequest(meta.id, prompt);
       assertRootsConfinable(this.cfg.codeRoot, this.cfg.dataRoot, this.deps.home ?? os.homedir());
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);

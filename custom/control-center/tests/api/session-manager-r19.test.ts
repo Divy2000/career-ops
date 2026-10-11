@@ -67,6 +67,23 @@ describe('session manager: a first turn that never started (R19-claude-L1-01)', 
     }
   });
 
+  it('given a session from before the original request was kept, when a reply replays nothing, then the reply is not recorded as its original request', async () => {
+    const token = flakyToken();
+    const app = await makeTestApp({}, { readToken: token.readToken });
+    try {
+      const url = 'https://jobs.example.com/synthetic/r19-l1-legacy';
+      const { id } = (await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` })).json();
+      expect((await settleOn(app, id)).meta.status).toBe('error');
+      const original = path.join(app.sessions.store.guardDirOf(id), 'original-request.txt');
+      fs.rmSync(original);
+      await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'retry' });
+      expect((await settleOn(app, id)).meta.status).toBe('error');
+      expect(fs.existsSync(original)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('given a session whose first turn failed before spawn, when the user forks it, then the fork gets the original request with the new prompt', async () => {
     const token = flakyToken();
     const app = await makeTestApp({}, { readToken: token.readToken });
