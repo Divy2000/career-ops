@@ -676,8 +676,10 @@ export class Runner {
   }
 
   private finalize(meta: RunMeta, exit: { code: number | null; signal: string | null; endedAt: string }): void {
-    // Only a run someone stopped reads cancelled: one marked so, or ended by a signal after its cancel file told it to stop.
-    const stopped = meta.status === 'cancelled' || (exit.signal !== null && fs.existsSync(path.join(this.store.dirOf(meta.id), CANCEL_FILE)));
+    // Only a run someone stopped reads cancelled: one marked so (on disk too, as another server may have cancelled it
+    // since `meta` was read), or ended by a signal after its cancel file told it to stop.
+    const marked = meta.status === 'cancelled' || this.store.read(meta.id)?.status === 'cancelled';
+    const stopped = marked || (exit.signal !== null && fs.existsSync(path.join(this.store.dirOf(meta.id), CANCEL_FILE)));
     let status: RunMeta['status'] = stopped ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
     let error = meta.error;
     if (!stopped && exit.signal) error = `killed by ${exit.signal}`;
