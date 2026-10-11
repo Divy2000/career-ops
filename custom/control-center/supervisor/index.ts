@@ -20,6 +20,7 @@ import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
+import { RECOVERY_CSS } from './recovery-css.js';
 import { serverChildCommand } from './child-command.js';
 import { waitHealthy } from './health.js';
 import { escapeHtml, plainTail, renderDownPage, renderStatus } from './down-page.js';
@@ -165,14 +166,7 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: R
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;
   });
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}
-body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:24px;max-width:960px}
-h1{font-size:22px}h2{font-size:16px;margin-top:32px}h3{font-size:14px}a{color:var(--accent)}code,pre{font-family:ui-monospace,Menlo,monospace;font-size:12px}
-pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px}
-.s{color:var(--text-muted)}button{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);border-radius:6px;padding:4px 10px;min-height:32px;cursor:pointer}
-form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:12px}
-#revert-status{margin:12px 0}.status p{margin:8px 0}.status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}#revert-status details{margin-top:6px}#revert-status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}
-</style></head><body><h1>Control Center recovery</h1>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}${RECOVERY_CSS}</style></head><body><h1>Control Center recovery</h1>
 <p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
 <div id="revert-status" role="alert"></div>
 <div class="status"><strong>Server reload status</strong>${renderStatus(status)}${serving && status.state === 'failed' ? '<p>The running server keeps serving the previous code.</p>' : ''}<form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
