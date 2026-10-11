@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp } from '../helpers/app.js';
@@ -225,6 +225,41 @@ describe('session manager: a turn whose run record vanished (HUNT follow-up, man
       expect(meta.turns[0]!).toHaveProperty('endedAt', expect.any(String));
       expect(sentinels()).toEqual(before);
     } finally {
+      await app.close();
+    }
+  }, 30_000);
+
+  it('given a Batch evaluate turn whose run record reads as gone while its Claude process still runs, when the tracker polls, then the session keeps its report number until that process has ended', async () => {
+    const app = await makeTestApp({}, { sessionPollMs: 100 });
+    let childPid: number | null = null;
+    try {
+      const reports = path.join(app.cfg.dataRoot, 'reports');
+      const slow = scenarioFile({ events: [INIT, { __sleep: 2500 }, result('still reading', 0.01)] });
+      const fan = await withScenario(slow, async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r20-run-vanished-live'] })).json());
+      const id = fan.sessions[0].id as string;
+      const num = fan.reserved[0] as number;
+      const runId = fan.sessions[0].turns[0].runId as string;
+      const deadline = Date.now() + 10_000;
+      while (app.runner.store.read(runId)?.childPid == null && Date.now() < deadline) await wait(20);
+      childPid = app.runner.store.read(runId)!.childPid;
+      // Its record reads as gone from here on, while the runner still follows the process until it exits.
+      const read = app.runner.store.read.bind(app.runner.store);
+      vi.spyOn(app.runner.store, 'read').mockImplementation((other) => (other === runId ? null : read(other)));
+      await wait(500);
+      expect(app.sessions.read(id)).toMatchObject({ status: 'running', reportNum: num });
+      expect(fs.existsSync(path.join(reports, `${String(num).padStart(3, '0')}-RESERVED.md`))).toBe(true);
+      const { meta } = await settleOn(app, id, 15_000);
+      expect(meta.status).toBe('error');
+      expect(meta.reportNum).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+      if (childPid) {
+        try {
+          process.kill(childPid, 'SIGKILL');
+        } catch {
+          /* already gone */
+        }
+      }
       await app.close();
     }
   }, 30_000);

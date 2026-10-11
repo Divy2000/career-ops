@@ -877,9 +877,11 @@ export class SessionManager {
       // SIGKILL: the turn is only over once the run has ended (its exit recorded), so the tracker waits for that instead
       // of finalizing a turn whose process is still writing the conversation.
       if (!run) {
-        // Its record is gone (a runs prune, a folder deleted by hand): nothing will ever record its exit, so the turn ends
-        // now, in error, and gives its report number back, as reconcile does for a run record missing after a restart.
+        // Its record is gone (a runs prune, a folder deleted by hand): nothing will ever record its exit. While the runner
+        // still follows its process, that process may still write the report, so the turn waits for it; then the turn
+        // ends in error and gives its report number back, as reconcile does for a run record missing after a restart.
         stopRun();
+        if (this.runner.ending(runId)) return;
         clearInterval(timer);
         void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)).finally(() => this.active.delete(id));
         return;
