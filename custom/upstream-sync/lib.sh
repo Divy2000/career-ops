@@ -33,18 +33,23 @@ version_ge() {
 }
 
 # sync_claude_bin <min version>: the claude the sync gives the subscription token
-# to, printed as a path: CC_CLAUDE_BIN when set (absolute), else the first claude
-# on PATH. A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
+# to, printed as a path: CC_CLAUDE_BIN when set (absolute), else the claude pinned
+# for the installed daily job (its plist's CC_CLAUDE_BIN, which launchd/install.sh
+# and the Control Center write, since launchd's PATH can reach an older install
+# first), else the first claude on PATH. A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
 # would hand the token to hooks and to the Bash children Claude runs (npm scripts,
 # upstream's suite), so it is refused, as is one whose version cannot be read. The
 # reason goes to stdout, with exit 1.
 sync_claude_bin() {
-  local min="$1" bin out version
+  local min="$1" bin out version daily
+  daily="$(plutil -extract EnvironmentVariables.CC_CLAUDE_BIN raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null)" || daily=""
   if [ -n "${CC_CLAUDE_BIN:-}" ]; then
     case "$CC_CLAUDE_BIN" in
       /*) bin="$CC_CLAUDE_BIN" ;;
       *) echo "CC_CLAUDE_BIN must be an absolute path (got $CC_CLAUDE_BIN)"; return 1 ;;
     esac
+  elif [[ "$daily" == /* ]]; then
+    bin="$daily"
   elif ! bin="$(command -v claude)"; then
     echo "no claude found on PATH; install Claude Code or pin one with CC_CLAUDE_BIN"
     return 1
