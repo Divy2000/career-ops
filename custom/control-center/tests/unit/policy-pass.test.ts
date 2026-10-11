@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { PendingUnreadableError, preparePolicyPass } from '../../server/domains/policyPass.js';
+import { ackPolicyPass, PendingUnreadableError, preparePolicyPass } from '../../server/domains/policyPass.js';
+import type { Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const ITEMS = [
@@ -85,5 +86,32 @@ describe('preparePolicyPass', () => {
     expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, malformed, EVENING)).toThrow(PendingUnreadableError);
     expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, malformed, EVENING)).toThrow('data/immigration/pending.json is not valid JSON; fix or remove it, then run the pass again');
     expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('{"items": []}'), EVENING)).toThrow('data/immigration/pending.json is not a list of items; fix or remove it, then run the pass again');
+  });
+});
+
+describe('ackPolicyPass (R18-srv-dom-b-L1-01)', () => {
+  const busy = { code: 1, stdout: '', stderr: 'pending.json.lock is held by another writer' };
+  const acked = { code: 0, stdout: 'acknowledged 2 item(s); 0 still pending\n', stderr: '' };
+
+  it('given the queue lock busy on the first attempts, when a done pass is acknowledged, then the ack is tried again until it lands', async () => {
+    const results = [busy, busy, acked];
+    const calls: string[][] = [];
+    const exec: Exec = async (_cmd, args) => (calls.push(args), results.shift()!);
+    const reason = await ackPolicyPass(exec, DEFAULT_CODE_ROOT, '/data', 'data/immigration/batches/b.json', { retryMs: 1 });
+    expect(reason).toBe('acknowledged 2 item(s); 0 still pending');
+    expect(calls).toHaveLength(3);
+    expect(calls.every((a) => a.at(-1) === path.join('/data', 'data/immigration/batches/b.json'))).toBe(true);
+  });
+
+  it('given an ack that keeps failing or throwing, when a done pass is acknowledged, then it gives up after a few attempts and says why', async () => {
+    let n = 0;
+    const exec: Exec = async () => {
+      n += 1;
+      if (n === 2) throw new Error('spawn failed');
+      return busy;
+    };
+    const reason = await ackPolicyPass(exec, DEFAULT_CODE_ROOT, '/data', 'data/immigration/batches/b.json', { retryMs: 1 });
+    expect(n).toBe(3);
+    expect(reason).toBe('could not acknowledge the policy items it was given: pending.json.lock is held by another writer');
   });
 });
