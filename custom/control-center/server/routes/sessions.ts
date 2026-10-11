@@ -203,6 +203,15 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
+  // A tailored CV (pdf mode) of a tracker row is one paid session writing that row's CV: a second start for the row is
+  // refused while one is live. The check and manager.start's session create run in one tick, so two racing starts cannot both pass.
+  const isTailoredCv = (mode: string, t: { type: string; value: string | null }) => englishModeOf(mode) === 'pdf' && t.type === 'app' && !!t.value;
+  /** Null when a tailored CV for the row may start, else the 409 reason naming the live session. */
+  const tailoredCvHolds = (row: string): string | null => {
+    const live = liveOrStarting().find((m) => isTailoredCv(m.mode, m.target) && m.target.value === row);
+    return live ? `session ${live.id} is already generating the tailored CV for tracker row #${row}. Open it instead.` : null;
+  };
+
   app.get('/api/sessions', async () => manager.list());
 
   app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listLaunchableModeIds() }));
@@ -221,6 +230,9 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (liveId) return reply.code(409).send({ error: `session ${liveId} is already evaluating ${parsed.data.target.value}` });
     const inboxHeld = isProcessInbox(parsed.data.mode) ? evaluationsHold() : parsed.data.target.type === 'url' && parsed.data.target.value ? processInboxHolds(parsed.data.mode, [parsed.data.target.value]) : null;
     if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
+    const cvRow = isTailoredCv(parsed.data.mode, parsed.data.target) ? parsed.data.target.value! : null;
+    const cvHeld = cvRow ? tailoredCvHolds(cvRow) : null;
+    if (cvHeld) return reply.code(409).send({ error: `Not started: ${cvHeld}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);

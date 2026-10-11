@@ -463,6 +463,24 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
     expect(item.textContent).toContain('already starting');
   });
 
+  it('opens a pdf session the Apply page started after the drawer last polled, instead of starting a second (R19-shared-comp-L1-01)', async () => {
+    // The drawer's sessions list loaded empty; Apply then starts row 2's CV and never adds it to that cached list.
+    listed = [{ id: 's-apply', mode: 'pdf', status: 'queued', target: { type: 'app', value: '2' } }];
+    await run();
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-apply' } }]);
+  });
+
+  it('starts nothing when the sessions list cannot be read at run time (R19-shared-comp-L1-01)', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'content-type': 'application/json' } });
+    });
+    const item = await run();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
   it('a row with surrounding whitespace opens the live pdf session for that row (R18-shared-comp-L2-01)', async () => {
     listed = [{ id: 's-pdf', mode: 'pdf', status: 'running', target: { type: 'app', value: '2' } }];
     await remountDrawer();

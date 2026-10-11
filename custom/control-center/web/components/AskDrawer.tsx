@@ -6,7 +6,7 @@ import { SessionPanel } from './SessionPanel';
 import { Pill } from './ui';
 import { apiGet, apiSend } from '../lib/api';
 import { describeError } from '../lib/actions';
-import { fanOut, startSession, startTailoredCvSession, useSessions } from '../lib/sessions';
+import { fanOut, startSession, startTailoredCvSession } from '../lib/sessions';
 import { lastSession } from '../lib/lastSession';
 import { afterFocusSettles } from '../lib/focus';
 import { ASK_ACTION_SPECS, type AskActionName, type AskActionSpec } from '@shared/ask-actions';
@@ -133,8 +133,6 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   // The oferta guard the Evaluate entry points share: an active session for a posting is opened, and a start is deduped.
   const activeFor = useActiveEvaluation();
   const startEvaluation = useStartEvaluation();
-  // The sessions list also backs the per-row tailored-CV guard (cc.pdf.N) the Apply page shares.
-  const sessions = useSessions();
   // The tracker names a row by company and role in the setStatus confirm, whose note can re-link reports.
   const tracker = useTracker();
   const drawerRef = useRef<HTMLElement>(null);
@@ -278,8 +276,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         }
         case 'generatePdf': {
           const n = rowParam(p.params);
-          // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled.
-          const live = sessions.data?.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.value === n);
+          // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled. Read fresh,
+          // not from the 5 s poll: Apply's own start never enters the cached list, and the confirm may have been open a while.
+          const list = await apiGet<SessionMeta[]>('/api/sessions');
+          const live = list.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.value === n);
           if (live) {
             await router.navigate({ to: '/sessions/$id', params: { id: live.id } });
             break;
