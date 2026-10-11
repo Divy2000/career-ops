@@ -125,6 +125,16 @@ describe('PUT /api/projects/:id', () => {
     expect(after).toContain('## Expense Splitter -- https://example.org/expense-splitter\nTags: react\n- Rebuilt the app.\n\n---');
   });
 
+  it('given a save that renames the entry, when it succeeds, then it answers with the new id the entry is stored under', async () => {
+    const before = await current();
+    const res = await send('PUT', '/api/projects/event-router', { title: 'Event Routing Service', bullets: ['Rebuilt the router.'] }, before.etag);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().id).toBe('event-routing-service');
+    expect((await current()).entries.map((e: { id: string }) => e.id)).toContain(res.json().id);
+    const again = await send('PUT', `/api/projects/${String(res.json().id)}`, { title: 'Event Routing Service', bullets: ['Rebuilt it again.'] }, res.json().etag);
+    expect(again.statusCode).toBe(200);
+  });
+
   it('gives 404 for an unknown id, 409 for a stale If-Match and 422 for an invalid entry, writing nothing', async () => {
     const before = await current();
     const text = read();
