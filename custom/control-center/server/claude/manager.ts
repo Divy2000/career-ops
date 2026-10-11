@@ -23,6 +23,7 @@ import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchAckable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { localDate } from '../../shared/local-date.js';
+import { unrecordedFor } from '../actions/registry.js';
 
 export type TokenReader = () => Promise<string>;
 
@@ -337,22 +338,22 @@ export class SessionManager {
   }
 
   private async startFanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
-    const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(input.urls.length)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
-    if (r.code !== 0) throw new Error(`reserve-report-num failed (exit ${r.code}): ${r.stderr.trim().slice(-400)}`);
-    const reserved = parseReservedRange(r.stdout);
-    if (reserved.length !== input.urls.length) {
-      for (const num of reserved) await this.releaseReportNum(num, false);
-      throw new Error(`reserve-report-num returned ${reserved.length} numbers for ${input.urls.length} postings: ${r.stdout.trim()}`);
-    }
+    const { r, nums: reserved } = await this.takeReportNums(input.urls.length);
     const sessions: SessionMeta[] = [];
     const handed = new Set<number>();
     try {
+      if (r.code !== 0) throw new Error(`reserve-report-num failed (exit ${r.code}): ${r.stderr.trim().slice(-400)}`);
+      if (reserved.length !== input.urls.length) throw new Error(`reserve-report-num returned ${reserved.length} numbers for ${input.urls.length} postings: ${r.stdout.trim()}`);
       for (const [i, url] of input.urls.entries()) {
         const num = reserved[i]!;
         const target = { type: 'url' as const, value: url };
         let created: SessionMeta | null = null;
+        const recorded = (m: SessionMeta) => {
+          created = m;
+          this.recordedReportNums([num]);
+        };
         try {
-          sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }, (m) => (created = m)));
+          sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }, recorded));
           handed.add(num);
         } catch (err) {
           // One URL that cannot start must not hide the ones that did: the caller keeps only the failed URLs for a retry.
@@ -374,8 +375,31 @@ export class SessionManager {
     } finally {
       // A session releases its own number; the ones never handed to a session go straight back to the pool.
       for (const num of reserved) if (!handed.has(num)) await this.releaseReportNum(num, false);
+      this.recordedReportNums(reserved);
     }
     return { sessions, reserved };
+  }
+
+  /**
+   * Runs reserve-report-num.mjs --count; the numbers it took stay in unrecordedReportNums until the caller passes
+   * them to recordedReportNums, once a session record holds them or they went back to the pool.
+   */
+  private async takeReportNums(count: number): Promise<{ r: Awaited<ReturnType<Exec>>; nums: number[] }> {
+    const unrecorded = unrecordedFor(this.cfg.dataRoot);
+    unrecorded.taking += 1;
+    try {
+      const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', String(count)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+      const nums = r.code === 0 ? parseReservedRange(r.stdout) : [];
+      for (const num of nums) unrecorded.nums.add(num);
+      return { r, nums };
+    } finally {
+      unrecorded.taking -= 1;
+    }
+  }
+
+  private recordedReportNums(nums: number[]): void {
+    const unrecorded = unrecordedFor(this.cfg.dataRoot);
+    for (const num of nums) unrecorded.nums.delete(num);
   }
 
   cancel(id: string): SessionMeta {
@@ -620,19 +644,22 @@ export class SessionManager {
     }
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
-    const r = await this.deps.exec(process.execPath, [cliScriptPath(this.cfg.codeRoot, 'reserveReportNum'), '--count', '1'], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
-    const fresh = r.code === 0 ? parseReservedRange(r.stdout) : [];
-    if (fresh.length === 1) {
-      // Recorded first: a number held without its record would read as lost on the next turn. One that cannot be
-      // recorded goes straight back to the pool, and the turn fails holding none.
-      try {
-        fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
-      } catch (err) {
-        await this.releaseReportNum(fresh[0]!, false);
-        throw err;
-      }
-      this.store.setReportNum(meta.id, fresh[0]!);
-    } else console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
+    const { r, nums: fresh } = await this.takeReportNums(1);
+    try {
+      if (fresh.length === 1) {
+        // Recorded first: a number held without its record would read as lost on the next turn. One that cannot be
+        // recorded goes straight back to the pool, and the turn fails holding none.
+        try {
+          fs.writeFileSync(this.reservationPath(meta.id), JSON.stringify({ num: fresh[0], at: Date.now() }));
+        } catch (err) {
+          await this.releaseReportNum(fresh[0]!, false);
+          throw err;
+        }
+        this.store.setReportNum(meta.id, fresh[0]!);
+      } else console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
+    } finally {
+      this.recordedReportNums(fresh);
+    }
     return this.store.read(meta.id)!;
   }
 

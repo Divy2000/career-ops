@@ -159,6 +159,26 @@ function auditBaseline(dataRoot: string, runId: string): { json?: string; proble
 }
 
 /**
+ * Report numbers a session manager is reserving, or has reserved but no session record holds yet, per data root.
+ * Release report numbers reads the session records to refuse a number a session holds, so it consults this too:
+ * a fan-out records its sessions one at a time, and a re-reservation records its number after taking it.
+ */
+const unrecordedReservations = new Map<string, { taking: number; nums: Set<number> }>();
+
+export function unrecordedFor(dataRoot: string): { taking: number; nums: Set<number> } {
+  const key = path.resolve(dataRoot);
+  let entry = unrecordedReservations.get(key);
+  if (!entry) unrecordedReservations.set(key, (entry = { taking: 0, nums: new Set() }));
+  return entry;
+}
+
+/** Whether a reservation is being taken now (its numbers unknown until it returns), and the numbers taken but not yet recorded. */
+function unrecordedReportNums(dataRoot: string): { taking: boolean; nums: number[] } {
+  const entry = unrecordedReservations.get(path.resolve(dataRoot));
+  return { taking: (entry?.taking ?? 0) > 0, nums: entry ? [...entry.nums] : [] };
+}
+
+/**
  * The reserved report numbers this data root's sessions hold (a session keeps its number until its turn settles and
  * clears it), or the session whose meta.json cannot be read: that one might hold any number.
  */
@@ -294,6 +314,11 @@ export const ACTIONS: ActionDef[] = [
     // (Batch evaluate, or one awaiting a reply) would be handed out again: refused while any session holds it.
     check: (p, ctx) => {
       const [first, last] = p.range.includes('-') ? p.range.split('-').map(Number) : [Number(p.range), Number(p.range)];
+      // A Batch evaluate or a reply taking a fresh number holds it before any session record says so.
+      const unrecorded = unrecordedReportNums(ctx.dataRoot);
+      if (unrecorded.taking) return { status: 409, error: 'A session is reserving report numbers right now, so one of these may be about to be its own. Nothing was released; try again in a moment.' };
+      const starting = unrecorded.nums.filter((n) => n >= first! && n <= last!);
+      if (starting.length > 0) return { status: 409, error: `Report ${starting.join(', ')} is reserved for a session that is starting. Nothing was released; it releases its own number.` };
       const sessions = heldReportNums(ctx.dataRoot);
       if ('unreadable' in sessions) return { status: 409, error: `Session ${sessions.unreadable} cannot be read (${sessions.why}), so it may hold one of these numbers. Nothing was released.` };
       const held = sessions.held.filter((h) => h.num >= first! && h.num <= last!);
