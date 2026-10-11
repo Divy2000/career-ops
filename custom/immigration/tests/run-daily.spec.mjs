@@ -443,23 +443,53 @@ jobTest('a stale policy-pass claim (its session is gone) is taken over, the pass
   assert.equal(fs.existsSync(claim), false);
 });
 
-jobTest('a run that starts while another holds the lock is skipped: a dated line in skipped.log, exit 0, no step runs', async () => {
-  const w = dailyWorld();
-  const imm = path.join(w.data, 'data', 'immigration');
-  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+/**
+ * Holds run-daily's lock as another daily run does. Its own process group, so stop() kills lockf and its sleep together
+ * (a signal to lockf alone leaves the sleep running for a minute); stop() fails the spec if either outlives it.
+ */
+async function lockHolder(imm) {
   const lock = path.join(imm, '.run-daily.lockf');
-  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore' });
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore', detached: true });
+  const kill = () => { try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ } };
+  const childrenOf = (pid) => spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map(Number);
+  let children = [];
   try {
     // lockf creates the file with the lock already held (O_EXLOCK), so its existence means the lock is taken.
     for (let i = 0; i < 200 && !fs.existsSync(lock); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.ok(fs.existsSync(lock), 'the holder never took the lock');
+    children = childrenOf(holder.pid);
+    for (let i = 0; i < 200 && children.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      children = childrenOf(holder.pid);
+    }
+    assert.notDeepEqual(children, [], 'lockf never started its sleep');
+  } catch (err) {
+    kill();
+    throw err;
+  }
+  return {
+    stop: async () => {
+      kill();
+      const tree = [holder.pid, ...children];
+      for (let i = 0; i < 200 && tree.some(alive); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.deepEqual(tree.filter(alive), [], 'the lock holder leaves no process running');
+    },
+  };
+}
+
+jobTest('a run that starts while another holds the lock is skipped: a dated line in skipped.log, exit 0, no step runs', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  const holder = await lockHolder(imm);
+  try {
     const r = w.run();
     assert.equal(r.status, 0, r.log);
     assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} another run-daily holds the lock; skipped$/m);
     assert.equal(r.steps, '');
     assert.equal(r.log, '', 'no dated run log is started');
   } finally {
-    holder.kill();
+    await holder.stop();
   }
 });
 
@@ -467,18 +497,15 @@ jobTest('a run the Control Center started (CC_RUN_DAILY_SKIP_EXIT) that finds th
   const w = dailyWorld();
   const imm = path.join(w.data, 'data', 'immigration');
   fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
-  const lock = path.join(imm, '.run-daily.lockf');
-  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore' });
+  const holder = await lockHolder(imm);
   try {
-    for (let i = 0; i < 200 && !fs.existsSync(lock); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.ok(fs.existsSync(lock), 'the holder never took the lock');
     const r = w.run({ CC_RUN_DAILY_SKIP_EXIT: '75' });
     assert.equal(r.status, 75, r.stderr);
     assert.match(r.stderr, /^run-daily: skipped, because the daily job is already running \(another run holds its lock\)$/m);
     assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /another run-daily holds the lock; skipped$/m);
     assert.equal(r.steps, '');
   } finally {
-    holder.kill();
+    await holder.stop();
   }
 });
 
@@ -544,11 +571,8 @@ jobTest('a .live-update.pid left by an update that is gone does not make a run w
   fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
   // A pid no process has: the update that wrote it was killed before it could remove it.
   fs.writeFileSync(path.join(imm, '.live-update.pid'), '999999\n');
-  const lock = path.join(imm, '.run-daily.lockf');
-  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', lock, '/bin/sleep', '60'], { stdio: 'ignore' });
+  const holder = await lockHolder(imm);
   try {
-    for (let i = 0; i < 200 && !fs.existsSync(lock); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.ok(fs.existsSync(lock), 'the holder never took the lock');
     const started = Date.now();
     const r = w.run();
     assert.equal(r.status, 0, r.log);
@@ -556,7 +580,7 @@ jobTest('a .live-update.pid left by an update that is gone does not make a run w
     assert.match(readFileSync(path.join(imm, 'logs', 'skipped.log'), 'utf8'), /another run-daily holds the lock; skipped$/m);
     assert.equal(r.steps, '');
   } finally {
-    holder.kill();
+    await holder.stop();
   }
 });
 
