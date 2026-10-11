@@ -647,6 +647,9 @@ describe('Hired Wall answers (R7-01)', () => {
       const row = rows.find((r) => r.num === 6)!;
       expect(row.reportLabel).toBe('006');
       const send = (id: string, params: Record<string, unknown>) => app.app.inject({ method: 'POST', url: `/api/actions/${id}`, headers: app.authedWrite, payload: { params } });
+      const before = await send('tracker.hiredStatus', {});
+      expect(before.statusCode, before.body).toBe(200);
+      expect(before.json().result.askable).toEqual(['006']);
       const draft = await send('tracker.hiredShare', { report: row.reportLabel, anonymity: 'role' });
       expect(draft.statusCode, draft.body).toBe(200);
       // A story that starts with "--" reaches hired-share as the story, not as a missing value (R12-srv-core-L2-02).
@@ -657,6 +660,10 @@ describe('Hired Wall answers (R7-01)', () => {
       expect(mark.statusCode, mark.body).toBe(200);
       const state = JSON.parse(fs.readFileSync(path.join(dataRoot, 'data', '.hired-share-state.json'), 'utf8'));
       expect(state.byReport['006'].status).toBe('later');
+      // A hire answered "later" a moment ago is not askable again, so the dialog stays shut (R18-feat-c-L1-04).
+      const status = await send('tracker.hiredStatus', {});
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json().result.askable).toEqual([]);
     } finally {
       await app.close();
     }

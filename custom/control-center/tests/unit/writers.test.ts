@@ -204,7 +204,7 @@ describe('follow-ups edits', () => {
 
 /** Every action id the spec's section 3.3 table lists. */
 export const SPEC_ACTION_IDS = [
-  'tracker.setStatus', 'tracker.delete', 'tracker.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.backfillUrls', 'tracker.reconcile', 'tracker.syncCheck', 'tracker.hiredShare', 'tracker.hiredMark',
+  'tracker.setStatus', 'tracker.delete', 'tracker.verify', 'tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.backfillUrls', 'tracker.reconcile', 'tracker.syncCheck', 'tracker.hiredShare', 'tracker.hiredMark', 'tracker.hiredStatus',
   // Batch evaluation (3.3 pipeline.batchRun) is the sessions fan-out now: batch-runner.sh's workers run outside any guard.
   'pipeline.prioritize', 'pipeline.rank', 'pipeline.shortlist', 'pipeline.reserveReportNums', 'pipeline.releaseReportNums',
   'scan.portals', 'scan.network', 'scan.full', 'scan.hn', 'scan.interamt', 'scan.funded', 'scan.reposts',
@@ -273,6 +273,10 @@ describe('action registry covers section 3.3', () => {
     expect(rank.args.slice(1)).toEqual(['--limit', '20', '--model', 'haiku', '--dry-run']);
     expect(findAction('tracker.hiredShare')!.build({ report: '012', anonymity: 'role', story: 'It worked' }, ctx).args.slice(1)).toEqual(['--report', '012', '--anonymity', 'role', '--story', 'It worked']);
     expect(findAction('tracker.hiredMark')!.build({ report: '012', mark: 'later' }, ctx).args.slice(1)).toEqual(['--report', '012', '--mark', 'later']);
+    // The Hired Wall ask cadence is read, never written, before the dialog opens (R18-feat-c-L1-04).
+    const hiredStatus = findAction('tracker.hiredStatus')!;
+    expect(hiredStatus.build(hiredStatus.params.parse({}), ctx).args.slice(1)).toEqual(['--status']);
+    expect({ cost: hiredStatus.cost, sync: hiredStatus.sync, claude: hiredStatus.claude, resources: hiredStatus.resources }).toEqual({ cost: 'free', sync: true, claude: false, resources: [] });
     // A caller holding the report as a number (12, an unpadded `[12]` row) still works; a padded label stays text.
     for (const id of ['tracker.hiredShare', 'tracker.hiredMark']) {
       const a = findAction(id)!;

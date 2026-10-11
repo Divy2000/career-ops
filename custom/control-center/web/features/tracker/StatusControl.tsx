@@ -78,6 +78,20 @@ export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: {
 }
 
 /**
+ * Whether the Hired Wall may ask about this report: one ask per hire, a "later" answer re-asked only after 30 days
+ * (hired-share.mjs --status). A cadence that cannot be read never nags.
+ */
+async function hiredAskable(reportLabel: string): Promise<boolean> {
+  try {
+    const r = await apiSend<{ result: unknown }>('POST', '/api/actions/tracker.hiredStatus', { params: {} });
+    const askable = (r.result as { askable?: unknown } | null)?.askable;
+    return Array.isArray(askable) && askable.includes(reportLabel);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Status picker with the current status first; Discarded and SKIP ask for a reason (TUI parity). A host whose list can
  * drop the row once it is Hired (a filtered tracker tab unmounts this control on the refetch) shows the Hired Wall
  * dialog itself through onHired.
@@ -90,11 +104,12 @@ export function StatusControl({ row, onHired }: { row: TrackerRow; onHired?: (ro
 
   const commit = async (state: string, note?: string) => {
     if (!(await setStatus(row, state, { note }))) return;
-    if (state === 'Hired' && row.reportLabel !== null) {
-      if (onHired) onHired({ ...row, reportLabel: row.reportLabel });
+    setPending(null);
+    const reportLabel = row.reportLabel;
+    if (state === 'Hired' && reportLabel !== null && (await hiredAskable(reportLabel))) {
+      if (onHired) onHired({ ...row, reportLabel });
       else setHired(true);
     }
-    setPending(null);
   };
 
   return (

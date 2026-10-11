@@ -17,6 +17,7 @@ let posts: Array<{ url: string; body: { params: Record<string, unknown> } }>;
 let markStatus: number;
 let statusFails: boolean;
 let shareOutput: string;
+let askable: string[] | 'fail';
 
 const ROW: TrackerRow = {
   num: 6, date: '2026-09-30', company: 'Vandelay Systems', role: 'Senior Python Engineer', score: 4.1, scoreRaw: '4.1/5', status: 'Offer',
@@ -32,12 +33,16 @@ beforeEach(async () => {
   markStatus = 200;
   statusFails = false;
   shareOutput = 'ok';
+  askable = ['012'];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) });
       // set-status.mjs --json on a busy tracker lock: exit 4 (mapped to 503), its error object on stdout, "❌ ..." on stderr.
       if (url === '/api/actions/tracker.setStatus' && statusFails) return json(503, { error: 'tracker.setStatus exited 4', exit: 4, result: { error: 'Timed out waiting for tracker lock at /data/applications.md.lock', code: 'lock-timeout' }, stderr: '❌ Timed out waiting for tracker lock at /data/applications.md.lock\n' });
+      // hired-share.mjs --status: the hires still askable by the AGENTS.md cadence (never asked, or "later" over 30 days ago).
+      if (url === '/api/actions/tracker.hiredStatus')
+        return askable === 'fail' ? json(500, { error: 'tracker.hiredStatus exited 1', exit: 1, result: '', stderr: 'boom\n' }) : json(200, { result: { hires: [], askable } });
       if (url === '/api/actions/tracker.hiredShare') return json(200, { result: shareOutput });
       // hired-share.mjs --mark: a line on stdout when it records the answer; exit 1 and the reason on stderr when the row is
       // not Hired (no exit map, so a 500 carrying stderr).
@@ -70,6 +75,20 @@ afterEach(async () => {
 const dialog = () => host.querySelector('[role="dialog"][aria-label="Hired celebration"]');
 const button = (name: string) => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === name)!;
 
+/** Remounts the control on a fresh row and sets it to Hired, waiting until the cadence read has answered. */
+async function setHiredAgain() {
+  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(StatusControl, { key: `again-${posts.length}`, row: ROW }))));
+  const select = host.querySelector<HTMLSelectElement>('select[aria-label="Change status"]')!;
+  const asked = posts.length;
+  await act(async () => {
+    select.value = 'Hired';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await until(() => host.querySelector('[role="status"]'), 'the status message');
+  await until(() => posts.slice(asked).some((p) => p.url === '/api/actions/tracker.hiredStatus'), 'the cadence read');
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+}
+
 describe('Hired Wall dialog', () => {
   it('sends the Report label as written, zero padding included', async () => {
     expect(dialog()).not.toBeNull();
@@ -99,6 +118,28 @@ describe('Hired Wall dialog', () => {
     expect(host.querySelector('[role="status"]')?.textContent).toBe('Could not set status: tracker.setStatus exited 4 (❌ Timed out waiting for tracker lock at /data/applications.md.lock)');
     expect(dialog()).toBeNull();
     expect(posts.some((p) => p.url === '/api/actions/tracker.hiredMark')).toBe(false);
+  });
+
+  it('does not ask again for a hire already answered "never" or recently "later" (R18-feat-c-L1-04)', async () => {
+    await act(async () => button('Close').click());
+    askable = [];
+    await setHiredAgain();
+    expect(dialog()).toBeNull();
+    expect(posts.some((p) => p.url === '/api/actions/tracker.hiredMark')).toBe(false);
+  });
+
+  it('stays quiet when the ask cadence cannot be read (R18-feat-c-L1-04)', async () => {
+    await act(async () => button('Close').click());
+    askable = 'fail';
+    await setHiredAgain();
+    expect(dialog()).toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('asks again for a hire the cadence still lists as askable (R18-feat-c-L1-04)', async () => {
+    await act(async () => button('Close').click());
+    await setHiredAgain();
+    await until(() => dialog(), 'the Hired Wall dialog');
   });
 
   it('links the prefilled issue hired-share.mjs printed, not a GitHub URL quoted in the story (SW4-web-a-06)', async () => {
