@@ -342,7 +342,7 @@ cc_running() {
     case "$seen" in *" $root "*) continue ;; esac
     seen="$seen$root "
     if cc_lock_live "$root/data/control-center/supervisor.lock"; then return 0; fi
-  done < <(printf '%s\n%s\n' "$DATA" "$DIR"; installed_job_root)
+  done < <(printf '%s\n%s\n' "$DATA" "$DIR"; installed_job_root own)
   return 1
 }
 
@@ -398,11 +398,16 @@ process.exit(live !== null && (start === null || live === "unknown" || live === 
 
 # The data root the installed daily job writes its launchd logs under (<root>/data/immigration/logs), which differs
 # from this run's when that install had CAREER_OPS_ROOT exported or this run moves the data root with --data-root.
-# Prints nothing without an installed job or plutil.
+# Prints nothing without an installed job or plutil. With "own", also nothing when that job runs from another checkout
+# (its WorkingDirectory): the label is per user, and another checkout's Control Center never shares this one's files.
 installed_job_root() {
-  local out
+  local plist="$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" out wd
+  if [ "${1:-}" = own ]; then
+    wd="$(plutil -extract WorkingDirectory raw -o - "$plist" 2>/dev/null || true)"
+    if [ -z "$wd" ] || ! [ "$wd" -ef "$DIR" ]; then return 0; fi
+  fi
   # The || stays inside $(...), where the ERR trap would see it.
-  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null || true)"
+  out="$(plutil -extract StandardOutPath raw -o - "$plist" 2>/dev/null || true)"
   case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/data/immigration/logs/launchd.out.log}" ;; esac
 }
 

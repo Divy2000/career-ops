@@ -1399,9 +1399,8 @@ test('a re-run that moves the data root with --data-root still sees the Control 
   }
 });
 
-test('a re-run sees the Control Center running on the data root the installed daily job names, when this run resolves another (R20-scripts-b-L2-01)', () => {
-  const { w, D } = fresh({ keychain: true });
-  w.makeCheckout(D, { files: READY_FILES });
+/** The daily job's plist as launchd/install.sh writes it for <checkout>, logging under <jobRoot>, plus a live Control Center lock there. */
+function controlCenterOnJobRoot(w, checkout) {
   const jobRoot = path.join(w.T, 'job-data');
   const agents = path.join(w.home, 'Library', 'LaunchAgents');
   fs.mkdirSync(agents, { recursive: true });
@@ -1410,6 +1409,7 @@ test('a re-run sees the Control Center running on the data root the installed da
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${checkout}</string>
   <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
 </dict>
 </plist>
@@ -1418,11 +1418,33 @@ test('a re-run sees the Control Center running on the data root the installed da
   const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true });
   fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  return child;
+}
+
+test('a re-run sees the Control Center running on the data root the installed daily job names, when this run resolves another (R20-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = controlCenterOnJobRoot(w, D);
   try {
     const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
     assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
     assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
     assert.match(r.out, /already running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a Control Center running on the data root of a daily job another checkout installed does not stop this checkout\'s npm ci or start (R20-scripts-b review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const other = path.join(w.T, 'other-checkout');
+  fs.mkdirSync(other);
+  const child = controlCenterOnJobRoot(w, other);
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), r.out);
+    assert.equal(w.calls('cc').length, 1, r.out);
   } finally {
     child.kill('SIGKILL');
   }
