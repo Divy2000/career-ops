@@ -414,6 +414,21 @@ describe('Runner', () => {
     expect(runner.store.read(run.id)).toMatchObject({ status: 'cancelled', endedAt: expect.any(String), error: expect.stringMatching(/without an exit record/) });
   });
 
+  it('a cancelled run this server tracks whose wrapper is killed before recording an exit still reads cancelled', async () => {
+    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = runner.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(runner.store.read(meta.id)?.childStartedAt) && runner.store.readRaw(meta.id).lines.length >= 1);
+    const { wrapperPid, childPid } = runner.store.read(meta.id)!;
+    runner.cancel(meta.id);
+    // Killed from outside during the grace, before it could record anything; then its command too.
+    process.kill(wrapperPid!, 'SIGKILL');
+    process.kill(-childPid!, 'SIGKILL');
+    await until(() => Boolean(runner.store.read(meta.id)?.endedAt));
+    expect(runner.store.read(meta.id)).toMatchObject({ status: 'cancelled', error: expect.stringMatching(/without an exit record/) });
+  });
+
   it('a run another server cancelled that has not exited yet still holds its resources and blocks a second run of its action (R18-srv-core-L3-01 review)', async () => {
     const root = tmpRoot();
     const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });

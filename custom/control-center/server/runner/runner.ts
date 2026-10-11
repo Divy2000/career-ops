@@ -663,9 +663,11 @@ export class Runner {
       } else if (current.wrapperPid && !this.ours(current.wrapperPid)) {
         clearInterval(timer);
         this.active.delete(meta.id);
-        this.store.write({ ...current, status: 'lost', endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
+        // One the user cancelled stays cancelled: it was meant to stop, and it has.
+        const status = current.status === 'cancelled' ? 'cancelled' : 'lost';
+        this.store.write({ ...current, status, endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
         this.dropInputs(meta);
-        this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+        this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId });
         this.pump();
       }
     }, this.opts.pollMs ?? 250);
