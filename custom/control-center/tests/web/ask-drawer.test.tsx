@@ -453,6 +453,28 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
     expect(item.textContent).toContain('already starting');
   });
 
+  it('a row with surrounding whitespace opens the live pdf session for that row (R18-shared-comp-L2-01)', async () => {
+    listed = [{ id: 's-pdf', mode: 'pdf', status: 'running', target: { type: 'app', value: '2' } }];
+    await remountDrawer();
+    await run(' 2 ');
+    expect(posts).toEqual([]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-pdf' } }]);
+  });
+
+  it('apply with a row with surrounding whitespace opens that row\'s Apply page (R18-shared-comp-L2-01)', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'apply', params: { row: ' 12 ' } }, 1));
+    await act(async () => bodyButton('Run')!.click());
+    expect(navigations).toEqual([{ to: '/apply/$n', params: { n: '12' } }]);
+  });
+
+  it('a row with surrounding whitespace honors the row\'s starting mark (R18-shared-comp-L2-01)', async () => {
+    sessionStorage.setItem('cc.pdf.2:starting', String(Date.now()));
+    await remountDrawer();
+    const item = await run(' 2');
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
   it('starts after an orphaned starting mark has expired, so a reload mid-start does not block the row forever', async () => {
     sessionStorage.setItem('cc.pdf.2:starting', String(Date.now() - 16_000));
     await remountDrawer();

@@ -25,9 +25,12 @@ export interface Proposal {
   note: string | null;
 }
 
-/** The tracker row a proposal names (row, or the older n), or a plain note that it names none. */
+/** The tracker row a proposal names (row, or the older n), trimmed: blank when it names none. */
+const rowParam = (p: Record<string, unknown>): string => String(p.row ?? p.n ?? '').trim();
+
+/** The tracker row a proposal names, or a plain note that it names none. */
 const rowOf = (p: Record<string, unknown>): string => {
-  const n = String(p.row ?? p.n ?? '').trim();
+  const n = rowParam(p);
   return n ? `row #${n}` : '(no row given)';
 };
 
@@ -193,7 +196,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     // A row named by number only is easy to confuse with another application: the setStatus confirm names it by
     // company and role, and shows the note it appends to the Notes cell (which can re-link reports).
     const nameRow = (p: Record<string, unknown>): string => {
-      const n = String(p.row ?? p.n ?? '').trim();
+      const n = rowParam(p);
       const num = Number(n);
       const row = Number.isInteger(num) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === num) : undefined;
       return row ? `row #${n} (${row.company}${row.role ? ` - ${row.role}` : ''})` : `row #${n}`;
@@ -225,7 +228,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           await router.navigate({ to: '/discover', search: { tab: 'network' } });
           break;
         case 'apply':
-          await router.navigate({ to: '/apply/$n', params: { n: String(p.params.row ?? p.params.n ?? '') } });
+          await router.navigate({ to: '/apply/$n', params: { n: rowParam(p.params) } });
           break;
         case 'evaluate': {
           const url = String(p.params.url).trim();
@@ -263,7 +266,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'generatePdf': {
-          const n = String(p.params.row ?? p.params.n ?? '');
+          const n = rowParam(p.params);
           // The Apply page's per-row guard (cc.pdf.N): a live pdf session for the row is opened, not doubled.
           const live = sessions.data?.find((s) => s.mode === 'pdf' && LIVE.has(s.status) && s.target.value === n);
           if (live) {
@@ -297,7 +300,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'setStatus':
-          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(p.params.row ?? p.params.n), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
+          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(rowParam(p.params)), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
           await qc.invalidateQueries({ queryKey: ['tracker'] });
           break;
         case 'remember': {
