@@ -435,6 +435,35 @@ jobTest('a Keychain that cannot be read (locked, exit 36) says so with the exit 
   assert.deepEqual(r.leftovers, []);
 });
 
+jobTest('a Keychain read that never answers (locked keychain, unlock prompt nobody answers) fails fast with the reason and frees the lock', () => {
+  const w = dailyWorld();
+  // A security that waits forever, as one blocked on an unanswered unlock dialog does, with a child of its own.
+  const childPid = path.join(w.T, 'security-child.pid');
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\nsleep 100000 &\necho $! > ${JSON.stringify(childPid)}\nwait\n`, { mode: 0o755 });
+  const started = Date.now();
+  const r = w.run({ CC_KEYCHAIN_TIMEOUT: '2' });
+  assert.ok(Date.now() - started < 30_000, `the run waited ${Date.now() - started} ms for the Keychain`);
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! Could not read Keychain item 'career-ops-claude-token': security did not answer within 2 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then retry\.$/m);
+  assert.doesNotMatch(r.log, /setup-token/);
+  assert.equal(r.steps, '');
+  assert.equal(r.calls.length, 0);
+  assert.deepEqual(r.leftovers, []);
+  assert.equal(fs.existsSync(path.join(r.imm, '.run-daily.pid')), false);
+  const lock = spawnSync('/usr/bin/lockf', ['-k', '-t', '0', path.join(r.imm, '.run-daily.lockf'), '/usr/bin/true']);
+  assert.equal(lock.status, 0, 'the daily lock is free once the run has failed');
+  const orphan = spawnSync('/bin/kill', ['-0', readFileSync(childPid, 'utf8').trim()]);
+  assert.notEqual(orphan.status, 0, 'nothing the Keychain read started is left running');
+});
+
+jobTest('a Keychain wait that is not a whole number of seconds is refused before the Keychain is read', () => {
+  const w = dailyWorld();
+  const r = w.run({ CC_KEYCHAIN_TIMEOUT: '0' });
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not '0'\.$/m);
+  assert.equal(r.steps, '');
+});
+
 jobTest('the pidfile the Control Center reads names the run while it holds the lock and is gone when the run ends, done or failed', () => {
   const w = dailyWorld();
   // A step that sees the run from inside: the pidfile must name a live bash running run-daily.sh.

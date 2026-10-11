@@ -131,8 +131,34 @@ if ! KEYCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/run-daily-keychain.XXXXXX")"; then
   echo "!!! Could not create a temp file for the Keychain read in ${TMPDIR:-/tmp}; check that it exists and is writable."
   exit 1
 fi
+# A locked login keychain can make security wait on an unlock dialog that an unattended run never answers, holding the
+# daily lock all the while: the read gets CC_KEYCHAIN_TIMEOUT seconds (default 60). Stock macOS has no timeout(1), so
+# perl runs security in its own process group and kills that group when the alarm fires, exiting 124 as timeout(1) does.
+KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
+if ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not '$KEYCHAIN_TIMEOUT'."
+  exit 1
+fi
+bounded() {
+  /usr/bin/perl -e '
+    my $limit = shift;
+    my $pid = fork;
+    die "cannot start $ARGV[0]: $!\n" unless defined $pid;
+    if ($pid == 0) {
+      setpgrp(0, 0);
+      exec { $ARGV[0] } @ARGV;
+      print STDERR "$ARGV[0]: $!\n";
+      exit($!{ENOENT} ? 127 : 126);
+    }
+    $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid $pid, 0; exit 124 };
+    alarm $limit;
+    waitpid $pid, 0;
+    alarm 0;
+    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+  ' "$@"
+}
 keychain_rc=0
-CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$KEYCHAIN_ERR")" || keychain_rc=$?
+CC_OAUTH_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s career-ops-claude-token -w 2>"$KEYCHAIN_ERR")" || keychain_rc=$?
 # Trimmed, as the Control Center trims it: a token of only whitespace is as missing as an empty one.
 CC_OAUTH_TOKEN="${CC_OAUTH_TOKEN#"${CC_OAUTH_TOKEN%%[![:space:]]*}"}"
 CC_OAUTH_TOKEN="${CC_OAUTH_TOKEN%"${CC_OAUTH_TOKEN##*[![:space:]]}"}"
@@ -142,11 +168,15 @@ if [ "$keychain_rc" -eq 44 ] || { [ "$keychain_rc" -eq 0 ] && [ -z "$CC_OAUTH_TO
   echo "!!! Keychain item 'career-ops-claude-token' not found. Run: claude setup-token, then security add-generic-password -U -a \"\$USER\" -s career-ops-claude-token -w"
   exit 1
 fi
+if [ "$keychain_rc" -eq 124 ]; then
+  echo "!!! Could not read Keychain item 'career-ops-claude-token': security did not answer within $KEYCHAIN_TIMEOUT s. The login keychain is probably locked and waiting at an unlock prompt nobody answered. Unlock it with: security unlock-keychain, then retry."
+  exit 1
+fi
 if [ "$keychain_rc" -ne 0 ]; then
   echo "!!! Could not read Keychain item 'career-ops-claude-token': security failed (exit $keychain_rc${keychain_err:+: $keychain_err}). The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry."
   exit 1
 fi
-unset keychain_rc keychain_err
+unset keychain_rc keychain_err KEYCHAIN_TIMEOUT
 FAILED=0
 
 step() {
