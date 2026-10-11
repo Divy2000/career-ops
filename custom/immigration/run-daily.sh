@@ -78,9 +78,16 @@ echo "$$" > "$PIDFILE"
 # signal (the Control Center's cancel, a launchd stop) exits through the EXIT trap. Only SIGKILL skips it.
 SETTINGS_DIR=""
 SHIM_DIR=""
+# The policy pass batch until the pass is recorded done: a pass that ends any other way leaves no batch behind.
+PASS_BATCH=""
+drop_pass_batch() {
+  [ -z "$PASS_BATCH" ] || [ -e "$PASS_BATCH.done" ] || rm -f "$PASS_BATCH"
+  PASS_BATCH=""
+}
 cleanup() {
   [ -z "$SETTINGS_DIR" ] || rm -rf "$SETTINGS_DIR"
   [ -z "$SHIM_DIR" ] || rm -rf "$SHIM_DIR"
+  drop_pass_batch
   # Last: while the pid file is there the run counts as alive.
   rm -f "$PIDFILE"
 }
@@ -185,6 +192,7 @@ policy_watch() {
     return 0
   fi
   policy_pass || rc=$?
+  drop_pass_batch
   policy_claim release || true
   return "$rc"
 }
@@ -220,6 +228,7 @@ if (after !== before) {
   # One immutable batch file per run: only what THIS run gave the AI is acked.
   mkdir -p "$IMM/batches"
   batch="$IMM/batches/$(date +%Y%m%dT%H%M%S)-$$.json"
+  PASS_BATCH="$batch"
   printf '%s' "$watch_json" > "$batch"
   prompt="$(WATCH_JSON="$watch_json" TODAY="$TODAY" IMM="$IMM" PROFILE="$DATA/config/profile.yml" node -e '
 const fs = require("fs");
@@ -292,6 +301,7 @@ process.stdout.write(policy.sha256);
   # (<batch>.done, as a Control Center pass records it in policyPass.ts), so an ack that still fails is finished by
   # the Control Center or the next run, never by sending the same items to Claude again.
   date -u +%Y-%m-%dT%H:%M:%SZ > "$batch.done" || return 1
+  PASS_BATCH=""
   ack_done_batch "$batch"
 }
 
@@ -328,7 +338,7 @@ try {
 process.exit(Array.isArray(items) && items.every((i) => typeof i === "object" && i !== null) ? 0 : 1);
 '; then
       echo "policy pass batch $batch cannot be read: its items stay queued for this pass"
-      rm -f "$done"
+      rm -f "$batch" "$done"
       continue
     fi
     ack_done_batch "$batch" || return 1
