@@ -43,3 +43,13 @@ test('a fresh data root gets both policy-pass files created with their headers (
   const imm = path.join(root, 'data', 'immigration');
   for (const [name, text] of Object.entries(FILES)) assert.equal(fs.readFileSync(path.join(imm, name), 'utf8'), text.split('\n')[0] + '\n', name);
 });
+
+test('a policy-pass file that is a symlink to a not-yet-created file gets its target created with the header (R23-scripts-a-X-02)', () => {
+  const root = tempDir('imm-headers-');
+  const imm = path.join(root, 'data', 'immigration');
+  fs.mkdirSync(imm, { recursive: true });
+  fs.mkdirSync(path.join(root, 'elsewhere'));
+  for (const name of Object.keys(FILES)) fs.symlinkSync(path.join('..', '..', 'elsewhere', name), path.join(imm, name));
+  runWatch(root, { stale: false });
+  for (const [name, text] of Object.entries(FILES)) assert.equal(fs.readFileSync(path.join(root, 'elsewhere', name), 'utf8'), text.split('\n')[0] + '\n', name);
+});

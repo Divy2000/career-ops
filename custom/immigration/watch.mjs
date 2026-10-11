@@ -5,7 +5,7 @@
 //
 //   node custom/immigration/watch.mjs [--since YYYY-MM-DD]
 
-import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, readlink, writeFile, appendFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending, newsSince } from './lib.mjs';
@@ -23,6 +23,30 @@ async function writeAtomic(file, text) {
   const tmp = `${file}.tmp-${process.pid}`;
   await writeFile(tmp, text);
   await rename(tmp, file);
+}
+// Exclusive create: the policy pass appends to these files without the pending lock, so a file that appeared since
+// any earlier check (another run's header, an appended entry) is left as it is rather than truncated. A symlink to a
+// file not created yet is followed, as a plain write would, since an exclusive create refuses the link itself.
+async function createExclusive(file, text) {
+  let target = file;
+  for (let hops = 0; ; hops++) {
+    try {
+      await writeFile(target, text, { flag: 'wx' });
+      return;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+    let link;
+    try {
+      link = await readlink(target);
+    } catch (err) {
+      if (err.code === 'EINVAL' || err.code === 'ENOENT') return; // a regular file (or gone again): leave it as it is
+      throw err;
+    }
+    if (existsSync(target)) return;
+    if (hops >= 40) throw new Error(`${file}: too many levels of symbolic links`);
+    target = path.resolve(path.dirname(target), link);
+  }
 }
 const FEED_HEADER = 'first_seen\tpublished\tsource\ttitle\turl\n';
 // Readers also accept headerless files; creating the headers keeps them self-describing.
@@ -129,15 +153,7 @@ async function main() {
   if (args.ack) return ack(args.ack);
   const sinceArg = args.since;
   await mkdir(DIR, { recursive: true });
-  // Exclusive create: the policy pass appends to these files without the pending lock, so a file that appeared since
-  // any earlier check (another run's header, an appended entry) is left as it is rather than truncated.
-  for (const [name, header] of Object.entries(HEADERS)) {
-    try {
-      await writeFile(path.join(DIR, name), header, { flag: 'wx' });
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    }
-  }
+  for (const [name, header] of Object.entries(HEADERS)) await createExclusive(path.join(DIR, name), header);
   const readSeen = async () => (existsSync(SEEN) ? JSON.parse(await readFile(SEEN, 'utf8')) : { ids: [] });
   // Read once before the fetch for the cursors only; the merge below reads it again under the lock.
   const cursors = await readSeen();
