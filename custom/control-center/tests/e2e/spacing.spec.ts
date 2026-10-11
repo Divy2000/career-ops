@@ -89,6 +89,27 @@ for (const [name, viewport] of [
       }
     });
 
+    test('Dev Chat: the held session panel adds no space of its own, and the row below it is one spacing step away', async ({ page }) => {
+      // The turn writes these fixture files that later specs read: they go back after.
+      const restore = snapshotDataFiles('modes/_custom.md', 'data/notes/devchat.md');
+      try {
+        await page.goto('/dev');
+        await page.getByLabel('Prompt for devchat').fill('Add a scoring rule');
+        await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+        await expect(page.getByRole('button', { name: 'New conversation' })).toBeVisible({ timeout: 20_000 });
+        await waitForAnimations(page);
+        const box = await page.evaluate(() => {
+          const hold = document.querySelector('.shell__main .turn-hold')!;
+          const panel = hold.firstElementChild!.getBoundingClientRect();
+          const outer = hold.getBoundingClientRect();
+          return { top: panel.top - outer.top, bottom: outer.bottom - panel.bottom, below: hold.nextElementSibling!.getBoundingClientRect().top - outer.bottom };
+        });
+        expect(box).toEqual({ top: 0, bottom: 0, below: SPACE_4 });
+      } finally {
+        restore();
+      }
+    });
+
     test('no page stacks boxed blocks edge to edge', async ({ page }) => {
       const touching: Record<string, string[]> = {};
       for (const url of ROUTES) {
