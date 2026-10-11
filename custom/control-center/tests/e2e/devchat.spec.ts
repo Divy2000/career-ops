@@ -168,7 +168,9 @@ test.describe('Dev Chat', () => {
     const origin = `http://127.0.0.1:${E2E_PORT}`;
     expect((await page.request.post('/__recovery/revert', { form })).status()).toBe(403);
     expect((await page.request.post('/__recovery/revert', { form, headers: { origin } })).status()).toBe(403);
-    expect((await page.request.post('/__recovery/revert', { form, headers: { origin: 'http://127.0.0.1:4387', 'x-cc': '1' } })).status()).toBe(403);
+    // One port above the app's: never one of the e2e servers (base, base-1, base-2), whatever CC_E2E_PORT_BASE says.
+    const otherPort = `http://127.0.0.1:${E2E_PORT + 1}`;
+    expect((await page.request.post('/__recovery/revert', { form, headers: { origin: otherPort, 'x-cc': '1' } })).status()).toBe(403);
     expect((await page.request.post('/__recovery/revert', { form, headers: { origin, 'x-cc': '1' } })).status()).toBe(404);
   });
 
