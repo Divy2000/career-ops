@@ -287,13 +287,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-# Seconds a Keychain read may wait (default 60), as in the daily job and the weekly sync: a locked login keychain can
-# make security wait on an unlock dialog nobody answers. perl's alarm wraps at 2^32, so the wait is capped at 3600.
-KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT-60}"
-if ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$KEYCHAIN_TIMEOUT" -gt 3600 ]; then
-  usage_error "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '$KEYCHAIN_TIMEOUT'."
-fi
-
 if [ -n "$DIR_ARG" ]; then
   DIR="$(abspath "$DIR_ARG")"
 elif [ -f "$SCRIPT_ROOT/doctor.mjs" ] && [ -e "$SCRIPT_ROOT/.git" ]; then
@@ -407,6 +400,24 @@ bounded() {
     alarm 0;
     exit status();
   ' "$@"
+}
+
+# keychain_read_token: reads the secret as the Control Center, the daily job and the weekly sync read it (bounded,
+# trimmed) and sets KEYCHAIN_TOKEN, KEYCHAIN_RC (an empty token counts as 44, missing) and KEYCHAIN_WHY.
+keychain_read_token() {
+  local err rc=0
+  KEYCHAIN_WHY=""
+  err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || err=""
+  # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
+  KEYCHAIN_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${err:-/dev/null}" || exit "$?")" || rc=$?
+  KEYCHAIN_TOKEN="$(trim "$KEYCHAIN_TOKEN")"
+  if [ -n "$err" ]; then
+    KEYCHAIN_WHY="$(tail -c 200 "$err" | tr '\n' ' ' | sed 's/ *$//')"
+    rm -f "$err"
+  fi
+  if [ "$rc" = 0 ] && [ -z "$KEYCHAIN_TOKEN" ]; then rc=44; fi
+  if [ "$rc" != 0 ]; then KEYCHAIN_TOKEN=""; fi
+  KEYCHAIN_RC=$rc
 }
 
 # keychain_problem <exit> <stderr> <retry>: why a Keychain read that failed did, worded as the weekly sync words it.
@@ -733,6 +744,13 @@ elif [ "$CORE_ONLY" = 1 ]; then
   say "$OS, core-only: clone, dependencies, user layer and onboarding only."
 else
   die 1 "$OS is not supported for the full install. These parts need macOS: the Keychain token store, the launchd jobs and the Control Center (it uses /usr/bin/lockf). Re-run with --core-only for the clone, dependencies, user layer and onboarding."
+fi
+# Seconds a Keychain read may wait (default 60), as in the daily job and the weekly sync: a locked login keychain can
+# make security wait on an unlock dialog nobody answers. perl's alarm wraps at 2^32, so the wait is capped at 3600.
+# Checked only where the Keychain is read, before anything changes.
+KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
+if [ "$MAC_FEATURES" = 1 ] && { ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$KEYCHAIN_TIMEOUT" -gt 3600 ]; }; then
+  usage_error "CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '$KEYCHAIN_TIMEOUT'."
 fi
 
 # ---------------------------------------------------------------- prerequisites
@@ -1228,6 +1246,11 @@ else
           say "  Headless onboarding could not read the approved Claude Code versions or the installed one: $gate_found"
           pending "Fix the problem above (a checkout without the Control Center contract is fixed by re-running the installer), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
         fi
+      elif keychain_read_token; [ "$KEYCHAIN_RC" != 0 ]; then
+        # Read before the earlier drafts are moved aside: a refused run leaves them where "Resume from drafts" looks.
+        say "  $(keychain_problem "$KEYCHAIN_RC" "$KEYCHAIN_WHY" "re-run with --onboard headless")"
+        say "  Headless onboarding did not run."
+        pending "Fix the Keychain item as described above, then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
         # Drafts from an earlier run would be listed as this run's and picked up by "Resume from drafts": they hold
         # personal data, so they are moved aside, not deleted.
@@ -1256,28 +1279,7 @@ else
         say "  Claude Code changed while onboarding was being prepared (approved: $gate_identity; now: ${recheck_identity:--}); nothing was run."
         pending "Re-run with --onboard headless once Claude Code has finished updating. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
         headless_ready=0
-      fi
-      if [ "$headless_ready" = 1 ]; then
-        # Read as the Control Center, the daily job and the weekly sync read it: bounded, trimmed, and an empty token or
-        # a failed read refuses the run instead of starting Claude without the credential this step says it uses.
-        token_rc=0
-        token_why=""
-        token_err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || token_err=""
-        # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
-        headless_token="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${token_err:-/dev/null}" || exit "$?")" || token_rc=$?
-        headless_token="$(trim "$headless_token")"
-        if [ -n "$token_err" ]; then
-          token_why="$(tail -c 200 "$token_err" | tr '\n' ' ' | sed 's/ *$//')"
-          rm -f "$token_err"
-        fi
-        if [ "$token_rc" = 0 ] && [ -z "$headless_token" ]; then token_rc=44; fi
-        if [ "$token_rc" != 0 ]; then
-          headless_token=""
-          say "  $(keychain_problem "$token_rc" "$token_why" "re-run with --onboard headless")"
-          say "  Headless onboarding did not run."
-          pending "Fix the Keychain item as described above, then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
-          headless_ready=0
-        fi
+        KEYCHAIN_TOKEN=""
       fi
       if [ "$headless_ready" = 1 ]; then
         say "  Running a restricted headless Claude (reads your documents, writes drafts only to $draft). This uses your Claude subscription."
@@ -1287,7 +1289,7 @@ else
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
-        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$headless_token" ANTHROPIC_API_KEY="" \
+        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
           "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
@@ -1300,7 +1302,7 @@ else
         else
           warn "  The headless run did not finish cleanly; review any drafts in $draft."
         fi
-        headless_token=""
+        KEYCHAIN_TOKEN=""
         say "  Review the drafts, then finish interactively (nothing live was written):"
         say "    cd $QDIR && claude $(shell_quote 'Read custom/install/ONBOARDING.md and follow it.')"
       fi

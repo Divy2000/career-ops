@@ -1472,8 +1472,37 @@ test('--onboard headless gives a Keychain read that waits on an unanswered unloc
   assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security did not answer within 1 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run with --onboard headless\./);
 });
 
+test('--onboard headless whose Keychain read fails leaves an earlier run\'s drafts where Resume from drafts reads them (R23-scripts-b-L3-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const draft = path.join(data, 'data', 'install', 'onboarding-draft');
+  fs.mkdirSync(draft, { recursive: true });
+  fs.writeFileSync(path.join(draft, 'article-digest.md'), '# from an earlier run\n');
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_SECURITY_READ_EXIT: '36' } });
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Could not read Keychain item career-ops-claude-token/);
+  assert.equal(fs.readFileSync(path.join(draft, 'article-digest.md'), 'utf8'), '# from an earlier run\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(draft)).filter((n) => n.startsWith('onboarding-draft.prev-')), []);
+  assert.doesNotMatch(r.out, /Moved the drafts/);
+});
+
+test('an empty CC_KEYCHAIN_TIMEOUT means the default, as the daily job and the weekly sync read it', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CC_KEYCHAIN_TIMEOUT: '' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /Keychain item career-ops-claude-token exists \(not read\)/);
+});
+
+test('a core-only install never reads the Keychain, so a stray CC_KEYCHAIN_TIMEOUT does not stop it', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', '--core-only', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_UNAME: 'Linux', CC_KEYCHAIN_TIMEOUT: 'abc' } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /CC_KEYCHAIN_TIMEOUT/);
+});
+
 test('a CC_KEYCHAIN_TIMEOUT that is not 1 to 3600 whole seconds is a usage error before anything changes', () => {
-  for (const value of ['0', 'abc', '3601', '1.5', '']) {
+  for (const value of ['0', 'abc', '3601', '1.5']) {
     const { w, D } = fresh({ keychain: true });
     const before = w.snapshot();
     const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CC_KEYCHAIN_TIMEOUT: value } });
