@@ -150,14 +150,16 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const read = readPipeline(opts.cfg.dataRoot);
     return new Set(read.kind === 'ok' ? read.rows.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url) : []);
   };
+  // A reply to a finished Process inbox run carries it on, but the run reads done until its turn begins.
+  const processInboxTurnsStarting = new Set<string>();
   /** Null when evaluations of these URLs in `mode` may start, else the 409 reason: a live Process inbox holds a pending one. */
   const processInboxHolds = (mode: string, urls: string[]): string | null => {
     if (!isReportGated(mode)) return null;
-    const pipe = liveSessions().find((m) => isProcessInbox(m.mode));
+    const pipe = liveSessions().find((m) => isProcessInbox(m.mode))?.id ?? [...processInboxTurnsStarting][0];
     if (!pipe) return null;
     const pending = pendingInboxUrls();
     const held = urls.find((u) => pending.has(u));
-    return held ? `Process inbox (session ${pipe.id}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
+    return held ? `Process inbox (session ${pipe}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
   };
   /** Null when a Process inbox turn may run, else the 409 reason: an evaluation of a pending row is live or starting. */
   const evaluationsHold = (): string | null => {
@@ -294,7 +296,14 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (held) return reply.code(409).send({ error: `Not continued: ${held}` });
     const busy = claimForTurn(req.params.id, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
-    return mutate(reply, async () => reply.code(202).send(await manager.send(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
+    const id = req.params.id;
+    const tracked = isProcessInbox(manager.read(id)?.mode ?? '') && !processInboxTurnsStarting.has(id);
+    if (tracked) processInboxTurnsStarting.add(id);
+    try {
+      return await mutate(reply, async () => reply.code(202).send(await manager.send(id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
+    } finally {
+      if (tracked) processInboxTurnsStarting.delete(id);
+    }
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/fork', async (req, reply) => {

@@ -187,3 +187,48 @@ describe('a reply or fork of a finished Process inbox run while evaluations of i
     });
   }
 });
+
+describe('an evaluation of a pending Inbox row while a reply to a finished Process inbox run is starting', () => {
+  it('is refused with 409: the run carries on over the pending rows, though it still reads done until its turn begins', async () => {
+    // Hold the reply's turn at its token read, so the request is under way while the run still reads done.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reading!: () => void;
+    let held = false;
+    const tokenRead = new Promise<void>((resolve) => {
+      reading = resolve;
+    });
+    const app = await makeTestApp(
+      { dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') },
+      {
+        // Only the reply's read is held: an evaluation the server wrongly lets through must not wait on it too.
+        readToken: async () => {
+          if (!held) {
+            held = true;
+            reading();
+            await gate;
+          }
+          return 'fake-oauth-token-for-tests';
+        },
+      },
+    );
+    await withApp(async () => {
+      const pipe = livePipeline(app, 'done');
+      const replyP = call(app, `/api/sessions/${pipe.id}/turns`, { prompt: 'carry on' });
+      let res;
+      try {
+        await tokenRead;
+        expect(app.sessions.read(pipe.id)!.status).toBe('done');
+        res = await call(app, '/api/sessions', { mode: 'oferta', target: { type: 'url', value: INBOX_URL }, prompt: 'evaluate' });
+      } finally {
+        release();
+      }
+      expect((await replyP).statusCode).toBe(202);
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(pipe.id);
+      expect(count(app, 'oferta')).toBe(0);
+    }, app);
+  });
+});
