@@ -132,4 +132,50 @@ describe('a session whose reserved report number was collected and claimed again
       await app.close();
     }
   });
+
+  it('given a waiting session whose first release attempt fails while the GC collects its sentinel and another reservation claims the number, when the user deletes it, then the retry leaves the other reservation alone', async () => {
+    let app: App | null = null;
+    let n = 0;
+    const releases: string[][] = [];
+    const flaky: Exec = async (cmd, args, opts) => {
+      if (!args.includes('--release')) return execNoShell(cmd, args, opts);
+      releases.push(args);
+      if (releases.length === 1) {
+        reclaim(app!, n, Date.now() + 1000);
+        return { code: 1, stdout: '', stderr: 'tracker lock busy' };
+      }
+      return execNoShell(cmd, args, opts);
+    };
+    app = await makeTestApp({}, { exec: flaky });
+    try {
+      const fan = await withScenario(NO_REPORT, async () => (await call(app!, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r25-delete-retry'] })).json());
+      const id = fan.sessions[0].id as string;
+      n = fan.reserved[0] as number;
+      expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+
+      expect((await call(app, 'DELETE', `/api/sessions/${id}`)).statusCode).toBe(200);
+      expect(releases).toHaveLength(1);
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a running session with no run record after a restart whose sentinel cannot be read, when the server reconciles, then the session is still settled holding no number', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+      app.sessions.store.beginTurn(meta.id, { runId: 'r25-gone-unreadable', userText: 'x' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      app.sessions.store.setReportNum(meta.id, 74);
+      fs.mkdirSync(sentinelPath(app, 74));
+
+      expect(() => app.sessions.reconcile()).not.toThrow();
+      expect(app.sessions.read(meta.id)).toMatchObject({ status: 'error', reportNum: null });
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  });
 });

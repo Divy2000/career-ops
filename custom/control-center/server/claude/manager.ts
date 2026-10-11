@@ -470,20 +470,19 @@ export class SessionManager {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
-    // Decided before the delete removes the record of when the session got the number.
-    // A credited report holds the number, so no other reservation can have claimed it.
-    const owned = num !== null && (meta?.creditedReport?.num === num || this.ownsReservation(meta!, num));
+    const credited = num !== null && meta?.creditedReport?.num === num;
+    // Taken before the delete removes the record of when the session got the number. A credited report holds the
+    // number, so no other reservation can have claimed it.
+    const owns = num !== null && !credited ? this.reservationOwnership(meta!, num) : undefined;
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
     let deleted: boolean;
     try {
       deleted = this.store.delete(id);
     } finally {
-      if (num !== null && !owned) {
-        console.warn(`[sessions] session ${id} deleted: report number ${num} was already lost (its reservation was collected), so it is not released`);
-      } else if (num !== null) {
-        const released = await this.releaseReportNum(num, meta?.creditedReport?.num === num);
-        if (released.startsWith('could not')) console.warn(`[sessions] session ${id} deleted: ${released}`);
+      if (num !== null) {
+        const released = await this.releaseReportNum(num, credited, owns);
+        if (released.startsWith('could not') || released.includes('already lost')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
     if (deleted && batch !== null) this.dropUnheldPolicyBatch(batch);
@@ -523,9 +522,9 @@ export class SessionManager {
         this.store.setStatus(meta.id, 'error', reason);
         // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
         if (meta.reportNum !== null) {
-          const owned = this.ownsReservation(meta, meta.reportNum);
+          const owns = this.reservationOwnership(meta, meta.reportNum);
           this.store.setReportNum(meta.id, null);
-          if (owned) void this.releaseReportNum(meta.reportNum, false);
+          void this.releaseReportNum(meta.reportNum, false, owns);
         }
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
@@ -738,13 +737,27 @@ export class SessionManager {
   }
 
   /**
-   * Whether `num`'s sentinel is still the session's: written no later than the session got the number. A sentinel the
-   * stale GC collected is gone, or belongs to whichever reservation claimed the number next, and is not the session's
-   * to release.
+   * Tells whether `num`'s sentinel is still the session's: written no later than the session got the number. A sentinel
+   * the stale GC collected is gone, or belongs to whichever reservation claimed the number next, and is not the
+   * session's to release. One that cannot be read is not released either: a release removes whatever is there.
    */
-  private ownsReservation(meta: SessionMeta, num: number): boolean {
-    const createdAt = readSentinelCreatedAt(this.sentinelPath(num));
-    return createdAt !== null && createdAt <= this.reservedAt(meta, num);
+  private reservationOwnership(meta: SessionMeta, num: number): () => boolean {
+    let since: number;
+    try {
+      since = this.reservedAt(meta, num);
+    } catch (err) {
+      console.warn(`[sessions] session ${meta.id}: could not read when it got report number ${num}: ${(err as Error).message}`);
+      return () => false;
+    }
+    return () => {
+      try {
+        const createdAt = readSentinelCreatedAt(this.sentinelPath(num));
+        return createdAt !== null && createdAt <= since;
+      } catch (err) {
+        console.warn(`[sessions] session ${meta.id}: could not read the reservation for report number ${num}: ${(err as Error).message}`);
+        return false;
+      }
+    };
   }
 
   private reservationPath(id: string): string {
@@ -1184,10 +1197,12 @@ export class SessionManager {
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
   /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
   /** A failed attempt is tried again (the tracker lock may be busy): nothing else would drop the RESERVED file before a gc. */
-  private async releaseReportNum(num: number, used: boolean | null): Promise<string> {
+  /** `owns`, when given, is asked before every attempt: a sentinel lost to the stale GC in between is not released. */
+  private async releaseReportNum(num: number, used: boolean | null, owns?: () => boolean): Promise<string> {
     let failure = '';
     for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
       if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
+      if (owns && !owns()) return `report number ${num} was already lost (its reservation was collected), so it is not released`;
       failure = await this.tryReleaseReportNum(num);
       if (!failure) break;
     }
