@@ -1166,6 +1166,31 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   assert.match(r.out, /claude .*Read custom\/install\/ONBOARDING\.md and follow it/);
 });
 
+test('--onboard headless confines the tool set itself, so the user\'s own Claude settings (allow rules, hooks) cannot add Bash, network or live writes (R20-scripts-b-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_DRAFTS: '1' } });
+  const argv = w.claudeArgv();
+  assert.ok(argv, r.out);
+  const flag = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
+  // --restricted loads no user, project or local settings file, so their allow rules and hooks do not apply.
+  assert.ok(argv.includes('--restricted'), argv.join(' '));
+  assert.deepEqual(flag('--tools')?.split(','), ['Read', 'Glob', 'Grep', 'Edit', 'Write']);
+  const denied = flag('--disallowedTools')?.split(',') ?? [];
+  for (const t of ['Bash', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'NotebookEdit', 'PowerShell']) assert.ok(denied.includes(t), `${t} not disallowed: ${denied}`);
+  const settings = JSON.parse(flag('--settings') ?? 'null');
+  assert.equal(settings?.disableAllHooks, true);
+});
+
+test('--onboard headless with a Claude Code that predates --restricted never hands it the token (R20-scripts-b-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: '2.1.288' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.289 or later/);
+});
+
 test('--onboard headless moves an earlier run\'s drafts aside, so only this run\'s drafts are listed and resumed (R15-scripts-b-L1-03)', () => {
   const { w, D } = fresh({ keychain: true });
   const data = path.join(w.T, 'mydata');
@@ -1190,7 +1215,7 @@ test('--onboard headless with a Claude Code too old to scrub hook and tool child
     const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_CLAUDE_VERSION: version } });
     assert.equal(r.status, 3, r.out);
     assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, `${version}: claude -p ran\n${r.out}`);
-    assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.288 or later/, version);
+    assert.match(r.out, /Headless onboarding needs Claude Code 2\.1\.289 or later/, version);
     assert.match(r.out, /claude update/, version);
   }
 });
