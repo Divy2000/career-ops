@@ -13,6 +13,7 @@ import { ConfirmProvider } from '@web/components/ConfirmDialog';
 class FakeEventSource {
   static all: FakeEventSource[] = [];
   closed = false;
+  readyState = 1;
   private listeners = new Map<string, Array<(ev: MessageEvent) => void>>();
   constructor(public url: string) {
     FakeEventSource.all.push(this);
@@ -22,8 +23,18 @@ class FakeEventSource {
   }
   close() {
     this.closed = true;
+    this.readyState = 2;
+  }
+  /** What the browser does: `error` after it gave up (readyState 2) on a non-stream answer, or a server event. */
+  emit(type: string, data?: unknown) {
+    if (type === 'error') this.readyState = 2;
+    for (const fn of this.listeners.get(type) ?? []) fn(new MessageEvent(type, { data: JSON.stringify(data) }));
   }
 }
+
+const STORE_KEY = 'cc.discover.script.scan.portals';
+/** Whether the server still has run r1: GET /api/runs/r1 answers 404 once it does not. */
+let runGone = false;
 
 let host: HTMLElement;
 let root: Root;
@@ -44,10 +55,12 @@ async function mount() {
 beforeEach(async () => {
   FakeEventSource.all = [];
   sessionStorage.clear();
+  runGone = false;
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
+      if (url === '/api/runs/r1' && runGone) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
       const body = url === '/api/actions/scan.portals' ? { runId: 'r1' } : url === '/api/actions' ? ACTIONS : {};
       return new Response(JSON.stringify(body), { status: url === '/api/actions/scan.portals' ? 202 : 200, headers: { 'content-type': 'application/json' } });
     }),
@@ -92,5 +105,34 @@ describe('Discover > Portal scan re-attaches its run', () => {
     await act(async () => b!.click());
     const posts = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/actions/scan.portals' && i?.method === 'POST').length;
     expect(posts).toBe(1);
+  });
+
+  it('a run the server no longer has clears the remembered id: the log goes, Scan portals is enabled, and coming back opens no stream', async () => {
+    const stream = await runScan();
+    expect(sessionStorage.getItem(STORE_KEY)).toBe('r1');
+    runGone = true;
+    await act(async () => stream.emit('error'));
+    await until(() => (sessionStorage.getItem(STORE_KEY) === null ? true : undefined), 'the remembered run id to be cleared');
+    expect(host.querySelector('[aria-label="Scan log"]')).toBeNull();
+    expect(scanButton()!.disabled).toBe(false);
+    await act(async () => root.unmount());
+    const opened = FakeEventSource.all.length;
+    await mount();
+    await until(() => scanButton() ?? undefined, 'the Scan portals button after coming back');
+    expect(FakeEventSource.all.length).toBe(opened);
+    expect(scanButton()!.disabled).toBe(false);
+  });
+
+  it('a finished run re-enables Scan portals, and does again once its stream replays run.done after coming back', async () => {
+    const stream = await runScan();
+    expect(scanButton()!.disabled).toBe(true);
+    await act(async () => stream.emit('run.done', { status: 'done' }));
+    expect(stream.closed).toBe(true);
+    await until(() => (scanButton()!.disabled ? undefined : true), 'Scan portals to be enabled after run.done');
+    await act(async () => root.unmount());
+    await mount();
+    const again = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && s !== stream && !s.closed), 'the run stream after coming back');
+    await act(async () => again!.emit('run.done', { status: 'done' }));
+    await until(() => (scanButton()!.disabled ? undefined : true), 'Scan portals to be enabled after the replayed run.done');
   });
 });
