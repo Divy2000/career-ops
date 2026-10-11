@@ -1166,6 +1166,24 @@ test('the live update skips the Control Center npm ci while it runs on the insta
   }
 });
 
+test('the live update skips the Control Center npm ci while it runs on the checkout itself, after the data root moved out (R20-scripts-b review)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(w.live, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
+    assert.match(res.stdout, /Control Center is running/);
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 test('a daily job installed on the sync\'s own data root, spelled through a symlink, is locked once, not waited on by the update itself (R20-scripts-b-L1-01)', () => {
   const w = liveWorld({ depsChange: true });
   const alias = path.join(w.base, 'data-alias');

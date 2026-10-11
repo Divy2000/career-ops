@@ -673,9 +673,11 @@ update_live_checkout() {
     failed="npm install"
   fi
   if [ "$cc_before" != "$(git rev-parse --verify --quiet HEAD:custom/control-center/package-lock.json)" ]; then
+    # The live checkout itself is checked too: a Control Center started before the data root moved out of it
+    # still runs from this checkout on its old root.
     while IFS= read -r data_root; do
       if [ -n "$data_root" ] && control_center_running "$data_root"; then cc_live=1; break; fi
-    done <<<"${CC_LIVE_UPDATE_ROOTS:-}"
+    done <<<"${CC_LIVE_UPDATE_ROOTS:-}"$'\n'"$PWD"
     if [ "$cc_live" = 1 ]; then
       # npm ci deletes node_modules, which would race the fast-forward's blue/green reload and fail it. Leave the
       # running instance's dependencies alone; a restart alone never installs them (bin/cc only checks node_modules
