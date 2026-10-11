@@ -326,3 +326,34 @@ describe('a second Process inbox run while one is live', () => {
     });
   });
 });
+
+describe('the forks of one Process inbox run', () => {
+  const forkOf = (app: TestApp, source: SessionMeta, status: SessionMeta['status']) => {
+    const meta = app.sessions.store.create({ mode: 'pipeline', policyClass: source.policyClass, target: source.target, model: null, forkedFrom: source.id });
+    app.sessions.store.setStatus(meta.id, status);
+    return meta;
+  };
+
+  for (const route of ['turns', 'fork'] as const) {
+    it(`POST /${route} of a fork waiting for a reply goes on beside the paused run it forked`, async () => {
+      await withApp(async (app) => {
+        const source = livePipeline(app, 'awaiting_user');
+        const fork = forkOf(app, source, 'awaiting_user');
+        const res = await call(app, `/api/sessions/${fork.id}/${route}`, { prompt: 'carry on' });
+        expect(res.statusCode).toBe(202);
+      });
+    });
+  }
+
+  for (const status of ['queued', 'running'] as const) {
+    it(`a fork of a ${status} run is refused with 409: both would process the pending rows at once`, async () => {
+      await withApp(async (app) => {
+        const pipe = livePipeline(app, status);
+        const res = await call(app, `/api/sessions/${pipe.id}/fork`, { prompt: 'carry on' });
+        expect(res.statusCode).toBe(409);
+        expect((res.json() as { error: string }).error).toContain(pipe.id);
+        expect(count(app, 'pipeline')).toBe(1);
+      });
+    });
+  }
+});

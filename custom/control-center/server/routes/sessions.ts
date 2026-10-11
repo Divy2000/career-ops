@@ -166,13 +166,25 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const held = urls.find((u) => pending.has(u));
     return held ? `Process inbox (session ${pipe.id}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
   };
+  /** The first session of a run's fork lineage (the id of a deleted ancestor where the chain breaks). */
+  const runRoot = (meta: SessionMeta): string => {
+    let cur = meta;
+    for (let i = 0; i < 100 && cur.forkedFrom; i++) {
+      const up = manager.read(cur.forkedFrom);
+      if (!up) return cur.forkedFrom;
+      cur = up;
+    }
+    return cur.id;
+  };
   /**
    * Null when a Process inbox turn may run, else the 409 reason: another Process inbox run, or an evaluation of a pending
-   * row, is live or starting. `own` is the run a reply or fork carries on.
+   * row, is live or starting. `own` is the run a reply or fork carries on: a run of its fork lineage paused for a reply
+   * is carried on by it, while one that is queued or running would process the rows beside it.
    */
-  const evaluationsHold = (own?: string): string | null => {
+  const evaluationsHold = (own?: SessionMeta): string | null => {
     const sessions = liveOrStarting();
-    const other = sessions.find((m) => isProcessInbox(m.mode) && m.id !== own);
+    const ownRoot = own ? runRoot(own) : null;
+    const other = sessions.find((m) => isProcessInbox(m.mode) && !(m.status === 'awaiting_user' && runRoot(m) === ownRoot));
     if (other) return `Process inbox (session ${other.id}) is already processing the pending Inbox rows, and a second run would evaluate them again. Try again once it ends.`;
     const pending = pendingInboxUrls();
     const live = sessions.find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
@@ -187,7 +199,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   const turnHeld = (id: string): string | null => {
     const meta = manager.read(id);
     if (!meta) return null;
-    if (isProcessInbox(meta.mode)) return evaluationsHold(meta.id);
+    if (isProcessInbox(meta.mode)) return evaluationsHold(meta);
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
