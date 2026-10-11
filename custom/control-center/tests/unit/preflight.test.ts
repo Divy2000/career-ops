@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { preflight, resolveClaudeBin, claudeCandidates, testHost, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
+import { preflight, probeEnv, resolveClaudeBin, claudeCandidates, testHost, versionAtLeast, KEYCHAIN_HELP, NODE_FLOOR } from '../../supervisor/preflight.js';
 import { tempDir } from '../helpers/tmp.js';
 import { configFromEnv } from '../../server/config.js';
+import { childEnv } from '../../server/system/child-env.js';
 
 // Preflight also requires an approved `claude --version`: read confinement is probed per CLI version.
 const execOk = async (cmd: string) => (cmd === 'claude' ? { code: 0, stdout: '2.1.289 (Claude Code)\n' } : 0);
@@ -115,6 +116,35 @@ describe('preflight claude probe', () => {
     expect(r.errors[0]).toMatch(/timed out after 1\.5s/);
     expect(r.errors[0]).toContain('CC_CLAUDE_BIN');
     expect(fs.readFileSync(marker, 'utf8')).toBe('xx');
+  });
+
+  it('runs the configured claude without the API key, Claude credentials or Control Center secrets', async () => {
+    const out = path.join(tempDir('cc-preflight-'), 'env.json');
+    const bin = fakeClaude(`require('node:fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.env)); console.log('0.0.0-fake');`);
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sentinel-key');
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'sentinel-oauth');
+    vi.stubEnv('CC_TOKEN', 'sentinel-token');
+    vi.stubEnv('CC_SESSION_SECRET', 'sentinel-secret');
+    try {
+      const r = await preflight({ ...base, claudeBin: bin, claudeTimeoutMs: 5000 });
+      expect(r.ok).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const env = JSON.parse(fs.readFileSync(out, 'utf8')) as Record<string, string>;
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CC_TOKEN).toBeUndefined();
+    expect(env.CC_SESSION_SECRET).toBeUndefined();
+    expect(env.DISABLE_AUTOUPDATER).toBe('1');
+    expect(env.PATH).toBe(process.env.PATH);
+  });
+
+  it('drops exactly the names the server drops for its children (a copy, so the supervisor loads nothing Dev Chat can edit)', () => {
+    const names = ['PATH', 'HOME', 'CC_TOKEN', 'CC_SESSION_SECRET', 'CC_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_API_KEY_HELPER', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'GITHUB_TOKEN', 'NODE_ENV'];
+    const base = Object.fromEntries(names.map((n) => [n, 'v']));
+    const server = Object.keys(childEnv({}, base)).filter((k) => names.includes(k));
+    expect(Object.keys(probeEnv(base)).sort()).toEqual(server.sort());
   });
 
   it('passes when the first attempt fails and the retry succeeds', async () => {

@@ -8,6 +8,8 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { copyFixtureRoot, FAKE_CLAUDE, PACKAGE_ROOT } from '../helpers/app.js';
 import { RunStore, type RunMeta } from '../../server/runner/store.js';
 import { serverChildCommand } from '../../supervisor/child-command.js';
+import { PAGE_THEME_CSS } from '../../supervisor/page-theme.js';
+import { RECOVERY_CSS } from '../../supervisor/recovery-css.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const TSX = path.join(PACKAGE_ROOT, 'node_modules', '.bin', 'tsx');
@@ -646,6 +648,43 @@ describe('one Control Center per data root (SW-claude-02)', () => {
         expect(reply.body).toMatch(/^the server still does not start: server child exited before listening/);
       }
       expect(s.proc.exitCode).toBeNull();
+    } finally {
+      await stop(s);
+      await held.release();
+    }
+  });
+
+  it('a restart whose new server fails while the old one is up says the old one keeps serving, on the reply and the page (R20-supervisor-L3-01)', async () => {
+    const port = await freePort();
+    // The first child takes this port, so the restart's new child cannot listen while the old one holds it.
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(await freePort()) } });
+    try {
+      await until(() => /Control Center ready/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to start');
+      const cookie = await signIn(port);
+      const restart = await request(port, 'POST', '/__recovery/restart', { cookie, origin: `http://127.0.0.1:${port}`, 'x-cc': '1' });
+      expect(restart.status, restart.body).toBe(502);
+      expect(restart.body).toMatch(/^the new server did not start; the running server keeps serving the previous code: server child exited before listening/);
+      expect(restart.body).not.toMatch(/still does not start/);
+      expect((await request(port, 'GET', '/healthz')).status).toBe(200);
+      const page = (await request(port, 'GET', '/__recovery', { cookie })).body;
+      const block = page.slice(page.indexOf('<div class="status">'), page.indexOf('<form', page.indexOf('<div class="status">')));
+      expect(block).toMatch(/The last start failed/);
+      expect(block).toMatch(/The running server keeps serving the previous code\./);
+    } finally {
+      await stop(s);
+    }
+  });
+
+  it('the recovery page serves its stylesheet, disabled-button style included (R20-supervisor-L3-02)', async () => {
+    const held = await heldPort();
+    const port = await freePort();
+    const s = startSupervisor(port, copyFixtureRoot(), { reload: true, env: { CC_CHILD_PORT: String(held.port) } });
+    try {
+      await until(() => /Recovery page:/.test(s.output()) || s.proc.exitCode !== null, 'the supervisor to listen');
+      const page = (await request(port, 'GET', '/__recovery', { cookie: await signIn(port) })).body;
+      // tests/web/recovery-css.test.ts checks what the rule does and that no theme block scopes it.
+      expect(page).toContain(`<style>${PAGE_THEME_CSS}${RECOVERY_CSS}</style>`);
+      expect(RECOVERY_CSS).toContain('button:disabled{');
     } finally {
       await stop(s);
       await held.release();

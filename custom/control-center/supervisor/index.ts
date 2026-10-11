@@ -11,16 +11,16 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import chokidar from 'chokidar';
 import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates, testHost } from './preflight.js';
 import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveGuardRoot } from './guard-root.js';
-import { SERVER_TREES, serverEntries, serverLoads, watchCoreGraph } from './core-graph.js';
+import { serverEntries, serverLoads, watchCoreGraph, watchServerTrees } from './core-graph.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { CONTRACT } from '../server/core/adapter.js';
 import { dataRootFromEnv } from './data-root.js';
 import { PAGE_THEME_CSS } from './page-theme.js';
+import { RECOVERY_CSS } from './recovery-css.js';
 import { serverChildCommand } from './child-command.js';
 import { waitHealthy } from './health.js';
 import { escapeHtml, plainTail, renderDownPage, renderStatus } from './down-page.js';
@@ -143,7 +143,8 @@ function safeEqual(a: string, b: string): boolean {
 const RECOVERY_CSP = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${crypto.createHash('sha256').update(RECOVERY_SCRIPT).digest('base64')}'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'`;
 
 /** Static recovery page: Dev Chat change sets with revert forms, no client build needed. */
-export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState): string {
+/** `serving`: a server child is up, so a failed start was a reload's new child, and the old one still answers. */
+export function renderRecovery(sessionsDir: string, guardRoot: string, status: ReloadState, serving: boolean): string {
   const sessions = listDevSessions(sessionsDir);
   const blocks = sessions.map((meta) => {
     const turns = listChanges(guardSessionDir(guardRoot, meta.id), meta);
@@ -165,17 +166,10 @@ export function renderRecovery(sessionsDir: string, guardRoot: string, status: R
       .join('');
     return `<article><h2>${escapeHtml(meta.id)} <span class="s">${escapeHtml(meta.status)} ${escapeHtml(meta.createdAt)}</span></h2>${turnHtml || '<p class="s">No turns.</p>'}</article>`;
   });
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}
-body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,Inter,sans-serif;margin:0;padding:24px;max-width:960px}
-h1{font-size:22px}h2{font-size:16px;margin-top:32px}h3{font-size:14px}a{color:var(--accent)}code,pre{font-family:ui-monospace,Menlo,monospace;font-size:12px}
-pre{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto;max-height:320px}
-.s{color:var(--text-muted)}button{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);border-radius:6px;padding:4px 10px;min-height:32px;cursor:pointer}
-form{display:inline-block;margin:0 8px}li{margin:6px 0}.status{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:12px}
-#revert-status{margin:12px 0}.status p{margin:8px 0}.status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}#revert-status details{margin-top:6px}#revert-status pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden}
-</style></head><body><h1>Control Center recovery</h1>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Control Center recovery</title><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><style>${PAGE_THEME_CSS}${RECOVERY_CSS}</style></head><body><h1>Control Center recovery</h1>
 <p class="s">Served by the supervisor, independent of the server child. Reverts restore the bytes a Dev Chat turn replaced (and delete files it created); a file that changed after the turn is never overwritten. <a href="/">Back to the app</a></p>
 <div id="revert-status" role="alert"></div>
-<div class="status"><strong>Server reload status</strong>${renderStatus(status)}<form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
+<div class="status"><strong>Server reload status</strong>${renderStatus(status)}${serving && status.state === 'failed' ? '<p>The running server keeps serving the previous code.</p>' : ''}<form method="post" action="/__recovery/restart" data-cc="restart"><button>Restart the server</button></form></div>
 ${blocks.join('') || '<p class="s">No Dev Chat sessions recorded yet.</p>'}
 <script>${RECOVERY_SCRIPT}</script>
 </body></html>`;
@@ -312,7 +306,7 @@ async function main(): Promise<void> {
         res.writeHead(302, { 'set-cookie': sessionCookie, location: '/__recovery' }).end();
         return true;
       }
-      const html = renderRecovery(sessionsDir, guardRoot, bg.status);
+      const html = renderRecovery(sessionsDir, guardRoot, bg.status, bg.active !== null);
       res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(html);
       return true;
     }
@@ -334,7 +328,8 @@ async function main(): Promise<void> {
       }
       // A blue/green reload: with no server running (a first start that failed) the new one takes over at once.
       const result = await bg.reload();
-      const text = result.state === 'ok' ? 'the server started' : `the server still does not start: ${result.error}`;
+      // A failed reload leaves the active child in place: say so, or the user is steered to reverts while the app is up.
+      const text = result.state === 'ok' ? 'the server started' : bg.active ? `the new server did not start; the running server keeps serving the previous code: ${result.error}` : `the server still does not start: ${result.error}`;
       res.writeHead(result.state === 'ok' ? 200 : 502, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(text);
       return true;
     }
@@ -451,7 +446,6 @@ async function main(): Promise<void> {
   // graph of the core modules the server loads (custom/projects/lib.mjs and what it imports from the upstream root, edited
   // by Dev Chat or fast-forwarded by the weekly sync): only a new process loads that whole graph anew (core-graph.ts).
   if (!process.env.CC_NO_RELOAD) {
-    const watcher = chokidar.watch(SERVER_TREES.map((tree) => path.join(PACKAGE_ROOT, tree)), { ignoreInitial: true });
     let debounce: NodeJS.Timeout | null = null;
     const changed = (file: string) => {
       if (debounce) clearTimeout(debounce);
@@ -460,7 +454,7 @@ async function main(): Promise<void> {
         void bg.reload();
       }, 500);
     };
-    watcher.on('all', (_event, file) => changed(file));
+    watchServerTrees(PACKAGE_ROOT, changed);
     const core = await watchCoreGraph(CODE_ROOT, CORE_ENTRIES, changed);
     // The new code may import files the old one did not: recomputed after every attempt, a failed one included.
     bg.onStatus((st) => {

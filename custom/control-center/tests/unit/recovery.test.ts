@@ -479,6 +479,21 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(JSON.parse(fs.readFileSync(path.join(t.turnDir, 'after.json'), 'utf8')).files).toEqual({ [t.file]: sha('broken by the turn\n') });
   });
 
+  it('with no server running, a settled session whose last turn the server died before finalizing is reverted the same way, whatever its status (R20-supervisor-L2-01)', () => {
+    // As the server's reconcile does: any session not running or queued whose last turn has no endedAt is finalized.
+    for (const status of ['cancelled', 'error', 'done', 'awaiting_user']) {
+      const t = stalled((dir) => {
+        runMeta(dir, { status: 'cancelled', wrapperPid: deadPid(), childPid: deadPid() });
+        fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: 't' }));
+      });
+      const metaFile = path.join(path.dirname(t.runsDir), 'sessions', 's1', 'meta.json');
+      fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf8')), status }));
+      expect(t.revert(false), status).toMatchObject({ status: 200, text: 'notes.md: restored' });
+      expect(fs.readFileSync(t.file, 'utf8'), status).toBe('before\n');
+      expect(JSON.parse(fs.readFileSync(path.join(t.turnDir, 'after.json'), 'utf8')).files, status).toEqual({ [t.file]: sha('broken by the turn\n') });
+    }
+  });
+
   it('a run killed before it could record its exit counts as ended once its processes are gone, or their PIDs belong to processes that started at another time', () => {
     const gone = stalled((dir) => runMeta(dir, { wrapperPid: deadPid(), childPid: deadPid() }));
     expect(gone.revert(false).status).toBe(200);

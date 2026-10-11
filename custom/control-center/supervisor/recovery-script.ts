@@ -50,6 +50,23 @@ const disarm = () => {
 const setDisabled = (disabled) => {
   for (const button of document.querySelectorAll('form[data-cc] button')) button.disabled = disabled;
 };
+// A failed restart does not reload the page, so the reload status block is re-read from it: it still shows the state
+// the page was rendered with (an old server that kept serving, or the new start's failure, is news to it).
+const refreshStatus = async () => {
+  try {
+    const res = await fetch(location.href, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const fresh = new DOMParser().parseFromString(await res.text(), 'text/html').querySelector('.status');
+    const current = document.querySelector('.status');
+    if (!fresh || !current) return;
+    // The restart form stays the one on the page: a press made while this was read (armed, asking to confirm) holds.
+    const kept = current.querySelector('form[data-cc]');
+    fresh.querySelector('form[data-cc]')?.remove();
+    current.replaceChildren(...[...fresh.childNodes].map((n) => document.importNode(n, true)), ...(kept ? [kept] : []));
+  } catch {
+    // The message above already says what happened; the block keeps its older state.
+  }
+};
 document.addEventListener('submit', async (e) => {
   const form = e.target;
   const labels = form instanceof HTMLFormElement ? LABELS.get(form.dataset.cc) : undefined;
@@ -85,6 +102,7 @@ document.addEventListener('submit', async (e) => {
       return;
     }
     show(out, labels.refused + text);
+    if (form.dataset.cc === 'restart') void refreshStatus();
   } catch (err) {
     show(out, labels.failed + err.message);
   }
