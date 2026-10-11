@@ -249,7 +249,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
             )}
             {/* Always wrapped, so holding the reply back does not remount the panel and drop what it shows. */}
             <fieldset disabled={replyHeld} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-              <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
+              <SessionPanel key={`${process.panelKey}-${fresh}`} {...process.panel} onStatus={onProcessStatus} onStarting={onProcessStarting} onStartFailed={onProcessStartFailed} onSessionId={onProcessId} marksTurnStarts mode="pipeline" title="Process inbox" initialPrompt={PROCESS_INBOX_PROMPT} />
             </fieldset>
           </>
         ))}

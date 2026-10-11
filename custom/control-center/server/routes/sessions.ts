@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { BusyError, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
-import { listLaunchableModeIds } from '../claude/modes.js';
+import { englishModeOf, listLaunchableModeIds } from '../claude/modes.js';
+import { isReportGated } from '../claude/honesty.js';
+import { sessionsDir, type SessionMeta } from '../claude/sessions.js';
+import { readPipeline } from '../domains/pipeline.js';
+import { localJdPath } from '../../shared/local-jd.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
@@ -10,6 +14,7 @@ import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
@@ -129,6 +134,75 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return claimed.ok ? null : `Not continued: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.`;
   };
 
+  // Process inbox (pipeline mode) evaluates every pending Inbox row, so an evaluation of one of them beside it (Batch
+  // evaluate, the advisor, another tab) would evaluate, report and bill that row twice: whichever starts second is refused.
+  const LIVE = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
+  const isProcessInbox = (mode: string) => englishModeOf(mode) === 'pipeline';
+  /** Every session whose meta.json reads: one unreadable folder must not stop every start (the list route fails on it). */
+  const liveSessions = (): SessionMeta[] =>
+    fs
+      .readdirSync(sessionsDir(opts.cfg.dataRoot), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => manager.read(e.name))
+      .filter((m): m is SessionMeta => m !== null && LIVE.has(m.status));
+  /** The posting URLs of the pending Inbox rows Process inbox works on; it leaves saved-JD (local:jds/) rows out. */
+  const pendingInboxUrls = (): Set<string> => {
+    const read = readPipeline(opts.cfg.dataRoot);
+    return new Set(read.kind === 'ok' ? read.rows.filter((r) => !r.done && localJdPath(r.url) === null).map((r) => r.url) : []);
+  };
+  // A reply to a finished session carries it on over its rows, but the session reads done until its turn begins.
+  const turnsStarting = new Set<string>();
+  const liveOrStarting = (): SessionMeta[] => {
+    const live = liveSessions();
+    const starting = [...turnsStarting].filter((id) => !live.some((m) => m.id === id)).map((id) => manager.read(id));
+    return [...live, ...starting.filter((m): m is SessionMeta => m !== null)];
+  };
+  /** Null when evaluations of these URLs in `mode` may start, else the 409 reason: a live Process inbox holds a pending one. */
+  const processInboxHolds = (mode: string, urls: string[]): string | null => {
+    if (!isReportGated(mode)) return null;
+    const pipe = liveOrStarting().find((m) => isProcessInbox(m.mode));
+    if (!pipe) return null;
+    const pending = pendingInboxUrls();
+    const held = urls.find((u) => pending.has(u));
+    return held ? `Process inbox (session ${pipe.id}) is processing the pending Inbox rows, ${held} among them, and would evaluate it a second time. Try again once it ends.` : null;
+  };
+  /** The first session of a run's fork lineage (the id of a deleted ancestor where the chain breaks). */
+  const runRoot = (meta: SessionMeta): string => {
+    let cur = meta;
+    for (let i = 0; i < 100 && cur.forkedFrom; i++) {
+      const up = manager.read(cur.forkedFrom);
+      if (!up) return cur.forkedFrom;
+      cur = up;
+    }
+    return cur.id;
+  };
+  /**
+   * Null when a Process inbox turn may run, else the 409 reason: another Process inbox run, or an evaluation of a pending
+   * row, is live or starting. `own` is the run a reply or fork carries on: a run of its fork lineage paused for a reply
+   * is carried on by it, while one that is queued or running would process the rows beside it.
+   */
+  const evaluationsHold = (own?: SessionMeta): string | null => {
+    const sessions = liveOrStarting();
+    const ownRoot = own ? runRoot(own) : null;
+    const other = sessions.find((m) => isProcessInbox(m.mode) && !(m.status === 'awaiting_user' && runRoot(m) === ownRoot));
+    if (other) return `Process inbox (session ${other.id}) is already processing the pending Inbox rows, and a second run would evaluate them again. Try again once it ends.`;
+    const pending = pendingInboxUrls();
+    const live = sessions.find((m) => isReportGated(m.mode) && m.target.type === 'url' && pending.has(m.target.value ?? ''));
+    if (live) return `session ${live.id} is evaluating the pending Inbox row ${live.target.value}, and Process inbox would evaluate it a second time. Try again once it ends.`;
+    const evaluationModes = listLaunchableModeIds().filter(isReportGated);
+    for (const url of pending) {
+      if (evaluationModes.some((m) => manager.isStartingInBatch(m, { type: 'url', value: url }))) return `a Batch evaluate is starting the pending Inbox row ${url}, and Process inbox would evaluate it a second time. Try again once it ends.`;
+    }
+    return null;
+  };
+  /** The 409 reason a reply or fork is refused with when it would carry on Process inbox or an evaluation over the same pending rows, or null. */
+  const turnHeld = (id: string): string | null => {
+    const meta = manager.read(id);
+    if (!meta) return null;
+    if (isProcessInbox(meta.mode)) return evaluationsHold(meta);
+    return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
+  };
+
   app.get('/api/sessions', async () => manager.list());
 
   app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listLaunchableModeIds() }));
@@ -145,6 +219,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: `another batch evaluate is already starting ${parsed.data.target.value}` });
     const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
     if (liveId) return reply.code(409).send({ error: `session ${liveId} is already evaluating ${parsed.data.target.value}` });
+    const inboxHeld = isProcessInbox(parsed.data.mode) ? evaluationsHold() : parsed.data.target.type === 'url' && parsed.data.target.value ? processInboxHolds(parsed.data.mode, [parsed.data.target.value]) : null;
+    if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
@@ -203,6 +279,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
     if (noReplies) return reply.code(422).send({ error: noReplies });
+    const inboxHeld = processInboxHolds(parsed.data.mode, parsed.data.urls);
+    if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     try {
       const out = await manager.fanOut({ mode: parsed.data.mode, urls: parsed.data.urls, model: sessionModel(opts.cfg.dataRoot, parsed.data.model) });
       return reply.code(202).send(out);
@@ -239,9 +317,18 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(req.params.id)?.mode ?? '');
     if (noReplies) return reply.code(422).send({ error: noReplies });
+    const held = turnHeld(req.params.id);
+    if (held) return reply.code(409).send({ error: `Not continued: ${held}` });
     const busy = claimForTurn(req.params.id, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
-    return mutate(reply, async () => reply.code(202).send(await manager.send(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
+    const id = req.params.id;
+    const tracked = !turnsStarting.has(id);
+    if (tracked) turnsStarting.add(id);
+    try {
+      return await mutate(reply, async () => reply.code(202).send(await manager.send(id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
+    } finally {
+      if (tracked) turnsStarting.delete(id);
+    }
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/fork', async (req, reply) => {
@@ -256,6 +343,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(req.params.id)?.mode ?? '');
     if (noReplies) return reply.code(422).send({ error: noReplies });
+    const held = turnHeld(req.params.id);
+    if (held) return reply.code(409).send({ error: `Not forked: ${held}` });
     const source = manager.read(req.params.id);
     const isPass = source?.mode === 'immigration-policy';
     // A fork continues the pass of the session it forks, taking over its claim: only a pass paused for a reply has no

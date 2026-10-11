@@ -128,6 +128,11 @@ export interface SessionPanelProps {
   onStartFailed?: () => void;
   /** Called as the panel sends a start, before the server answers (onSessionId or onStartFailed follows). */
   onStarting?: () => void;
+  /**
+   * Reports a reply or fork as a start too: onStarting as it is sent, then onSessionId with the session it runs in, or
+   * onStartFailed. For a host that holds other work back while its session starts a turn the server does not list yet.
+   */
+  marksTurnStarts?: boolean;
   /** Keeps a typed, unsent prompt under this key (this browser tab), so closing the panel or leaving the page keeps it. */
   draftKey?: string;
 }
@@ -179,10 +184,18 @@ export function SessionPanel(props: SessionPanelProps) {
     for (const env of transcript.envelopes.slice(seen.current)) onEnvelope(env.kind, env.payload, env.turn);
     seen.current = transcript.envelopes.length;
   }, [transcript.envelopes, onEnvelope]);
+  // Bumped when a reply or fork reported as a start fails: the host hears the status again, since a turn started
+  // meanwhile from elsewhere keeps the session going.
+  const [restated, setRestated] = useState(0);
+  // The latest turn the stream has shown, read by a reply that answers after the stream may have moved on.
+  const shownTurn = useRef(0);
+  useEffect(() => {
+    shownTurn.current = transcript.turns.reduce((max, t) => (t.n > max ? t.n : max), 0);
+  }, [transcript.turns]);
   useEffect(() => {
     // A session the server no longer has reports 'gone', so a host waiting on it does not wait forever.
     onStatus?.(gone ? 'gone' : transcript.status, gone ? null : transcript.reason);
-  }, [gone, transcript.status, transcript.reason, onStatus]);
+  }, [gone, transcript.status, transcript.reason, onStatus, restated]);
   const start = async (text: string) => {
     props.onStarting?.();
     setBusy(true);
@@ -219,27 +232,34 @@ export function SessionPanel(props: SessionPanelProps) {
 
   const send = async (text: string, fork = false) => {
     if (!sessionId) return;
+    const marks = props.marksTurnStarts === true;
+    if (marks) props.onStarting?.();
     setBusy(true);
     setError(null);
     try {
-      if (fork) {
-        const m = await forkSession(sessionId, text, props.blacklistAllowed);
-        if (m.status !== 'error') {
+      const m = fork ? await forkSession(sessionId, text, props.blacklistAllowed) : await sendTurn(sessionId, text, props.blacklistAllowed);
+      if (m.status !== 'error') {
         props.onSent?.();
         writeDraft(props.draftKey, null);
       }
+      if (fork) {
         seen.current = 0;
         setSessionId(m.id);
         props.onSessionId?.(m.id);
-      } else {
-        const m = await sendTurn(sessionId, text, props.blacklistAllowed);
-        if (m.status !== 'error') {
-        props.onSent?.();
-        writeDraft(props.draftKey, null);
+      } else if (marks) {
+        // The session is going again before its stream says so: the host must not read the old turn's end meanwhile.
+        // Once the stream has shown the turn, its own status (perhaps the turn's end already) is the one to keep.
+        if (m.turns.length > shownTurn.current) props.onStatus?.(m.status, null);
+        props.onSessionId?.(m.id);
       }
-      }
+      // A 202 can carry a turn that failed before it ran: nothing was started.
+      if (marks && m.status === 'error') props.onStartFailed?.();
       setReply('');
     } catch (err) {
+      if (marks) {
+        props.onStartFailed?.();
+        setRestated((n) => n + 1);
+      }
       if (err instanceof ApiError && err.status === 404) setLostId(sessionId);
       else setError(describeError(err));
     } finally {
