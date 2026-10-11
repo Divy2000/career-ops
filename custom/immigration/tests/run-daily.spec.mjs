@@ -381,6 +381,60 @@ jobTest('a missing Keychain item ends the run with a !!! failure line the app re
   assert.equal(r.calls.length, 0);
 });
 
+jobTest('an empty Keychain item counts as missing: the run asks for a new token, before any step runs', () => {
+  const w = dailyWorld();
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\necho\n', { mode: 0o755 });
+  const r = w.run();
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! Keychain item 'career-ops-claude-token' not found\. Run: claude setup-token/m);
+  assert.equal(r.steps, '');
+  assert.equal(r.calls.length, 0);
+});
+
+jobTest('a Keychain item holding only whitespace counts as missing, as the Control Center reads it', () => {
+  const w = dailyWorld();
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\nprintf "  \\r\\n"\n', { mode: 0o755 });
+  const r = w.run();
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! Keychain item 'career-ops-claude-token' not found\. Run: claude setup-token/m);
+  assert.equal(r.calls.length, 0);
+});
+
+jobTest('a Keychain token with surrounding whitespace reaches the policy pass trimmed', () => {
+  const w = dailyWorld();
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\nprintf " fake-keychain-token \\r\\n"\n', { mode: 0o755 });
+  // The fake claude records only whether a token came: this wrapper records the value the policy pass was given.
+  const seen = path.join(w.T, 'token-seen.txt');
+  const wrapper = path.join(w.T, 'bin', 'token-claude');
+  fs.writeFileSync(wrapper, `#!/bin/bash\n[ "$1" = "-p" ] && printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" > ${JSON.stringify(seen)}\nexec ${JSON.stringify(w.fakeClaude)} "$@"\n`, { mode: 0o755 });
+  const r = w.run({ CC_CLAUDE_BIN: wrapper });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.calls.length, 1, r.log);
+  assert.equal(readFileSync(seen, 'utf8'), 'fake-keychain-token');
+});
+
+jobTest('a temp folder the Keychain read cannot write to says so, never that the keychain is locked', () => {
+  const w = dailyWorld();
+  const r = w.run({ TMPDIR: path.join(w.T, 'no-such-tmp') });
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! Could not create a temp file for the Keychain read in .*no-such-tmp/m);
+  assert.doesNotMatch(r.log, /unlock-keychain|setup-token/);
+  assert.equal(r.steps, '');
+});
+
+jobTest('a Keychain that cannot be read (locked, exit 36) says so with the exit and stderr and asks for an unlock, never a new token', () => {
+  const w = dailyWorld();
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), '#!/bin/bash\necho "security: SecKeychainSearchCopyNext: User interaction is not allowed." >&2\nexit 36\n', { mode: 0o755 });
+  const r = w.run();
+  assert.equal(r.status, 1, r.log);
+  assert.match(r.log, /^!!! Could not read Keychain item 'career-ops-claude-token': security failed \(exit 36: security: SecKeychainSearchCopyNext: User interaction is not allowed\.\)\..*Unlock it with: security unlock-keychain/m);
+  assert.doesNotMatch(r.log, /setup-token/);
+  assert.doesNotMatch(r.log, /^=== .* done/m);
+  assert.equal(r.steps, '');
+  assert.equal(r.calls.length, 0);
+  assert.deepEqual(r.leftovers, []);
+});
+
 jobTest('the pidfile the Control Center reads names the run while it holds the lock and is gone when the run ends, done or failed', () => {
   const w = dailyWorld();
   // A step that sees the run from inside: the pidfile must name a live bash running run-daily.sh.

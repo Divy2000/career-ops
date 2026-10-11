@@ -150,6 +150,15 @@ export function dropPolicyBatch(dataRoot: string, batch: string): void {
   fs.rmSync(path.join(dataRoot, batch), { force: true });
 }
 
+/**
+ * Removes a done pass's batch that cannot be read (policyBatchReadable), then its marker: it can never be acknowledged,
+ * so nothing uses it. The batch goes first, so a removal cut short leaves a marker whose missing batch is let go of later.
+ */
+export function dropUnreadablePolicyBatch(dataRoot: string, batch: string): void {
+  fs.rmSync(path.join(dataRoot, batch), { force: true });
+  forgetDonePolicyBatch(dataRoot, batch);
+}
+
 /** The batches (relative to the data root) of done passes whose ack has not landed yet. */
 export function donePolicyBatches(dataRoot: string): string[] {
   let names: string[];
