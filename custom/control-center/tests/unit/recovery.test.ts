@@ -187,6 +187,17 @@ describe('Dev Chat change sets', () => {
     expect(r.status).toBe(409);
     expect(fs.readFileSync(kept, 'utf8')).toBe('the user edit made later\n');
   });
+
+  it('given a torn line in turn 1 of files.ndjson, when turn 2 is grouped and finalized, then its files stay with turn 2 (offsets count raw lines)', () => {
+    const { root, sessionDir, file, meta, rec } = fakeSession();
+    const later = path.join(root, 'custom', 'later.md');
+    // A hook killed mid-append left a fragment with no newline; the next append joined it into one unparseable line.
+    // Turn 2 started at raw line 2 (manager filesLineCount) and its hook appended a record for later.md.
+    fs.writeFileSync(path.join(sessionDir, 'files.ndjson'), [rec(file), `{"path":"custom/x.md","ab${rec(file)}`, rec(later, sha('later\n'))].join('\n') + '\n');
+    expect(changesByTurn(sessionDir, meta).map((g) => g.records.map((r) => r.abs))).toEqual([[file], [later]]);
+    recordTurnAfter(sessionDir, 2, 2);
+    expect(JSON.parse(fs.readFileSync(path.join(sessionDir, 'turns', '2', 'after.json'), 'utf8')).files).toEqual({ [later]: sha('later\n') });
+  });
 });
 
 describe('snapshot names (SW5-claude-03)', () => {

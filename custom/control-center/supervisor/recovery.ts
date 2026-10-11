@@ -62,26 +62,35 @@ export function snapshotKey(turnDir: string, abs: string): string {
   return turnSnapshotKey(turnDir, abs);
 }
 
-export function readFilesLog(sessionDir: string): ChangeRecord[] {
+/**
+ * files.ndjson as one slot per non-empty raw line (null for a torn or invalid one): turn offsets count raw lines
+ * (the manager's filesLineCount), so slicing must happen before anything is dropped.
+ */
+function readFilesLogLines(sessionDir: string): Array<ChangeRecord | null> {
   let text: string;
   try {
     text = fs.readFileSync(path.join(sessionDir, 'files.ndjson'), 'utf8');
   } catch {
     return [];
   }
-  const out: ChangeRecord[] = [];
+  const out: Array<ChangeRecord | null> = [];
   for (const line of text.split('\n').filter(Boolean)) {
     try {
       const rec = JSON.parse(line) as Partial<ChangeRecord>;
-      if (!rec.abs || !rec.path) continue;
+      if (!rec.abs || !rec.path) {
+        out.push(null);
+        continue;
+      }
       const sha256 = rec.sha256 === null || (typeof rec.sha256 === 'string' && /^[0-9a-f]{64}$/.test(rec.sha256)) ? rec.sha256 : undefined;
       out.push({ path: rec.path, abs: rec.abs, root: rec.root ?? 'code', tool: rec.tool ?? '', ts: rec.ts ?? '', ...(sha256 !== undefined ? { sha256 } : {}) });
     } catch {
-      /* torn line */
+      out.push(null); // torn line
     }
   }
   return out;
 }
+
+const recordsOf = (slots: Array<ChangeRecord | null>): ChangeRecord[] => slots.filter((r): r is ChangeRecord => r !== null);
 
 function turnOffset(sessionDir: string, n: number): number | null {
   try {
@@ -93,14 +102,14 @@ function turnOffset(sessionDir: string, n: number): number | null {
 
 /** Change records grouped by turn using the files.ndjson offsets recorded at each turn start. */
 export function changesByTurn(sessionDir: string, meta: MetaLike): Array<{ n: number; records: ChangeRecord[] }> {
-  const all = readFilesLog(sessionDir);
+  const all = readFilesLogLines(sessionDir);
   const turns = (Array.isArray(meta.turns) ? meta.turns : []).map((t) => t.n).sort((a, b) => a - b);
   return turns.map((n, i) => {
     const start = turnOffset(sessionDir, n) ?? 0;
     const next = turns[i + 1];
     const end = next !== undefined ? (turnOffset(sessionDir, next) ?? all.length) : all.length;
     const seen = new Set<string>();
-    const records = all.slice(start, end).filter((r) => (seen.has(r.abs) ? false : (seen.add(r.abs), true)));
+    const records = recordsOf(all.slice(start, end)).filter((r) => (seen.has(r.abs) ? false : (seen.add(r.abs), true)));
     return { n, records };
   });
 }
@@ -255,7 +264,7 @@ function fileHash(abs: string): string | null {
  */
 export function recordTurnAfter(sessionDir: string, n: number, fromLine: number): void {
   const files: Record<string, string | null> = {};
-  for (const r of readFilesLog(sessionDir).slice(fromLine)) {
+  for (const r of recordsOf(readFilesLogLines(sessionDir).slice(fromLine))) {
     if (r.sha256 === undefined) delete files[r.abs];
     else files[r.abs] = r.sha256;
   }
