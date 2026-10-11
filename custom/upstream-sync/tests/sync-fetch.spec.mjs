@@ -1407,6 +1407,17 @@ test('an empty Keychain token stops the sync as a missing one, before anything i
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('a whitespace-only Keychain token stops the sync as a missing one, as the Control Center trims it (R22-scripts-b-L3-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  mkdirSync(home);
+  try {
+    const res = runSync(w, { home, security: 'printf "  \\t \\n"' });
+    assert.equal(res.status, 1, res.log);
+    assert.match(res.log, /^!!! Keychain item career-ops-claude-token not found\. Run: claude setup-token/m);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('a locked Keychain (security exit 36) stops the sync saying the token could not be read, never that it is missing (R22-scripts-b-L3-01)', () => {
   const w = makeWorld();
   const home = path.join(w.base, 'home');
