@@ -34,7 +34,8 @@ export interface InsightRead {
   fromCache: boolean;
 }
 
-const INPUT_FILES = [
+/** Files the Insights scripts read, relative to the data root; the watcher refreshes Insights on each. */
+export const INSIGHTS_INPUT_FILES: readonly string[] = [
   'cv.md',
   'article-digest.md',
   'portals.yml',
@@ -54,7 +55,7 @@ const INPUT_FILES = [
   'active-interviews.md',
 ];
 /** Folders whose files the scripts read; each file counts, since editing one in place leaves its folder's time alone. */
-const INPUT_DIRS = ['reports', 'interview-prep', 'interview-prep/sessions', 'jds'];
+export const INSIGHTS_INPUT_DIRS: readonly string[] = ['reports', 'interview-prep', 'interview-prep/sessions', 'jds'];
 
 const mtimeOf = (file: string): string => {
   try {
@@ -95,7 +96,7 @@ export function companyHistoryInputs(dataRoot: string, trackerPath: string, env:
 
 export function inputsKey(dataRoot: string, trackerPath?: string): string {
   const tracker = trackerPath ? [`tracker=${trackerPath}:${mtimeOf(trackerPath)}`, `tracker-log:${mtimeOf(path.join(path.dirname(trackerPath), 'status-log.tsv'))}`] : [];
-  return [...INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`), ...tracker].join('|');
+  return [...INSIGHTS_INPUT_FILES.map((rel) => `${rel}:${mtimeOf(path.join(dataRoot, rel))}`), ...INSIGHTS_INPUT_DIRS.map((rel) => `${rel}/:${dirKey(path.join(dataRoot, rel))}`), ...tracker].join('|');
 }
 
 const CODE_FILE = /\.(mjs|json)$/;

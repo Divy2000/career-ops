@@ -1,6 +1,7 @@
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import type { Domain, EventBus } from './bus.js';
+import { INSIGHTS_INPUT_DIRS, INSIGHTS_INPUT_FILES } from '../domains/insightsCache.js';
 
 /** Map a changed file (relative to the data root, posix separators) to the domain whose queries go stale. */
 export function domainFor(relPath: string): Domain | null {
@@ -17,17 +18,25 @@ export function domainFor(relPath: string): Domain | null {
   if (p.startsWith('output/') || p === 'data/pdf-index.tsv') return 'documents';
   // JD captures list in an application's Documents tab and are Insights inputs.
   if (p.startsWith('jds/')) return 'jds';
-  // Inputs only the Insights scripts read (assessment-log, salary-gap, funnel-velocity).
-  if (p === 'data/assessments.tsv' || p === 'data/salary-observations.tsv' || p === 'config/benchmarks.yml') return 'insights';
   if (p === 'data/follow-ups.md' || p === 'data/contacts.tsv') return 'followups';
   if (p === 'data/shortlist.md') return 'shortlist';
   if (p === 'portals.yml' || p === 'config/profile.yml' || p === 'config/plugins.yml' || p === 'cv.md' || p === 'article-digest.md' || p === 'voice-dna.md' || p === 'data/blacklist.md') return 'config';
   if (/^modes\/_[\w-]+\.md$/.test(p)) return 'config';
+  // Last, so a more specific domain above wins for a file the Insights scripts also read.
+  if (INSIGHTS_INPUT_FILES.includes(p) || INSIGHTS_INPUT_DIRS.some((dir) => p.startsWith(`${dir}/`))) return 'insights';
   return null;
 }
 
+/** Top-level files and folders watched under the data root, each Insights input's top-level entry included. */
+export const WATCH_TARGETS: readonly string[] = [
+  ...new Set([
+    ...['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'voice-dna.md', 'applications.md', 'status-log.tsv', 'interview-prep', 'active-interviews.md', 'output', 'jds'],
+    ...[...INSIGHTS_INPUT_FILES, ...INSIGHTS_INPUT_DIRS].map((rel) => rel.split('/')[0]!),
+  ]),
+];
+
 export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300): FSWatcher {
-  const targets = ['data', 'reports', 'config', 'modes', 'portals.yml', 'cv.md', 'article-digest.md', 'voice-dna.md', 'applications.md', 'status-log.tsv', 'interview-prep', 'active-interviews.md', 'output', 'jds'].map((t) => path.join(dataRoot, t));
+  const targets = WATCH_TARGETS.map((t) => path.join(dataRoot, t));
   const watcher = chokidar.watch(targets, {
     ignoreInitial: true,
     // Judged inside the data root: the root itself may sit under a folder named control-center or node_modules.
