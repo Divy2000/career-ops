@@ -422,6 +422,81 @@ jobTest('a failed policy pass acknowledges nothing: its batch stays pending for 
   assert.deepEqual(r.leftovers, []);
 });
 
+/**
+ * A watch.mjs stand-in whose --ack fails while a counter file says so (FAKE_ACK_FAILS: how many acks fail first), and
+ * whose watch JSON is dated today (local), as the real one is.
+ */
+function failingAckWatch(w) {
+  const steps = path.join(w.T, 'steps.log');
+  const count = path.join(w.T, 'ack-count');
+  fs.writeFileSync(
+    path.join(w.root, 'custom/immigration/watch.mjs'),
+    `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(steps)}, 'watch ' + process.argv.slice(2).join(' ') + '\\n');\nif (process.argv.includes('--ack')) {\n  const n = fs.existsSync(${JSON.stringify(count)}) ? Number(fs.readFileSync(${JSON.stringify(count)}, 'utf8')) : 0;\n  fs.writeFileSync(${JSON.stringify(count)}, String(n + 1));\n  if (n < Number(process.env.FAKE_ACK_FAILS || 0)) { console.error('pending.json.lock is busy'); process.exit(1); }\n  console.log('acknowledged 1 item(s); 0 still pending');\n} else {\n  const d = new Date();\n  const today = [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');\n  process.stdout.write(JSON.stringify({ date: today, new_items: [{ id: 'x' }] }));\n}\n`,
+  );
+  return { reset: () => fs.rmSync(count, { force: true }) };
+}
+
+const ackedBatches = (steps) => [...steps.matchAll(/^watch --ack (\S+)$/gm)].map((m) => m[1]);
+const doneMarks = (imm) => (fs.existsSync(path.join(imm, 'batches')) ? fs.readdirSync(path.join(imm, 'batches')).filter((f) => f.endsWith('.done')) : []);
+
+jobTest('a failed ack after a successful pass is tried again in the same run, so a passing lock wait does not leave the items queued (R20-scripts-a-L1-01)', () => {
+  const w = dailyWorld();
+  failingAckWatch(w);
+  const r = w.run({ FAKE_ACK_FAILS: '1' });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.calls.length, 1, r.log);
+  const acks = ackedBatches(r.steps);
+  assert.equal(acks.length, 2, r.steps);
+  assert.equal(acks[0], acks[1], 'the retry acknowledges the same batch');
+  assert.deepEqual(doneMarks(r.imm), [], 'an ack that landed leaves no .done marker');
+});
+
+jobTest('an ack that keeps failing leaves a .done marker, and the next run acknowledges that batch instead of sending its items to Claude again (R20-scripts-a-L1-01)', () => {
+  const w = dailyWorld();
+  const watch = failingAckWatch(w);
+  const first = w.run({ FAKE_ACK_FAILS: '99' });
+  assert.equal(first.calls.length, 1, first.log);
+  assert.match(first.log, /^!!! step failed: policy watch$/m);
+  const [batch] = ackedBatches(first.steps);
+  assert.ok(batch, first.steps);
+  assert.deepEqual(doneMarks(first.imm), [`${path.basename(batch)}.done`], 'the done pass is recorded beside its batch, for the Control Center or the next run to acknowledge');
+
+  // The ack still failing on the next run: the leftover is not acknowledged, so the pass is not run again on its items.
+  watch.reset();
+  const second = w.run({ FAKE_ACK_FAILS: '99' });
+  assert.equal(second.calls.length, 1, `Claude is not given the unacknowledged items again:\n${second.log}`);
+  assert.match(second.log, /^!!! step failed: policy watch$/m);
+  assert.deepEqual(doneMarks(second.imm), [`${path.basename(batch)}.done`]);
+
+  // The lock free again: the leftover batch is acknowledged before anything else, then a new pass runs.
+  watch.reset();
+  fs.writeFileSync(path.join(w.T, 'steps.log'), '');
+  const third = w.run();
+  assert.equal(third.status, 0, third.log);
+  const steps = third.steps.trim().split('\n').filter((l) => l.startsWith('watch'));
+  assert.equal(steps[0], `watch --ack ${batch}`, third.steps);
+  assert.equal(steps[1], 'watch ', third.steps);
+  assert.equal(third.calls.length, 2, third.log);
+  assert.equal(ackedBatches(third.steps).length, 2, third.steps);
+  assert.deepEqual(doneMarks(third.imm), []);
+});
+
+jobTest('a leftover done batch from before the news window is let go unacknowledged, and the pass runs (R20-scripts-a-L1-01)', () => {
+  const w = dailyWorld();
+  failingAckWatch(w);
+  const batches = path.join(w.data, 'data', 'immigration', 'batches');
+  fs.mkdirSync(batches, { recursive: true });
+  const old = path.join(batches, '20200101T000000-1.json');
+  fs.writeFileSync(old, JSON.stringify({ date: '2020-01-01', new_items: [] }));
+  fs.writeFileSync(`${old}.done`, '2020-01-01T00:00:00Z\n');
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.equal(ackedBatches(r.steps).includes(old), false, r.steps);
+  assert.match(r.log, /older than the news window/);
+  assert.deepEqual(doneMarks(r.imm), []);
+  assert.equal(r.calls.length, 1, r.log);
+});
+
 jobTest('the policy pass is skipped with its reason while a Control Center session holds the policy-pass claim; the other steps still run (SW8-server-01 review)', () => {
   const w = dailyWorld();
   const sessionDir = path.join(w.data, 'data', 'control-center', 'sessions', 's-paused');
