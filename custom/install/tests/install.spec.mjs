@@ -911,24 +911,27 @@ test('an H1B_INDEX_PATH with surrounding spaces is trimmed like the plugin trims
 
 test('an H1B_INDEX_PATH other than the default is a pending action, since the daily job does not inherit it (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
-  w.makeCheckout(D, { files: { 'data/h1b/shared.gz': 'x' } });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x' } });
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /the daily job does not inherit H1B_INDEX_PATH/, r.out);
   assert.ok(r.out.includes(path.join(D, 'data/h1b/index.ndjson.gz')), r.out);
 });
 
-test('an H1B_INDEX_PATH naming the default index leaves nothing pending (R18-scripts-b-L2-01 review)', () => {
-  const { w, D } = fresh({ keychain: true });
-  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/index.ndjson.gz': 'x' } });
-  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/index.ndjson.gz' } });
-  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
-  assert.match(r.out, /index already installed/, r.out);
-});
+for (const spelling of ['data/h1b/index.ndjson.gz', './data//h1b/index.ndjson.gz']) {
+  test(`an H1B_INDEX_PATH naming the default index (${spelling}) leaves nothing pending (R18-scripts-b-L2-01 review)`, () => {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/index.ndjson.gz': 'x' } });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: spelling } });
+    assert.equal(r.status, 0, r.out);
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+    assert.match(r.out, /index already installed/, r.out);
+  });
+}
 
 test('a blank H1B_INDEX_PATH is the plugin\'s misconfiguration, not the default index: a pending action, nothing downloaded (R18-scripts-b-L2-01)', () => {
   const { w, D } = fresh({ keychain: true });
-  w.makeCheckout(D, { files: { 'data/h1b/index.ndjson.gz': 'x' } });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/index.ndjson.gz': 'x' } });
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: '   ' } });
   assert.equal(r.status, 3, r.out);
   assert.doesNotMatch(r.out, /index already installed/, r.out);

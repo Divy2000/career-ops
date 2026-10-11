@@ -884,6 +884,14 @@ fi
 
 # ---------------------------------------------------------------- H-1B index
 
+# same_file_path <a> <b>: whether both name one file, however spelled (./, //, symlinked folders), even before it exists.
+same_file_path() {
+  local da db
+  [ "$1" = "$2" ] || [ "$1" -ef "$2" ] && return 0
+  da="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" && db="$(cd "$(dirname "$2")" 2>/dev/null && pwd -P)" &&
+    [ "$da/${1##*/}" = "$db/${2##*/}" ]
+}
+
 step "8/11 H-1B sponsor index"
 # Resolved as the plugin's indexPath() does: trimmed, set-but-blank is an error, and a relative path is taken from the
 # checkout, which is where the plugin runs.
@@ -900,7 +908,7 @@ if [ -n "${H1B_INDEX_PATH+set}" ]; then
   esac
 fi
 # The launchd plist does not carry H1B_INDEX_PATH, so the daily job always reads the default index.
-if [ "$H1B_BLANK" = 0 ] && [ "$H1B_INDEX" != "$H1B_DEFAULT" ]; then
+if [ "$H1B_BLANK" = 0 ] && ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
   pending "H1B_INDEX_PATH points at $H1B_INDEX, but the daily job does not inherit H1B_INDEX_PATH and reads $H1B_DEFAULT. Copy the index there, or unset H1B_INDEX_PATH and run: $H1B_CMD"
 fi
 if [ "$NO_H1B" = 1 ]; then
