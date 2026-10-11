@@ -215,6 +215,58 @@ describe('follow-up cadence form (Settings > Profile)', () => {
     expect(writes()[1]!.headers['If-Match']).toBe('c2');
     expect(files['/api/followups/cadence']).toMatchObject({ etag: 'c3', cadence: { applied_first_days: 3 } });
   });
+  it('after a successful save, a change on disk during the next edit still shows "changed on disk" (R19-feat-c-L1-01)', async () => {
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    await click(button('Save cadence')!);
+    await until(() => writes().length === 1 && /Follow-up cadence saved/.test(host.textContent ?? '') && button('Save cadence')!.disabled, 'the first save');
+    await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.disabled === false, 'the form to settle');
+    await type(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!, '11');
+    await changeOnDisk('/api/followups/cadence', { etag: 'c9', cadence: { applied_first_days: 4 } });
+    await until(() => /changed on disk since you started editing/.test(alerts()), 'the changed-on-disk note');
+    // The old success note no longer claims the current edits were saved.
+    expect(host.textContent).not.toMatch(/Follow-up cadence saved/);
+  });
+  it('a successful save never reports its own write as a change on disk, even while other follow-up data refreshes', async () => {
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    const { useQuery } = await import('@tanstack/react-query');
+    // Another follow-up view on the page, whose refresh after the save is slow.
+    let release!: () => void;
+    let slow = false;
+    function Followups() {
+      useQuery({ queryKey: ['followups', 'list'], queryFn: () => (slow ? new Promise((r) => (release = () => r({}))) : Promise.resolve({})) });
+      return null;
+    }
+    await mount(createElement(Fragment, null, createElement(CadenceForm), createElement(Followups)));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    slow = true;
+    const seen: string[] = [];
+    const watch = new MutationObserver(() => seen.push(alerts()));
+    watch.observe(document.body, { subtree: true, childList: true, characterData: true });
+    await click(button('Save cadence')!);
+    await until(() => writes().length === 1 && calls.filter((c) => c.url === '/api/followups/cadence' && c.method === 'GET').length >= 2, 'the save and its refetch');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    seen.push(alerts());
+    await act(async () => release());
+    watch.disconnect();
+    expect(seen.filter((a) => /changed on disk/.test(a))).toEqual([]);
+  });
+
+  it('a change on disk while a refused value is being corrected still shows "changed on disk"', async () => {
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '-1');
+    await click(button('Save cadence')!);
+    await until(() => /whole numbers of days/.test(alerts()), 'the refused value');
+    await type(field, '9');
+    await changeOnDisk('/api/followups/cadence', { etag: 'c9', cadence: { applied_first_days: 4 } });
+    await until(() => /changed on disk since you started editing/.test(alerts()), 'the changed-on-disk note');
+    expect(writes()).toEqual([]);
+  });
 });
 
 describe('structured editors (useStructuredConfig)', () => {
