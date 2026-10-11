@@ -121,7 +121,7 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
-  /** The postings (mode and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
+  /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
@@ -193,15 +193,16 @@ export class SessionManager {
   /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
   isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
     const key = postingKey(target);
-    return key !== null && this.fanningOut.has(`${mode}\0${key}`);
+    return key !== null && this.fanningOut.has(`${evaluationClass(mode)}\0${key}`);
   }
 
-  /** Id of a live session of this mode already evaluating this posting, if any: a second start would write a second report. */
+  /** Id of a live session of this mode's evaluation class already evaluating this posting, if any: a second start would write a second report. */
   liveEvaluationFor(mode: string, target: SessionMeta['target'], exceptId?: string): string | null {
     const key = postingKey(target);
     if (key === null) return null;
+    const cls = evaluationClass(mode);
     for (const m of this.readableSessions()) {
-      if (m.id !== exceptId && m.mode === mode && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
+      if (m.id !== exceptId && evaluationClass(m.mode) === cls && LIVE_STATUSES.has(m.status) && postingKey(m.target) === key) return m.id;
     }
     return null;
   }
@@ -290,7 +291,7 @@ export class SessionManager {
     if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
     const posting = postingKey(meta.target);
     if (posting === null) return () => {};
-    const key = `${meta.mode}\0${posting}`;
+    const key = `${evaluationClass(meta.mode)}\0${posting}`;
     this.fanningOut.add(key);
     return () => this.fanningOut.delete(key);
   }
@@ -298,11 +299,12 @@ export class SessionManager {
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
   async fanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
     this.turnPolicy(input.mode);
-    // A second evaluation of a posting a live session of the mode evaluates (one waiting for the user's reply too: the
-    // reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
+    // A second evaluation of a posting a live session of the mode's class evaluates (one waiting for the user's reply
+    // too: the reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
+    const cls = evaluationClass(input.mode);
     const live = new Map<string, string>();
-    for (const m of this.readableSessions()) if (m.mode === input.mode && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
-    const key = (url: string) => `${input.mode}\0${postingKey({ type: 'url', value: url })}`;
+    for (const m of this.readableSessions()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(m.target.value, m.id);
+    const key = (url: string) => `${cls}\0${postingKey({ type: 'url', value: url })}`;
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
     for (const url of input.urls) {
@@ -1040,6 +1042,14 @@ export class SessionManager {
 
 /** What a fan-out answers for a URL whose session could not even be recorded: an error with the reason, saved nowhere. */
 const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
+
+/**
+ * What a mode's duplicate guard compares: every report-gated mode (oferta, auto-pipeline, a localized oferta) writes the
+ * posting's report and tracker row, so they are one class; any other mode is only a duplicate of itself.
+ */
+function evaluationClass(mode: string): string {
+  return isReportGated(mode) ? '\0report' : mode;
+}
 
 /** The dedupe key of a posting a session evaluates: its URL, or the saved JD a local:jds/ text target names (as finalize keys it). */
 function postingKey(target: SessionMeta['target']): string | null {
