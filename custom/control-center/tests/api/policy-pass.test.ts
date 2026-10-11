@@ -413,14 +413,9 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
 describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
   const ACK_BUSY = { code: 1, stdout: '', stderr: 'pending.json.lock is held by another writer' };
   let ackFails = true;
-  let failedAcks = 0;
   let app: TestApp;
   // Every --ack fails while ackFails is set; anything else runs for real.
-  const exec: Exec = async (cmd, args, opts) => {
-    if (!(ackFails && args.includes('--ack'))) return execNoShell(cmd, args, opts);
-    failedAcks += 1;
-    return ACK_BUSY;
-  };
+  const exec: Exec = async (cmd, args, opts) => (ackFails && args.includes('--ack') ? ACK_BUSY : execNoShell(cmd, args, opts));
   const immFile = (name: string) => path.join(app.cfg.dataRoot, 'data', 'immigration', name);
   const pending = () => JSON.parse(fs.readFileSync(immFile('pending.json'), 'utf8')) as Array<{ id: string }>;
   const lastPass = () => (fs.existsSync(immFile('seen.json')) ? (JSON.parse(fs.readFileSync(immFile('seen.json'), 'utf8')) as { last_pass?: string }).last_pass : undefined);
@@ -540,12 +535,17 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
 
   it('given a leftover ack that fails too, when the retry delay passes, then it is tried again until it lands', async () => {
     const { batch } = await failedAckPass(26);
-    const retrying = restart({ policyAckRetryMs: 50 });
+    // Only this manager's attempts count: the shared app's own retry timer may fire meanwhile.
+    let ownAttempts = 0;
+    const ownExec: Exec = async (cmd, args, opts) => {
+      if (args.includes('--ack')) ownAttempts += 1;
+      return exec(cmd, args, opts);
+    };
+    const retrying = new SessionManager(app.cfg, app.runner, app.bus, { readToken: async () => FAKE_TOKEN, exec: ownExec, policyAckRetryMs: 50 });
     try {
-      const before = failedAcks;
       retrying.reconcile();
-      // Two rounds of failed attempts: the leftover ack, then at least one retry.
-      await until(() => failedAcks >= before + 6, 'the leftover ack to fail and be retried');
+      // Two rounds of failed attempts on this batch alone: the leftover ack, then at least one retry.
+      await until(() => ownAttempts >= 6, 'the leftover ack to fail and be retried');
       expect(donePolicyBatches(app.cfg.dataRoot)).toContain(batch);
       ackFails = false;
       await until(() => pending().length === 0 && !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the retried ack');
