@@ -183,7 +183,35 @@ export function checkSearch(policy, tool, input, cwd) {
   const value = input?.[key];
   if (value === undefined || value === null || value === '') return tool === 'Glob' ? `${tool}: no pattern` : null;
   if (typeof value !== 'string') return `${tool}: ${key} must be a string`;
-  return checkSearchPattern(policy, value, `${tool} ${key}`);
+  const syntax = checkSearchPattern(policy, value, `${tool} ${key}`);
+  if (syntax) return syntax;
+  // A search pattern that literally names a secret file (`.env`, `**/.env`, `*.pem`, `id_rsa*`, `.git/config`, ...) is
+  // refused as an explicit secret-targeting search. This is a literal-text check only: Grep's contents are protected by
+  // the excludes narrowGrepInput appends, while a wildcard Glob (`*`, `.e?v`) can still list a secret file's name,
+  // never its contents (an accepted residual).
+  const readDeny = policy.readDeny ?? [];
+  const hit = readDeny.find((g) => matches(value, [g]));
+  if (hit) return `${tool} ${key}: ${value} can match ${hit}, a protected secret file (.env, keys, credentials); sessions never read them`;
+  return null;
+}
+
+/**
+ * ripgrep excludes for the readDeny files, each one Grep glob piece (no whitespace, comma or brace, so Claude Code
+ * passes it to `rg --glob` unsplit) with every letter as a two-case class: `--glob` is case-sensitive, and macOS
+ * volumes are not.
+ */
+export function grepSecretExcludes(readDeny) {
+  return readDeny.map((g) => `!${g.replace(/[a-z]/gi, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`)}`);
+}
+
+/**
+ * The Grep input with the secret-file excludes appended after the caller's own globs. ripgrep lets the last matching
+ * glob decide, so no spelling of a positive glob (`*`, `.\env`, `{x,{.env,y}}`, `.git[/]config`) can reach a secret
+ * file, and a Grep with no glob gets them too: Grep reads contents, and its globs override .gitignore.
+ */
+export function narrowGrepInput(input, readDeny) {
+  const own = typeof input.glob === 'string' && input.glob !== '' ? [input.glob] : [];
+  return { ...input, glob: [...own, ...grepSecretExcludes(readDeny)].join(' ') };
 }
 
 // ---- URLs: WebFetch, and URL arguments of scripts ----

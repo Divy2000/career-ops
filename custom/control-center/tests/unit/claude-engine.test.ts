@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
-import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, locateRead, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
+import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, grepSecretExcludes, locateRead, narrowGrepInput, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { trackerDenyGlobs, writeGuardPolicy } from '../../server/claude/confinement.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
@@ -952,6 +952,36 @@ describe('guard hook: read confinement', () => {
     expect(pre('Grep', { pattern: 'x', glob: '{/etc,a}/*' }).status).toBe(2);
   });
 
+  it('Glob and Grep whose pattern or glob names a secret file exit 2, even from the repo root', () => {
+    const denied = [
+      ['Glob', { pattern: '.env', path: code }],
+      ['Glob', { pattern: '**/.env', path: code }],
+      ['Glob', { pattern: '**/*.pem', path: code }],
+      ['Grep', { pattern: 'SECRET', path: code, glob: '**/.env' }],
+      ['Grep', { pattern: 'SECRET', path: code, glob: '.env' }],
+      ['Grep', { pattern: 'SECRET', path: code, glob: '**/credentials*.json' }],
+    ] as Array<[string, Record<string, unknown>]>;
+    for (const [tool, input] of denied) {
+      const r = pre(tool, input);
+      expect(r.status, `${tool} ${JSON.stringify(input)}`).toBe(2);
+      expect(r.stderr).toMatch(/protected secret file/);
+    }
+    expect(pre('Grep', { pattern: 'SECRET', path: code, glob: '**/*.md' }).status).toBe(0);
+  });
+
+  it('a Grep that passes is narrowed: the hook answers with updatedInput whose glob ends in the secret-file excludes', () => {
+    const tail = grepSecretExcludes(READ_DENY).join(' ');
+    for (const input of [{ pattern: 'SECRET', path: code }, { pattern: 'SECRET', path: code, glob: '*', output_mode: 'content' }, { pattern: 'SECRET', path: code, glob: '**/*.md' }]) {
+      const r = pre('Grep', input);
+      expect(r.status, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse');
+      expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
+      expect(out.hookSpecificOutput.updatedInput).toEqual({ ...input, glob: input.glob ? `${input.glob} ${tail}` : tail });
+    }
+    expect(pre('Glob', { pattern: '**/*.md', path: code }).stdout).toBe('');
+  });
+
   it('WebFetch of file:, of a loopback address, or of a name that does not resolve exits 2; a public literal address exits 0', () => {
     for (const url of ['file:///etc/passwd', 'http://127.0.0.1:1/', 'http://localhost/', 'http://[::1]/', 'https://nothing.invalid/']) {
       const r = pre('WebFetch', { url, prompt: 'x' });
@@ -1604,6 +1634,38 @@ describe('read confinement: guard policy', () => {
     for (const pattern of ['../outside/*', '**/../../x', 'a\\..\\b', '~/.ssh/*', '{/etc,src}/*', 'src/{a,/etc}/*', '{~,x}/*', 'a,~/x', `${outside}/*`, '/etc/*', '/*'])
       expect(search('Glob', { pattern }), pattern).toEqual(expect.any(String));
     for (const glob of ['../outside/*', '~/x', '{/etc,a}', `${outside}/*`]) expect(search('Grep', { pattern: 'x', glob }), glob).toEqual(expect.any(String));
+  });
+
+  it('a Glob pattern or Grep glob that names a secret file is refused, wherever the search starts', () => {
+    const search = (tool: string, input: Record<string, unknown>, cwd: string = code) => checkSearch(policy, tool, input, cwd);
+    for (const pattern of ['.env', '**/.env', '.env.*', '**/.env.*', '*.pem', '**/*.pem', 'id_rsa', 'id_rsa*', '**/id_rsa*', '.git/config', '**/.git/config', 'credentials*.json', '**/credentials*.json', 'client_secret*.json', '**/*.token']) {
+      expect(search('Glob', { pattern }), `Glob ${pattern}`).toMatch(/protected secret file/);
+      expect(search('Grep', { pattern: 'x', glob: pattern }), `Grep ${pattern}`).toMatch(/protected secret file/);
+    }
+    for (const pattern of ['**/*.md', '*.ts', 'src/**/*.md']) {
+      expect(search('Glob', { pattern }), `Glob ${pattern}`).toBeNull();
+      expect(search('Grep', { pattern: 'x', glob: pattern }), `Grep ${pattern}`).toBeNull();
+    }
+  });
+
+  it('every Grep is narrowed: a case-folded exclude for each secret file follows the caller\'s globs, so no spelling of a positive glob reaches one', () => {
+    const excludes = grepSecretExcludes(READ_DENY);
+    expect(excludes).toContain('!**/.[eE][nN][vV]');
+    expect(excludes).toContain('!**/.[eE][nN][vV].*');
+    expect(excludes).toContain('!**/.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG]');
+    expect(excludes).toHaveLength(READ_DENY.length);
+    // Claude Code splits the glob on whitespace, and on commas in a piece without braces: each exclude stays one piece.
+    for (const e of excludes) expect(e, e).toMatch(/^![^\s,{}]+$/);
+    const tail = excludes.join(' ');
+    expect(narrowGrepInput({ pattern: 'x', path: code }, READ_DENY)).toEqual({ pattern: 'x', path: code, glob: tail });
+    for (const glob of ['*', '.\\env', '**/\\.env', '{x,{.env,y}}', '.e?v.local', 'server.p[e]m', 'id_rs[a]_old', '**/credentials-prod.js[o]n', '.git[/]config', '*.md', 'src/**/*.tsx']) {
+      expect(narrowGrepInput({ pattern: 'x', glob, output_mode: 'content' }, READ_DENY), glob).toEqual({ pattern: 'x', glob: `${glob} ${tail}`, output_mode: 'content' });
+    }
+  });
+
+  it('a Grep glob that only spells a secret file through wildcards, classes or braces is allowed, since the hook narrows it', () => {
+    const grep = (glob: string) => checkSearch(policy, 'Grep', { pattern: 'x', path: code, glob }, code);
+    for (const glob of ['*', '**/*', '.e*', '[.]env', '{.env,README.md}', '*.md .env', '*.md,.env', 'src/**', '*.md', '**/*.ts', '*.{ts,tsx}', '!.env']) expect(grep(glob), glob).toBeNull();
   });
 
   it('Glob and Grep are refused when the policy does not grant search', () => {

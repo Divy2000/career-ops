@@ -9,7 +9,7 @@ import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReport } from './reports.js';
 import { inside } from '../lib/paths.js';
-import { isProcessedHeading, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
+import { isProcessedHeading, pipelineSection, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
 import { WRITTEN_SEGMENT } from './pipeline.js';
 
 const HEADING_RE = /^##\s+(.+?)\s*$/;
@@ -100,7 +100,17 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
   const target = unescapeMarkdownUrl(url);
   const remove = new Set<number>();
   let processedLine: string | null = null;
-  for (let i = pendStart + 1; i < sectionEnd(pendStart); i++) {
+  // scan.mjs appends a row under its own `## Pending` heading when the file's Pending heading is not English or
+  // Spanish, so the row can sit in any section but Processed; parsePipeline reads every non-Processed section as
+  // pending, so the match spans them all.
+  let section: 'pending' | 'done' | 'other' = 'other';
+  for (let i = 0; i < lines.length; i++) {
+    const title = headingTitle(lines[i]!);
+    if (title !== null) {
+      section = pipelineSection(title);
+      continue;
+    }
+    if (section === 'done') continue;
     if (!PENDING_ITEM_RE.test(lines[i]!)) continue;
     const body = lines[i]!.replace(PENDING_ITEM_RE, '');
     const cell = lineUrl(body);

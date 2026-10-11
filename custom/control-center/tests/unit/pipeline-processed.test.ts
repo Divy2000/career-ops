@@ -112,6 +112,41 @@ describe('moving an evaluated posting to Processed', () => {
     expect(moveToProcessed(md, URL, POSTING).text).toBe(`## Pending\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`);
   });
 
+  it('moves a row scan.mjs appended under a second Pending heading when the file uses localized headings (R18-claude-L2-01)', () => {
+    const md = [
+      '## Offen',
+      '',
+      '- [ ] https://jobs.example.com/other | Other | Role',
+      '',
+      '## Verarbeitet',
+      '',
+      '- [x] #041 | https://jobs.example.com/old | Old | Role | 3.0/5 | PDF ❌',
+      '',
+      '## Pending',
+      '',
+      `- [ ] ${URL} | Acme | Backend Engineer | Remote`,
+      '',
+    ].join('\n');
+    const r = moveToProcessed(md, URL, POSTING);
+    expect(r.moved).toBe(true);
+    expect(r.text).toBe(
+      [
+        '## Offen',
+        '',
+        '- [ ] https://jobs.example.com/other | Other | Role',
+        '',
+        '## Verarbeitet',
+        '',
+        `- [x] #042 | ${URL} | Acme | Backend Engineer | 4.2/5 | PDF ❌`,
+        '- [x] #041 | https://jobs.example.com/old | Old | Role | 3.0/5 | PDF ❌',
+        '',
+        '## Pending',
+        '',
+        '',
+      ].join('\n'),
+    );
+  });
+
   it('leaves the file alone when the URL is not pending: skipped, flagged, another URL, or no Pending section', () => {
     for (const md of [`## Pending\n- [x] ${URL} | Acme | Eng\n`, `## Pending\n- [!] ${URL} - Error: login required\n`, `## Pending\n- [ ] ${URL}?gh_src=x | Acme | Eng\n`, `- [ ] ${URL}\n`]) {
       expect(moveToProcessed(md, URL, POSTING)).toEqual({ text: md, moved: false });
