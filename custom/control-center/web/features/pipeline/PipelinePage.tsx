@@ -295,12 +295,14 @@ function EvaluateJd({ reference, label, running, checking }: { reference: string
     if (jd === null) return;
     setBusy(true);
     setError(null);
-    // A start can answer after the user left the page, or left and came back: only one that never left moves them to the
-    // session. The page, not this row's button, which a filter or a refreshed list can take away while the user stays.
-    const page = router.state.location.pathname;
+    // A start can answer after the user left the Inbox, or left and came back: only one that never left moves them to the
+    // session. The Inbox (page and tab), not this row's button, which a filter or a refreshed list can take away while
+    // the user stays; a filter change alone is not leaving.
+    const where = (l: { pathname: string; search: unknown }) => `${l.pathname}?${(l.search as { tab?: string }).tab ?? 'inbox'}`;
+    const inbox = where(router.state.location);
     let left = false;
     const unsubscribe = router.subscribe('onBeforeNavigate', (e) => {
-      if (e.toLocation.pathname !== page) left = true;
+      if (where(e.toLocation) !== inbox) left = true;
     });
     try {
       const m = await startSavedJdSession(reference, jd);

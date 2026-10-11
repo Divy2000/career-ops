@@ -379,6 +379,18 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
     expect(router.state.location.pathname).toBe('/pipeline');
   });
 
+  it('Evaluate JD does not move a user who switched to the Batch tab before it answered', async () => {
+    holdUrl = '/api/sessions';
+    const router = await mount();
+    const jd = await until(() => host.querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]:not(:disabled)'), 'Evaluate JD');
+    await act(async () => jd.click());
+    await until(() => hold, 'the start sent');
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+    await act(async () => hold!.release());
+    await settle();
+    expect(router.state.location.pathname).toBe('/pipeline');
+  });
+
   // The same waits as above, for a user who stayed: they are long enough for the move to land, so the test above would
   // catch a move to the session after the user left.
   it('Evaluate JD still moves a user who stayed to the session', async () => {
