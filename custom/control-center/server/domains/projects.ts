@@ -56,6 +56,7 @@ export interface ProjectsLib {
   removeEntry: (text: string, id: string) => string;
   convertJsonProjects: (data: unknown) => { entries: ProjectInput[]; warnings: string[] };
   findCvEntry: (cvText: string, title: string) => { line: number; text: string } | null;
+  findCvProject: (cvText: string, title: string) => { line: number; text: string } | null;
   titleKey: (title: string) => string;
 }
 
