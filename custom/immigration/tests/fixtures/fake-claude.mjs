@@ -22,7 +22,9 @@ if (argv[0] === '--version') {
   process.exit(0);
 }
 const at = argv.indexOf('--settings');
-const settings = at === -1 ? null : JSON.parse(fs.readFileSync(argv[at + 1], 'utf8'));
+// --settings takes a file path or inline JSON, as the real CLI does: the policy pass passes a file, the rank shim JSON.
+const settingsArg = at === -1 ? null : argv[at + 1];
+const settings = settingsArg === null ? null : JSON.parse(settingsArg.trimStart().startsWith('{') ? settingsArg : fs.readFileSync(settingsArg, 'utf8'));
 const policyFile = process.env.CC_POLICY_FILE;
 const policyBytes = policyFile && fs.existsSync(policyFile) ? fs.readFileSync(policyFile) : null;
 const probes = process.env.FAKE_HOOK_PROBES ? JSON.parse(process.env.FAKE_HOOK_PROBES) : [];
