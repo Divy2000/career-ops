@@ -895,8 +895,9 @@ function clickTargetReason(description, label, submit) {
 
 /**
  * Null when a Playwright MCP call may run, else the reason. The session never submits (a submit-looking click, Enter,
- * type with submit, page JavaScript), never browses outside the public web (navigate gets the WebFetch checks), never
- * uploads a file a Read could not reach and never saves a file outside the guard. A tool not named here is refused.
+ * type with submit, page JavaScript), never uploads a file a Read could not reach and never saves a file outside the
+ * guard. A tool not named here is refused. Navigate gets the WebFetch checks as an early refusal; what keeps every
+ * page load, redirect, frame and click on the public web is the proxy the browser runs behind (browser-egress-proxy.mjs).
  */
 export async function checkPlaywright(policy, tool, input, cwd, lookup = lookupAll) {
   const name = tool.slice(PLAYWRIGHT_TOOL_PREFIX.length);
