@@ -467,6 +467,48 @@ test('local-paths.txt keeps the user\'s own lines', () => {
   assert.equal(read(D, 'config', 'local-paths.txt'), 'my-runner.sh\ncustom/\n');
 });
 
+test('a local-paths.txt the installer cannot write is a failure naming it, not a claim that custom/ is declared (R19-scripts-b-L1-01)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'config/local-paths.txt': 'my-runner.sh\n' } });
+  const file = path.join(D, 'config', 'local-paths.txt');
+  fs.chmodSync(file, 0o444);
+  try {
+    const r = w.run(args());
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /local-paths\.txt/);
+    assert.doesNotMatch(r.out, /already declares custom\//);
+    assert.equal(read(D, 'config', 'local-paths.txt'), 'my-runner.sh\n');
+  } finally {
+    fs.chmodSync(file, 0o644);
+  }
+});
+
+test('a modes/_custom.md the installer cannot create is a failure, not a claim that it already exists (R19-scripts-b-L1-01)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'modes/_profile.md': 'mine\n' } });
+  const modes = path.join(D, 'modes');
+  fs.chmodSync(modes, 0o555);
+  try {
+    const r = w.run(args());
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /_custom\.md/);
+    assert.doesNotMatch(r.out, /already exists; left as is/);
+    assert.equal(exists(D, 'modes', '_custom.md'), false);
+  } finally {
+    fs.chmodSync(modes, 0o755);
+  }
+});
+
+test('a projects-library house rule the installer cannot add is a pending action, not silently skipped (R19-scripts-b-L1-01)', () => {
+  const { w, D, args } = fresh();
+  const script = standalone(w);
+  fs.rmSync(path.join(path.dirname(script), 'templates', '_custom-projects.md'));
+  const r = w.run(args(), { script });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /Done, with pending actions:[\s\S]*projects-library house rule/);
+  assert.equal(read(D, 'modes', '_custom.md'), read(INSTALL_DIR, 'templates', '_custom.md'));
+});
+
 test('--data-root writes the marker, keeps personal files there and seeds _custom.md in it', () => {
   const { w, D, args } = fresh();
   const data = path.join(w.T, 'mydata');

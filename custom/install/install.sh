@@ -729,7 +729,9 @@ if [ "$DRY_RUN" = 1 ]; then
   dry "create modes/_custom.md from the template if absent (with the projects-library house rule), then run doctor.mjs --json --init-templates"
   dry "NOT create config/profile.yml or portals.yml: onboarding writes them from your documents"
 else
-  case "$(seed local-paths --dir "$DIR")" in
+  # Captured first: set -e ignores a failing command substitution used as a case word or a [ argument.
+  seeded="$(seed local-paths --dir "$DIR")" || die 1 "could not declare custom/ in $DIR/config/local-paths.txt (the error is above). Fix it and re-run."
+  case "$seeded" in
     added) say "  declared custom/ in config/local-paths.txt" ;;
     *) say "  config/local-paths.txt already declares custom/" ;;
   esac
@@ -753,10 +755,13 @@ else
     die 1 "the data root resolves to $DATA (CAREER_OPS_ROOT or CAREER_OPS_DATA_DIR is set in your environment) instead of $DATA_REQ. Unset it and re-run."
   fi
   say "  data root: $DATA"
-  case "$(seed custom-template --data "$DATA" --template "$SCRIPT_DIR/templates/_custom.md")" in
+  seeded="$(seed custom-template --data "$DATA" --template "$SCRIPT_DIR/templates/_custom.md")" || die 1 "could not create $DATA/modes/_custom.md from the fork template (the error is above). Fix it and re-run."
+  case "$seeded" in
     created)
       say "  created modes/_custom.md from the fork template"
-      if [ "$(seed projects-rule --data "$DATA" --template "$SCRIPT_DIR/templates/_custom-projects.md")" = added ]; then
+      if ! seeded="$(seed projects-rule --data "$DATA" --template "$SCRIPT_DIR/templates/_custom-projects.md")"; then
+        pending "the projects-library house rule could not be added to $DATA/modes/_custom.md (the error is above); the onboarding adds it after your yes."
+      elif [ "$seeded" = added ]; then
         say "  added the projects-library house rule to modes/_custom.md"
       fi
       ;;
