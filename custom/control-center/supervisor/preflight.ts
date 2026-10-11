@@ -56,7 +56,7 @@ export interface PreflightInput {
   nodeVersion: string;
   env: NodeJS.ProcessEnv;
   /** Injected runner: an exit code, or the code and stdout (`claude --version` needs its output), plus stderr and a timeout when known. */
-  exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string; stderr?: string; timedOut?: boolean }>;
+  exec?: (cmd: string, args: string[]) => Promise<number | { code: number; stdout: string; stderr?: string; timedOut?: boolean; enoent?: boolean }>;
   /** Limit for the Keychain read; an unanswered unlock dialog holds it until then. */
   keychainTimeoutMs?: number;
   /** Per-attempt limit for `claude --version`; a cold first start can self-update before it answers. */
@@ -91,7 +91,7 @@ export interface PreflightResult {
 const SECURITY_ITEM_NOT_FOUND = 44;
 const KEYCHAIN_TIMEOUT_MS = 8000;
 
-type KeychainRead = { code: number; stdout?: string; stderr?: string; timedOut?: boolean };
+type KeychainRead = { code: number; stdout?: string; stderr?: string; timedOut?: boolean; enoent?: boolean };
 
 /**
  * Absent (exit 44) or empty, which sessions refuse the same way (server/claude/manager.ts), asks for a new token. Any
@@ -99,7 +99,7 @@ type KeychainRead = { code: number; stdout?: string; stderr?: string; timedOut?:
  */
 function keychainProblem(r: KeychainRead, timeoutMs: number): string | null {
   if (r.timedOut) return keychainUnreadable(`security timed out after ${timeoutMs / 1000}s`);
-  if (r.code === 127) return 'Could not read Keychain item "career-ops-claude-token": the `security` command was not found on PATH (it ships with macOS in /usr/bin).';
+  if (r.enoent) return 'Could not read Keychain item "career-ops-claude-token": the `security` command was not found on PATH (it ships with macOS in /usr/bin).';
   if (r.code === SECURITY_ITEM_NOT_FOUND) return KEYCHAIN_HELP;
   if (r.code !== 0) return keychainUnreadable(`security failed (exit ${r.code}${r.stderr?.trim() ? `: ${r.stderr.trim().slice(-200)}` : ''})`);
   // An injected runner that returns only a code has no stdout to check.
@@ -130,9 +130,9 @@ function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   });
 }
 
-async function exitCode(cmd: string, args: string[], timeoutMs = KEYCHAIN_TIMEOUT_MS): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+async function exitCode(cmd: string, args: string[], timeoutMs = KEYCHAIN_TIMEOUT_MS): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean; enoent: boolean }> {
   const r = await probe(cmd, args, timeoutMs);
-  return { code: r.enoent ? 127 : r.code, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut };
+  return { code: r.enoent ? 127 : r.code, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, enoent: r.enoent };
 }
 
 const CLAUDE_FALLBACKS = ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
@@ -207,7 +207,8 @@ async function probeClaude(input: PreflightInput): Promise<{ error: string } | {
   if (input.exec) {
     const out = await input.exec(input.claudeBin, ['--version']);
     const code = typeof out === 'number' ? out : out.code;
-    if (code !== 0) return { error: claudeFailure(input.claudeBin, { code, timedOut: false, enoent: code === 127, stdout: '', stderr: '' }, timeoutMs) };
+    const timedOut = typeof out !== 'number' && out.timedOut === true;
+    if (code !== 0 || timedOut) return { error: claudeFailure(input.claudeBin, { code, timedOut, enoent: code === 127 || (typeof out !== 'number' && out.enoent === true), stdout: '', stderr: '' }, timeoutMs) };
     stdout = typeof out === 'number' ? '' : out.stdout;
   } else {
     let last: Probe = { code: 1, timedOut: false, enoent: false, stdout: '', stderr: '' };

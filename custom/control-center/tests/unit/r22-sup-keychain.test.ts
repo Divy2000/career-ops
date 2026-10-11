@@ -85,4 +85,24 @@ describe('preflight Keychain probe', () => {
     expect(r.errors.join('\n')).toContain('timed out');
     expect(r.errors.join('\n')).toContain('security unlock-keychain');
   });
+
+  it('given a `security` that ran and exited 127, says to unlock the keychain, not that the command is missing', async () => {
+    const exec = async (cmd: string) => (cmd === 'security' ? { code: 127, stdout: '', stderr: 'security: unknown failure' } : { code: 0, stdout: '2.1.289 (Claude Code)\n' });
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec, approvedVersions: ['2.1.289'] });
+    expect(r.errors.join('\n')).toContain('security unlock-keychain');
+    expect(r.errors.join('\n')).not.toContain('was not found on PATH');
+  });
+
+  it('given an injected `claude --version` that timed out, reports the timeout', async () => {
+    const exec = async (cmd: string) => (cmd === 'claude' ? { code: 1, stdout: '', timedOut: true } : 0);
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec, claudeTimeoutMs: 5000 });
+    expect(r.ok).toBe(false);
+    expect(r.errors[0]).toContain('timed out');
+  });
+
+  it('given an injected `claude --version` that never started, reports ENOENT whatever its code', async () => {
+    const exec = async (cmd: string) => (cmd === 'claude' ? { code: 1, stdout: '', enoent: true } : 0);
+    const r = await preflight({ ...host(), claudeBin: 'claude', nodeVersion: 'v26.0.0', env: {}, exec });
+    expect(r.errors[0]).toContain('not found (ENOENT)');
+  });
 });
