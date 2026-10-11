@@ -90,6 +90,10 @@ async function mount(tab: 'inbox' | 'batch' = 'inbox') {
   return router;
 }
 const button = (start: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(start));
+// Lets a start's answer and the move it makes settle, the same way for a user who left and one who stayed.
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 20)));
+};
 const pipelinePanel = () => panels.filter((p) => p.mode === 'pipeline').pop();
 const typeUrls = (value: string) =>
   act(async () => {
@@ -288,9 +292,21 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
     await until(() => hold, 'the start sent');
     await act(async () => router.navigate({ to: '/tracker' }));
     await act(async () => hold!.release());
-    await until(() => posts.length === 1 || undefined, 'the start');
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await settle();
     expect(router.state.location.pathname).toBe('/tracker');
+  });
+
+  // The same waits as above, for a user who stayed: they are long enough for the move to land, so the test above would
+  // catch a move to the session after the user left.
+  it('Evaluate JD still moves a user who stayed to the session', async () => {
+    holdUrl = '/api/sessions';
+    const router = await mount();
+    const jd = await until(() => host.querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]:not(:disabled)'), 'Evaluate JD');
+    await act(async () => jd.click());
+    await until(() => hold, 'the start sent');
+    await act(async () => hold!.release());
+    await settle();
+    expect(router.state.location.pathname).toBe('/sessions/s-jd');
   });
 
   it('Evaluate visible does not move a user who went elsewhere to Sessions', async () => {
@@ -301,7 +317,7 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
     await until(() => hold, 'the fan-out sent');
     await act(async () => router.navigate({ to: '/tracker' }));
     await act(async () => hold!.release());
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await settle();
     expect(router.state.location.pathname).toBe('/tracker');
   });
 
@@ -315,7 +331,7 @@ describe('A start that answers after the user left the page (R18-feat-b-L3-05)',
     await until(() => hold, 'the fan-out sent');
     await act(async () => router.navigate({ to: '/tracker' }));
     await act(async () => hold!.release());
-    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await settle();
     expect(router.state.location.pathname).toBe('/tracker');
   });
 
