@@ -9,6 +9,18 @@ async function login(page: Page) {
   await expect(page.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
 }
 
+// A SessionMeta as the fan-out answers it: a started session holds its reserved number, a refused URL comes back as an
+// unstarted session with status error, no id and the reason (manager.ts unstartedMeta).
+function fanoutSession(id: string, url: string, reportNum: number) {
+  const now = new Date().toISOString();
+  return { id, claudeSessionId: `${id}-claude`, mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: url }, model: null, status: 'queued', createdAt: now, updatedAt: now, turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error: null, reportNum, lastReason: null, policyVersion: 2 };
+}
+
+function refusedFanoutSession(url: string, error: string) {
+  const { policyVersion: _unset, ...meta } = fanoutSession('', url, 0);
+  return { ...meta, claudeSessionId: '', status: 'error', reportNum: null, error, lastReason: error };
+}
+
 async function axeClean(page: Page) {
   const axe = await (await axeBuilder(page)).analyze();
   const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
@@ -60,7 +72,7 @@ test.describe('AI sessions through the fake Claude', () => {
     // Answered here so no evaluation runs: the server side of the fan-out is covered by the sessions API tests.
     await page.route('**/api/sessions/fanout', async (route) => {
       bodies.push(route.request().postDataJSON());
-      await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ sessions: [], reserved: [41, 42] }) });
+      await route.fulfill({ status: 202, json: { sessions: [fanoutSession('e2e-batch-1', 'https://jobs.example.com/batch/1', 41), fanoutSession('e2e-batch-2', 'https://jobs.example.com/batch/2', 42)], reserved: [41, 42] } });
     });
     await page.goto('/pipeline?tab=batch');
     await expect(page.getByText(/batch-runner/)).toHaveCount(0);
@@ -71,6 +83,21 @@ test.describe('AI sessions through the fake Claude', () => {
     await page.getByRole('button', { name: 'Start them' }).click();
     await expect(page).toHaveURL(/\/sessions$/);
     expect(bodies).toEqual([{ mode: 'oferta', urls: ['https://jobs.example.com/batch/1', 'https://jobs.example.com/batch/2'] }]);
+  });
+
+  test('Pipeline > Batch keeps a URL the fan-out refused in the box and says which started, without leaving the page', async ({ page }) => {
+    // The fan-out lists started sessions first and a refused URL after them as an unstarted error session; only the
+    // started one holds a reserved number.
+    await page.route('**/api/sessions/fanout', (route) =>
+      route.fulfill({ status: 202, json: { sessions: [fanoutSession('e2e-batch-3', 'https://jobs.example.com/batch/3', 43), refusedFanoutSession('https://jobs.example.com/batch/4', 'not started: session s-busy is already evaluating https://jobs.example.com/batch/4')], reserved: [43] } }),
+    );
+    await page.goto('/pipeline?tab=batch');
+    await page.getByLabel('Batch URLs').fill('https://jobs.example.com/batch/3\nhttps://jobs.example.com/batch/4');
+    await page.getByRole('button', { name: /Batch evaluate/ }).click();
+    await page.getByRole('button', { name: 'Start them' }).click();
+    await expect(page.getByText('Started 1 of 2 evaluations with report number 43. 1 could not start: not started: session s-busy is already evaluating https://jobs.example.com/batch/4')).toBeVisible();
+    await expect(page.getByLabel('Batch URLs')).toHaveValue('https://jobs.example.com/batch/4');
+    await expect(page).toHaveURL(/\/pipeline\?tab=batch$/);
   });
 
   test('New session and the command palette offer no batch mode, while a batch session from before stays listed and opens', async ({ page }) => {

@@ -130,22 +130,27 @@ test.describe('Dev Chat', () => {
   });
 
   test('a transcript taller than its box scrolls with the keyboard (axe: scrollable-region-focusable)', async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 420 });
-    await page.goto(`/auth?t=${E2E_TOKEN}`);
-    await page.goto('/dev');
-    await page.getByLabel('Prompt for devchat').fill('Add a scoring rule for a short window');
-    await page.getByRole('button', { name: 'Send', exact: true }).first().click();
-    await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
-    const transcript = page.getByLabel('Transcript for devchat');
-    await expect.poll(() => transcript.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-    await expect(transcript).toHaveAttribute('tabindex', '0');
-    expect(await transcript.evaluate((el) => el.scrollTop)).toBe(0);
-    await transcript.focus();
-    await expect(transcript).toBeFocused();
-    await page.keyboard.press('PageDown');
-    await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-    const axe = await (await axeBuilder(page)).analyze();
-    expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    const restore = keepTurnFiles();
+    try {
+      await page.setViewportSize({ width: 1280, height: 420 });
+      await page.goto(`/auth?t=${E2E_TOKEN}`);
+      await page.goto('/dev');
+      await page.getByLabel('Prompt for devchat').fill('Add a scoring rule for a short window');
+      await page.getByRole('button', { name: 'Send', exact: true }).first().click();
+      await expect(page.locator('p', { hasText: 'Blacklist and supervisor writes were blocked as expected.' })).toBeVisible({ timeout: 20_000 });
+      const transcript = page.getByLabel('Transcript for devchat');
+      await expect.poll(() => transcript.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      await expect(transcript).toHaveAttribute('tabindex', '0');
+      expect(await transcript.evaluate((el) => el.scrollTop)).toBe(0);
+      await transcript.focus();
+      await expect(transcript).toBeFocused();
+      await page.keyboard.press('PageDown');
+      await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+      const axe = await (await axeBuilder(page)).analyze();
+      expect(axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')).toEqual([]);
+    } finally {
+      restore();
+    }
   });
 
   test('the supervisor serves the reload status and the recovery page behind the session cookie', async ({ page, request }) => {
@@ -163,7 +168,9 @@ test.describe('Dev Chat', () => {
     const origin = `http://127.0.0.1:${E2E_PORT}`;
     expect((await page.request.post('/__recovery/revert', { form })).status()).toBe(403);
     expect((await page.request.post('/__recovery/revert', { form, headers: { origin } })).status()).toBe(403);
-    expect((await page.request.post('/__recovery/revert', { form, headers: { origin: 'http://127.0.0.1:4387', 'x-cc': '1' } })).status()).toBe(403);
+    // One port above the app's: never one of the e2e servers (base, base-1, base-2), whatever CC_E2E_PORT_BASE says.
+    const otherPort = `http://127.0.0.1:${E2E_PORT + 1}`;
+    expect((await page.request.post('/__recovery/revert', { form, headers: { origin: otherPort, 'x-cc': '1' } })).status()).toBe(403);
     expect((await page.request.post('/__recovery/revert', { form, headers: { origin, 'x-cc': '1' } })).status()).toBe(404);
   });
 

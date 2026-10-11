@@ -2,7 +2,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { E2E_TOKEN } from '../../playwright.config.js';
 import { NAV_GROUPS } from '../../web/nav.js';
-import { waitForAnimations } from './helpers.js';
+import { snapshotDataFiles, waitForAnimations } from './helpers.js';
 
 const ROUTES = [
   ...NAV_GROUPS.flatMap((g) => g.items.map((i) => i.to)),
@@ -71,16 +71,22 @@ for (const [name, viewport] of [
     });
 
     test('Sponsorship: the AI policy pass card and the tab row below it are one spacing step apart', async ({ page }) => {
-      await page.goto('/sponsorship');
-      await page.getByRole('button', { name: /Run AI policy pass/ }).click();
-      await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
-      await waitForAnimations(page);
-      const gap = await page.evaluate(() => {
-        const tabs = document.querySelector('.shell__main section > .tabs')!;
-        const card = tabs.previousElementSibling!;
-        return tabs.getBoundingClientRect().top - card.getBoundingClientRect().bottom;
-      });
-      expect(gap).toBe(SPACE_4);
+      // The pass rewrites the shared fixture digest that later specs read: it goes back after.
+      const restore = snapshotDataFiles('data/immigration/policy-digest.md');
+      try {
+        await page.goto('/sponsorship');
+        await page.getByRole('button', { name: /Run AI policy pass/ }).click();
+        await expect(page.getByText('Policy pass complete')).toBeVisible({ timeout: 20_000 });
+        await waitForAnimations(page);
+        const gap = await page.evaluate(() => {
+          const tabs = document.querySelector('.shell__main section > .tabs')!;
+          const card = tabs.previousElementSibling!;
+          return tabs.getBoundingClientRect().top - card.getBoundingClientRect().bottom;
+        });
+        expect(gap).toBe(SPACE_4);
+      } finally {
+        restore();
+      }
     });
 
     test('no page stacks boxed blocks edge to edge', async ({ page }) => {
