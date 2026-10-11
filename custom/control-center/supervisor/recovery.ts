@@ -45,7 +45,7 @@ export interface TurnChanges {
 interface MetaLike {
   id: string;
   mode: string;
-  turns: Array<{ n: number; runId?: string }>;
+  turns: Array<{ n: number; runId?: string; endedAt?: string | null }>;
 }
 
 /**
@@ -513,6 +513,12 @@ export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
   }
 }
 
+/** Writes turn `n`'s post-turn record from the hook's hashes, as the server's finalize would, unless it has one. */
+function finalizeTurn(sessionDir: string, n: number): void {
+  const offset = turnOffset(sessionDir, n);
+  if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(n), 'after.json'))) recordTurnAfter(sessionDir, n, offset);
+}
+
 /** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
 export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null; serverRunning?: boolean }): { status: number; text: string } {
   const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
@@ -529,8 +535,7 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
       return { status: 409, text: 'the session is still running (one of its runs has not ended); wait for it to finish before reverting' };
     }
     markLost = true;
-    const offset = turnOffset(sessionDir, last.n);
-    if (offset !== null && !fs.existsSync(path.join(sessionDir, 'turns', String(last.n), 'after.json'))) recordTurnAfter(sessionDir, last.n, offset);
+    finalizeTurn(sessionDir, last.n);
   } else if (!sessionRunsEnded(opts.ctx.dataRoot, meta.id, processStartTime, opts.serverRunning !== false)) {
     // A cancel marks the session at once, but its run's command may still write in the kill grace: the server keeps the
     // session active (manager.isActive, which /api/dev/revert checks) until that run records its end.
@@ -538,6 +543,13 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
   } else {
     // A server that died between starting a turn's run and recording the turn leaves the run queued under a finished session.
     markLost = opts.serverRunning === false;
+    // A cancel marks the session before finalize records the turn, so a server that died in the kill grace leaves its
+    // last turn with no endedAt and no post-turn record, and only a server that starts would write one (its reconcile
+    // finalizes such a turn whatever the session's status): with none, finalize it here.
+    const last = Array.isArray(meta.turns) ? meta.turns.at(-1) : undefined;
+    if (markLost && last && !last.endedAt && runEnded(opts.ctx.dataRoot, last.runId, processStartTime, false)) {
+      finalizeTurn(sessionDir, last.n);
+    }
   }
   try {
     let plans: RevertPlan[];
