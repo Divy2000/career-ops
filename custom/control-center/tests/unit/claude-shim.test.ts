@@ -60,6 +60,9 @@ describe('claude shim: argv rewriting', () => {
     expect(out.argv?.[1]).toBe(neutralizeFileMentions(prompt));
     expect(out.argv?.[1]).toContain('(@\u2060.env)');
     expect(out.argv?.[1]).toContain('https://medium.com/@acme');
+    // Every character class edge the session rule has: the shim's copy must agree on all of them.
+    const corpus = ['@x', '(@/etc/passwd)', '"@x"', "'@x'", '[@x]', '{@x}', '<@x>', 'a,@x', 'a;@x', 'a!@x', 'a|@x', 'a\\@x', 'line\n@x', 'tab\t@x', 'cr\r@x', '@\u2060x', '@@x', 'a@b.com', 'first.last+tag@example.co', 'user-1@x.io', 'scheme:@x', 'https://x.example/%@y', 'https://x.example/q?@z', 'https://x.example/a=@b&@c', 'https://medium.com/@acme/x', 'mailto:me@example.com', 'é@x', '_@x', '9@x', '\u00a0@x'];
+    for (const text of corpus) expect(confinedArgv(['-p', `${text} ${text}`]).argv?.[1], JSON.stringify(text)).toBe(neutralizeFileMentions(`${text} ${text}`));
   });
 
   it('wraps only print-mode calls and needs a value for a value flag', () => {
