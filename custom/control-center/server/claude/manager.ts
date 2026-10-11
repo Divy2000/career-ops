@@ -123,6 +123,8 @@ export class SessionManager {
   private sending = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
+  /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
+  private cancelledBeforeSpawn = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
   private policyAckTimer: NodeJS.Timeout | null = null;
@@ -377,6 +379,14 @@ export class SessionManager {
   cancel(id: string): SessionMeta {
     const meta = this.must(id);
     const turn = meta.turns.at(-1);
+    if (!turn && meta.status === 'queued' && this.sending.has(id)) {
+      // Its first turn is still preparing (the CLI version probe, the Keychain read): it ends before Claude is spawned.
+      this.cancelledBeforeSpawn.add(id);
+      this.store.setStatus(id, 'cancelled');
+      this.emit(id, { type: 'status', status: 'cancelled', reason: 'cancel requested' });
+      this.bus.publish('session.status', { sessionId: id, status: 'cancelled', mode: meta.mode });
+      return this.store.read(id)!;
+    }
     if (turn && (meta.status === 'running' || meta.status === 'queued')) {
       // A turn whose run already ended is being finalized (or about to be): marking it cancelled here would turn a
       // completed turn into "cancelled", keep its pipeline row pending, leave its policy batch unacknowledged and let
@@ -637,7 +647,35 @@ export class SessionManager {
     return Date.parse(meta.createdAt);
   }
 
+  /**
+   * A new session's first turn is claimed (as send and fork claim theirs) until it is running, so a delete is refused
+   * while it prepares; a cancel meanwhile is honoured before anything is spawned.
+   */
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
+    const claimed = !this.sending.has(meta.id);
+    if (claimed) this.sending.add(meta.id);
+    try {
+      return await this.prepareAndSpawn(meta, policy, prompt, opts);
+    } finally {
+      if (claimed) this.sending.delete(meta.id);
+      this.cancelledBeforeSpawn.delete(meta.id);
+    }
+  }
+
+  /** A turn cancelled before its run started: a first turn's report reservation goes back to the pool, as for one that cannot start. */
+  private async endCancelledBeforeSpawn(meta: SessionMeta): Promise<SessionMeta> {
+    const num = this.store.read(meta.id)?.reportNum ?? null;
+    if (num !== null && meta.turns.length === 0) {
+      this.store.setReportNum(meta.id, null);
+      const reason = `cancelled by the user before the turn started; ${await this.releaseReportNum(num, false)}`;
+      // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
+      this.emit(meta.id, { type: 'status', status: 'cancelled', reason });
+      this.bus.publish('session.status', { sessionId: meta.id, status: 'cancelled', mode: meta.mode });
+    }
+    return this.store.read(meta.id)!;
+  }
+
+  private async prepareAndSpawn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     // Policy, settings and revert bookkeeping live under the guard root, outside every write scope.
     const sessionDir = this.store.guardDirOf(meta.id);
     const n = meta.turns.length + 1;
@@ -687,8 +725,11 @@ export class SessionManager {
       state = { beforeReports: [...snapshotReports(this.cfg.dataRoot)], filesOffset: this.filesLineCount(meta.id), resumed: opts.resume };
       fs.writeFileSync(this.turnStatePath(meta.id, n), JSON.stringify(state));
     } catch (err) {
+      if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
+    // Checked after the last await: no cancel can land between here and the spawn.
+    if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
     let run: RunMeta;
     try {
       run = this.runner.start({

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { copyFixtureRoot, makeTestApp } from '../helpers/app.js';
+import { copyFixtureRoot, FAKE_TOKEN, makeTestApp } from '../helpers/app.js';
 import { SessionStore, sessionsDir } from '../../server/claude/sessions.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -37,7 +37,7 @@ const NO_REPORT = { events: [INIT, result('The posting needs a login; I could no
 const SLOW = { events: [INIT, { __sleep: 3000 }, result('still reading', 0.01)] };
 const evaluate = (url: string) => ({ mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` });
 
-const call = (app: Awaited<ReturnType<typeof makeTestApp>>, method: 'GET' | 'POST', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload: method === 'GET' ? undefined : (payload ?? {}) });
+const call = (app: Awaited<ReturnType<typeof makeTestApp>>, method: 'GET' | 'POST' | 'DELETE', url: string, payload?: Record<string, unknown>) => app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload: method === 'GET' ? undefined : (payload ?? {}) });
 
 describe('session list: one unreadable session folder (R20-claude-L3-01)', () => {
   it('given a session whose meta.json is truncated, when the server starts and the Sessions list loads, then that session is skipped and every other one is listed', async () => {
@@ -108,6 +108,96 @@ describe('session manager: resuming an uncredited evaluation never duplicates a 
       const res = await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'here is the text' }));
       expect(res.statusCode, res.body).toBe(202);
       expect((await settleOn(app, id)).meta.turns).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('session manager: a new session cancelled or deleted while its first turn prepares (R20-claude-L1-02)', () => {
+  /** A token read held until released: the session sits queued with no turn, as during the CLI version probe. */
+  function heldToken() {
+    const gate: { release: (() => void) | null } = { release: null };
+    const readToken = async () => {
+      await new Promise<void>((resolve) => (gate.release = resolve));
+      return FAKE_TOKEN;
+    };
+    return { gate, readToken };
+  }
+  async function untilHeld(gate: { release: (() => void) | null }): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    while (!gate.release && Date.now() < deadline) await wait(20);
+    expect(gate.release).not.toBeNull();
+  }
+  const queuedId = async (app: App): Promise<string> => {
+    const list = (await call(app, 'GET', '/api/sessions')).json() as Array<{ id: string; status: string }>;
+    expect(list.map((m) => m.status)).toEqual(['queued']);
+    return list[0]!.id;
+  };
+  const sentinels = (app: App) => fs.readdirSync(path.join(app.cfg.dataRoot, 'reports')).filter((f) => f.endsWith('-RESERVED.md'));
+
+  it('given a session queued before its first turn, when the user cancels it, then it ends cancelled and no Claude run starts', async () => {
+    const token = heldToken();
+    const app = await makeTestApp({}, { readToken: token.readToken });
+    try {
+      const runsBefore = app.runner.store.list().length;
+      const start = withScenario(scenarioFile(NO_REPORT), async () => {
+        const pending = call(app, 'POST', '/api/sessions', { mode: 'devchat', target: { type: 'none', value: null }, prompt: 'look around' });
+        await untilHeld(token.gate);
+        const id = await queuedId(app);
+        const cancelled = await call(app, 'POST', `/api/sessions/${id}/cancel`, {});
+        expect(cancelled.statusCode, cancelled.body).toBe(200);
+        expect(cancelled.json().status).toBe('cancelled');
+        token.gate.release!();
+        return { id, res: await pending };
+      });
+      const { id, res } = await start;
+      expect(res.json().status).toBe('cancelled');
+      const { meta } = await settleOn(app, id);
+      expect(meta.status).toBe('cancelled');
+      expect(meta.turns).toEqual([]);
+      expect(app.runner.store.list().length).toBe(runsBefore);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a Batch evaluate session queued before its first turn, when the user cancels it, then its reserved report number goes back to the pool', async () => {
+    const token = heldToken();
+    const app = await makeTestApp({}, { readToken: token.readToken });
+    try {
+      const before = sentinels(app);
+      const fan = await withScenario(scenarioFile(NO_REPORT), async () => {
+        const pending = call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r20-cancel-queued'] });
+        await untilHeld(token.gate);
+        const id = await queuedId(app);
+        expect((await call(app, 'POST', `/api/sessions/${id}/cancel`, {})).statusCode).toBe(200);
+        token.gate.release!();
+        return (await pending).json();
+      });
+      const { meta } = await settleOn(app, fan.sessions[0].id);
+      expect(meta).toMatchObject({ status: 'cancelled', reportNum: null, turns: [] });
+      expect(sentinels(app)).toEqual(before);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a session queued before its first turn, when the user deletes it, then the delete is refused with 409 and the turn still starts on the kept session', async () => {
+    const token = heldToken();
+    const app = await makeTestApp({}, { readToken: token.readToken });
+    try {
+      const { id, res } = await withScenario(scenarioFile(NO_REPORT), async () => {
+        const pending = call(app, 'POST', '/api/sessions', { mode: 'devchat', target: { type: 'none', value: null }, prompt: 'look around' });
+        await untilHeld(token.gate);
+        const id = await queuedId(app);
+        const del = await call(app, 'DELETE', `/api/sessions/${id}`);
+        expect(del.statusCode, del.body).toBe(409);
+        token.gate.release!();
+        return { id, res: await pending };
+      });
+      expect(res.statusCode, res.body).toBe(202);
+      expect((await settleOn(app, id)).meta.turns).toHaveLength(1);
     } finally {
       await app.close();
     }
