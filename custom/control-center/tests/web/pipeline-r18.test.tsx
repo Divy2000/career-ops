@@ -235,7 +235,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
     await until(() => button('Process inbox'), 'the Inbox tab');
     await act(async () => button('Process inbox')!.click());
-    await until(() => host.textContent?.includes('Batch evaluations are starting'), 'the note');
+    await until(() => host.textContent?.includes('Evaluations started from Pipeline are still starting'), 'the note');
     expect(pipelinePanel()).toBeUndefined();
     await act(async () => hold!.release());
   });
@@ -271,14 +271,28 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     expect(button('Batch evaluate')!.disabled).toBe(true);
   });
 
-  it('given only its own Evaluate visible fan-out in flight, the Inbox does not say Batch evaluations are starting', async () => {
+  it('given only its own Evaluate visible fan-out in flight, the Inbox does not say other evaluations are starting', async () => {
     holdUrl = '/api/sessions/fanout';
     await mount();
     await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
     await act(async () => button('Evaluate visible (2)')!.click());
     await until(() => hold, 'the fan-out sent');
     await settle();
-    expect(host.textContent).not.toContain('Batch evaluations are starting');
+    expect(host.textContent).not.toContain('Evaluations started from Pipeline are still starting');
+  });
+
+  it('given an Evaluate visible fan-out in flight and the Inbox mounted again, Process inbox is held without naming a Batch evaluate', async () => {
+    holdUrl = '/api/sessions/fanout';
+    const router = await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
+    await act(async () => button('Evaluate visible (2)')!.click());
+    await until(() => hold, 'the fan-out sent');
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
+    await act(async () => (await until(() => button('Process inbox'), 'the Inbox tab')).click());
+    await until(() => host.textContent?.includes('It can start once they finish'), 'the held-back note');
+    expect(pipelinePanel()).toBeUndefined();
+    expect(host.textContent).not.toContain('Batch evaluations');
   });
 
   it('given a Batch evaluate fan-out still in flight after the start window, Process inbox is still held back', async () => {
@@ -294,9 +308,9 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
       await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
       await until(() => button('Process inbox'), 'the Inbox tab');
       await act(async () => button('Process inbox')!.click());
-      await until(() => host.textContent?.includes('Batch evaluations are starting'), 'the note');
+      await until(() => host.textContent?.includes('Evaluations started from Pipeline are still starting'), 'the note');
       await act(async () => vi.advanceTimersByTime(60_000));
-      expect(host.textContent).toContain('Batch evaluations are starting');
+      expect(host.textContent).toContain('Evaluations started from Pipeline are still starting');
       expect(pipelinePanel()).toBeUndefined();
     } finally {
       vi.useRealTimers();
