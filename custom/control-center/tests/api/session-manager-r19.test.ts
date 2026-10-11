@@ -117,6 +117,35 @@ describe('session manager: replaying an original request never duplicates a live
     });
   }
 
+  it('given a reply replaying a failed evaluation that has not reached its run yet, when the same posting is started again, then the start is refused with 409', async () => {
+    let release!: () => void;
+    const state = { mode: 'fail' as 'fail' | 'hold' };
+    const readToken = async () => {
+      if (state.mode === 'fail') throw new Error('Keychain item career-ops-claude-token not found');
+      await new Promise<void>((resolve) => (release = resolve));
+      return FAKE_TOKEN;
+    };
+    const app = await makeTestApp({}, { readToken });
+    try {
+      const url = 'https://jobs.example.com/synthetic/r19-dup-window';
+      const body = { mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` };
+      const { id } = (await call(app, 'POST', '/api/sessions', body)).json();
+      expect((await settleOn(app, id)).meta.status).toBe('error');
+      state.mode = 'hold';
+      await withScenario(scenarioFile(NO_REPORT), async () => {
+        const reply = call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'retry' });
+        const deadline = Date.now() + 10_000;
+        while (!release && Date.now() < deadline) await wait(20);
+        expect((await call(app, 'POST', '/api/sessions', body)).statusCode).toBe(409);
+        release();
+        expect((await reply).statusCode).toBe(202);
+      });
+      await settleOn(app, id);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('given a source whose cancelled first turn is still stopping and never started a conversation, when it is forked, then the fork starts only once that run has ended', async () => {
     const app = await makeTestApp();
     try {

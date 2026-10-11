@@ -121,7 +121,7 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
-  /** The postings (mode and URL) a fan-out is starting right now, before their sessions exist. */
+  /** The postings (mode and URL) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   readonly playwrightAvailable: boolean;
   /** The pending retry of the policy-pass acks that failed, and the delay the next one waits. */
@@ -217,8 +217,12 @@ export class SessionManager {
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
       const resume = this.hasConversation(meta) || forkPending;
-      if (!resume) this.assertNotEvaluatedElsewhere(meta);
-      return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
+      const unclaim = resume ? () => {} : this.claimReplay(meta);
+      try {
+        return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
+      } finally {
+        unclaim();
+      }
     } finally {
       this.sending.delete(id);
     }
@@ -237,9 +241,13 @@ export class SessionManager {
       const src = this.must(id);
       // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
       if (!this.hasConversation(src)) {
-        this.assertNotEvaluatedElsewhere(src);
-        const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
-        return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+        const unclaim = this.claimReplay(src);
+        try {
+          const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
+          return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+        } finally {
+          unclaim();
+        }
       }
       const forked = this.store.fork(id);
       return await this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
@@ -269,11 +277,19 @@ export class SessionManager {
     }
   }
 
-  /** A replayed original request starts the posting's evaluation again: refused while another session evaluates it. */
-  private assertNotEvaluatedElsewhere(meta: SessionMeta): void {
-    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another batch evaluate is already starting ${meta.target.value}`);
+  /**
+   * A replayed original request starts the posting's evaluation again: refused while another session evaluates it, and
+   * claimed (as a starting fan-out claims its URLs) until its turn is running, so no start slips in while it prepares.
+   * Returns the release.
+   */
+  private claimReplay(meta: SessionMeta): () => void {
+    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another evaluation is already starting ${meta.target.value}`);
     const live = this.liveEvaluationFor(meta.mode, meta.target, meta.id);
     if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
+    if (meta.target.type !== 'url' || !meta.target.value) return () => {};
+    const key = `${meta.mode}\0${meta.target.value}`;
+    this.fanningOut.add(key);
+    return () => this.fanningOut.delete(key);
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
@@ -586,8 +602,13 @@ export class SessionManager {
     }
     if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
       const now = new Date();
-      fs.utimesSync(sentinel, now, now);
-      return meta;
+      try {
+        fs.utimesSync(sentinel, now, now);
+        return meta;
+      } catch (err) {
+        // Collected between the read and the refresh: the number is lost like any other.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
     }
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
