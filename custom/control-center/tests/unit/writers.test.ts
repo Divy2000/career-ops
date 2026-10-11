@@ -203,6 +203,31 @@ describe('follow-ups edits', () => {
     const relogged = FOLLOWUPS.replace('| 2 | 6 | 2026-10-02 | Vandelay | Eng | LinkedIn | HM | thanks |', '| 2 | 6 | 2026-10-02 | Vandelay | Eng | Email | Recruiter | second note |');
     expect(applyFollowupEdit(relogged, { op: 'log.delete', num: 2, appNum: 6, date: '2026-10-02', channel: 'LinkedIn', contact: 'HM', notes: 'thanks' })).toEqual({ ok: false, error: 'stale' });
   });
+  it('keeps a hand-written line the cadence does not read as a pin when setting or clearing a pin (R23-srv-dom-a-L2-01)', () => {
+    const text = `${FOLLOWUPS}- next #42 2026-07-10 after the onsite\n- next #42 2026-02-31\n`;
+    const set = applyFollowupEdit(text, { op: 'pin.set', appNum: 42, date: '2026-07-20', setOn: '2026-07-01' });
+    expect(set.ok).toBe(true);
+    if (!set.ok) return;
+    expect(set.text).toContain('- next #42 2026-07-10 after the onsite\n');
+    expect(set.text).toContain('- next #42 2026-02-31\n');
+    expect(set.text).toContain('- next #42 2026-07-20 (set 2026-07-01)');
+    // Only lines the cadence reads as a pin exist to clear; the user's text is not one.
+    expect(applyFollowupEdit(text, { op: 'pin.clear', appNum: 42 })).toEqual({ ok: false, error: 'not-found' });
+    const cleared = applyFollowupEdit(set.text, { op: 'pin.clear', appNum: 42 });
+    expect(cleared.ok && cleared.text).toBe(text);
+  });
+  it('still replaces and clears a pin carrying a dash-led note, as the cadence reads one', () => {
+    const text = `${FOLLOWUPS}- next #42 2026-07-10 (set 2026-07-01) - after the onsite\n- next #42 2026-07-12 \u2013 moved\n`;
+    const set = applyFollowupEdit(text, { op: 'pin.set', appNum: 42, date: '2026-07-20', setOn: '2026-07-02' });
+    expect(set.ok && set.text.match(/^- next #42 /gm)).toEqual(['- next #42 ']);
+    expect(applyFollowupEdit(text, { op: 'pin.clear', appNum: 42 })).toEqual({ ok: true, text: FOLLOWUPS });
+  });
+  it('reads a zero-padded application number in a pin or retirement as the cadence does (#042 is application 42)', () => {
+    const text = `${FOLLOWUPS}- next #042 2026-10-20 (set 2026-10-10)\n- cleared #042 2026-10-01\n`;
+    expect(applyFollowupEdit(text, { op: 'pin.clear', appNum: 42 })).toEqual({ ok: true, text: `${FOLLOWUPS}- cleared #042 2026-10-01\n` });
+    const set = applyFollowupEdit(text, { op: 'pin.set', appNum: 42, date: '2026-10-25', setOn: '2026-10-11' });
+    expect(set).toEqual({ ok: true, text: `${FOLLOWUPS}- next #42 2026-10-25 (set 2026-10-11)\n` });
+  });
   it('rejects dates that are not YYYY-MM-DD', () => {
     expect(applyFollowupEdit(FOLLOWUPS, { op: 'pin.set', appNum: 1, date: 'tomorrow', setOn: '2026-10-03' })).toEqual({ ok: false, error: 'invalid-date' });
   });

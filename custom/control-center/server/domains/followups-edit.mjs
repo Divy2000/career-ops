@@ -29,18 +29,19 @@ function isSeparator(line) {
   return line !== undefined && /^\s*\|\s*:?-{3,}/.test(line);
 }
 
-function pinRe(appNum) {
-  return new RegExp(`^-\\s+next\\s+#${appNum}\\s+\\d{4}-\\d{2}-\\d{2}`, 'i');
+// followup-cadence.mjs OVERRIDE_RE and parseNextOverrides: a line the cadence does not read as a pin is the user's text and stays.
+function isPin(line, appNum) {
+  // The cadence reads the number with parseInt, so #042 is application 42.
+  const m = line.match(/^-\s+next\s+#(\d+)\s+(\d{4}-\d{2}-\d{2})(?:\s+\(set\s+\d{4}-\d{2}-\d{2}\))?(?:\s*[\u2014\u2013-].*)?\s*$/i);
+  return m !== null && parseInt(m[1], 10) === appNum && isRealDate(m[2]);
 }
 
 // followup-cadence.mjs: a `- cleared #N` retirement outranks any pin, so pinning a retired application revives it.
 // The whole CLEARED_RE grammar: a line the cadence does not read as a retirement is the user's text and stays.
 function isCleared(line, appNum) {
-  const m = line.match(new RegExp(`^-\\s+cleared\\s+#${appNum}\\s+(\\d{4}-\\d{2}-\\d{2})(?:\\s*[\u2014\u2013-].*)?\\s*$`, 'i'));
-  if (!m) return false;
+  const m = line.match(/^-\s+cleared\s+#(\d+)\s+(\d{4}-\d{2}-\d{2})(?:\s*[\u2014\u2013-].*)?\s*$/i);
   // followup-cadence.mjs parseDate: an impossible day (2026-02-31) is no retirement.
-  const d = new Date(m[1]);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === m[1];
+  return m !== null && parseInt(m[1], 10) === appNum && isRealDate(m[2]);
 }
 
 /**
@@ -91,14 +92,12 @@ export function applyFollowupEdit(text, edit) {
     }
     case 'pin.set': {
       if (!isRealDate(String(edit.date)) || !isRealDate(String(edit.setOn))) return { ok: false, error: 'invalid-date' };
-      const re = pinRe(edit.appNum);
-      const kept = lines.filter((l) => !re.test(l) && !isCleared(l, edit.appNum));
+      const kept = lines.filter((l) => !isPin(l, edit.appNum) && !isCleared(l, edit.appNum));
       kept.push(`- next #${edit.appNum} ${edit.date} (set ${edit.setOn})`);
       return { ok: true, text: join(kept) };
     }
     case 'pin.clear': {
-      const re = pinRe(edit.appNum);
-      const kept = lines.filter((l) => !re.test(l));
+      const kept = lines.filter((l) => !isPin(l, edit.appNum));
       if (kept.length === lines.length) return { ok: false, error: 'not-found' };
       return { ok: true, text: join(kept) };
     }
