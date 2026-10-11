@@ -861,3 +861,77 @@ jobTest('the job under test runs on the node running these specs, not a Homebrew
   assert.equal(r.status, 0, r.log);
   assert.deepEqual(r.stepNodes, [fs.realpathSync(process.execPath)]);
 });
+
+const batchFiles = (imm) => (fs.existsSync(path.join(imm, 'batches')) ? fs.readdirSync(path.join(imm, 'batches')).sort() : []);
+
+for (const [what, env] of [
+  ['the claude call fails (a usage limit, no network)', { FAKE_CLAUDE_EXIT: '1' }],
+  ['the version re-check before the spawn refuses the pass', { FAKE_CLAUDE_VERSIONS: JSON.stringify(['2.1.289 (Claude Code)', '2.1.300 (Claude Code)']) }],
+]) {
+  jobTest(`a policy pass that ends not done because ${what} leaves no batch behind (R22-scripts-a-L1-01)`, () => {
+    const w = dailyWorld({ approved: ['2.1.289', '2.1.300', ...APPROVED] });
+    failingAckWatch(w);
+    const r = w.run(env);
+    assert.match(r.log, /^!!! step failed: policy watch$/m);
+    assert.equal(ackedBatches(r.steps).length, 0, r.steps);
+    assert.deepEqual(batchFiles(r.imm), [], 'nothing reads a batch that was never recorded done');
+  });
+}
+
+jobTest('a policy pass cancelled while claude runs leaves no batch behind (R22-scripts-a-L1-01)', async () => {
+  const w = dailyWorld();
+  failingAckWatch(w);
+  // The policy call, not the rank: it notes it started, then waits to be cancelled.
+  const started = path.join(w.T, 'policy-started');
+  fs.writeFileSync(w.fakeClaude, `#!/bin/bash\nif [ "$1" = --version ]; then echo "${APPROVED[0]} (Claude Code)"; exit 0; fi\ntouch "${started}"\nexec /bin/sleep 30\n`, { mode: 0o755 });
+  const child = w.start();
+  const exited = new Promise((resolve) => child.on('exit', (status, sig) => resolve({ status, sig })));
+  for (let i = 0; i < 600 && !fs.existsSync(started); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(started), 'the policy call never started');
+  const imm = path.join(w.data, 'data', 'immigration');
+  assert.equal(batchFiles(imm).filter((f) => f.endsWith('.json')).length, 1, 'the batch exists while the pass runs');
+  const holder = Number(readFileSync(path.join(imm, '.run-daily.pid'), 'utf8'));
+  process.kill(-child.pid, 'SIGTERM');
+  await exited;
+  for (let i = 0; i < 600 && alive(holder); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(alive(holder), false, 'the lock holder exits on the signal');
+  assert.deepEqual(batchFiles(imm), [], 'a cancelled pass leaves no batch behind');
+});
+
+jobTest('a cancelled run keeps a batch already recorded done, for the next run to acknowledge (R22-scripts-a-L1-01)', async () => {
+  const w = dailyWorld();
+  failingAckWatch(w);
+  // The ack hangs, so the cancel lands after the pass is recorded done.
+  const acking = path.join(w.T, 'acking');
+  fs.writeFileSync(
+    path.join(w.root, 'custom/immigration/watch.mjs'),
+    `import fs from 'node:fs';\nif (process.argv.includes('--ack')) { fs.writeFileSync(${JSON.stringify(acking)}, ''); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000); process.exit(1); }\nprocess.stdout.write(JSON.stringify({ new_items: [{ id: 'x' }] }));\n`,
+  );
+  const child = w.start();
+  const exited = new Promise((resolve) => child.on('exit', (status, sig) => resolve({ status, sig })));
+  for (let i = 0; i < 600 && !fs.existsSync(acking); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(acking), 'the ack never started');
+  const imm = path.join(w.data, 'data', 'immigration');
+  const holder = Number(readFileSync(path.join(imm, '.run-daily.pid'), 'utf8'));
+  process.kill(-child.pid, 'SIGTERM');
+  await exited;
+  for (let i = 0; i < 600 && alive(holder); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  const left = batchFiles(imm);
+  assert.equal(left.length, 2, left.join(' '));
+  assert.ok(left[1] === `${left[0]}.done`, left.join(' '));
+});
+
+jobTest('a leftover done batch that cannot be read is removed with its .done marker (R22-scripts-a-L1-01)', () => {
+  const w = dailyWorld();
+  failingAckWatch(w);
+  const batches = path.join(w.data, 'data', 'immigration', 'batches');
+  fs.mkdirSync(batches, { recursive: true });
+  const garbled = path.join(batches, '20200101T000000-3.json');
+  fs.writeFileSync(garbled, '{not json');
+  fs.writeFileSync(`${garbled}.done`, '2020-01-01T00:00:00Z\n');
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.equal(fs.existsSync(garbled), false, 'the unreadable batch goes with its marker');
+  assert.deepEqual(doneMarks(r.imm), []);
+  assert.deepEqual(batchFiles(r.imm), ackedBatches(r.steps).map((b) => path.basename(b)), 'only the batch of the pass just acknowledged stays, as the Control Center keeps one');
+});
