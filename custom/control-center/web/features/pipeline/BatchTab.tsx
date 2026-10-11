@@ -88,19 +88,21 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const startAsked = async () => {
     if (list.length === 0 || tooMany || refused.length > 0 || blocked) return;
     const n = list.length;
+    // The Process inbox run known before the confirm: one reported only while it was open is in no list yet.
+    const knownProcess = processStore.read();
     if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
     setBusy(true);
     setMessage(null);
     // From here until the sessions list has the started sessions, a Process inbox on the Inbox tab waits for this one.
     markBatchStarting(true);
     try {
-      await launch();
+      await launch(knownProcess);
     } finally {
       await endBatchStarting(queryClient);
       setBusy(false);
     }
   };
-  const launch = async () => {
+  const launch = async (knownProcess: string | null) => {
     // A Process inbox can start while the confirm is open: the sessions list is read again before anything starts. It is
     // also the list from before the start, so a failure part way can tell which sessions it started.
     const read = await withinSessionsReadLimit(sessions.refetch());
@@ -110,10 +112,8 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     }
     const now = read.value;
     if (now.isError || !now.data || livePipelineId(now.data) !== null) return;
-    // One that reported its id after that read began is in no list yet. An id the read before the confirm already
-    // found unlisted is a session the server no longer has.
     const remembered = processStore.read();
-    if (processStore.starting() || (remembered !== null && remembered !== readFor && !now.data.some((x) => x.id === remembered))) {
+    if (processStore.starting() || (remembered !== null && remembered !== knownProcess && !now.data.some((x) => x.id === remembered))) {
       setMessage({ tone: 'danger', text: 'A Process inbox run started meanwhile, so no evaluation was started.' });
       return;
     }

@@ -168,6 +168,20 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     expect(posts).toEqual([]);
   });
 
+  it('given the remembered finished Process inbox run deleted while the confirm was open, Start them still starts', async () => {
+    sessionStorage.setItem('cc.pipeline.process', 's-old');
+    sessions = [pipelineSession('s-old', 'done')];
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    const startThem = await until(() => button('Start them'), 'the confirm');
+    sessions = [];
+    await act(async () => startThem.click());
+    await until(() => posts.length === 1 || undefined, 'the fan-out');
+    expect(host.textContent).not.toContain('A Process inbox run started meanwhile');
+  });
+
   it('given a sessions read after the confirm that never answers, Batch evaluate gives up in time, says so and holds nothing', async () => {
     const router = await mount('batch');
     await typeUrls('https://jobs.example.com/busy');
