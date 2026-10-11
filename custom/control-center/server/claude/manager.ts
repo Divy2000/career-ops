@@ -451,10 +451,26 @@ export class SessionManager {
     return this.store.read(id)!;
   }
 
-  delete(id: string): boolean {
+  /**
+   * A session left holding its report number (awaiting the user, or a later turn that failed or was cancelled before it
+   * started) gives it back here: nothing else would drop the RESERVED file before a gc.
+   */
+  async delete(id: string): Promise<boolean> {
     if (this.active.has(id) || this.sending.has(id)) throw new BusyError(`session ${id} is still running`);
-    const batch = this.store.read(id)?.policyBatch ?? null;
-    const deleted = this.store.delete(id);
+    const meta = this.store.read(id);
+    const batch = meta?.policyBatch ?? null;
+    const num = meta?.reportNum ?? null;
+    // Claimed before the delete and the await, as finalize does, so the number is released once.
+    if (num !== null) this.store.setReportNum(id, null);
+    let deleted: boolean;
+    try {
+      deleted = this.store.delete(id);
+    } finally {
+      if (num !== null) {
+        const released = await this.releaseReportNum(num, meta?.creditedReport?.num === num);
+        if (released.startsWith('could not')) console.warn(`[sessions] session ${id} deleted: ${released}`);
+      }
+    }
     if (deleted && batch !== null) this.dropUnheldPolicyBatch(batch);
     return deleted;
   }

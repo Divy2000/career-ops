@@ -504,7 +504,7 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
 
   it('given a session deleted after its ack failed, when the leftover acks run, then its batch is still acknowledged', async () => {
     const { id, batch } = await failedAckPass(24);
-    expect(app.sessions.delete(id)).toBe(true);
+    expect(await app.sessions.delete(id)).toBe(true);
     ackFails = false;
     const restarted = restart();
     try {
