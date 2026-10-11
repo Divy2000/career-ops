@@ -507,6 +507,81 @@ describe('projects library form (Profile & CV > Projects)', () => {
   });
 });
 
+describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)', () => {
+  const entry = { id: 'event-router', title: 'Event Router', url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['One.'], line: 1, editProblem: null, inCv: false };
+  beforeEach(() => {
+    files = { '/api/projects': { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [entry] } };
+  });
+
+  /** Holds the first PUT until released and, as the real route does, writes its body into the library (the id comes from the title). */
+  function holdFirstPutAndApply() {
+    const real = vi.mocked(fetch).getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let first = true;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (init?.method !== 'PUT') return real(input, init);
+      if (first) {
+        first = false;
+        await held;
+      }
+      const res = await real(input, init);
+      if (res.ok) {
+        const body = JSON.parse(String(init.body)) as typeof entry;
+        const id = String(input).split('/').pop();
+        const doc = files['/api/projects']!;
+        doc.entries = (doc.entries as Array<typeof entry>).map((e) => (e.id === id ? { ...e, ...body, id: body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') } : e));
+      }
+      return res;
+    });
+    return () => act(async () => release());
+  }
+
+  it('given a save on its way, when the user edits the title meanwhile, then the form stays open with that edit and the next save updates the saved version', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLTextAreaElement>('Bullet 1'), 'the bullet field'), 'One, reworded.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Title')!, 'Event Router v2');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Event Router v2');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')!.value).toBe('One, reworded.');
+    expect(alerts()).toBe('');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-router', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Router v2', bullets: ['One, reworded.'] }) }));
+  });
+
+  it('given a save that renames the entry, when the user edits a bullet meanwhile, then the next save updates the entry under its new id', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'One, reworded.');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLTextAreaElement>('Bullet 1')?.value).toBe('One, reworded.');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Routing', bullets: ['One, reworded.'] }) }));
+  });
+
+  it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    await click(button('Save project')!);
+    await until(() => labelled('Title') === null, 'the form to close');
+    expect(writes()).toHaveLength(1);
+  });
+});
+
 describe('projects library: a save still on its way after Cancel (R20-feat-b-L1-01)', () => {
   const entry = (id: string, title: string) => ({ id, title, url: null, tagline: null, tags: [], kind: 'project', dates: null, source: null, bullets: ['One.'], line: 1, editProblem: null, inCv: false });
   beforeEach(() => {
