@@ -126,9 +126,16 @@ if ! command -v security >/dev/null 2>&1; then
   echo "!!! Could not read Keychain item 'career-ops-claude-token': the security command was not found on PATH (it ships with macOS in /usr/bin)."
   exit 1
 fi
-KEYCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/run-daily-keychain.XXXXXX")"
+if ! KEYCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/run-daily-keychain.XXXXXX")"; then
+  KEYCHAIN_ERR=""
+  echo "!!! Could not create a temp file for the Keychain read in ${TMPDIR:-/tmp}; check that it exists and is writable."
+  exit 1
+fi
 keychain_rc=0
 CC_OAUTH_TOKEN="$(security find-generic-password -s career-ops-claude-token -w 2>"$KEYCHAIN_ERR")" || keychain_rc=$?
+# Trimmed, as the Control Center trims it: a token of only whitespace is as missing as an empty one.
+CC_OAUTH_TOKEN="${CC_OAUTH_TOKEN#"${CC_OAUTH_TOKEN%%[![:space:]]*}"}"
+CC_OAUTH_TOKEN="${CC_OAUTH_TOKEN%"${CC_OAUTH_TOKEN##*[![:space:]]}"}"
 keychain_err="$(tail -c 200 "$KEYCHAIN_ERR" | tr '\n' ' ' | sed 's/ *$//')"
 rm -f "$KEYCHAIN_ERR"
 if [ "$keychain_rc" -eq 44 ] || { [ "$keychain_rc" -eq 0 ] && [ -z "$CC_OAUTH_TOKEN" ]; }; then
