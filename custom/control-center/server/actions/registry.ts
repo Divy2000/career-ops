@@ -14,6 +14,7 @@ import { RunStore } from '../runner/store.js';
 import { prefillUrlProblem } from '../../shared/prefill.js';
 import { outputFileProblem } from '../../shared/output-path.js';
 import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
+import { STATUS_NOTE_MAX } from '../../shared/tracker-status.js';
 import { writeTmpInput } from './tmp-inputs.js';
 import { replyWatchRefused } from '../domains/replyCandidates.js';
 
@@ -168,7 +169,7 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: true,
-    params: z.object({ row: positive, state: z.enum(TRACKER_STATES), note: z.string().max(500).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
+    params: z.object({ row: positive, state: z.enum(TRACKER_STATES), note: z.string().max(STATUS_NOTE_MAX).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
     build: (p, ctx) => node(ctx, 'setStatus', ['--row', String(p.row), p.state, '--source', 'web', '--json', ...noteArg(p.note), ...opt(p.on, '--on')]),
     exitMap: { 1: 400, 2: 404, 3: 409, 4: 503 },
   }),
