@@ -172,8 +172,9 @@ export async function readDocuments(codeRoot: string, dataRoot: string, report: 
   const jdsDir = path.join(dataRoot, 'jds');
   // With a report, only its own jds/<n>- captures: a company match would also list the JDs of the company's other reports.
   // The prefix is compared as a number, as jd-capture.mjs does: hand-named captures are 7- or 0007- as often as 007-.
+  // archive-posting.mjs without --report names a capture {YYYY-MM-DD}_..., whose year is not a report number.
   const reportOf = (f: string) => {
-    const m = /^(\d+)-/.exec(f);
+    const m = /^\d{4}-\d{2}-\d{2}[_-]/.test(f) ? null : /^(\d+)-/.exec(f);
     return m ? parseInt(m[1]!, 10) : null;
   };
   const ownsJd = report === null ? (f: string) => namesCompany(slug, f) : (f: string) => reportOf(f) === report;
@@ -252,8 +253,10 @@ export async function readApplyDocuments(codeRoot: string, dataRoot: string, row
   const covers = files.filter((f) => COVER_TEXT.test(f) && artifactKindFromName(f) === 'cover');
   if (!row) return { pdfs, covers, suggestedPdf: null, suggestedCover: null };
   const slug = companySlug(row.company);
-  const named = (f: string) => namesCompany(slug, f);
-  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? pdfs.find(named) ?? null, suggestedCover: covers.find(named) ?? null };
+  // A name match is only a guess: never one the manifest or an application bundle files under another report.
+  const otherReports = (f: string) => index.some((r) => r.pdf === f && r.report !== row.report) || (bundleReport(f) ?? row.report) !== row.report;
+  const guess = (f: string) => namesCompany(slug, f) && !otherReports(f);
+  return { pdfs, covers, suggestedPdf: suggestCv(index, pdfs, row.report) ?? pdfs.find(guess) ?? null, suggestedCover: covers.find(guess) ?? null };
 }
 
 /** The manifest's CV for the report (its last row is the newest), else the highest tailored version in the report's bundle. */
