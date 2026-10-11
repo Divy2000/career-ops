@@ -353,7 +353,8 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                     <button type="button" disabled={generating || pdfSession.busy || livePdf !== undefined || sessionsChecking} onClick={() => void generatePdf()}>
                       Generate CV PDF <CostPill cost="tokens" />
                     </button>
-                    {(livePdf?.id ?? (pdfSession.busy ? pdfId : null)) && (
+                    {/* While another mount's start is in flight, the remembered id is still the earlier, finished session. */}
+                    {livePdf?.id || (pdfSession.busy && !pdfSession.waiting && pdfId) ? (
                       <span className="muted small">
                         {' '}
                         <Link to="/sessions/$id" params={{ id: livePdf?.id ?? pdfId! }}>
@@ -361,6 +362,8 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                         </Link>{' '}
                         is still running.
                       </span>
+                    ) : (
+                      pdfSession.waiting && <span className="muted small"> The tailored CV session is starting.</span>
                     )}
                   </div>
                 )}
