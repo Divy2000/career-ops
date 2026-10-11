@@ -11,9 +11,12 @@ import { until } from '../helpers/until';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const navigations = vi.hoisted(() => [] as unknown[]);
+// Where the user is: the application page of row 4 unless a test moves them.
+const location = vi.hoisted(() => ({ pathname: '/tracker/4' }));
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useNavigate: () => async (to: unknown) => void navigations.push(to),
+  useRouter: () => ({ state: { location } }),
 }));
 
 let host: HTMLElement;
@@ -28,6 +31,7 @@ function json(status: number, body: unknown) {
 
 beforeEach(async () => {
   navigations.length = 0;
+  location.pathname = '/tracker/4';
   posts = [];
   confirmations = [];
   // What POST /api/actions/tracker.delete answers: tracker.mjs delete prints only to stderr, so result is '' and the
@@ -88,6 +92,51 @@ describe('Danger zone delete', () => {
     await click('Confirm delete #4');
     expect(navigations).toEqual([]);
     expect(host.querySelector('[role="alert"]')!.textContent).toBe('tracker.delete exited 1 (Fatal: Timed out waiting for tracker lock at /data/applications.md.lock)');
+  });
+
+  /** Confirms a delete that a held tracker lock keeps from answering, and returns the release of that lock. */
+  async function confirmHeldDelete(qc: QueryClient) {
+    let answer!: () => void;
+    const held = new Promise<void>((r) => (answer = r));
+    const fetchStub = fetch as unknown as ReturnType<typeof vi.fn>;
+    const inner = fetchStub.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>;
+    fetchStub.mockImplementation(async (url: string, init?: RequestInit) => {
+      const res = await inner(url, init);
+      if (!(JSON.parse(String(init?.body)) as { params: { dryRun: boolean } }).params.dryRun) await held;
+      return res;
+    });
+    const { DangerZone } = await import('@web/features/tracker/DangerZone');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(DangerZone, { n: 4 }))));
+    await click('Preview delete (dry run)');
+    await act(async () => void button('Confirm delete #4')!.click());
+    await until(() => posts.length === 2, 'the real delete to be sent');
+    return async () =>
+      act(async () => {
+        answer();
+        await new Promise((r) => setTimeout(r, 20));
+      });
+  }
+
+  it('a delete that answers after the user left the page does not pull them back to the tracker (R19-feat-c-L3-01)', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(['tracker', 'row', '4'], { ok: true });
+    const release = await confirmHeldDelete(qc);
+    // Meanwhile the user goes to Pipeline.
+    location.pathname = '/pipeline';
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement('p', null, 'Pipeline'))));
+    await release();
+    expect(navigations).toEqual([]);
+    // The row is still gone from the cache, whichever page the user is on.
+    expect(qc.getQueryState(['tracker', 'row', '4'])).toBeUndefined();
+  });
+
+  it('a delete that answers after the user switched to another tab of the same application still leaves the deleted row', async () => {
+    const qc = new QueryClient();
+    const release = await confirmHeldDelete(qc);
+    // The Report tab: the danger zone unmounts, but the user is still on /tracker/4, whose row is gone.
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement('p', null, 'Report'))));
+    await release();
+    expect(navigations).toEqual([{ to: '/tracker' }]);
   });
 
   it('leaves for the tracker at once and never refetches the deleted row, which would 404 and stall on retries (SW5-web-a-04)', async () => {

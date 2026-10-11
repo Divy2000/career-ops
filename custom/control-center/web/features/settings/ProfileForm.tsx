@@ -78,12 +78,16 @@ export function CadenceForm() {
   // Saves against the version the edit started from, so a change on disk meanwhile gets the 409, not an overwrite.
   const edit = useEditBase(q.data);
   const [draft, setDraftState] = useState<Record<string, string>>({});
+  const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const setDraft = (next: Record<string, string>) => {
-    if (Object.keys(next).length) edit.pin();
+    if (Object.keys(next).length) {
+      edit.pin();
+      // A new edit after a save: the old success note no longer describes the form, and would hide the drift alert.
+      if (note?.tone === 'ok') setNote(null);
+    }
     setDraftState(next);
   };
   useUnsaved('the follow-up cadence', Object.keys(draft).length > 0);
-  const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
   const value = (k: string) => draft[k] ?? (q.data?.cadence[k] !== undefined ? String(q.data.cadence[k]) : '');
   // One save at a time: a second click would send the same ETag, get the 409 once the first lands, and report a
   // conflict for a write that happened.
@@ -145,7 +149,7 @@ export function CadenceForm() {
             Save cadence
           </button>
         </div>
-        {edit.drifted && !note && (
+        {edit.drifted && !saving && (
           <p role="alert" className="danger-text">
             config/profile.yml changed on disk since you started editing. Your values are kept; Save cadence shows the conflict before anything is written.
           </p>
