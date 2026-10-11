@@ -106,14 +106,14 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
     }
   }, 45_000);
 
-  it('settles a cancelled run whose wrapper is gone without an exit record as lost and ends its stream', async () => {
+  it('settles a cancelled run whose wrapper is gone without an exit record and ends its stream', async () => {
     const t = await makeTestApp();
     // Marked cancelled by a process that is gone, and its wrapper is gone too without an exit record.
     const meta = t.runner.store.create({ actionId: 'test.orphan', label: 'orphan', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [], cwd: PACKAGE_ROOT } });
     t.runner.store.write({ ...meta, status: 'cancelled', startedAt: new Date().toISOString() });
     try {
       const events = await readRunStream(t, meta.id, 20_000);
-      expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'lost', exitCode: null, signal: null } });
+      expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'cancelled', exitCode: null, signal: null } });
     } finally {
       await t.close();
     }

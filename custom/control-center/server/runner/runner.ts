@@ -133,6 +133,8 @@ export class Runner {
   private retryTimer: NodeJS.Timeout | null = null;
   /** Starts a dead process left whose wrapper was told to stop and may still record itself: held until it does or the grace ends. */
   private stopping = new Set<string>();
+  /** SIGKILLs armed by cancel: they live in this process only, so close() drops them as its exit would. */
+  private killTimers = new Set<NodeJS.Timeout>();
   /** This process as claims and the schedule lock name it, read once. */
   private self: { pid: number; start: number | null } | null = null;
 
@@ -381,6 +383,8 @@ export class Runner {
       this.finalize(meta, exit);
     } else if (wrapper !== false) {
       this.track(meta);
+      // Cancelled by a process that stopped before its grace ended: the SIGKILL it armed went with it.
+      if (meta.status === 'cancelled') this.afterGrace(() => this.killRecordedCommand(meta.id));
     } else {
       // The PID still runs, as ours with another start or as another user's: reused, not just gone.
       const now = meta.wrapperPid ? this.liveness(meta.wrapperPid) : 'gone';
@@ -390,9 +394,11 @@ export class Runner {
           : now === 'own'
             ? 'the wrapper PID now belongs to another process (its start time differs); the run is gone'
             : 'wrapper process disappeared without an exit record';
-      this.store.write({ ...meta, status: 'lost', endedAt: new Date().toISOString(), error });
+      // One the user cancelled stays cancelled: it was meant to stop, and it has.
+      const status = meta.status === 'cancelled' ? 'cancelled' : 'lost';
+      this.store.write({ ...meta, status, endedAt: new Date().toISOString(), error });
       this.dropInputs(meta);
-      this.bus.publish('run.status', { runId: meta.id, status: 'lost', actionId: meta.actionId });
+      this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId });
     }
   }
 
@@ -745,7 +751,7 @@ export class Runner {
       } catch {
         /* group already gone */
       }
-      const killTimer = setTimeout(() => {
+      this.afterGrace(() => {
         if (!this.store.readExit(id) && this.identity(childPid, meta.childStartedAt) !== false) {
           try {
             process.kill(-childPid, 'SIGKILL');
@@ -753,8 +759,7 @@ export class Runner {
             /* gone */
           }
         }
-      }, 5000);
-      killTimer.unref();
+      });
     } else if (meta.wrapperPid && wrapper !== false) {
       // A wrapper that has not recorded its command yet may still be starting, with no SIGTERM handler: a signal would
       // end it with no exit record. The cancel file stops it instead (read before it spawns and after it records the
@@ -767,22 +772,34 @@ export class Runner {
           /* gone */
         }
       }
-      // A command that ignores SIGTERM is killed once the grace ends, but only one provably started before its wrapper
-      // recorded it: a reused PID, or one whose start cannot be read, is never signalled.
-      const killTimer = setTimeout(() => {
-        if (this.store.readExit(id)) return;
-        const recorded = this.store.readWrapper(id) as { childPid: number; startedAt?: unknown } | null;
-        const recordedAt = Date.parse(String(recorded?.startedAt));
-        if (!recorded?.childPid || !Number.isFinite(recordedAt) || typeof this.startRecordedBy(recorded.childPid, recordedAt) !== 'number') return;
-        try {
-          process.kill(-recorded.childPid, 'SIGKILL');
-        } catch {
-          /* gone */
-        }
-      }, 5000);
-      killTimer.unref();
+      this.afterGrace(() => this.killRecordedCommand(id));
     }
     return marked;
+  }
+
+  private afterGrace(fn: () => void): void {
+    const timer = setTimeout(() => {
+      this.killTimers.delete(timer);
+      fn();
+    }, 5000);
+    timer.unref();
+    this.killTimers.add(timer);
+  }
+
+  /**
+   * SIGKILLs a cancelled run's command group if it has not exited, but only a command provably started before its
+   * wrapper recorded it: a reused PID, or one whose start cannot be read, is never signalled.
+   */
+  private killRecordedCommand(id: string): void {
+    if (this.store.readExit(id)) return;
+    const recorded = this.store.readWrapper(id) as { childPid: number; startedAt?: unknown } | null;
+    const recordedAt = Date.parse(String(recorded?.startedAt));
+    if (!recorded?.childPid || !Number.isFinite(recordedAt) || typeof this.startRecordedBy(recorded.childPid, recordedAt) !== 'number') return;
+    try {
+      process.kill(-recorded.childPid, 'SIGKILL');
+    } catch {
+      /* gone */
+    }
   }
 
   /**
@@ -832,6 +849,8 @@ export class Runner {
   close(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    for (const timer of this.killTimers) clearTimeout(timer);
+    this.killTimers.clear();
     for (const { timer } of this.active.values()) clearInterval(timer);
     this.active.clear();
   }

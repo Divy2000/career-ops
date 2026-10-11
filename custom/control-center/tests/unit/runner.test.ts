@@ -387,6 +387,33 @@ describe('Runner', () => {
     expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', exitCode: 143 });
   });
 
+  it('a command that ignores SIGTERM after a cancel is still killed once the grace ends when the cancelling server stopped first (R18-srv-core-L3-01 review)', async () => {
+    const root = tmpRoot();
+    const first = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(first);
+    const stubborn = "console.log('ready'); process.on('SIGTERM', () => console.log('ignored')); setInterval(() => {}, 1000);";
+    const meta = first.start({ ...req([]), cmd: { bin: process.execPath, args: ['-e', stubborn], cwd: PACKAGE_ROOT } });
+    await until(() => Boolean(first.store.read(meta.id)?.childStartedAt) && first.store.readRaw(meta.id).lines.length >= 1);
+    first.cancel(meta.id);
+    first.close();
+    const second = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(second);
+    second.reconcile();
+    await until(() => Boolean(second.store.read(meta.id)?.endedAt), 15_000);
+    expect(second.store.read(meta.id)).toMatchObject({ status: 'cancelled', signal: 'SIGKILL' });
+  }, 20_000);
+
+  it('a cancelled run whose wrapper vanished without an exit record before any server settled it still reads cancelled', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root);
+    const run = store.create({ actionId: 'x', label: 'x', cost: 'free', resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} });
+    store.write({ ...run, status: 'cancelled', startedAt: new Date().toISOString() });
+    const runner = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(runner);
+    runner.reconcile();
+    expect(runner.store.read(run.id)).toMatchObject({ status: 'cancelled', endedAt: expect.any(String), error: expect.stringMatching(/without an exit record/) });
+  });
+
   it('a run another server cancelled that has not exited yet still holds its resources and blocks a second run of its action (R18-srv-core-L3-01 review)', async () => {
     const root = tmpRoot();
     const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
