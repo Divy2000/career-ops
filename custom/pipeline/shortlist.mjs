@@ -94,8 +94,12 @@ const usableName = (c) => Boolean(c.replace(/\b(inc|llc|ltd|corp)\b\.?/gi, '').t
 async function writeTiers(cache) {
   await mkdir(path.dirname(TIER_CACHE), { recursive: true });
   const tmp = `${TIER_CACHE}.tmp-${process.pid}`;
-  await writeFile(tmp, JSON.stringify(cache, null, 2) + '\n');
-  await rename(tmp, TIER_CACHE);
+  try {
+    await writeFile(tmp, JSON.stringify(cache, null, 2) + '\n');
+    await rename(tmp, TIER_CACHE);
+  } finally {
+    await rm(tmp, { force: true });
+  }
 }
 
 const readTiers = async () => (existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {});

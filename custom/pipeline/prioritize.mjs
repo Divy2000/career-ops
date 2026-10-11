@@ -6,7 +6,7 @@
 //
 //   node custom/pipeline/prioritize.mjs [--today YYYY-MM-DD]
 
-import { readFile, writeFile, copyFile, rename } from 'node:fs/promises';
+import { readFile, writeFile, copyFile, rename, rm } from 'node:fs/promises';
 import { orderPending, parseRow, strayOperands } from './lib.mjs';
 import { withPipelineLock } from '../../pipeline-lock.mjs';
 import { localToday } from '../../lib/local-today.mjs';
@@ -82,8 +82,12 @@ async function main() {
     slots.forEach((slot, k) => { lines[slot] = sorted[k]; });
     await copyFile(PIPELINE, `${PIPELINE}.bak`);
     const tmp = `${PIPELINE}.tmp-${process.pid}`;
-    await writeFile(tmp, lines.join('\n'));
-    await rename(tmp, PIPELINE);
+    try {
+      await writeFile(tmp, lines.join('\n'));
+      await rename(tmp, PIPELINE);
+    } finally {
+      await rm(tmp, { force: true });
+    }
     return sorted;
   });
   if (ordered === null) {

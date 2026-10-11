@@ -2,7 +2,7 @@
 // projects library, payload normalization for the fork template, and the
 // fit-to-page loop and PDF page count used by render-pdf.mjs.
 
-import { parseLibrary, findCvBlock, projectSections, titleKey } from '../projects/lib.mjs';
+import { parseLibrary, findCvProjectBlock, titleKey } from '../projects/lib.mjs';
 
 export const AWARDS_TITLE = 'Recent Achievements';
 const PUBLISHER_HOSTS = ['doi.org', 'sciencedirect.com', 'wiley.com', 'arxiv.org'];
@@ -60,7 +60,6 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
   const warnings = [];
   const achievements = recentAchievements(cvText);
   const library = libraryText === null ? [] : parseLibrary(libraryText).entries;
-  const cvProjects = projectSections(cvText);
   for (const p of Array.isArray(payload?.projects) ? payload.projects : []) {
     const name = typeof p?.name === 'string' ? p.name.trim() : '';
     if (!name) continue;
@@ -72,7 +71,7 @@ export function checkPayload(payload, { cvText = '', libraryText = null } = {}) 
     if (entry && entry.kind !== 'project') {
       errors.push(`project "${name}" is a ${entry.kind} in article-digest.md (line ${entry.line}); only kind project can be listed under Projects`);
     }
-    const inCv = entry ? null : findCvBlock(cvProjects, name);
+    const inCv = entry ? null : findCvProjectBlock(cvText, name);
     if (!entry && !inCv) {
       errors.push(`project "${name}" is in neither article-digest.md nor cv.md; take projects from node custom/projects/rank.mjs output`);
     }

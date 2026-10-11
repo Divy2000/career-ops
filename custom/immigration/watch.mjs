@@ -5,7 +5,7 @@
 //
 //   node custom/immigration/watch.mjs [--since YYYY-MM-DD]
 
-import { mkdir, readFile, readlink, writeFile, appendFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, readlink, writeFile, appendFile, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseRssItems, isRelevantPolicyItem, sinceForSource, sourceCursor, mergePending, newsSince } from './lib.mjs';
@@ -21,8 +21,12 @@ const PENDING = path.join(DIR, 'pending.json');
 
 async function writeAtomic(file, text) {
   const tmp = `${file}.tmp-${process.pid}`;
-  await writeFile(tmp, text);
-  await rename(tmp, file);
+  try {
+    await writeFile(tmp, text);
+    await rename(tmp, file);
+  } finally {
+    await rm(tmp, { force: true });
+  }
 }
 // Exclusive create: the policy pass appends to these files without the pending lock, so a file that appeared since
 // any earlier check (another run's header, an appended entry) is left as it is rather than truncated. A symlink to a

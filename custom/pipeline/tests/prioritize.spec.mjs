@@ -164,3 +164,23 @@ test('only pending rows move: every other line keeps its place, and the file as 
   for (const [i, line] of before.entries()) if (!line.startsWith('- [ ] ')) assert.equal(after[i], line, `line ${i + 1}`);
   assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md.bak'), 'utf8'), pipeline);
 });
+
+test('a pipeline rewrite that fails leaves no temp file behind in data/ (R25-scripts-a-L1-01)', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n');
+  const preload = path.join(root, 'rename-fails.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.promises.rename;
+fs.promises.rename = async (from, to) => {
+  if (String(to).endsWith('pipeline.md')) { const err = new Error('disk full'); err.code = 'ENOSPC'; throw err; }
+  return real(from, to);
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /disk full/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.includes('.tmp-')), []);
+});
