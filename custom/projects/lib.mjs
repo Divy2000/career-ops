@@ -452,10 +452,15 @@ export function convertJsonProjects(data) {
 // The body of every cv.md `##` section whose title ends in "Project" or "Projects" ("Projects", "Personal Projects"): the only part of
 // cv.md a project may come from, never an employer, a role, another section's title or a skill category.
 export function projectSections(cvText) {
+  return projectSectionBodies(cvText).flat().map((l) => l.text).join('\n');
+}
+
+// The same sections one by one, each line with its 0-based index in cv.md.
+function projectSectionBodies(cvText) {
   const lines = String(cvText ?? '').split('\n').map((l) => l.replace(/\r$/, ''));
   const out = [];
   let inside = false;
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     // A `#` heading ends a section as a `##` one does, and starts no projects section.
     const section = line.match(/^#{1,2}(?!#)\s+(.*\S)\s*$/);
     if (section) {
@@ -465,11 +470,22 @@ export function projectSections(cvText) {
       }
       // The last word names the section: "Selected Projects" lists projects, "Project Management" does not.
       inside = /\bprojects?$/i.test(section[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[^A-Za-z]+$/, ''));
+      if (inside) out.push([]);
       continue;
     }
-    if (inside) out.push(line);
+    if (inside) out.at(-1).push({ index, text: line });
   }
-  return out.join('\n');
+  return out;
+}
+
+// findCvEntry limited to cv.md's Projects sections, each searched alone so an entry's body ends with its section,
+// with `line` still a 1-based line of cv.md.
+export function findCvProject(cvText, title) {
+  for (const body of projectSectionBodies(cvText)) {
+    const found = findCvEntry(body.map((l) => l.text).join('\n'), title);
+    if (found) return { line: body[found.line - 1].index + 1, text: found.text };
+  }
+  return null;
 }
 
 // The entry named `title` in cv.md: a `##`-`######` heading whose name (text

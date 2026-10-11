@@ -19,7 +19,7 @@ import {
   serializeLibrary,
   appendBlock,
   convertJsonProjects,
-  findCvEntry,
+  findCvProject,
   wordDiff,
   titleKey,
 } from './lib.mjs';
@@ -61,7 +61,7 @@ async function readInput(file, label) {
 
 function compareWithCv(entries, cvText) {
   for (const e of entries) {
-    const found = findCvEntry(cvText, e.title);
+    const found = findCvProject(cvText, e.title);
     if (!found) {
       process.stderr.write(`+ ${e.title} is not in cv.md\n`);
       continue;

@@ -713,7 +713,7 @@
         "appendBlock",
         "removeEntry",
         "convertJsonProjects",
-        "findCvEntry",
+        "findCvProject",
         "titleKey"
       ]
     },

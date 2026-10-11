@@ -41,6 +41,13 @@ describe('GET /api/projects', () => {
     expect(body.entries.find((e: { id: string }) => e.id === 'expense-splitter').inCv).toBe(false);
   });
 
+  it('does not mark a project inCv when cv.md names it only outside its Projects section', async () => {
+    fs.appendFileSync(path.join(t.cfg.dataRoot, 'cv.md'), '\n## Experience\n\n### Acme\n\n- **Event Router**: led the migration.\n\n## Expense Splitter\n\n## Projects\n\n- **Other Tool** -- Something else.\n');
+    const body = await current();
+    expect(body.entries.find((e: { id: string }) => e.id === 'event-router').inCv).toBe(false);
+    expect(body.entries.find((e: { id: string }) => e.id === 'expense-splitter').inCv).toBe(false);
+  });
+
   it('reports a missing file as missing with no entries', async () => {
     fs.rmSync(file());
     expect(await current()).toMatchObject({ kind: 'missing', etag: null, entries: [], validation: { ok: true } });
