@@ -242,3 +242,27 @@ describe('the insights cache after a code update (R18-srv-dom-a-L1-01)', () => {
   }
 });
 
+describe('Company history with a relative CAREER_OPS_PORTALS (R18-srv-dom-a-L2-01 review)', () => {
+  it('keys the cache on the file the child reads, relative to the code checkout it runs in', async () => {
+    const codeRoot = stubCodeRoot();
+    const rel = path.join('lanes', 'b', 'portals.yml');
+    fs.mkdirSync(path.dirname(path.join(codeRoot, rel)), { recursive: true });
+    fs.writeFileSync(path.join(codeRoot, rel), 'tracked_companies: []\n');
+    const prior = process.env.CAREER_OPS_PORTALS;
+    process.env.CAREER_OPS_PORTALS = rel;
+    try {
+      const cwds: Array<string | undefined> = [];
+      const exec: Exec = async (_cmd, _args, opts) => (cwds.push(opts.cwd), { code: 0, stdout: '{"ok":true}', stderr: '' });
+      const cfg = testConfig({ codeRoot });
+      await readInsight(cfg, exec, 'companyHistory');
+      expect(cwds[0]).toBe(codeRoot);
+      expect((await readInsight(cfg, exec, 'companyHistory')).fromCache).toBe(true);
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(path.join(codeRoot, rel), later, later);
+      expect((await readInsight(cfg, exec, 'companyHistory')).fromCache).toBe(false);
+    } finally {
+      if (prior === undefined) delete process.env.CAREER_OPS_PORTALS;
+      else process.env.CAREER_OPS_PORTALS = prior;
+    }
+  });
+});
