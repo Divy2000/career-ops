@@ -5,14 +5,33 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
 
 let t: TestApp;
+/** Sessions the tests started: each runs the fake Claude under a detached wrapper that writes into the temp data root. */
+const started: string[] = [];
+const ENDED = ['done', 'awaiting_user', 'error', 'cancelled'];
+
 beforeAll(async () => {
   t = await makeTestApp();
 });
 afterAll(async () => {
+  // Closing the app does not stop those wrappers: one still writing its run files while the temp root is removed
+  // fails that removal with ENOTEMPTY. Every session has ended (its wrapper has exited) before the app closes.
+  const live = async () => {
+    const statuses = await Promise.all(started.map(async (id) => [id, (await t.app.inject({ method: 'GET', url: `/api/sessions/${id}`, headers: t.authed })).json().meta.status as string] as const));
+    return statuses.filter(([, status]) => !ENDED.includes(status));
+  };
+  const deadline = Date.now() + 30_000;
+  for (let left = await live(); left.length > 0; left = await live()) {
+    if (Date.now() > deadline) throw new Error(`sessions still running 30s after the tests ended, so their temp root cannot be removed safely: ${left.map(([id, status]) => `${id} (${status})`).join(', ')}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
   await t.close();
 });
 
-const start = (value: string | null) => t.app.inject({ method: 'POST', url: '/api/sessions', headers: t.authedWrite, payload: { mode: 'advisor', target: { type: 'url', value }, prompt: 'Look at this posting' } });
+const start = async (value: string | null) => {
+  const res = await t.app.inject({ method: 'POST', url: '/api/sessions', headers: t.authedWrite, payload: { mode: 'advisor', target: { type: 'url', value }, prompt: 'Look at this posting' } });
+  if (res.statusCode === 202) started.push(res.json().id as string);
+  return res;
+};
 
 describe('POST /api/sessions with a URL target', () => {
   for (const [label, bad] of [
