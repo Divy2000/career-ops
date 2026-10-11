@@ -898,17 +898,21 @@ lexical_path() {
   if [ "${#out[@]}" -eq 0 ]; then printf '/'; else printf '/%s' "${out[@]}"; fi
 }
 
-# same_file_path <a> <b>: whether two absolute paths name one file, however spelled (./, //, symlinked folders), even
-# before it exists. Folders that exist are resolved as the kernel resolves them (.. after a symlink leaves its target);
-# only when one is missing are the spellings folded lexically.
+# physical_path <absolute-path>: the path as the kernel would resolve it, even before it exists: its deepest existing
+# folder with symlinks resolved, then the rest folded lexically.
+physical_path() {
+  local head tail=""
+  head="$(dirname "$1")"
+  while [ ! -d "$head" ]; do
+    tail="/${head##*/}$tail"
+    head="$(dirname "$head")"
+  done
+  lexical_path "$(cd -P "$head" && pwd -P)$tail/${1##*/}"
+}
+
+# same_file_path <a> <b>: whether two absolute paths name one file, however spelled (./, //, .., symlinked folders).
 same_file_path() {
-  local da db
-  [ "$1" = "$2" ] || [ "$1" -ef "$2" ] && return 0
-  if da="$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)" && db="$(cd -P "$(dirname "$2")" 2>/dev/null && pwd -P)"; then
-    [ "$da/${1##*/}" = "$db/${2##*/}" ]
-  else
-    [ "$(lexical_path "$1")" = "$(lexical_path "$2")" ]
-  fi
+  [ "$1" = "$2" ] || [ "$1" -ef "$2" ] || [ "$(physical_path "$1")" = "$(physical_path "$2")" ]
 }
 
 step "8/11 H-1B sponsor index"
@@ -929,7 +933,7 @@ fi
 # The launchd plist does not carry H1B_INDEX_PATH, so the daily job always reads the default index: it matters only when
 # a daily job is or will be installed and the default index is not there.
 if [ "$NO_H1B" = 0 ] && [ "$H1B_BLANK" = 0 ] && [ ! -f "$H1B_DEFAULT" ] &&
-  { [ "$NO_LAUNCHD" = 0 ] || [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ]; } &&
+  { [ -f "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" ] || { [ "$MAC_FEATURES" = 1 ] && [ "$NO_LAUNCHD" = 0 ]; }; } &&
   ! same_file_path "$H1B_INDEX" "$H1B_DEFAULT"; then
   pending "H1B_INDEX_PATH points at $H1B_INDEX, but the daily job does not inherit H1B_INDEX_PATH and reads $H1B_DEFAULT. Copy the index there, or unset H1B_INDEX_PATH and run: $H1B_CMD"
 fi

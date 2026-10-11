@@ -936,6 +936,26 @@ test('an H1B_INDEX_PATH other than the default leaves nothing pending when the d
   }
 });
 
+test('an H1B_INDEX_PATH other than the default leaves nothing pending in a core-only install, which never installs a daily job (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/shared.gz': 'x' } });
+  const r = w.run(['--dir', D, '--non-interactive', '--core-only', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
+test('an absolute H1B_INDEX_PATH through the real folder of a symlinked checkout names the default index before data/h1b exists (R18-scripts-b-L2-01 review)', () => {
+  const { w } = fresh({ keychain: true });
+  const real = path.join(w.T, 'real-checkout');
+  const D = path.join(w.T, 'linked-checkout');
+  w.makeCheckout(real, { files: READY_FILES });
+  fs.symlinkSync(real, D);
+  w.write(`home/${DAILY_PLIST}`, '<plist/>\n');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(real, 'data/h1b/index.ndjson.gz') } });
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+  assert.equal(r.status, 0, r.out);
+});
+
 test('an H1B_INDEX_PATH whose .. leaves a symlinked data/h1b names another file than the default, as the kernel resolves it (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
