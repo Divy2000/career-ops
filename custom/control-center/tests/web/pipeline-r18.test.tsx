@@ -193,6 +193,16 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     expect(button('Batch evaluate')!.disabled).toBe(true);
   });
 
+  it('given the sessions list still loading, Batch evaluate is off and says it is checking', async () => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (input === '/api/sessions' && !init?.method ? new Promise<Response>(() => undefined) : inner(input as string, init)));
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await settle();
+    expect(button('Batch evaluate')!.disabled).toBe(true);
+    expect(host.textContent).toContain('Checking for a running Process inbox');
+  });
+
   it('given a remembered Process inbox id the server no longer lists, Batch evaluate comes back once the list is read again', async () => {
     sessionStorage.setItem('cc.pipeline.process', 's-gone');
     const released = heldSecondList();
@@ -259,7 +269,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => hold!.release());
   });
 
-  it('given an Evaluate visible fan-out in flight and the user on the Batch tab, Batch evaluate is off', async () => {
+  it('given an Evaluate visible fan-out in flight and the user on the Batch tab, Batch evaluate is off and says why', async () => {
     holdUrl = '/api/sessions/fanout';
     const router = await mount();
     await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
@@ -269,6 +279,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await typeUrls('https://jobs.example.com/busy');
     await settle();
     expect(button('Batch evaluate')!.disabled).toBe(true);
+    expect(host.textContent).toContain('Evaluations started from Pipeline are still starting, so Batch evaluate is off');
   });
 
   it('given only its own Evaluate visible fan-out in flight, the Inbox does not say other evaluations are starting', async () => {
