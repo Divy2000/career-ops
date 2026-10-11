@@ -134,6 +134,18 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
     await until(() => posts.length === 1 || undefined, 'the fan-out');
     expect(posts[0]).toEqual({ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.example.com/busy'] } });
   });
+
+  it('given a Process inbox that went live while the confirm was open, Start them starts nothing and says why', async () => {
+    await mount('batch');
+    await typeUrls('https://jobs.example.com/busy');
+    await until(() => button('Batch evaluate') && !button('Batch evaluate')!.disabled, 'Batch evaluate enabled');
+    await act(async () => button('Batch evaluate')!.click());
+    const startThem = await until(() => button('Start them'), 'the confirm');
+    sessions = [pipelineSession('s-pipe', 'running')];
+    await act(async () => startThem.click());
+    await until(() => host.textContent?.includes('Process inbox is processing the pending rows'), 'the note');
+    expect(posts).toEqual([]);
+  });
 });
 
 describe('A finished Process inbox run beside evaluations of its rows (R18-feat-b-L3-02)', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { Message } from '../../components/ActionBar';
 import { Pill } from '../../components/ui';
@@ -9,6 +9,7 @@ import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
+import { lastSession } from '../../lib/lastSession';
 import { livePipelineId } from './InboxAi';
 
 // Only http(s) postings go through the URL fan-out, by the rule pipeline writes use (postingUrl in
@@ -23,8 +24,6 @@ const postingLike = (s: string): boolean => {
     return false;
   }
 };
-
-const sessionIds = async (): Promise<Set<string>> => new Set((await apiGet<SessionMeta[]>('/api/sessions')).map((s) => s.id));
 
 /** The URLs of oferta sessions the server lists now and did not list in `before`: what a fan-out that failed part way did start. */
 async function startedSince(urls: string[], before: Set<string>): Promise<Set<string>> {
@@ -49,6 +48,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   // it a second time: Batch is off while one is starting or live, and until the sessions list tells there is none.
   const sessions = useSessions();
   const processStarting = useRememberedSession('cc.pipeline.process').waiting;
+  const processStore = useMemo(() => lastSession('cc.pipeline.process'), []);
   const pipelineLive = processStarting || livePipelineId(sessions.data) !== null;
   const blocked = pipelineLive || sessions.isPending || sessions.isError;
   // Confirms queue, so a second click while one is asking or writing would ask twice: it is ignored.
@@ -76,8 +76,14 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     if (!(await confirm({ title: `Start ${n} evaluation session${n === 1 ? '' : 's'}?`, body: 'Each URL is evaluated in its own session under the Claude slot cap (Settings > AI engine). Each one uses tokens.', confirmLabel: 'Start them', focusCancel: true }))) return;
     setBusy(true);
     setMessage(null);
-    // The sessions listed before the start, so a failure part way can tell which ones it started.
-    const before = await sessionIds().catch(() => null);
+    // A Process inbox can start while the confirm is open: the sessions list is read again before anything starts. It is
+    // also the list from before the start, so a failure part way can tell which sessions it started.
+    const now = await sessions.refetch();
+    if (now.isError || !now.data || livePipelineId(now.data) !== null || processStore.starting()) {
+      setBusy(false);
+      return;
+    }
+    const before = new Set(now.data.map((s) => s.id));
     try {
       const r = await fanOut('oferta', list);
       const outcome = fanoutOutcome(r);
@@ -89,17 +95,13 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
     } catch (err) {
       // The fan-out starts its sessions one by one and answers an error without the ones it already started: those are
       // taken out of the box, so a retry does not evaluate them twice.
-      const unknown = ' Check Sessions for any that started before retrying.';
-      let note = unknown;
-      // Without the list from before the start, which sessions this batch started cannot be told.
-      if (before) {
-        try {
-          const started = await startedSince(list, before);
-          if (started.size > 0) setUrls(list.filter((u) => !started.has(u)).join('\n'));
-          note = started.size > 0 ? ` ${started.size} started before the failure and ${started.size === 1 ? 'was' : 'were'} taken out of the box; see Sessions.` : '';
-        } catch {
-          note = unknown;
-        }
+      let note: string;
+      try {
+        const started = await startedSince(list, before);
+        if (started.size > 0) setUrls(list.filter((u) => !started.has(u)).join('\n'));
+        note = started.size > 0 ? ` ${started.size} started before the failure and ${started.size === 1 ? 'was' : 'were'} taken out of the box; see Sessions.` : '';
+      } catch {
+        note = ' Check Sessions for any that started before retrying.';
       }
       setMessage({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}${note ? `.${note}` : ''}` });
     } finally {
