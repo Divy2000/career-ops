@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RECOVERY_SCRIPT } from '../../supervisor/recovery-script';
 import { until } from '../helpers/until';
 
@@ -26,13 +26,33 @@ const submit = (kind: string) => {
 };
 const status = () => document.getElementById('revert-status')!;
 
-describe('the recovery page script', () => {
-  beforeAll(() => {
+/** The submit listeners the script has added; a real page load starts with none, so each test runs its own one. */
+let listeners: Parameters<typeof document.addEventListener>[] = [];
+const unload = () => {
+  for (const args of listeners) document.removeEventListener(...args);
+  listeners = [];
+};
+/** Runs the script as a page load does, in place of the previous page's. */
+const load = () => {
+  unload();
+  const add = vi.spyOn(document, 'addEventListener');
+  try {
     new Function(RECOVERY_SCRIPT)();
+    listeners = [...add.mock.calls];
+  } finally {
+    add.mockRestore();
+  }
+};
+
+describe('the recovery page script', () => {
+  beforeEach(() => {
+    load();
   });
   afterEach(() => {
+    unload();
     vi.unstubAllGlobals();
     document.body.innerHTML = '';
+    sessionStorage.clear();
   });
 
   it('a multi-line failure shows its first line as the message and the rest, line breaks kept, in a details block', async () => {
@@ -141,24 +161,22 @@ describe('the recovery page script', () => {
     expect((fetch.mock.calls[2] as unknown[])[1]).toMatchObject({ method: 'POST' });
   });
 
-  // It runs the script a second time, as the reload does.
   it('a revert that succeeds shows its per-file outcome after the page reloads (R14-supervisor-L3-03)', async () => {
     document.body.innerHTML = PAGE;
     vi.stubGlobal('fetch', reply(200, 'notes.md: restored\nplan.md: no-snapshot'));
     submit('revert');
     await until(() => sessionStorage.length > 0, 'the outcome kept for the reload');
+    // The reload: a new page whose script shows the kept outcome.
     document.body.innerHTML = PAGE;
-    new Function(RECOVERY_SCRIPT)();
+    load();
     expect(status().textContent).toContain('Reverted: notes.md: restored');
     expect(status().querySelector('pre')!.textContent).toBe('plan.md: no-snapshot');
     expect(sessionStorage.length).toBe(0);
   });
-  // After the reload test, which leaves the scripts before it waiting for a reload.
   it('a successful revert whose outcome cannot be kept (storage full) still reloads, and is never shown as failed', async () => {
     document.body.innerHTML = PAGE;
-    // The earlier reloads left their scripts waiting for the reload; a fresh one stands for the reloaded page.
-    new Function(RECOVERY_SCRIPT)();
-    vi.stubGlobal('fetch', reply(200, 'notes.md: restored'));
+    const fetch = reply(200, 'notes.md: restored');
+    vi.stubGlobal('fetch', fetch);
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('quota', 'QuotaExceededError');
     });
@@ -167,6 +185,7 @@ describe('the recovery page script', () => {
       await until(() => setItem.mock.calls.length > 0, 'the attempt to keep the outcome');
       await new Promise((r) => setTimeout(r, 20));
       expect(status().textContent).toBe('Reverting...');
+      expect(fetch).toHaveBeenCalledTimes(1);
     } finally {
       setItem.mockRestore();
     }
