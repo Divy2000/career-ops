@@ -584,7 +584,20 @@ export const ACTIONS: ActionDef[] = [
   define({ id: 'followups.linkedinJoin', label: 'LinkedIn join lookup', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ company: company.optional() }), build: (p, ctx) => node(ctx, 'linkedinJoin', ['--summary', ...opt(p.company, '--company')]) }),
   // ---- plugins ----
   define({ id: 'plugins.list', label: 'List plugins', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'plugins', ['list']) }),
-  define({ id: 'plugins.run', label: 'Run plugin hook', cost: 'network', resources: [], claude: false, sync: false, params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }), build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]) }),
+  define({
+    id: 'plugins.run',
+    label: 'Run plugin hook',
+    cost: 'network',
+    resources: [],
+    claude: false,
+    sync: false,
+    // A hook finds-else-creates on the plugin's service (a Notion export creates a page per row it does not find), so
+    // two runs at once would both create the same pages. single is per action, so a run of one plugin also waits out
+    // another plugin's run.
+    single: (mine) => `Skipped: a plugin hook is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule and run again once it ends.`,
+    params: z.object({ id: safeToken, hook: safeToken.optional(), args: z.array(safeToken).max(10).default([]) }),
+    build: (p, ctx) => node(ctx, 'plugins', ['run', p.id, ...(p.hook ? [p.hook] : []), ...p.args]),
+  }),
   define({ id: 'plugins.audit', label: 'Audit plugins', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: process.execPath, args: [path.join(ctx.codeRoot, PLUGIN_AUDIT_ALL), ctx.pluginsLocalDir ?? path.join(ctx.codeRoot, 'plugins.local')], cwd: ctx.codeRoot }) }),
   // ---- system ----
   define({ id: 'system.doctor', label: 'Doctor', cost: 'free', resources: [], claude: false, sync: true, params: none, build: (_p, ctx) => node(ctx, 'doctor', ['--json']) }),

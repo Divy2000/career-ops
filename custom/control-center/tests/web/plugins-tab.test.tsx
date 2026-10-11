@@ -33,7 +33,7 @@ async function mount() {
   const plugins = { plugins: [plugin('apify', ['provider']), plugin('notion', ['provider', 'export', 'search'])], config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag: 'e' } };
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/actions' ? [RUN_META] : plugins), { status: 200, headers: { 'content-type': 'application/json' } })),
+    vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/actions' ? [RUN_META] : url === '/api/runs' ? [] : plugins), { status: 200, headers: { 'content-type': 'application/json' } })),
   );
   host = document.createElement('div');
   document.body.append(host);

@@ -6,13 +6,17 @@ import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { Md } from '../../components/Md';
 import { DataState, Empty, Pill, TableScroll } from '../../components/ui';
-import type { PluginsRead } from '@shared/api';
+import type { PluginsRead, RunMeta } from '@shared/api';
 
 export function PluginsTab() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['config', 'plugins'], queryFn: () => apiGet<PluginsRead>('/api/plugins') });
   const actions = useActions();
   const { run, busy, message } = useRunAction();
+  // A hook run outlives its POST (the 202 answers at once): Run stays off while one from here is queued or running,
+  // as the server refuses a second one meanwhile.
+  const runs = useQuery({ queryKey: ['runs'], queryFn: () => apiGet<RunMeta[]>('/api/runs'), refetchInterval: 5000 });
+  const hookLive = (runs.data ?? []).some((r) => r.actionId === 'plugins.run' && (r.status === 'queued' || r.status === 'running'));
   const [skill, setSkill] = useState<{ id: string; markdown: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // One toggle at a time, until its refetch brings the new ETag: a second PUT meanwhile would carry the old one and
@@ -97,7 +101,7 @@ export function PluginsTab() {
                         <td>
                           <div className="row gap">
                             {hook ? (
-                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled || busy !== null} onRun={(params) => void run('plugins.run', params)}>
+                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled || busy !== null || hookLive} onRun={(params) => void run('plugins.run', params)}>
                                 Run {hook}
                               </ActionButton>
                             ) : (

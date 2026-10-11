@@ -60,9 +60,10 @@ beforeEach(() => {
       // As the real routes: the write lock serializes saves, and each compares If-Match with the version on disk.
       if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
       const etag = `${doc.etag}+`;
-      // A structured save writes its ops, so the refetch after it reads the version written, as on the real routes.
+      // A structured save writes its ops and a raw save its text, so the refetch after it reads the version written, as on the real routes.
       const ops = (body as { ops?: YamlOp[] } | null)?.ops;
-      files[key] = { ...doc, etag, ...(ops && 'doc' in doc ? { doc: applyOpsJs(doc.doc, ops) } : {}) };
+      const raw = (body as { raw?: string } | null)?.raw;
+      files[key] = { ...doc, etag, ...(ops && 'doc' in doc ? { doc: applyOpsJs(doc.doc, ops) } : {}), ...(typeof raw === 'string' ? { raw } : {}) };
       return json(200, { ok: true, etag, warnings: '' });
     }),
   );
@@ -378,5 +379,70 @@ describe('plugin toggles', () => {
     expect(writes()[1]!.headers['If-Match']).toBe('g1+');
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(alerts()).toBe('');
+  });
+});
+
+describe('raw YAML editor: a save whose refetch fails (R18-feat-c-L1-01)', () => {
+  it('hides the editor until a read after the save succeeds, which shows the written text and saves on its ETag', async () => {
+    files = { '/api/config/portals': { key: 'portals', path: 'portals.yml', kind: 'ok', raw: 'a: 1\n', etag: 'p1', doc: { a: 1 }, parseError: null } };
+    const { ConfigEditor } = await import('@web/features/settings/RawConfigEditor');
+    await mount(createElement(ConfigEditor, { fileKey: 'portals', label: 'portals.yml', validator: 'validate-portals.mjs' }));
+    const editor = await until(() => labelled<HTMLTextAreaElement>('portals.yml YAML')?.value === 'a: 1\n' && labelled<HTMLTextAreaElement>('portals.yml YAML'), 'the editor');
+    await type(editor, 'a: 2\n');
+    readsFail = true;
+    await click(button('Validate and save')!);
+    await until(() => /Saved portals\.yml/.test(document.body.textContent ?? ''), 'the saved note');
+    // The pre-save copy is never editable: the failed read replaces the editor with the load error.
+    await until(() => /Could not load/.test(alerts()), 'the load error');
+    expect(labelled('portals.yml YAML')).toBeNull();
+    readsFail = false;
+    await click(button('Retry')!);
+    const shown = await until(() => labelled<HTMLTextAreaElement>('portals.yml YAML'), 'the editor back');
+    expect(shown.value).toBe('a: 2\n');
+    await type(shown, 'a: 3\n');
+    await click(button('Validate and save')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ body: { raw: 'a: 3\n' }, headers: expect.objectContaining({ 'If-Match': 'p1+' }) }));
+  });
+});
+
+describe('cadence and blacklist editors while the post-save refetch is on its way (R18-feat-c-L1-02)', () => {
+  it('the cadence form keeps showing the saved value, not the pre-save copy', async () => {
+    files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    slowRead = {};
+    const refetch = slowRead;
+    await click(button('Save cadence')!);
+    await until(() => /Follow-up cadence saved/.test(document.body.textContent ?? ''), 'the saved note');
+    await until(() => Boolean(refetch.release), 'the refetch on its way');
+    expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.value).toBe('9');
+    // The read on its way answers the file as written.
+    files['/api/followups/cadence']!.cadence = { applied_first_days: 9 };
+    await act(async () => refetch.release!());
+    await until(() => !document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.disabled, 'the fields back');
+    expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.value).toBe('9');
+  });
+
+  it('the blacklist keeps showing the written rows, not the pre-save copy', async () => {
+    files = { '/api/blacklist': { kind: 'ok', path: 'data/blacklist.md', raw: '', etag: 'b1', rows: [{ company: 'Initech', since: '2026-01-01', scope: 'company', reason: '' }], preamble: null, postamble: '', extraColumns: [], columnWarning: null, unkept: [] } };
+    const { BlacklistEditor } = await import('@web/features/settings/BlacklistEditor');
+    await mount(createElement(BlacklistEditor, {}));
+    await type(await until(() => labelled<HTMLInputElement>('Blacklist company or domain'), 'the company field'), 'Globex');
+    await click(button('Add row')!);
+    slowRead = {};
+    const refetch = slowRead;
+    await click(button('Save blacklist')!);
+    await click(await until(() => button('Write blacklist'), 'the confirm dialog'));
+    await until(() => /Blacklist written/.test(document.body.textContent ?? ''), 'the written note');
+    await until(() => Boolean(refetch.release), 'the refetch on its way');
+    expect(button('Remove Globex from the blacklist draft')).toBeDefined();
+    files['/api/blacklist']!.rows = [{ company: 'Initech', since: '2026-01-01', scope: 'company', reason: '' }, { company: 'Globex', since: '2026-01-01', scope: 'company', reason: '' }];
+    await act(async () => refetch.release!());
+    await until(() => button('Remove Globex from the blacklist draft')?.disabled === false, 'the editor back');
+    expect(button('Remove Globex from the blacklist draft')).toBeDefined();
+    expect(button('Discard')!.disabled).toBe(true);
   });
 });

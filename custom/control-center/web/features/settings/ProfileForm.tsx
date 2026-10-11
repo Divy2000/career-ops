@@ -102,11 +102,12 @@ export function CadenceForm() {
     setSaving(true);
     try {
       await apiSend('PUT', '/api/followups/cadence', { cadence }, from?.etag ? { 'If-Match': from.etag } : {});
-      edit.rebase(null);
-      setDraftState({});
       setNote({ tone: 'ok', text: 'Follow-up cadence saved (validated by validate-profile.mjs).' });
       toast.success('Follow-up cadence saved');
       await Promise.all([qc.invalidateQueries({ queryKey: ['config'] }), qc.invalidateQueries({ queryKey: ['followups'] })]);
+      // Cleared once the refetch settles, so the form never flashes the pre-save values while it is on its way.
+      edit.rebase(null);
+      setDraftState({});
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // Told, the user may now save their values over the version on disk they were shown: the next save carries
