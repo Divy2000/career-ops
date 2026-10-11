@@ -954,6 +954,25 @@ test('an absolute H1B_INDEX_PATH through the real folder of a symlinked checkout
   assert.equal(r.status, 0, r.out);
 });
 
+test('an H1B_INDEX_PATH other than the default raises no daily-job note when this run does not install the job: onboarding unfinished, or a dry run (R18-scripts-b-L2-01 review)', () => {
+  for (const [name, files, flags] of [['onboarding unfinished', {}, []], ['dry run', READY_FILES, ['--dry-run']]]) {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...files, 'data/h1b/shared.gz': 'x' } });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none', ...flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, `${name}\n${r.out}`);
+  }
+});
+
+test('an H1B_INDEX_PATH through the target of a dangling data/h1b symlink names the default index (R18-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const target = path.join(w.T, 'unmounted', 'idx');
+  fs.mkdirSync(path.join(D, 'data'), { recursive: true });
+  fs.symlinkSync(target, path.join(D, 'data/h1b'));
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(target, 'index.ndjson.gz') } });
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
 test('an H1B_INDEX_PATH whose .. leaves a symlinked data/h1b names another file than the default, as the kernel resolves it (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
