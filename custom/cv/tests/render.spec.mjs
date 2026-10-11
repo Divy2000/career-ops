@@ -314,6 +314,20 @@ test('given another render\'s temp HTML in the same folder, when a render is sto
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), [path.basename(other), 'cv-test.html'].sort());
 });
 
+test('given another render starts after this one\'s density render began, when this one is stopped, then that render\'s temp HTML is left alone (R19-scripts-a-L1-01)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const { child, exited } = startRender(root, html, ['--max-pages=1'], { group: true });
+  await waitFor(() => renderTemps(root).length > 0, 'the temp HTML of a density render');
+  // A second render, started after this one sampled the folder, writes its own temp HTML beside the input.
+  const other = path.join(root, 'output', '.career-ops-render-22222222-2222-2222-2222-222222222222.html');
+  fs.writeFileSync(other, '<html><body>another render in progress</body></html>');
+  process.kill(-child.pid, 'SIGINT');
+  await exited;
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')).sort(), [path.basename(other), 'cv-test.html'].sort(),
+    'only this render\'s own temp HTML is removed');
+});
+
 test('given another render starts while this one runs, when this one finishes, the other render\'s temp HTML is left alone (R15-scripts-a-L1-01 review)', { timeout: 240000 }, async () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
