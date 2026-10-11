@@ -499,10 +499,12 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
     d.setDate(d.getDate() - days);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
-  /** Rewrites a batch's pass day to `days` days before today (local), as a pass that ran then would have left it. */
+  /** Rewrites a batch's pass day to `days` days before today (local), as a pass that ran then would have left it; returns that day. */
   const backdate = (batch: string, days: number) => {
     const file = path.join(app.cfg.dataRoot, batch);
-    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), date: daysAgo(days) }));
+    const day = daysAgo(days);
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), date: day }));
+    return day;
   };
   const setLastPass = (day: string) => {
     const seen = fs.existsSync(immFile('seen.json')) ? JSON.parse(fs.readFileSync(immFile('seen.json'), 'utf8')) : { ids: [] };
@@ -523,17 +525,18 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
   it('given a leftover batch from days before the news window, when the leftover acks run, then it is acknowledged and last_pass moves only up to its day', async () => {
     const { batch } = await failedAckPass(25);
     setLastPass(daysAgo(10));
-    backdate(batch, 6);
+    const day = backdate(batch, 6);
     await ackLeftover(batch);
-    expect(lastPass()).toBe(daysAgo(6));
+    expect(lastPass()).toBe(day);
   });
 
   it('given a leftover batch older than the last pass, when the leftover acks run, then it is acknowledged and last_pass does not move back', async () => {
     const { batch } = await failedAckPass(28);
-    setLastPass(daysAgo(1));
+    const last = daysAgo(1);
+    setLastPass(last);
     backdate(batch, 6);
     await ackLeftover(batch);
-    expect(lastPass()).toBe(daysAgo(1));
+    expect(lastPass()).toBe(last);
   });
 
   it('given a leftover batch from an earlier day still inside the news window, when the leftover acks run, then it is acknowledged', async () => {
@@ -542,15 +545,18 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
     await ackLeftover(batch);
   });
 
-  it('given a leftover batch that cannot be read, when the leftover acks run, then it is let go of unacknowledged and its items stay queued', async () => {
-    const { batch } = await failedAckPass(29);
-    fs.writeFileSync(path.join(app.cfg.dataRoot, batch), '{not json');
+  it.each([
+    ['is not JSON', '{not json', 29],
+    ['holds an item watch.mjs --ack cannot read', JSON.stringify({ date: '2020-01-01', new_items: [null] }), 30],
+  ])('given a leftover batch that %s, when the leftover acks run, then it is let go of unacknowledged and its items stay queued', async (_what, text, n) => {
+    const { batch } = await failedAckPass(n);
+    fs.writeFileSync(path.join(app.cfg.dataRoot, batch), text);
     ackFails = false;
     const restarted = restart();
     try {
       restarted.reconcile();
       await until(() => !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the unreadable batch to be let go of');
-      expect(pending().map((i) => i.id)).toEqual([item(29).id]);
+      expect(pending().map((i) => i.id)).toEqual([item(n).id]);
     } finally {
       restarted.close();
     }

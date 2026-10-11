@@ -325,7 +325,7 @@ let items;
 try {
   items = JSON.parse(require("fs").readFileSync(process.env.BATCH, "utf8"))?.new_items;
 } catch {}
-process.exit(Array.isArray(items) ? 0 : 1);
+process.exit(Array.isArray(items) && items.every((i) => typeof i === "object" && i !== null) ? 0 : 1);
 '; then
       echo "policy pass batch $batch cannot be read: its items stay queued for this pass"
       rm -f "$done"
