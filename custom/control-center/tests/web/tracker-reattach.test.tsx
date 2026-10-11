@@ -179,6 +179,19 @@ describe('Compare selected', () => {
     expect(button('Compare selected')!.disabled).toBe(false);
   });
 
+  it("Compare stays off while the comparison waits for the user's reply, so no second paid comparison starts (R23-feat-c-X-01)", async () => {
+    const { CompareSelected } = await import('@web/features/tracker/CompareSelected');
+    const rows = [trackerRow(1, 'Acme', null), trackerRow(2, 'Globex', null)];
+    await render(createElement(CompareSelected, { rows, onClear: () => {} }));
+    await act(async () => button('Compare selected')!.click());
+    await act(async () => panels.filter((p) => p.mode === 'ofertas').pop()!.onSessionId!('cmp-1'));
+    await act(async () => panels.filter((p) => p.mode === 'ofertas').pop()!.onStatus!('awaiting_user', 'the turn ended with a question'));
+    expect(button('Compare selected')!.disabled).toBe(true);
+    expect(button('Compare selected')!.title).toBe('A comparison is waiting for your reply');
+    await act(async () => panels.filter((p) => p.mode === 'ofertas').pop()!.onStatus!('done', 'clean exit with output'));
+    expect(button('Compare selected')!.disabled).toBe(false);
+  });
+
   it('renders nothing with no selection and no comparison', async () => {
     const { CompareSelected } = await import('@web/features/tracker/CompareSelected');
     await render(createElement(CompareSelected, { rows: [], onClear: () => {} }));

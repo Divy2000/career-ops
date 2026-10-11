@@ -5,8 +5,10 @@ import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from './lastSes
  * A page's paid session that must survive leaving the page: the last one started under `key` (this browser tab) is
  * re-attached when the page comes back, and `busy` stays true while it is starting, queued or running, so a second one
  * cannot start beside it. Hand `panel` (and `panelKey` as its key) to the SessionPanel; `start` begins a new one.
+ * `holdWhileAwaiting` also keeps `busy` true while the session waits for the user's reply: for a session that must stay
+ * the only one of its kind (it writes shared files), whose reply carries it on, so a second one must not start beside it.
  */
-export function useRememberedSession(key: string) {
+export function useRememberedSession(key: string, { holdWhileAwaiting = false }: { holdWhileAwaiting?: boolean } = {}) {
   const store = useMemo(() => lastSession(key), [key]);
   const [id, setId] = useState<string | null>(store.read);
   const [startingElsewhere, setStartingElsewhere] = useState(store.starting);
@@ -37,7 +39,9 @@ export function useRememberedSession(key: string) {
   const shown = id !== null || starts > 0;
   // A reply or fork reported as a start (marksTurnStarts) runs a session the stream still shows as finished. The status
   // counts only while a session is held: a panel left without one (its session gone) reports an empty stream's 'queued'.
-  const busy = waiting || startingHere || (id !== null && !startFailed && (status === null || status === 'queued' || status === 'running'));
+  const held = id !== null && !startFailed;
+  const awaitingReply = held && status === 'awaiting_user';
+  const busy = waiting || startingHere || (held && (status === null || status === 'queued' || status === 'running' || (holdWhileAwaiting && awaitingReply)));
   const onStatus = useCallback(
     (s: string) => {
       setStatus(s);
@@ -82,5 +86,5 @@ export function useRememberedSession(key: string) {
     setStarts((n) => n + 1);
   };
   // panelKey remounts the panel for each new start, so it does not keep the session it showed before.
-  return { shown, busy, waiting, start, panelKey: starts, panel: { sessionId: id, autoStart: starts > 0 && id === null, onSessionId, onStatus, onStartFailed, onStarting } };
+  return { shown, busy, waiting, awaitingReply, start, panelKey: starts, panel: { sessionId: id, autoStart: starts > 0 && id === null, onSessionId, onStatus, onStartFailed, onStarting } };
 }
