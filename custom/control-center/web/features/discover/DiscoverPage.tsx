@@ -233,7 +233,7 @@ interface NetworkFilters {
   ats: NetworkScanSource[];
   limit: number;
 }
-const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: 'intern', locations: 'Remote', sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 };
+const DEFAULT_FILTERS: NetworkFilters = { roles: 'backend, platform', exclude: 'word:intern, word:internship', locations: 'Remote', sinceDays: 7, ats: ['greenhouse', 'lever'], limit: 100 };
 
 // The filters the remembered run used, kept beside its id: a re-attached results card must sit under the form it ran.
 const NETWORK_FILTERS_KEY = 'cc.discover.networkScan.params';
@@ -390,7 +390,7 @@ export function NetworkScan() {
             <span className="muted">Roles</span> <input aria-label="Roles (comma separated)" value={roles} onChange={(e) => setRoles(e.target.value)} />
           </label>
           <label>
-            <span className="muted">Exclude</span> <input aria-label="Exclude keywords" value={exclude} onChange={(e) => setExclude(e.target.value)} />
+            <span className="muted">Exclude</span> <input aria-label="Exclude keywords" aria-describedby="network-exclude-hint" value={exclude} onChange={(e) => setExclude(e.target.value)} />
           </label>
           <label>
             <span className="muted">Locations</span> <input aria-label="Allowed locations" value={locations} onChange={(e) => setLocations(e.target.value)} />
@@ -416,6 +416,9 @@ export function NetworkScan() {
             </select>
           </label>
         </div>
+        <p id="network-exclude-hint" className="faint small" style={{ margin: 0 }}>
+          A keyword of 4 or more letters matches anywhere in a title (intern also drops Internal and International); prefix it with word: to match whole words only.
+        </p>
         <fieldset className="row gap" style={{ border: 0, padding: 0, margin: 0 }}>
           <legend className="muted">ATS sources</legend>
           {NETWORK_SCAN_SOURCES.map((a) => (
