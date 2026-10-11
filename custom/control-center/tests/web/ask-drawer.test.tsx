@@ -684,6 +684,31 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
     expect(item.dataset.proposalState).toBe('done');
   });
 
+  it('given Process inbox started after the last sessions poll, an evaluateCompany still fails before asking', async () => {
+    listed = [];
+    await remountDrawer();
+    listed = [PIPELINE];
+    const item = await propose('evaluateCompany', { company: 'Acme' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
+  it('given Process inbox starts while the confirm is open, Do it starts nothing', async () => {
+    listed = [];
+    await remountDrawer();
+    for (const [action, params] of [['evaluateCompany', { company: 'Acme' }], ['evaluate', { url: 'https://jobs.acme.example/1' }]] as const) {
+      listed = [];
+      const item = await propose(action, params);
+      listed = [PIPELINE];
+      await act(async () => bodyButton('Do it')!.click());
+      expect(posts).toEqual([]);
+      expect(item.dataset.proposalState).toBe('failed');
+      expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+      await remountDrawer();
+    }
+  });
+
   it('given the Process inbox run has ended, an evaluateCompany runs', async () => {
     listed = [{ ...PIPELINE, status: 'done' }];
     await remountDrawer();

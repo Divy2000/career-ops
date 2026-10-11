@@ -147,6 +147,18 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
 
   const update = (id: number, patch: Partial<Proposal>) => setProposals((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
+  /**
+   * Whether a running Process inbox session already evaluates what an evaluate or evaluateCompany would: every pending
+   * row, so a second evaluation would run, report and bill it twice. Read fresh, not from the 5 s poll, since Process
+   * inbox can start in the gap (or while the confirm is open).
+   */
+  const processInboxOwns = async (p: Proposal): Promise<boolean> => {
+    if (p.action !== 'evaluate' && p.action !== 'evaluateCompany') return false;
+    const list = await qc.fetchQuery({ queryKey: ['sessions'], queryFn: () => apiGet<SessionMeta[]>('/api/sessions'), staleTime: 0 });
+    if (!list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
+    return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
+  };
+
   // The hidden button lags the click by a render, and confirms queue: a second click before it would ask twice.
   const started = useRef(new Set<number>());
   const run = async (p: Proposal) => {
@@ -164,22 +176,14 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     // A company's evaluations are counted before the question, so it says how many paid sessions it starts.
     const company = String(p.params.company ?? '').trim();
     let companyUrls: string[] = [];
-    // Process inbox evaluates every pending row, so an evaluation of one of them would run, report and bill it twice.
-    const pipelineLive = (sessions.data ?? []).some((s) => s.mode === 'pipeline' && LIVE.has(s.status));
-    if (pipelineLive && p.action === 'evaluateCompany') {
-      update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
-      return;
-    }
-    if (pipelineLive && p.action === 'evaluate') {
-      try {
-        if (await isPendingInboxRow(String(p.params.url).trim())) {
-          update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
-          return;
-        }
-      } catch (err) {
-        update(p.id, { state: 'failed', note: describeError(err) });
+    try {
+      if (await processInboxOwns(p)) {
+        update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
         return;
       }
+    } catch (err) {
+      update(p.id, { state: 'failed', note: describeError(err) });
+      return;
     }
     if (p.action === 'evaluateCompany') {
       try {
@@ -214,6 +218,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       return;
     }
     try {
+      if (await processInboxOwns(p)) {
+        update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
+        return;
+      }
       switch (p.action) {
         case 'navigate': {
           await router.navigate({ to: String(p.params.to).trim() as '/' });
