@@ -220,7 +220,8 @@ export class SessionManager {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
       // it must never start a fresh conversation under the source's id or append to it.
       const forkPending = meta.forkPending === true;
-      return await this.runTurn(meta, policy, prompt, { resume: this.hasConversation(meta) || forkPending, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
+      const resume = this.hasConversation(meta) || forkPending;
+      return await this.runTurn(meta, policy, resume ? prompt : this.withOriginalRequest(meta, prompt), { resume, fork: forkPending, blacklistAllowed: opts.blacklistAllowed });
     } finally {
       this.sending.delete(id);
     }
@@ -233,7 +234,7 @@ export class SessionManager {
     // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
     if (!this.hasConversation(src)) {
       const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
-      return this.runTurn(fresh, policy, prompt, { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
+      return this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
     }
     const forked = this.store.fork(id);
     return this.runTurn(forked, policy, prompt, { resume: true, fork: true, blacklistAllowed: opts.blacklistAllowed });
@@ -450,6 +451,36 @@ export class SessionManager {
     return conversationStarted(meta) || transcriptFiles(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId).some((f) => fs.existsSync(f));
   }
 
+  private originalRequestPath(id: string): string {
+    return path.join(this.store.guardDirOf(id), 'original-request.txt');
+  }
+
+  /** Kept from the session's first turn on: the route adds the target to that message only, so a later fresh start needs it. */
+  private recordOriginalRequest(id: string, prompt: string): void {
+    const file = this.originalRequestPath(id);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      fs.writeFileSync(file, prompt, { flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+
+  /**
+   * A turn that starts a fresh conversation after the first one never reached Claude (it failed before spawn, or died
+   * before the CLI saved anything) would otherwise carry only the reply: the original request and its target go first.
+   */
+  private withOriginalRequest(meta: SessionMeta, prompt: string): string {
+    let original: string | undefined;
+    try {
+      original = fs.readFileSync(this.originalRequestPath(meta.id), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      original = meta.turns[0]?.userText;
+    }
+    return original ? `${original}\n\n${prompt}` : prompt;
+  }
+
   private must(id: string): SessionMeta {
     const meta = this.read(id);
     if (!meta) throw new NotFoundError(`no session ${id}`);
@@ -515,6 +546,7 @@ export class SessionManager {
     try {
       const baseDeny = policy.policyClass === 'devchat' ? DEVCHAT_DENIED_WRITES : ALWAYS_DENIED_WRITES;
       const deny = blacklistAllowed ? baseDeny.filter((p) => p !== 'data/blacklist.md') : [...baseDeny];
+      if (n === 1 && !opts.resume) this.recordOriginalRequest(meta.id, prompt);
       assertRootsConfinable(this.cfg.codeRoot, this.cfg.dataRoot, this.deps.home ?? os.homedir());
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
