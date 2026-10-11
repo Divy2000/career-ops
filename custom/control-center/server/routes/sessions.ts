@@ -377,12 +377,18 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const giveBack = () => policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`);
     return mutate(reply, async () => {
       let forked;
+      // The fork may wait for a cancelled source to finish before it creates the copy: the source counts as starting
+      // meanwhile, so a tailored CV or Process inbox start for the same rows is refused instead of running beside it.
+      const tracked = !turnsStarting.has(req.params.id);
+      if (tracked) turnsStarting.add(req.params.id);
       try {
         forked = await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed });
       } catch (err) {
         // The fork did not start: the claim goes back to the session it was taken from.
         if (isPass) giveBack();
         throw err;
+      } finally {
+        if (tracked) turnsStarting.delete(req.params.id);
       }
       if (!isPass) return reply.code(202).send(forked);
       // A fork that failed before its Claude process started leaves the pass, its claim and its batch with the source.
