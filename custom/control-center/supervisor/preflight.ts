@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { approvedClaudeVersions, parseClaudeVersion, unapprovedWarning } from '../server/claude/cli-version.js';
+import { approvedClaudeVersions, parseClaudeVersion, probeEnv, unapprovedWarning } from '../server/claude/cli-version.js';
+
+export { probeEnv };
 
 /**
  * The Node versions every dependency in package-lock.json accepts (the app's and the test suite's alike, since the
@@ -85,18 +87,6 @@ export interface PreflightResult {
 
 export const KEYCHAIN_HELP =
   'Keychain item "career-ops-claude-token" is missing. Run: claude setup-token, then\n  security add-generic-password -U -a "$USER" -s career-ops-claude-token -w';
-
-/**
- * The supervisor's environment minus what no probed program needs: its CC_* internals (CC_TOKEN and CC_SESSION_SECRET
- * drive the local API) and Claude/Anthropic credentials, the same names server/system/child-env.ts drops for every child
- * the server starts. A copy, not an import: Dev Chat may edit server/system/, and a file the supervisor loads must not
- * be one it can break (tests/unit/claude-engine.test.ts SW2-claude-05); tests/unit/preflight.test.ts keeps them equal.
- */
-export function probeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const secret = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
-  const drop = (k: string) => k.startsWith('CC_') || k.startsWith('ANTHROPIC_') || (k.startsWith('CLAUDE_CODE_') && secret.test(k.slice('CLAUDE_CODE_'.length)));
-  return Object.fromEntries(Object.entries(base).filter(([k]) => !drop(k)));
-}
 
 function probe(cmd: string, args: string[], timeoutMs: number): Promise<Probe> {
   return new Promise((resolve) => {

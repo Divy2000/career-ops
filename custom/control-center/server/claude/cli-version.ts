@@ -31,11 +31,23 @@ export function unapprovedWarning(found: string, approved: string[]): string {
   return `${unapprovedMessage(found, approved)}. Sessions are refused until then; the rest of the app works.`;
 }
 
+/**
+ * The process environment minus what no probed program needs: the CC_* internals (CC_TOKEN and CC_SESSION_SECRET
+ * drive the local API) and Claude/Anthropic credentials, the same names server/system/child-env.ts drops for every child
+ * the server starts. A copy, not an import: Dev Chat may edit server/system/, and a file the supervisor loads must not
+ * be one it can break (tests/unit/claude-engine.test.ts SW2-claude-05); tests/unit/preflight.test.ts keeps them equal.
+ */
+export function probeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const secret = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
+  const drop = (k: string) => k.startsWith('CC_') || k.startsWith('ANTHROPIC_') || (k.startsWith('CLAUDE_CODE_') && secret.test(k.slice('CLAUDE_CODE_'.length)));
+  return Object.fromEntries(Object.entries(base).filter(([k]) => !drop(k)));
+}
+
 export type VersionRunner = (bin: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 const runVersion: VersionRunner = (bin) =>
   new Promise((resolve) => {
-    execFile(bin, ['--version'], { shell: false, timeout: VERSION_TIMEOUT_MS, env: { ...process.env, DISABLE_AUTOUPDATER: '1' } }, (err, stdout, stderr) => {
+    execFile(bin, ['--version'], { shell: false, timeout: VERSION_TIMEOUT_MS, env: { ...probeEnv(process.env), DISABLE_AUTOUPDATER: '1' } }, (err, stdout, stderr) => {
       // err.code is the exit status for a process that ran, or a string such as ENOENT for one that never started.
       const raw = (err as { code?: unknown } | null)?.code;
       resolve({ code: err ? (typeof raw === 'number' ? raw : 1) : 0, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
