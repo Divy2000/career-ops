@@ -6,6 +6,7 @@ import { copyFixtureRoot, FIXTURE_ROOT, testConfig } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { findAction } from '../../server/actions/registry.js';
+import { childEnv } from '../../server/system/child-env.js';
 
 describe('the insights cache key', () => {
   // upskill leaves out skills cv.md already has and story provenance traces stories to cv.md and the digest.
@@ -181,5 +182,31 @@ describe('Company history reads the data root, wherever it is (SW7-server-01)', 
     const cmd = findAction('insights.companyHistory')!.build({}, { codeRoot: '/code', dataRoot: root, tmpInputs: [], trackerPath: path.join(root, 'data', 'applications.md') });
     expect(cmd.args).toEqual(expect.arrayContaining(['--followups', path.join(root, 'data', 'follow-ups.md'), '--scan-history', path.join(root, 'data', 'scan-history.tsv')]));
     expect(cmd.env).toMatchObject({ CAREER_OPS_TRACKER: path.join(root, 'data', 'applications.md'), CAREER_OPS_PORTALS: path.join(root, 'portals.yml') });
+  });
+});
+
+describe('Company history with a second-lane CAREER_OPS_PORTALS in the server environment (R18-srv-dom-a-L2-01)', () => {
+  it('the child really reads the lane file (the server blanks the inherited value), and the cache is keyed on it', async () => {
+    const root = copyFixtureRoot();
+    const lane = path.join(tempDir('cc-portals-lane-'), 'portals.yml');
+    fs.copyFileSync(path.join(root, 'portals.yml'), lane);
+    const prior = process.env.CAREER_OPS_PORTALS;
+    process.env.CAREER_OPS_PORTALS = lane;
+    try {
+      const seen: NodeJS.ProcessEnv[] = [];
+      // What the child sees: execNoShell starts it with childEnv(opts.env).
+      const exec: Exec = async (_cmd, _args, opts) => (seen.push(childEnv(opts.env)), { code: 0, stdout: '{"ok":true}', stderr: '' });
+      const cfg = testConfig({ dataRoot: root });
+      await readInsight(cfg, exec, 'companyHistory');
+      expect(seen[0]!.CAREER_OPS_PORTALS).toBe(lane);
+      expect((await readInsight(cfg, exec, 'companyHistory')).fromCache).toBe(true);
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(lane, later, later);
+      expect((await readInsight(cfg, exec, 'companyHistory')).fromCache).toBe(false);
+      expect(seen).toHaveLength(2);
+    } finally {
+      if (prior === undefined) delete process.env.CAREER_OPS_PORTALS;
+      else process.env.CAREER_OPS_PORTALS = prior;
+    }
   });
 });

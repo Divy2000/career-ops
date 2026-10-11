@@ -83,12 +83,13 @@ function dirKey(dir: string): string {
  * company-history.mjs reads its tracker, follow-ups, scan history and portals from its own folder (the code checkout),
  * not the data root: only its profile follows CAREER_OPS_ROOT. These are the overrides it honours, pointed at the data
  * root's files. `trackerPath` is path-resolver.mjs rawTrackerPath(dataRoot), which already puts CAREER_OPS_TRACKER
- * first; a CAREER_OPS_PORTALS in the environment is left to win, as in every other script.
+ * first; a CAREER_OPS_PORTALS in the environment wins too, so it is passed on explicitly: child-env.ts blanks an
+ * inherited one, and the script would then fall back to the code checkout's portals.yml.
  */
 export function companyHistoryInputs(dataRoot: string, trackerPath: string, env: NodeJS.ProcessEnv = process.env): { args: string[]; env: Record<string, string> } {
   return {
     args: ['--followups', path.join(dataRoot, 'data', 'follow-ups.md'), '--scan-history', path.join(dataRoot, 'data', 'scan-history.tsv')],
-    env: { CAREER_OPS_TRACKER: trackerPath, ...(env.CAREER_OPS_PORTALS?.trim() ? {} : { CAREER_OPS_PORTALS: path.join(dataRoot, 'portals.yml') }) },
+    env: { CAREER_OPS_TRACKER: trackerPath, CAREER_OPS_PORTALS: env.CAREER_OPS_PORTALS?.trim() || path.join(dataRoot, 'portals.yml') },
   };
 }
 
@@ -104,7 +105,10 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   const { resolveTrackerPath, rawTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string; rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
   const now = opts.now ?? Date.now;
   // The scripts count days from today (rejection latency, weekly digest, funnel velocity), so a new local day is a new input.
-  const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}|day:${localDate(new Date(now()))}`;
+  const extra = script === 'companyHistory' ? companyHistoryInputs(cfg.dataRoot, rawTrackerPath(cfg.dataRoot)) : { args: [], env: {} };
+  // The portals file company-history reads may be a lane file outside the data root.
+  const portals = extra.env.CAREER_OPS_PORTALS ? `|portals=${extra.env.CAREER_OPS_PORTALS}:${mtimeOf(extra.env.CAREER_OPS_PORTALS)}` : '';
+  const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}${portals}|day:${localDate(new Date(now()))}`;
   const file = cachePath(cfg.dataRoot, script);
   if (!opts.recompute) {
     try {
@@ -115,7 +119,6 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
       /* no usable cache */
     }
   }
-  const extra = script === 'companyHistory' ? companyHistoryInputs(cfg.dataRoot, rawTrackerPath(cfg.dataRoot)) : { args: [], env: {} };
   const r = await exec(process.execPath, [cliScriptPath(cfg.codeRoot, def.cli), ...extra.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...extra.env } });
   let json: unknown;
   try {
