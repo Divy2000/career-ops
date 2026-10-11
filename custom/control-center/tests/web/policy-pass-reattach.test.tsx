@@ -34,7 +34,7 @@ async function openPage() {
   await until(() => passButton(), 'the policy pass button');
 }
 
-const passButton = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Run AI policy pass') || b.textContent?.startsWith('Policy pass running'));
+const passButton = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Run AI policy pass') || b.textContent?.startsWith('Policy pass running') || b.textContent?.startsWith('Policy pass needs your reply'));
 const lastPanel = () => panels.filter((p) => p.mode === 'immigration-policy').pop();
 
 beforeEach(() => {
@@ -117,5 +117,22 @@ describe('Sponsorship AI policy pass', () => {
     expect(passButton()!.disabled).toBe(false);
     await act(async () => lastPanel()!.onStatus!('running', null));
     expect(passButton()!.disabled).toBe(true);
+  });
+
+  it('a pass waiting for the user\'s reply keeps the button off and stays attached after coming back, since it still holds the server claim (R24-feat-c-L3-01)', async () => {
+    sessionStorage.setItem('cc.sponsorship.policyPass', 'pass-asks');
+    await openPage();
+    await act(async () => lastPanel()!.onStatus!('awaiting_user', null));
+    expect(passButton()!.disabled).toBe(true);
+    expect(passButton()!.textContent).toContain('Policy pass needs your reply');
+    expect(lastPanel()).toMatchObject({ sessionId: 'pass-asks' });
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openPage();
+    expect(lastPanel()).toMatchObject({ sessionId: 'pass-asks' });
+    await act(async () => lastPanel()!.onStatus!('awaiting_user', null));
+    expect(passButton()!.disabled).toBe(true);
+    expect(sessionStorage.getItem('cc.sponsorship.policyPass')).toBe('pass-asks');
   });
 });

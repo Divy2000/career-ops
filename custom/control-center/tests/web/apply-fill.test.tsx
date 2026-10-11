@@ -10,7 +10,7 @@ import { ConfirmProvider } from '@web/components/ConfirmDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type PanelProps = { initialPrompt?: string; onEnvelope?: (kind: string, payload: unknown) => void; onSessionId?: (id: string) => void; onStatus?: (s: string) => void };
+type PanelProps = { initialPrompt?: string; target?: { type: string; value: string }; onEnvelope?: (kind: string, payload: unknown) => void; onSessionId?: (id: string) => void; onStatus?: (s: string) => void };
 let panel: PanelProps = {};
 vi.mock('@web/components/SessionPanel', () => ({
   SessionPanel: (props: PanelProps) => {
@@ -26,6 +26,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 let host: HTMLElement;
 let root: Root;
 let turns: Array<{ prompt: string }>;
+let actionPosts: Array<{ url: string; body: { params: Record<string, unknown> } }>;
 let turnAnswer: (() => Response) | null;
 let releaseTurn: () => void;
 
@@ -37,6 +38,7 @@ beforeEach(async () => {
   // The page remembers its last apply session in this tab; each test starts as a fresh tab.
   sessionStorage.clear();
   turns = [];
+  actionPosts = [];
   turnAnswer = null;
   vi.stubGlobal(
     'fetch',
@@ -48,6 +50,10 @@ beforeEach(async () => {
         turns.push(JSON.parse(String(init!.body)));
         if (turnAnswer) return new Promise<Response>((resolve) => (releaseTurn = () => resolve(turnAnswer!())));
         return json({ id: 's1' });
+      }
+      if (url.startsWith('/api/actions/')) {
+        actionPosts.push({ url, body: JSON.parse(String(init!.body)) });
+        return json({ result: 'prefilled' });
       }
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404 });
     }),
@@ -171,5 +177,18 @@ describe('Apply: the chosen documents reach the session', () => {
     await until(() => host.textContent?.includes('Fill turn sent with your edited answers.'), 'the sent note');
     expect(fillButton().disabled).toBe(false);
   });
-});
 
+  it('a posting URL pasted with surrounding whitespace reaches the session target, prompt and prefill trimmed (R24-feat-a-L2-01)', async () => {
+    const plain = 'https://jobs.lever.co/acme/abc123';
+    await pick('Posting URL', ` ${plain}\n`);
+    await pick('CV PDF to attach', 'output/cv-acme-v2.pdf');
+    expect(panel.target).toEqual({ type: 'url', value: plain });
+    expect(panel.initialPrompt).toContain(`Read the application form at ${plain}, draft`);
+    const prefill = [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Zero-token prefill'))!;
+    expect(prefill.disabled).toBe(false);
+    await act(async () => prefill.click());
+    await until(() => actionPosts.length > 0, 'the prefill action');
+    expect(actionPosts[0]!.url).toBe('/api/actions/docs.prepareApplication');
+    expect(actionPosts[0]!.body.params.url).toBe(plain);
+  });
+});
