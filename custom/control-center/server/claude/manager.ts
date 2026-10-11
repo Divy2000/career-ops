@@ -20,6 +20,7 @@ import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
+import { sponsorCheckCompany } from '../../shared/company-slug.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
 import { ackPolicyPass, donePolicyBatches, dropPolicyBatch, dropUnreadablePolicyBatch, forgetDonePolicyBatch, policyBatchReadable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { beginTakingReportNums, unrecordedFor } from '../actions/registry.js';
@@ -1197,13 +1198,12 @@ function owesReport(meta: SessionMeta): boolean {
 
 /**
  * The dedupe key of what a session writes for: a posting's URL, the saved JD a local:jds/ text target names (as finalize
- * keys it), or the company a sponsorship check writes data/immigration/companies/** for (trimmed, case-insensitive).
+ * keys it), or the company a sponsorship check writes data/immigration/companies/** for (by its company-file slug).
  */
 function postingKey(mode: string, target: SessionMeta['target']): string | null {
   if (target.type === 'url' && target.value) return `url\0${target.value}`;
   if (target.type === 'company' && mode === 'sponsorship-check') {
-    const company = target.value?.trim().toLowerCase().replace(/\s+/g, ' ');
-    if (company) return `company\0${company}`;
+    if (target.value?.trim()) return `company\0${sponsorCheckCompany(target.value)}`;
   }
   if (target.type === 'text' && target.value) {
     const jd = localJdPath(target.value);

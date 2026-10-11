@@ -180,3 +180,19 @@ describe('a fork of a sponsorship check is held by a live check of its company',
     }
   });
 });
+
+// The company key is the slug the check writes its file under, so two spellings of one company file collide (R24-FU-01c).
+describe('the sponsorship check company key is the company-file slug', () => {
+  it('given a live check of "Acme, Inc.", when a check names "Acme Inc", then it is refused with 409 naming the live session', async () => {
+    const app = await freshApp();
+    try {
+      const live = liveSession(app, 'sponsorship-check', 'Acme, Inc.', 'running');
+      const res = await call(app, check('Acme Inc'));
+      expect(res.statusCode, res.body).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(live.id);
+    } finally {
+      await quiet(app);
+      await app.close();
+    }
+  });
+});
