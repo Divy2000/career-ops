@@ -19,6 +19,7 @@ import { companySlug, parseCompanyAlerts } from '../immigration/lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { hasIndex } from '../../plugins/h1b-sponsor/lib/index.mjs';
 import { localToday } from '../../lib/local-today.mjs';
+import { withPipelineLock } from '../../pipeline-lock.mjs';
 import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const run = promisify(execFile);
@@ -97,8 +98,23 @@ async function writeTiers(cache) {
   await rename(tmp, TIER_CACHE);
 }
 
+const readTiers = async () => (existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {});
+
+// Overlapping runs (the daily job and a manual one) each look up their own companies: every lookup is merged into the
+// cache as it is on disk now, under its lock, so one run's write never drops what the other cached. A failed lookup
+// does not replace an entry another run has just cached fresh. Returns the entry the cache now holds for the company.
+async function saveTier(company, entry, fresh) {
+  await mkdir(path.dirname(TIER_CACHE), { recursive: true });
+  return withPipelineLock(TIER_CACHE, async () => {
+    const latest = await readTiers();
+    if (!(entry.error && fresh(latest[company]))) latest[company] = entry;
+    await writeTiers(latest);
+    return latest[company];
+  });
+}
+
 async function loadTiers(allCompanies, today) {
-  const cache = existsSync(TIER_CACHE) ? JSON.parse(await readFile(TIER_CACHE, 'utf8')) : {};
+  const cache = await readTiers();
   const fresh = (e) => e && !e.error && (e.tier !== 'unknown' || e.searched || e.note) && (Date.parse(today) - Date.parse(e.checked)) / 86400000 < TIER_TTL_DAYS;
   const nameless = allCompanies.filter((c) => !usableName(c));
   const companies = allCompanies.filter(usableName);
@@ -114,15 +130,16 @@ async function loadTiers(allCompanies, today) {
   let looked = 0;
   for (const c of companies) {
     if (fresh(cache[c])) continue;
+    let entry;
     try {
-      cache[c] = { ...(await lookupTier(c)), checked: today };
+      entry = { ...(await lookupTier(c)), checked: today };
     } catch (err) {
       process.stderr.write(`tier lookup failed for ${c}: ${lookupError(err)}\n`);
-      cache[c] = { tier: 'lookup failed', matched: null, checked: today, error: true };
+      entry = { tier: 'lookup failed', matched: null, checked: today, error: true };
     }
     looked++;
     // Persist after each lookup: a cancel partway through keeps the lookups already done instead of losing all of them.
-    await writeTiers(cache);
+    cache[c] = await saveTier(c, entry, fresh);
   }
   return { tiers: withNameless(companies.map((c) => [c, cache[c].tier])), looked };
 }

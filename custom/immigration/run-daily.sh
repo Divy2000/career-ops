@@ -188,6 +188,7 @@ policy_watch() {
 
 policy_pass() {
   local watch_json prompt batch settings_dir policy_sha rc now
+  ack_leftover_batches || return 1
   watch_json="$(node custom/immigration/watch.mjs)" || return 1
   echo "$watch_json"
   # Only an approved Claude Code runs the pass (see claude_gate). An unapproved one skips the pass
@@ -284,8 +285,55 @@ process.stdout.write(policy.sha256);
     --output-format text 2>&1 | sed 's/^/  /' || rc=$?
   rm -rf "$settings_dir"
   [ "$rc" -eq 0 ] || return 1
-  # Only a successful pass acknowledges the batch; failures retry tomorrow.
-  node custom/immigration/watch.mjs --ack "$batch"
+  # Only a successful pass acknowledges the batch; failures retry tomorrow. The pass is recorded done first
+  # (<batch>.done, as a Control Center pass records it in policyPass.ts), so an ack that still fails is finished by
+  # the Control Center or the next run, never by sending the same items to Claude again.
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$batch.done" || return 1
+  ack_done_batch "$batch"
+}
+
+# watch.mjs --ack is idempotent, so a failed attempt (pending.json.lock busy) is tried again, waiting longer each
+# time; the .done marker goes once it lands.
+ack_done_batch() {
+  local batch="$1" attempt
+  for attempt in 1 2 3; do
+    [ "$attempt" -eq 1 ] || sleep $((attempt - 1))
+    if node custom/immigration/watch.mjs --ack "$batch"; then
+      rm -f "$batch.done"
+      return 0
+    fi
+  done
+  echo "could not acknowledge the policy items of $batch; it stays recorded as done for a later ack"
+  return 1
+}
+
+# Acknowledges the batches of earlier done passes whose ack failed, before a new pass: until they are acknowledged
+# their items are still queued, and a new pass would send them to Claude again. One from before the news window is
+# let go of unacknowledged (policyBatchAckable in the Control Center): an ack stamps last_pass with today, and the
+# news between that pass and the window would never be searched. A leftover still failing fails the step.
+ack_leftover_batches() {
+  local done batch
+  for done in "$IMM"/batches/*.done; do
+    [ -e "$done" ] || continue
+    batch="${done%.done}"
+    if ! BATCH="$batch" TODAY="$TODAY" node --input-type=module -e '
+import fs from "node:fs";
+import path from "node:path";
+const { newsSince } = await import(path.resolve("custom/immigration/lib.mjs"));
+const { BATCH, TODAY } = process.env;
+let day = null;
+try {
+  const date = JSON.parse(fs.readFileSync(BATCH, "utf8"))?.date;
+  if (typeof date === "string") day = date;
+} catch {}
+process.exit(day !== null && day <= TODAY && newsSince({ lastPass: TODAY, today: TODAY }) <= day ? 0 : 1);
+'; then
+      echo "policy pass batch $batch is older than the news window: its items stay queued for this pass"
+      rm -f "$done"
+      continue
+    fi
+    ack_done_batch "$batch" || return 1
+  done
 }
 
 step "policy watch" policy_watch
