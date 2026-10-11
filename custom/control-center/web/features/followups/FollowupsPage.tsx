@@ -153,7 +153,14 @@ export function CadenceTab() {
       <DataState query={q}>
         {q.data &&
           (q.data.entries.length === 0 ? (
-            <Empty>No applications in follow-up cadence yet. Once you apply to a job, its follow-ups are scheduled here.</Empty>
+            // followup-cadence.mjs counts retired applications but never lists them, so they cannot show as rows here.
+            q.data.metadata.retired > 0 ? (
+              <Empty>
+                {q.data.metadata.retired === 1 ? 'The one application in follow-up cadence is retired.' : `All ${q.data.metadata.retired} applications in follow-up cadence are retired.`} A retirement is a `- cleared #N` line in data/follow-ups.md: remove it, or log a follow-up dated after it, to bring the application back.
+              </Empty>
+            ) : (
+              <Empty>No applications in follow-up cadence yet. Once you apply to a job, its follow-ups are scheduled here.</Empty>
+            )
           ) : (
             <TableScroll label="Follow-up cadence">
               <table className="table">
@@ -343,6 +350,7 @@ export function FollowupsPage() {
         {q.data && (
           <span className="faint">
             {q.data.metadata.actionable} actionable of {q.data.metadata.totalTracked} tracked
+            {q.data.metadata.retired > 0 && `, ${q.data.metadata.retired} retired`}
           </span>
         )}
       </div>
@@ -403,8 +411,7 @@ function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLo
             <button type="button" aria-label={`Log follow-up for ${e.company}`} onClick={onLog} disabled={logLocked} title={logLocked ? 'Another follow-up is being saved' : undefined}>
               Log
             </button>
-            {/* The cadence keeps a retired application retired whatever date is pinned: logging a follow-up revives it. */}
-            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, localDatePlusDays(7))} disabled={e.urgency === 'retired'} title={e.urgency === 'retired' ? 'Retired: log a follow-up to bring it back into the cadence' : undefined}>
+            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, localDatePlusDays(7))}>
               +7d
             </button>
             <button type="button" aria-label={`Clear pinned date for ${e.company}`} onClick={() => onPin(e.num, null)} disabled={!e.nextOverride}>

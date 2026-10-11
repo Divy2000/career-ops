@@ -1,5 +1,6 @@
 // Follow-ups page: its paid launcher sessions survive a tab switch, a failed invite match does not leave the previous
-// invite's result under the new text, and a retired application offers no pin that the cadence would ignore.
+// invite's result under the new text, and retired applications (counted, never listed, by followup-cadence.mjs) are
+// named in the header and the empty state rather than read as "no applications yet".
 import { createElement, type ReactNode } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -23,9 +24,15 @@ const entry = (over: Partial<FollowupCadenceEntry>): FollowupCadenceEntry => ({
   num: 1, company: 'Acme Robotics', role: 'Backend Engineer', status: 'applied', score: '4.3/5', appliedDate: '2026-09-01', daysSinceApplication: 30,
   daysSinceLastFollowup: 20, followupCount: 2, urgency: 'overdue', nextFollowupDate: '2026-10-01', daysUntilNext: -9, nextOverride: null, contacts: [], followups: [], ...over,
 });
-const CADENCE: FollowupCadence = {
+// followup-cadence.mjs counts retired applications in metadata.retired and leaves them out of entries.
+let CADENCE: FollowupCadence;
+const ACTIVE: FollowupCadence = {
   metadata: { analysisDate: '2026-10-10', totalTracked: 2, actionable: 1, overdue: 1, urgent: 0, cold: 0, waiting: 0, retired: 1 },
-  entries: [entry({}), entry({ num: 12, company: 'Globex', urgency: 'retired', nextFollowupDate: null, daysUntilNext: null })],
+  entries: [entry({})],
+};
+const ALL_RETIRED: FollowupCadence = {
+  metadata: { analysisDate: '2026-10-10', totalTracked: 2, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 2 },
+  entries: [],
 };
 const ACTIONS: ActionMeta[] = [{ id: 'followups.inviteMatch', label: 'Match invite', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }, { id: 'followups.replyPaste', label: 'Paste a reply', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }];
 
@@ -36,6 +43,7 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 
 beforeEach(() => {
   launchers = [];
+  CADENCE = ACTIVE;
   inviteAnswer = () => json(200, { result: { row: 12, company: 'Globex' } });
   vi.stubGlobal(
     'fetch',
@@ -56,16 +64,16 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(component: () => ReactNode) {
+async function render(component: () => ReactNode, initialPath = '/') {
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
   const page = createRoute({ getParentRoute: () => rootRoute, path: '/', component });
   const tracker = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: () => null });
-  const router = createRouter({ routeTree: rootRoute.addChildren([page, tracker]), history: createMemoryHistory({ initialEntries: ['/'] }) });
+  const followups = createRoute({ getParentRoute: () => rootRoute, path: '/followups', component, validateSearch: () => ({ tab: 'cadence' as const }) });
+  const router = createRouter({ routeTree: rootRoute.addChildren([page, tracker, followups]), history: createMemoryHistory({ initialEntries: [initialPath] }) });
   root = createRoot(host);
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(RouterProvider, { router }))));
 }
-const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
 describe('Follow-ups page', () => {
   it('both launchers remember their sessions, so a tab switch does not lose a running paid session (R13-feat-a-L1-05)', async () => {
@@ -77,12 +85,20 @@ describe('Follow-ups page', () => {
     expect(keys.get('Reply watch session')).toBe('cc.followups.replies');
   });
 
-  it('a retired application offers no +7d pin, which the cadence would ignore (R13-feat-a-X-01, SW9-web-a-02)', async () => {
+  it('given every application is retired, the cadence says so instead of claiming no applications yet (R21-feat-a-L2-01)', async () => {
+    CADENCE = ALL_RETIRED;
     const { CadenceTab } = await import('@web/features/followups/FollowupsPage');
     await render(CadenceTab);
-    await until(() => button('Pin next follow-up for Globex in 7 days'), 'the cadence table');
-    expect(button('Pin next follow-up for Globex in 7 days')!.disabled).toBe(true);
-    expect(button('Pin next follow-up for Acme Robotics in 7 days')!.disabled).toBe(false);
+    await until(() => host.textContent?.includes('retired') || undefined, 'the retired empty state');
+    expect(host.textContent).toContain('All 2 applications in follow-up cadence are retired');
+    expect(host.textContent).not.toContain('No applications in follow-up cadence yet');
+  });
+
+  it('given retired applications, the page header counts them next to the actionable ones (R21-feat-a-L2-01)', async () => {
+    const { FollowupsPage } = await import('@web/features/followups/FollowupsPage');
+    await render(FollowupsPage, '/followups');
+    await until(() => host.textContent?.includes('actionable of') || undefined, 'the header count');
+    expect(host.textContent).toContain('1 actionable of 2 tracked, 1 retired');
   });
 
   it('a failed invite match clears the previous invite\'s result (R13-feat-a-L1-08)', async () => {

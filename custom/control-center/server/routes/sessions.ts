@@ -16,6 +16,7 @@ import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass
 import crypto from 'node:crypto';
 import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
+import { postingUrl } from '../../shared/posting-url.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
 
@@ -291,8 +292,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
   });
 
+  // The pipeline write routes' rule: a URL with credentials would put them in the session's prompt, and another scheme
+  // starts an evaluation the liveness and fetch path cannot read.
+  const fanoutUrl = z.string().refine((u) => postingUrl(u) === u, 'must be an http(s) posting URL without credentials');
   app.post<{ Body: unknown }>('/api/sessions/fanout', async (req, reply) => {
-    const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(z.string().url().max(2048)).min(1).transform((urls) => [...new Set(urls)]).pipe(z.array(z.string()).max(BATCH_MAX_URLS)), model }).safeParse(req.body ?? {});
+    const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(fanoutUrl).min(1).transform((urls) => [...new Set(urls)]).pipe(z.array(z.string()).max(BATCH_MAX_URLS)), model }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
