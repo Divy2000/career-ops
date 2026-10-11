@@ -29,8 +29,10 @@ export function SessionsPage() {
   const [targetValue, setTargetValue] = useState('');
   const [open, setOpen] = useState(false);
   const target = targetFor(targetValue, newMode);
+  // The panel has started a session, so the target no longer reaches the route: its controls stay usable.
+  const [started, setStarted] = useState(false);
   // The session route refuses a url target that is not a plain posting URL; said here, before a start is sent.
-  const badUrl = target.type === 'url' && !plainPostingUrl(target.value);
+  const badUrl = !started && target.type === 'url' && !plainPostingUrl(target.value);
   const rows = (sessions.data ?? []).filter((s) => (!filter.mode || s.mode === filter.mode) && (!filter.status || s.status === filter.status));
   return (
     <section aria-labelledby="page-title">
@@ -46,7 +48,14 @@ export function SessionsPage() {
           <div className="row gap">
             <label>
               Mode{' '}
-              <select aria-label="New session mode" value={newMode} onChange={(e) => setNewMode(e.target.value)}>
+              <select
+                aria-label="New session mode"
+                value={newMode}
+                onChange={(e) => {
+                  setNewMode(e.target.value);
+                  setStarted(false);
+                }}
+              >
                 {(modes.data ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.id} ({m.policyClass})
@@ -66,7 +75,7 @@ export function SessionsPage() {
           )}
           {/* Always wrapped, so a target being fixed does not remount the panel and drop the typed prompt. */}
           <fieldset disabled={badUrl} className="turn-hold">
-            <SessionPanel key={newMode} mode={newMode} target={target} placeholder="What should this session do?" />
+            <SessionPanel key={newMode} mode={newMode} target={target} placeholder="What should this session do?" onSessionId={() => setStarted(true)} />
           </fieldset>
         </div>
       )}

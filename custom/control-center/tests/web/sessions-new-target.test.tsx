@@ -13,10 +13,18 @@ vi.mock('sonner', () => ({ toast: { success: () => undefined, warning: () => und
 let host: HTMLElement;
 let root: Root;
 let starts: unknown[];
+// The start's answer: the route's 400 for a refused target, or a running session.
+let accept: boolean;
+const RUNNING = {
+  id: 's-1', claudeSessionId: '44444444-4444-4444-8444-444444444444', mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://jobs.example.com/1' }, model: null, status: 'running',
+  createdAt: '2026-10-10T10:00:00.000Z', updatedAt: '2026-10-10T10:00:00.000Z', turns: [], totals: { costUsd: 0, tokens: 0 }, filesChanged: [], forkedFrom: null, error: null, reportNum: null, lastReason: null, policyVersion: 2,
+};
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
   starts = [];
+  accept = false;
+  vi.stubGlobal('EventSource', class { addEventListener() {} removeEventListener() {} close() {} });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -24,9 +32,11 @@ beforeEach(() => {
       const method = init?.method ?? 'GET';
       if (method === 'GET' && url === '/api/modes') return json([{ id: 'oferta', policyClass: 'read' }]);
       if (method === 'GET' && url === '/api/sessions') return json([]);
+      if (method === 'GET' && url === '/api/sessions/s-1') return json({ meta: RUNNING, events: [{ seq: 1, ts: RUNNING.createdAt, event: { type: 'status', status: 'running' } }] });
       // As server/routes/sessions.ts: a url target that is not a plain posting URL is refused.
       if (method === 'POST' && url === '/api/sessions') {
         starts.push(JSON.parse(String(init?.body)));
+        if (accept) return json(RUNNING, 202);
         return json({ error: 'a url target must be a plain http(s) job posting URL: no credentials, no spaces, at most 2048 characters' }, 400);
       }
       return json({ error: 'not stubbed' }, 404);
@@ -97,5 +107,14 @@ describe('Sessions > New session: a URL target the server refuses', () => {
     await act(async () => start.click());
     await until(() => starts.length > 0 || undefined, 'the start');
     expect(starts[0]).toMatchObject({ mode: 'oferta', target: { type: 'url', value: 'https://jobs.example.com/1' } });
+  });
+
+  it('given a session already started, when the target is then edited into a refused URL, then its Cancel stays usable', async () => {
+    accept = true;
+    await openNewSession('https://jobs.example.com/1');
+    await act(async () => button('Start session')!.click());
+    const cancel = await until(() => button('Cancel'), 'the running session Cancel');
+    await act(async () => type(document.querySelector<HTMLInputElement>('input[aria-label="New session target"]')!, 'https://jobs.example.com/1 Senior Engineer'));
+    expect(cancel.matches(':disabled')).toBe(false);
   });
 });
