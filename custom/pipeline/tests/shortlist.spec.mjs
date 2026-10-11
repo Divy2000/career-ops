@@ -330,6 +330,94 @@ test('a run killed mid-lookup keeps the tier lookups already done and leaves no 
   }
 });
 
+// ---- concurrent runs merge their tier lookups into the cache (R20-scripts-a-X-01) ----
+
+test('two overlapping shortlist runs both keep their tier lookups: the slower write does not drop the faster one (R20-scripts-a-X-01)', async () => {
+  let releaseAcme = null;
+  let acmeSeen = false;
+  const server = http.createServer((req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') ?? '').toLowerCase();
+    const answer = () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ results: [] }));
+    };
+    // The first Acme lookup is held until the other run has finished, so this run read the cache before that run wrote it.
+    if (q.startsWith('acme') && !acmeSeen) {
+      acmeSeen = true;
+      releaseAcme = answer;
+      return;
+    }
+    answer();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const root = rankedRoot();
+  const pipeline = path.join(root, 'data', 'pipeline.md');
+  const row = (n, company) => `- [ ] https://jobs.example.com/${n} | ${company} | Backend Engineer | Remote | rank: 4.0/5 — fit\n`;
+  const env = rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` });
+  try {
+    fs.writeFileSync(pipeline, `# Pipeline\n\n## Pending\n\n${row(1, 'Acme')}`);
+    const slow = spawn(process.execPath, [SHORTLIST], { cwd: REPO, env, stdio: 'ignore' });
+    const slowExit = new Promise((r) => slow.on('exit', r));
+    await waitFor(() => acmeSeen, 'the slow run to start its Acme lookup');
+    fs.writeFileSync(pipeline, `# Pipeline\n\n## Pending\n\n${row(2, 'Globex')}`);
+    // Not spawnSync: the stand-in API answers from this process, whose event loop must keep running.
+    const fast = spawn(process.execPath, [SHORTLIST], { cwd: REPO, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let fastErr = '';
+    fast.stderr.setEncoding('utf8').on('data', (d) => { fastErr += d; });
+    assert.equal(await new Promise((r) => fast.on('exit', r)), 0, fastErr);
+    releaseAcme();
+    assert.equal(await slowExit, 0);
+    const cache = JSON.parse(fs.readFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), 'utf8'));
+    assert.ok(cache['Acme'], `the slow run's lookup is cached:\n${JSON.stringify(cache)}`);
+    assert.ok(cache['Globex'], `the fast run's lookup survives the slow run's write:\n${JSON.stringify(cache)}`);
+  } finally {
+    server.close();
+  }
+});
+
+test('a lookup that fails in one run does not replace the entry an overlapping run has just cached (R20-scripts-a-X-01)', async () => {
+  let failAcme = null;
+  let acmeSeen = false;
+  const server = http.createServer((req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') ?? '').toLowerCase();
+    if (q.startsWith('acme') && !acmeSeen) {
+      acmeSeen = true;
+      failAcme = () => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      };
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const root = rankedRoot();
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Backend Engineer | Remote | rank: 4.0/5 — fit\n');
+  const env = rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` });
+  const runShortlist = () => {
+    const child = spawn(process.execPath, [SHORTLIST], { cwd: REPO, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.setEncoding('utf8').on('data', (d) => { err += d; });
+    return new Promise((r) => child.on('exit', (code) => r({ code, err })));
+  };
+  try {
+    const slow = runShortlist();
+    await waitFor(() => acmeSeen, 'the slow run to start its Acme lookup');
+    const fast = await runShortlist();
+    assert.equal(fast.code, 0, fast.err);
+    failAcme();
+    const s = await slow;
+    assert.equal(s.code, 0, s.err);
+    assert.match(s.err, /^tier lookup failed for Acme/m, 'the slow run did fail its lookup');
+    const cache = JSON.parse(fs.readFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), 'utf8'));
+    assert.equal(cache['Acme'].error, undefined, `the fast run's answer is kept:\n${JSON.stringify(cache)}`);
+    assert.equal(cache['Acme'].searched, true);
+  } finally {
+    server.close();
+  }
+});
+
 // ---- the excluded bullet escapes a markdown-linked headline (R17-scripts-a-L3-02) ----
 
 // The Control Center's greedy parse of `- Company - [Title](url) - label` (custom/control-center/server/domains/shortlist.ts).
