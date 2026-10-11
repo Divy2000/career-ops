@@ -364,6 +364,20 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect(g!.disabled).toBe(true);
   });
 
+  it('Given another mount is starting the row\'s CV while an earlier one finished, Then the page says it is starting and links no finished session', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    pdfStatus = 'done';
+    sessionStorage.setItem('cc.pdf.12', 's-pdf-12');
+    sessionStorage.setItem('cc.pdf.12:starting', String(Date.now()));
+    await openApply();
+    await until(generate, 'the Generate CV PDF button');
+    // The stream has answered for the earlier session, so the page knows it finished.
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(host.querySelector('a[href="/sessions/s-pdf-12"]')).toBeNull();
+    expect(host.textContent).toContain('The tailored CV session is starting.');
+    expect(generate()!.disabled).toBe(true);
+  });
+
   it('Generate CV PDF comes back once the tailored CV session ended', async () => {
     docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
     pdfStatus = 'error';

@@ -206,8 +206,9 @@ const ALERT_COLUMNS = ['date', 'company', 'slug', 'status', 'headline', 'url'] a
 /**
  * Every row of company-alerts.tsv, read by position like the core's parseCompanyAlerts: the header is optional (a
  * sponsorship-check session may create the file with bare rows), so line 1 is skipped only when it starts with `date\t`.
+ * The Overview and the sponsorship lookup share it so the two reads cannot drift.
  */
-function parseAlertHistory(text: string): Record<string, string>[] {
+export function parseAlertHistory(text: string): Record<string, string>[] {
   return text
     .replace(/\r/g, '')
     .split('\n')

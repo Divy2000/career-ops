@@ -4,7 +4,7 @@ import path from 'node:path';
 import { cliScriptPath, importCore } from '../core/adapter.js';
 import type { ServerConfig } from '../config.js';
 import type { Exec } from '../routes/system.js';
-import { parseCompanyFile, type CompanyFile } from './immigration.js';
+import { parseAlertHistory, parseCompanyFile, type CompanyFile } from './immigration.js';
 import { readText } from './files.js';
 
 export const INSTALL_COMMAND = 'node plugins/h1b-sponsor/install-h1b-index.mjs';
@@ -107,23 +107,6 @@ interface ImmigrationLib {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-const ALERT_COLUMNS = ['date', 'company', 'slug', 'status', 'headline', 'url'] as const;
-
-/**
- * company-alerts.tsv read by position, as the core's parseCompanyAlerts and the Overview read it: the header is optional
- * (a sponsorship-check session may create the file with bare rows), so line 1 is skipped only when it starts with `date\t`.
- */
-function parseAlerts(text: string): Record<string, string>[] {
-  return text
-    .replace(/\r/g, '')
-    .split('\n')
-    .filter((line, i) => line.trim() && !(i === 0 && line.startsWith('date\t')))
-    .map((line) => {
-      const cells = line.split('\t');
-      return Object.fromEntries(ALERT_COLUMNS.map((c, i) => [c, cells[i] ?? '']));
-    });
-}
-
 export async function lookupCompany(ctx: Ctx, query: string): Promise<LookupResult> {
   const lib = await importCore<ImmigrationLib>(ctx.cfg.codeRoot, 'custom/immigration/lib.mjs');
   const check = await runCheck<H1bCheck & { error?: string }>(ctx, [query, '--json']);
@@ -167,7 +150,7 @@ export async function lookupCompany(ctx: Ctx, query: string): Promise<LookupResu
   const alertsRead = readText(path.join(imm, 'company-alerts.tsv'));
   const alerts =
     alertsRead.kind === 'ok'
-      ? parseAlerts(alertsRead.text)
+      ? parseAlertHistory(alertsRead.text)
           // The slug column is whatever the writing session derived, so the company name, slugged like the query, matches too.
           .filter((row) => [row.slug && SLUG_RE.test(row.slug) ? row.slug : null, slugOf(row.company ?? '')].some((s) => s !== null && slugs.includes(s)))
           .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
