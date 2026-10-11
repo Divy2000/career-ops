@@ -281,6 +281,8 @@ function entryLines(entry) {
   else if (url) heading = `## ${title} -- ${url}`;
   else if (tagline) heading = `## ${title} -- ${tagline}`;
   else heading = `## ${title}`;
+  // A title that opens as a markdown link ("[Foo](https://x)") would read back as another title with that link.
+  if (parseHeading(heading.slice(3)).title !== title) throw new Error(`title "${title}" would not read back as entered: it reads as a markdown link`);
   const meta = [];
   const tags = (entry.tags ?? []).map(oneLine).filter(Boolean);
   if (tags.length) meta.push(`Tags: ${tags.join(', ')}`);
@@ -352,7 +354,8 @@ export function replaceEntry(text, id, entry) {
   const out = text.slice(0, target.start) + block + text.slice(target.end);
   const want = parseLibrary(serializeEntry(entry)).entries[0];
   const got = parseLibrary(out).entries;
-  if (got.length !== entries.length || EDITED_FIELDS.some((f) => JSON.stringify(got[index][f]) !== JSON.stringify(want[f]))) {
+  if (got.length !== entries.length || EDITED_FIELDS.some((f) => JSON.stringify(got[index][f]) !== JSON.stringify(want[f]))
+    || titleKey(want.title) !== titleKey(entry.title)) {
     throw refuse('the edited block would not read back as entered; edit article-digest.md directly');
   }
   return out;

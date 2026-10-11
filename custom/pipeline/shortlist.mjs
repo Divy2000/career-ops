@@ -168,10 +168,16 @@ const slugOf = (name) => {
 // slugged like the pipeline rows, since the writing session's rule may have differed: AT&T as at-t, a kept
 // "corporation"), or equal names once stripped of a dotted domain suffix, lowercased, stripped of punctuation and of
 // trailing corporate suffixes. A longer
-// or shorter name is another company ("Meta Labs" is not "Meta"). Of every alert that applies, the newest wins.
+// or shorter name is another company ("Meta Labs" is not "Meta"). Of every alert that applies, the newest wins, and of
+// two on one date the later line, as parseCompanyAlerts decides within one slug. Each line is read on its own, since
+// parseCompanyAlerts keeps one alert per slug and so loses the file order between two slug spellings.
 async function loadAlerts(companies) {
   if (!existsSync(ALERTS)) return new Map();
-  const alerts = [...parseCompanyAlerts(await readFile(ALERTS, 'utf8'))].map(([slug, alert]) => ({
+  const text = await readFile(ALERTS, 'utf8');
+  parseCompanyAlerts(text); // validates the whole file, naming the bad line
+  // Only the first line may be the header: every later one is parsed as a non-first line, so it is never skipped as one.
+  const lines = text.replace(/\r/g, '').split('\n');
+  const alerts = lines.flatMap((line, i) => [...parseCompanyAlerts(i === 0 ? line : `\n${line}`)]).map(([slug, alert]) => ({
     slugs: new Set([slug, slugOf(alert.company)].filter(Boolean)),
     name: normalizeCompanyName(alert.company),
     alert,
@@ -183,7 +189,7 @@ async function loadAlerts(companies) {
     let hit = null;
     for (const a of alerts) {
       if (!(slug && a.slugs.has(slug)) && !(name && a.name === name)) continue;
-      if (!hit || a.alert.date > hit.date) hit = a.alert;
+      if (!hit || a.alert.date >= hit.date) hit = a.alert;
     }
     if (hit) out.set(c, hit);
   }
