@@ -498,12 +498,21 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
     }
   });
 
-  it('given a leftover batch from an earlier day, when the leftover acks run, then it is not acknowledged, so the news window stays at the last pass', async () => {
+  /** Rewrites a batch's pass day to `days` days before today (local), as a pass that ran then would have left it. */
+  const backdate = (batch: string, days: number) => {
+    const file = path.join(app.cfg.dataRoot, batch);
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), date: day }));
+  };
+
+  it('given a leftover batch older than the news window, when the leftover acks run, then it is not acknowledged, so the news window stays at the last pass', async () => {
     const { batch } = await failedAckPass(25);
     const before = lastPass();
-    // watch.mjs --ack stamps last_pass with the day the ack lands: a late ack would skip the news since the pass ran.
-    const file = path.join(app.cfg.dataRoot, batch);
-    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), date: '2020-01-01' }));
+    // watch.mjs --ack stamps last_pass with the day the ack lands, and the next pass searches back at least 3 days from
+    // there: a later ack would skip the news between the pass and that window.
+    backdate(batch, 4);
     ackFails = false;
     const restarted = restart();
     try {
@@ -511,6 +520,19 @@ describe('a done pass whose ack fails (FOLLOWUP to #95)', () => {
       await until(() => !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the stale batch to be let go of');
       expect(pending().map((i) => i.id)).toEqual([item(25).id]);
       expect(lastPass()).toBe(before);
+    } finally {
+      restarted.close();
+    }
+  });
+
+  it('given a leftover batch from an earlier day still inside the news window, when the leftover acks run, then it is acknowledged', async () => {
+    const { batch } = await failedAckPass(27);
+    backdate(batch, 3);
+    ackFails = false;
+    const restarted = restart();
+    try {
+      restarted.reconcile();
+      await until(() => pending().length === 0 && !donePolicyBatches(app.cfg.dataRoot).includes(batch), 'the leftover ack');
     } finally {
       restarted.close();
     }

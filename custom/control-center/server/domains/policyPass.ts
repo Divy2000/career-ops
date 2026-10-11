@@ -154,13 +154,23 @@ export function donePolicyBatches(dataRoot: string): string[] {
 }
 
 /** The day a batch's pass was prepared (its watch JSON `date`), or null when the batch cannot be read. */
-export function policyBatchDay(dataRoot: string, batch: string): string | null {
+function policyBatchDay(dataRoot: string, batch: string): string | null {
   try {
     const date = (JSON.parse(fs.readFileSync(path.join(dataRoot, batch), 'utf8')) as { date?: unknown } | null)?.date;
     return typeof date === 'string' ? date : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether a done pass's batch may still be acknowledged today. watch.mjs --ack stamps last_pass with the day it runs,
+ * and the next pass searches the news back from there, at least newsSince's window: an ack from further after the pass
+ * than that window would skip the news between the pass and the window, which is worse than seeing the items twice.
+ */
+export function policyBatchAckable(dataRoot: string, batch: string, today: string): boolean {
+  const day = policyBatchDay(dataRoot, batch);
+  return day !== null && day <= today && newsSince({ lastPass: today, today }) <= day;
 }
 
 /**

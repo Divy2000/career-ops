@@ -21,7 +21,7 @@ import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapsho
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { recordTurnAfter } from '../../supervisor/recovery.js';
-import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchDay, recordDonePolicyBatch } from '../domains/policyPass.js';
+import { ackPolicyPass, donePolicyBatches, forgetDonePolicyBatch, policyBatchAckable, recordDonePolicyBatch } from '../domains/policyPass.js';
 import { localDate } from '../../shared/local-date.js';
 
 export type TokenReader = () => Promise<string>;
@@ -391,17 +391,16 @@ export class SessionManager {
 
   /**
    * Acknowledges the batches of passes that ended done but whose ack failed: until it lands their items stay queued, and
-   * the next pass would send them to Claude again. A batch still failing is kept and tried again later. One from an
-   * earlier day is let go of unacknowledged: watch.mjs --ack stamps last_pass with the day it runs, so a late ack would
-   * move the next pass's news window past days no pass searched, which is worse than seeing the items twice.
+   * the next pass would send them to Claude again. A batch still failing is kept and tried again later; one from before
+   * the news window is let go of unacknowledged (policyBatchAckable).
    */
   private async ackLeftoverPolicyBatches(): Promise<void> {
     const today = localDate(new Date());
     let failed = false;
     for (const batch of donePolicyBatches(this.cfg.dataRoot)) {
       if (this.policyAcksInFlight.has(batch)) continue;
-      if (policyBatchDay(this.cfg.dataRoot, batch) !== today) {
-        console.warn(`[sessions] policy pass batch ${batch} is from an earlier day: its items stay queued for the next pass`);
+      if (!policyBatchAckable(this.cfg.dataRoot, batch, today)) {
+        console.warn(`[sessions] policy pass batch ${batch} is older than the news window: its items stay queued for the next pass`);
         forgetDonePolicyBatch(this.cfg.dataRoot, batch);
         continue;
       }
