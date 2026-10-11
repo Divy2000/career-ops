@@ -1342,6 +1342,34 @@ test('an update that left the running Control Center\'s dependencies alone says 
   assert.match(r.stdout, /continued$/m);
 });
 
+test('a live update that cannot take the daily lock for a reason other than a timeout fails the run with a readable reason, naming the lock and the merged commit (R22-scripts-b-L1-01)', () => {
+  const w = liveWorld();
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('  LIVE_UPDATE="$(update_live_checkout '));
+  const to = lines.findIndex((l, i) => i > from && l === '  esac');
+  const block = lines.slice(from, to + 1).join('\n');
+  // The lock's folder exists but cannot be written, so lockf cannot create the lock file and exits 73 (EX_CANTCREAT).
+  const imm = path.dirname(w.dailyLock);
+  mkdirSync(imm, { recursive: true });
+  chmodSync(imm, 0o555);
+  try {
+    const before = w.head();
+    const res = bashLib(w.live, `notify() { echo "NOTIFY: $1"; }\nfail() { echo "!!! $1"; notify "$1 (log: x)"; exit 1; }\nBEHIND=2\n${block}\necho continued`, { PATH: `${path.join(w.base, 'bin')}:${process.env.PATH}`, HOME: w.home, DATA: path.join(w.base, 'data'), MERGE_OID: w.target });
+    assert.equal(res.status, 1, res.stdout + res.stderr);
+    assert.doesNotMatch(res.stdout, /continued/);
+    const problem = res.stdout.split('\n').find((l) => l.startsWith('!!!')) ?? '';
+    // The Control Center's parseDailyLog only records a `!!!` line with text after the marker.
+    assert.match(problem, /^!!!\s+\S/, res.stdout);
+    assert.ok(problem.includes(w.dailyLock), problem);
+    assert.ok(problem.includes(w.target), problem);
+    assert.match(problem, /not updated/);
+    assert.equal(w.head(), before);
+  } finally {
+    chmodSync(imm, 0o755);
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
 // ---- the merge goes ahead only onto the main every gate tested (R11-scripts-b-L1-01) ----
 
 /**

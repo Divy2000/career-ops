@@ -234,7 +234,10 @@ if [ -z "$BLOCKERS" ]; then
   # Waits up to an hour for a daily job running from the live checkout (both can start together on wake).
   # Moves to the tested sync commit only: a PR merged after it was not tested by this run.
   LIVE_UPDATE="$(update_live_checkout "$DATA/data/immigration/.run-daily.lockf" 3600 "$MERGE_OID")"
-  case $? in
+  LIVE_RC=$?
+  # lockf failing for a reason other than the wait (a lock it cannot create) says why on stderr, the log, only.
+  [ -n "$LIVE_UPDATE" ] || LIVE_UPDATE="could not take the daily job's lock $DATA/data/immigration/.run-daily.lockf or the installed daily job's (exit $LIVE_RC; lockf's reason is in the lines above); the fork main is at $MERGE_OID but the live checkout was not updated"
+  case $LIVE_RC in
     # A running Control Center keeps its old dependencies (update_live_checkout says so after the first "; ").
     0)
       echo "$LIVE_UPDATE"
