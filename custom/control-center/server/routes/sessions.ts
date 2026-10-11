@@ -24,6 +24,13 @@ const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
+/**
+ * The pipeline write routes' rule: a URL with credentials would put them in the session's prompt, and another scheme
+ * starts an evaluation the liveness and fetch path cannot read. Whitespace inside is refused too (the URL parser
+ * encodes a space), so free text cannot ride into the prompt in the URL slot.
+ */
+const plainPostingUrl = (u: string): boolean => postingUrl(u) === u && !/\s/.test(u);
+
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function namesTarget(prompt: string, type: string, v: string): boolean {
@@ -231,6 +238,13 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
+    // A URL target reaches the session's prompt, so it is held to the fan-out's posting URL rule.
+    // Every later use (duplicate checks, inbox holds, the stored target) sees the trimmed value; a blank one names no URL.
+    if (parsed.data.target.type === 'url' && parsed.data.target.value !== null) {
+      const url = parsed.data.target.value.trim();
+      if (url && !plainPostingUrl(url)) return reply.code(400).send({ error: 'a url target must be a plain http(s) job posting URL: no credentials, no spaces, at most 2048 characters' });
+      parsed.data.target = { type: 'url', value: url || null };
+    }
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: `another batch evaluate is already starting ${parsed.data.target.value}` });
     const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
@@ -292,9 +306,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
   });
 
-  // The pipeline write routes' rule: a URL with credentials would put them in the session's prompt, and another scheme
-  // starts an evaluation the liveness and fetch path cannot read.
-  const fanoutUrl = z.string().refine((u) => postingUrl(u) === u, 'must be an http(s) posting URL without credentials');
+  const fanoutUrl = z.string().refine(plainPostingUrl, 'must be an http(s) posting URL without credentials or spaces');
   app.post<{ Body: unknown }>('/api/sessions/fanout', async (req, reply) => {
     const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(fanoutUrl).min(1).transform((urls) => [...new Set(urls)]).pipe(z.array(z.string()).max(BATCH_MAX_URLS)), model }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });

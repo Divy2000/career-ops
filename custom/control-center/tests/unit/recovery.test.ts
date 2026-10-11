@@ -981,6 +981,26 @@ describe('guard root (policy and revert bookkeeping outside every session write 
     }
     expect(() => resolve(dataRoot)).toThrow(/inside the data root/);
   });
+
+  it('resolves a relative CC_GUARD_DIR against the folder the user started from (INIT_CWD), like CC_DATA_ROOT', () => {
+    const base = fs.realpathSync(tempDir('cc-guard-root-'));
+    const launch = path.join(base, 'repo');
+    const codeRoot = path.join(launch, 'code');
+    const dataRoot = path.join(base, 'data');
+    fs.mkdirSync(codeRoot, { recursive: true });
+    fs.mkdirSync(dataRoot);
+    const chosen = resolveGuardRoot({ env: { CC_GUARD_DIR: '../cc-guard', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' });
+    expect(chosen).toBe(path.join(base, 'cc-guard'));
+    // A relative INIT_CWD is not a launch folder npm would set, so the cwd is the base, as for CC_DATA_ROOT.
+    expect(resolveGuardRoot({ env: { CC_GUARD_DIR: path.relative(process.cwd(), path.join(base, 'g2')), INIT_CWD: 'repo' }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'g2'));
+    // Trimmed like CC_DATA_ROOT: padding is not part of the folder name, and a blank value means the default.
+    expect(resolveGuardRoot({ env: { CC_GUARD_DIR: ' ../cc-guard2 ', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'cc-guard2'));
+    expect(resolveGuardRoot({ env: { CC_GUARD_DIR: '  ', INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'darwin' })).toBe(path.join(base, 'Library', 'Application Support', 'career-ops-control-center'));
+    // Only CC_GUARD_DIR follows the launch folder; the default stays where it always was, so a relative XDG_STATE_HOME
+    // does not move earlier sessions' policies and revert bookkeeping when the app is started from another folder.
+    const xdg = path.relative(process.cwd(), path.join(base, 'xdg'));
+    expect(resolveGuardRoot({ env: { XDG_STATE_HOME: xdg, INIT_CWD: launch }, codeRoot, dataRoot, home: base, platform: 'linux' })).toBe(path.join(base, 'xdg', 'career-ops-control-center'));
+  });
 });
 
 type FakeChild = ChildHandle & { drained: boolean; killed: boolean; activated: boolean; exit: () => void };
