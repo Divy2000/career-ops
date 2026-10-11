@@ -88,7 +88,7 @@ test('the headless sync Claude starts none of the user\'s or the project\'s MCP 
 // ---- which claude gets the token (R15-scripts-b-L3-01) ----
 
 /** sync_claude_bin 2.1.288 with `claude` stubs printing the given versions, one folder each on PATH in order. */
-function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion } = {}) {
+function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyCheckout = 'this' } = {}) {
   const dir = tempDir('sync-claude-bin-');
   const dirs = onPath.map((version, i) => {
     const d = path.join(dir, `bin${i}`);
@@ -99,6 +99,10 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion } = {})
   const home = path.join(dir, 'home');
   mkdirSync(home, { recursive: true });
   const env = { PATH: [...dirs, '/usr/bin', '/bin'].join(':'), HOME: home };
+  // The sync runs sync_claude_bin from its live checkout.
+  const checkout = path.join(dir, 'checkout');
+  mkdirSync(checkout);
+  mkdirSync(path.join(dir, 'other-checkout'));
   if (dailyPinVersion !== undefined) {
     // The daily job's plist, with the claude launchd/install.sh or the Control Center pinned for it.
     stub(path.join(dir, 'daily-pin'), 'claude', `echo "${dailyPinVersion} (Claude Code)"`);
@@ -109,6 +113,7 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion } = {})
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${dailyCheckout === 'this' ? checkout : path.join(dir, 'other-checkout')}</string>
   <key>EnvironmentVariables</key><dict><key>CC_CLAUDE_BIN</key><string>${path.join(dir, 'daily-pin', 'claude')}</string></dict>
 </dict>
 </plist>
@@ -118,7 +123,7 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion } = {})
     env.CC_CLAUDE_BIN = pinned === 'pin' ? path.join(dir, 'pin', 'claude') : pinned;
     if (pinned === 'pin') stub(path.join(dir, 'pin'), 'claude', `echo "${pinnedVersion} (Claude Code)"`);
   }
-  const r = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { env, encoding: 'utf8' });
+  const r = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: checkout, env, encoding: 'utf8' });
   // sync.sh reads it through $(...), which drops the trailing newline.
   return { ...r, stdout: r.stdout.replace(/\n$/, ''), dir, dirs };
 }
@@ -158,6 +163,12 @@ test('sync_claude_bin uses the claude pinned for the installed daily job over an
   assert.equal(r.stdout, path.join(r.dir, 'daily-pin', 'claude'));
   const env = claudeBin({ onPath: ['2.1.100'], dailyPinVersion: '2.1.290', pinned: 'pin', pinnedVersion: '2.1.291' });
   assert.equal(env.stdout, path.join(env.dir, 'pin', 'claude'), 'CC_CLAUDE_BIN in the sync\'s own environment still wins');
+});
+
+test('sync_claude_bin ignores the claude pinned for a daily job another checkout installed (R20-scripts-b review)', () => {
+  const r = claudeBin({ onPath: ['2.1.289'], dailyPinVersion: '2.1.290', dailyCheckout: 'other' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.stdout, path.join(r.dirs[0], 'claude'));
 });
 
 test('sync_claude_bin refuses when no claude is found or its version cannot be read', () => {

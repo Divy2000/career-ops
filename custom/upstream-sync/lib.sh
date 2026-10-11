@@ -34,15 +34,16 @@ version_ge() {
 
 # sync_claude_bin <min version>: the claude the sync gives the subscription token
 # to, printed as a path: CC_CLAUDE_BIN when set (absolute), else the claude pinned
-# for the installed daily job (its plist's CC_CLAUDE_BIN, which launchd/install.sh
-# and the Control Center write, since launchd's PATH can reach an older install
-# first), else the first claude on PATH. A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
-# would hand the token to hooks and to the Bash children Claude runs (npm scripts,
-# upstream's suite), so it is refused, as is one whose version cannot be read. The
-# reason goes to stdout, with exit 1.
+# for the daily job this checkout (the current directory) installed, which
+# launchd/install.sh and the Control Center write into its plist because
+# launchd's PATH can reach an older install first, else the first claude on PATH.
+# A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and would hand
+# the token to hooks and to the Bash children Claude runs (npm scripts, upstream's
+# suite), so it is refused, as is one whose version cannot be read. The reason
+# goes to stdout, with exit 1.
 sync_claude_bin() {
   local min="$1" bin out version daily
-  daily="$(plutil -extract EnvironmentVariables.CC_CLAUDE_BIN raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null)" || daily=""
+  daily="$(installed_daily_value EnvironmentVariables.CC_CLAUDE_BIN)"
   if [ -n "${CC_CLAUDE_BIN:-}" ]; then
     case "$CC_CLAUDE_BIN" in
       /*) bin="$CC_CLAUDE_BIN" ;;
@@ -589,13 +590,22 @@ process.exit(live !== null && (start === null || live === "unknown" || live === 
 ' "$lock"
 }
 
-# installed_daily_root: the data root the installed daily job writes its launchd logs under
+# installed_daily_value <key path>: a value from the installed daily job's plist, printed only when that job runs
+# from the current directory (its WorkingDirectory): the label is per user, so the plist may belong to another
+# checkout, whose pins and data root say nothing about this one. Prints nothing without such a job or plutil.
+installed_daily_value() {
+  local plist="$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" wd
+  wd="$(plutil -extract WorkingDirectory raw -o - "$plist" 2>/dev/null)" || return 0
+  [ -n "$wd" ] && [ "$wd" -ef . ] || return 0
+  plutil -extract "$1" raw -o - "$plist" 2>/dev/null || true
+}
+
+# installed_daily_root: the data root this checkout's installed daily job writes its launchd logs under
 # (<root>/data/immigration/logs), which differs from the sync's own when the two plists were written with different
-# CAREER_OPS_ROOT values (launchd/install.sh --jobs daily leaves an installed sync job alone). Prints nothing without
-# an installed job or plutil.
+# CAREER_OPS_ROOT values (launchd/install.sh --jobs daily leaves an installed sync job alone).
 installed_daily_root() {
   local out
-  out="$(plutil -extract StandardOutPath raw -o - "$HOME/Library/LaunchAgents/com.career-ops.immigration-watch.plist" 2>/dev/null)" || return 0
+  out="$(installed_daily_value StandardOutPath)"
   case "$out" in */data/immigration/logs/launchd.out.log) printf '%s\n' "${out%/data/immigration/logs/launchd.out.log}" ;; esac
 }
 

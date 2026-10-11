@@ -1113,7 +1113,7 @@ test('the live update names its pid beside the daily job\'s lock while it holds 
 });
 
 /** Installs the daily job's plist in the world's HOME with its launchd logs under <jobRoot>, as launchd/install.sh writes it. */
-function installDailyPlist(w, jobRoot) {
+function installDailyPlist(w, jobRoot, checkout = w.live) {
   const agents = path.join(w.home, 'Library', 'LaunchAgents');
   mkdirSync(agents, { recursive: true });
   writeFileSync(path.join(agents, 'com.career-ops.immigration-watch.plist'), `<?xml version="1.0" encoding="UTF-8"?>
@@ -1121,6 +1121,7 @@ function installDailyPlist(w, jobRoot) {
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.career-ops.immigration-watch</string>
+  <key>WorkingDirectory</key><string>${checkout}</string>
   <key>EnvironmentVariables</key><dict><key>CAREER_OPS_ROOT</key><string>${jobRoot}</string></dict>
   <key>StandardOutPath</key><string>${jobRoot}/data/immigration/logs/launchd.out.log</string>
 </dict>
@@ -1198,6 +1199,29 @@ test('an installed daily job whose data root is gone (an unmounted volume) does 
     assert.equal(existsSync(gone), false);
   } finally {
     chmodSync(path.join(w.base, 'unmounted'), 0o755);
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('a daily job and Control Center of another checkout neither hold up the live update nor stop its npm ci (R20-scripts-b review)', () => {
+  const w = liveWorld({ ccChange: true });
+  const other = path.join(w.base, 'other-checkout');
+  mkdirSync(other);
+  const jobRoot = path.join(w.base, 'other-data');
+  installDailyPlist(w, jobRoot, other);
+  const jobLock = path.join(jobRoot, 'data', 'immigration', '.run-daily.lockf');
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(jobRoot, 'data', 'control-center', 'supervisor.lock');
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const res = w.update({ wait: 1, prefix: `LOCK="${jobLock}"\n${holdDailyLock(w, `for _ in $(seq 600); do [ -e "${w.base}/release" ] && break; sleep 0.05; done`)}LOCK="${w.dailyLock}"\n` });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target);
+    assert.match(w.npm(), /^--prefix custom\/control-center ci$/m);
+  } finally {
+    writeFileSync(path.join(w.base, 'release'), '');
+    child.kill('SIGKILL');
     rmSync(w.base, { recursive: true, force: true });
   }
 });
