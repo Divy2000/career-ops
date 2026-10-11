@@ -12,7 +12,7 @@ import { useUnsaved } from '../../lib/unsaved';
 import { SessionPanel } from '../../components/SessionPanel';
 import { useParseSession } from './parseSession';
 import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
-import type { ConvertResult, ProjectInput, ProjectView, ProjectsRead, RankResult } from '@shared/api';
+import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
 import { KIND_OPTIONS, describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, findRenamed, hostOf, moveItem, rebaseDraft, type DraftField, type EntryOrigin, type ProjectDraft } from './projectsDraft';
 
 const QUERY_KEY = ['config', 'projects'];
@@ -77,14 +77,16 @@ function rebaseOn(e: Editing, fresh: ProjectsRead): Editing {
   };
 }
 
-const sameEntry = (e: ProjectView, input: ProjectInput) => JSON.stringify(entryFromDraft(draftFromEntry(e), { tagline: e.tagline, source: e.source })) === JSON.stringify(input);
-
-/** A form whose draft moved on during a save: it now edits the saved version, with the newer text on top. */
-function onSaved(e: Editing, sent: ProjectDraft, input: ProjectInput, etag: string, list: ProjectsRead | undefined): Editing {
-  const next = { ...e, base: sent, baseEtag: etag, messages: [], onDisk: null, orphaned: false };
-  // Found by content, not by the id the save was sent to: a save that changes the title gives the entry a new id.
-  const now = list?.etag === etag ? list.entries.find((x) => sameEntry(x, input)) : undefined;
-  if (!list || !now) return next;
+/**
+ * A form whose draft moved on during a save: it now edits the saved version, with the newer text on top. The saved
+ * entry is found where the write put it, not by content (the library stores fields normalized): a POST answers with
+ * its id, and a PUT keeps the entry at its index in the version the save was pinned to.
+ */
+function onSaved(e: Editing, sent: ProjectDraft, saved: { etag: string; id?: string }, pinned: { posted: boolean; origin: EntryOrigin | null }, list: ProjectsRead | undefined): Editing {
+  const next = { ...e, base: sent, baseEtag: saved.etag, messages: [], onDisk: null, orphaned: false };
+  if (!list || list.etag !== saved.etag) return next;
+  const now = pinned.posted ? list.entries.find((x) => x.id === saved.id) : pinned.origin ? list.entries[pinned.origin.index] : undefined;
+  if (!now) return next;
   return { ...next, id: now.id, base: draftFromEntry(now), tagline: now.tagline, source: now.source, origin: { ids: list.entries.map((x) => x.id), index: list.entries.indexOf(now), bullets: now.bullets } };
 }
 
@@ -284,14 +286,14 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
     setSaving(true);
     try {
       const body = entryFromDraft(draft, { tagline: editing.tagline, source: editing.source });
-      const saved =
-        editing.id === null || asNew
-          ? await apiSend<{ etag: string }>('POST', '/api/projects', body, ifMatch(editing.baseEtag))
-          : await apiSend<{ etag: string }>('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
+      const posted = editing.id === null || asNew;
+      const saved = posted
+        ? await apiSend<{ etag: string; id?: string }>('POST', '/api/projects', body, ifMatch(editing.baseEtag))
+        : await apiSend<{ etag: string; id?: string }>('PUT', `/api/projects/${editing.id}`, body, ifMatch(editing.baseEtag));
       toast.success(`Saved ${body.title}`);
       await qc.invalidateQueries({ queryKey: QUERY_KEY });
       // The form closes only if its draft is still what was saved; text typed during the save stays as unsaved edits.
-      update((prev) => (prev?.token !== mine ? prev : JSON.stringify(prev.draft) === JSON.stringify(draft) ? null : onSaved(prev, draft, body, saved.etag, qc.getQueryData<ProjectsRead>(QUERY_KEY))));
+      update((prev) => (prev?.token !== mine ? prev : JSON.stringify(prev.draft) === JSON.stringify(draft) ? null : onSaved(prev, draft, saved, { posted, origin: editing.origin }, qc.getQueryData<ProjectsRead>(QUERY_KEY))));
     } catch (err) {
       if (err instanceof ApiError && err.status === 422) say((err.body as { errors?: string[] }).errors ?? [describeError(err)]);
       // The route answers a PUT for an id the library no longer has (renamed or removed on disk) with 404, before it

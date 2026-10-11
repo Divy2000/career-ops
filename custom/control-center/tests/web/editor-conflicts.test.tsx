@@ -513,25 +513,34 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     files = { '/api/projects': { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [entry] } };
   });
 
-  /** Holds the first PUT until released and, as the real route does, writes its body into the library (the id comes from the title). */
+  /** Holds the first write until released and, as the real routes do, writes its body into the library (the id comes from the title; a POST answers with it). */
   function holdFirstPutAndApply() {
     const real = vi.mocked(fetch).getMockImplementation()!;
     let release: () => void = () => {};
     const held = new Promise<void>((r) => (release = r));
     let first = true;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
-      if (init?.method !== 'PUT') return real(input, init);
+      const method = init?.method;
+      if (method !== 'PUT' && method !== 'POST') return real(input, init);
       if (first) {
         first = false;
         await held;
       }
       const res = await real(input, init);
-      if (res.ok) {
-        const body = JSON.parse(String(init.body)) as typeof entry;
-        const id = String(input).split('/').pop();
-        const doc = files['/api/projects']!;
-        doc.entries = (doc.entries as Array<typeof entry>).map((e) => (e.id === id ? { ...e, ...body, id: body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') } : e));
+      if (!res.ok) return res;
+      const sent = JSON.parse(String(init!.body)) as typeof entry;
+      // The library stores each field on one line, as the real serializer does.
+      const oneLine = (v: string) => v.replace(/\s+/g, ' ').trim();
+      const body = { ...sent, title: oneLine(sent.title), tags: sent.tags.map(oneLine), bullets: sent.bullets.map(oneLine) };
+      const savedId = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const doc = files['/api/projects']!;
+      const list = doc.entries as Array<typeof entry>;
+      if (method === 'POST') {
+        doc.entries = [...list, { ...entry, ...body, id: savedId }];
+        return json(200, { ...((await res.json()) as object), id: savedId });
       }
+      const id = String(input).split('/').pop();
+      doc.entries = list.map((e) => (e.id === id ? { ...e, ...body, id: savedId } : e));
       return res;
     });
     return () => act(async () => release());
@@ -569,6 +578,40 @@ describe('projects library: typing while a save is on its way (R23-feat-b-L1-01)
     await click(button('Save project')!);
     await until(() => writes().length === 2, 'the second save');
     expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Routing', bullets: ['One, reworded.'] }) }));
+  });
+
+  it('given a renaming save whose bullet the library stores normalized, when the user edits the title meanwhile, then the next save still finds the entry under its new id', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Edit Event Router'), 'the edit button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Event Routing');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Built   the API.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Title')!, 'Event Routing v2');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Title')?.value).toBe('Event Routing v2');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/event-routing', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Event Routing v2' }) }));
+  });
+
+  it('given a new project saving, when the user edits it meanwhile, then the form stays open on the added entry and the next save updates it', async () => {
+    const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
+    await mount(createElement(ProjectsLibrary));
+    await click(await until(() => button('Add project')?.disabled === false && button('Add project'), 'the add button'));
+    await type(await until(() => labelled<HTMLInputElement>('Title'), 'the title field'), 'Kite Tracker');
+    await type(labelled<HTMLTextAreaElement>('Bullet 1')!, 'Tracks   kites.');
+    const release = holdFirstPutAndApply();
+    await click(button('Save project')!);
+    await type(labelled<HTMLInputElement>('Dates')!, '2024');
+    await release();
+    await until(() => writes().length === 1 && button('Save project')?.disabled !== true, 'the first save to finish');
+    expect(labelled<HTMLInputElement>('Dates')?.value).toBe('2024');
+    await click(button('Save project')!);
+    await until(() => writes().length === 2, 'the second save');
+    expect(writes()[1]).toEqual(expect.objectContaining({ method: 'PUT', url: '/api/projects/kite-tracker', headers: expect.objectContaining({ 'If-Match': 'e1-saved' }), body: expect.objectContaining({ title: 'Kite Tracker', dates: '2024' }) }));
   });
 
   it('given a save on its way, when nothing is typed meanwhile, then the form closes on success', async () => {
