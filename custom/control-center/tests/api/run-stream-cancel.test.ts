@@ -108,7 +108,8 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
 
   it('ends the stream of a run whose folder is deleted while it streams, instead of polling for it forever', async () => {
     const t = await makeTestApp();
-    const run = t.runner.start({ actionId: 'test.slowstop', label: 'slow stop', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: ['-e', SLOW_STOP], cwd: PACKAGE_ROOT } });
+    // Exits on its own: once its folder is gone, cancel can no longer find it to stop it.
+    const run = t.runner.start({ actionId: 'test.gone', label: 'gone', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: ['-e', "console.log('ready'); setTimeout(() => process.exit(0), 2000);"], cwd: PACKAGE_ROOT } });
     try {
       let deleted = false;
       const events = await readRunStream(t, run.id, 5_000, (e) => {
@@ -120,8 +121,11 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
       expect(deleted).toBe(true);
       expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'gone', exitCode: null, signal: null } });
     } finally {
-      t.runner.cancel(run.id);
-      await wait(1_500);
+      // The runner records the run's end into its folder, and throws when the folder is gone: give it one to write to.
+      const dir = t.runner.store.dirOf(run.id);
+      fs.mkdirSync(dir, { recursive: true });
+      const deadline = Date.now() + 10_000;
+      while (!t.runner.store.read(run.id)?.endedAt && Date.now() < deadline) await wait(50);
       await t.close();
     }
   }, 30_000);
