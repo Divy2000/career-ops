@@ -4,6 +4,7 @@ import { readText } from './files.js';
 import { parseScore, postingUrl, readReport, summaryOf, type ReportSummary } from './reports.js';
 import { parseFollowups } from './followups.js';
 import { statusLabeler } from './insights.js';
+import { resolveTrackerFile } from './trackerPath.js';
 
 export const STATUS_ORDER = ['Interview', 'Offer', 'Hired', 'Responded', 'Applied', 'Evaluated', 'Rejected', 'Discarded', 'SKIP'] as const;
 export type TrackerStatus = (typeof STATUS_ORDER)[number];
@@ -43,9 +44,6 @@ interface TrackerParse {
   isSeparatorRow: (line: string) => boolean;
   isHeaderRow: (line: string) => boolean;
 }
-interface PathResolver {
-  resolveTrackerPath: (root: string) => string;
-}
 
 export function postedFromNotes(notes: string): string | null {
   return notes.match(/posted:\s*(\d{4}-\d{2}-\d{2})/i)?.[1] ?? null;
@@ -58,8 +56,8 @@ export function pdfPresent(cell: string): boolean {
 }
 
 export async function readTracker(codeRoot: string, dataRoot: string): Promise<TrackerRead> {
-  const [tp, pr, label] = await Promise.all([importCore<TrackerParse>(codeRoot, 'tracker-parse.mjs'), importCore<PathResolver>(codeRoot, 'path-resolver.mjs'), statusLabeler(codeRoot)]);
-  const trackerPath = pr.resolveTrackerPath(dataRoot);
+  const [tp, tracker, label] = await Promise.all([importCore<TrackerParse>(codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(codeRoot, dataRoot), statusLabeler(codeRoot)]);
+  const trackerPath = tracker.canonical;
   const read = readText(trackerPath);
   if (read.kind === 'missing') return { kind: 'missing', path: trackerPath };
   const lines = read.text.split('\n');

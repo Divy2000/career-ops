@@ -2,9 +2,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '../config.js';
-import { cliScriptPath, importCore, type CliId } from '../core/adapter.js';
+import { cliScriptPath, type CliId } from '../core/adapter.js';
 import type { Exec } from '../routes/system.js';
 import { localDate } from '../../shared/local-date.js';
+import { resolveTrackerFile } from './trackerPath.js';
 
 export const INSIGHT_SCRIPTS: Record<string, { cli: CliId; label: string }> = {
   funnelVelocity: { cli: 'funnelVelocity', label: 'Funnel velocity' },
@@ -113,16 +114,16 @@ const cachePath = (dataRoot: string, script: string) => path.join(dataRoot, 'dat
 
 export async function readInsight(cfg: ServerConfig, exec: Exec, script: InsightScript, opts: { recompute?: boolean; now?: () => number } = {}): Promise<InsightRead> {
   const def = INSIGHT_SCRIPTS[script]!;
-  const { resolveTrackerPath, rawTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string; rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
+  const tracker = await resolveTrackerFile(cfg.codeRoot, cfg.dataRoot);
   const now = opts.now ?? Date.now;
   // The scripts count days from today (rejection latency, weekly digest, funnel velocity), so a new local day is a new input.
-  const extra = script === 'companyHistory' ? companyHistoryInputs(cfg.dataRoot, rawTrackerPath(cfg.dataRoot)) : { args: [], env: {} };
+  const extra = script === 'companyHistory' ? companyHistoryInputs(cfg.dataRoot, tracker.lexical) : { args: [], env: {} };
   // The portals file company-history reads may be a lane file outside the data root; a relative one is read from the
   // child's cwd, the code checkout.
   const portalsFile = extra.env.CAREER_OPS_PORTALS ? path.resolve(cfg.codeRoot, extra.env.CAREER_OPS_PORTALS) : null;
   const portals = portalsFile ? `|portals=${portalsFile}:${mtimeOf(portalsFile)}` : '';
   const scriptPath = cliScriptPath(cfg.codeRoot, def.cli);
-  const key = `${inputsKey(cfg.dataRoot, resolveTrackerPath(cfg.dataRoot))}${portals}|${codeKey(cfg.codeRoot, scriptPath)}|day:${localDate(new Date(now()))}`;
+  const key = `${inputsKey(cfg.dataRoot, tracker.canonical)}${portals}|${codeKey(cfg.codeRoot, scriptPath)}|day:${localDate(new Date(now()))}`;
   const file = cachePath(cfg.dataRoot, script);
   if (!opts.recompute) {
     try {
