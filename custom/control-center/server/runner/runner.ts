@@ -377,8 +377,9 @@ export class Runner {
       return;
     }
     if (!unended(meta) || this.active.has(meta.id)) return;
-    const exit = this.store.readExit(meta.id);
     const wrapper = this.identity(meta.wrapperPid, meta.wrapperStartedAt);
+    // Read after the wrapper check: a wrapper writes its exit before it exits, so one found gone has recorded it by now.
+    const exit = this.store.readExit(meta.id);
     if (exit) {
       this.finalize(meta, exit);
     } else if (wrapper !== false) {
