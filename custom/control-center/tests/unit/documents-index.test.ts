@@ -22,10 +22,11 @@ const write = (file: string, text: string) => {
 };
 
 describe('the PDF index is read where generate-pdf.mjs writes it (R12-srv-dom-a-L2-02)', () => {
-  it('resolves the same manifest path as tracker-utils.mjs resolvePdfIndexPath(rawTrackerPath(root))', async () => {
+  it('resolves the same manifest path as tracker-utils.mjs resolvePdfIndexPath(resolveTrackerPath(root))', async () => {
     const root = copyFixtureRoot();
     const { resolvePdfIndexPath } = await importCore<{ resolvePdfIndexPath: (tracker: string) => string }>(DEFAULT_CODE_ROOT, 'tracker-utils.mjs');
-    const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(DEFAULT_CODE_ROOT, 'path-resolver.mjs');
+    // generate-pdf.mjs writes the manifest beside its realpathed tracker, resolveTrackerPath().
+    const { resolveTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string }>(DEFAULT_CODE_ROOT, 'path-resolver.mjs');
     const cases: Partial<Record<(typeof ENV_KEYS)[number], string>>[] = [
       {},
       { CAREER_OPS_TRACKER: path.join(root, 'ws', 'data', 'applications.md') },
@@ -35,11 +36,26 @@ describe('the PDF index is read where generate-pdf.mjs writes it (R12-srv-dom-a-
     for (const env of cases) {
       for (const k of ENV_KEYS) delete process.env[k];
       Object.assign(process.env, env);
-      expect(await pdfIndexPath(DEFAULT_CODE_ROOT, root), JSON.stringify(env)).toBe(path.resolve(resolvePdfIndexPath(rawTrackerPath(root))));
+      expect(await pdfIndexPath(DEFAULT_CODE_ROOT, root), JSON.stringify(env)).toBe(resolvePdfIndexPath(resolveTrackerPath(root)));
     }
     for (const k of ENV_KEYS) delete process.env[k];
     fs.rmSync(path.join(root, 'data', 'applications.md'));
-    expect(await pdfIndexPath(DEFAULT_CODE_ROOT, root)).toBe(path.resolve(resolvePdfIndexPath(rawTrackerPath(root))));
+    expect(await pdfIndexPath(DEFAULT_CODE_ROOT, root)).toBe(resolvePdfIndexPath(resolveTrackerPath(root)));
+  });
+
+  it('reads the index beside the realpath of a symlinked tracker, as generate-pdf.mjs writes it', async () => {
+    const root = copyFixtureRoot();
+    const jobs = path.join(root, 'synced', 'jobs');
+    write(path.join(jobs, 'applications.md'), fs.readFileSync(path.join(root, 'data', 'applications.md'), 'utf8'));
+    fs.rmSync(path.join(root, 'data', 'applications.md'));
+    fs.symlinkSync(path.join(jobs, 'applications.md'), path.join(root, 'data', 'applications.md'));
+    write(path.join(jobs, 'data', 'pdf-index.tsv'), fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8'));
+    fs.rmSync(path.join(root, 'data', 'pdf-index.tsv'));
+    expect(fs.realpathSync(await pdfIndexPath(DEFAULT_CODE_ROOT, root))).toBe(fs.realpathSync(path.join(jobs, 'data', 'pdf-index.tsv')));
+    // Row paths stay relative to the lexical workspace (generate-pdf.mjs resolveWorkspaceRootFor), the data root here.
+    const docs = await readDocuments(DEFAULT_CODE_ROOT, root, 1, 'Acme Robotics');
+    expect(docs.indexPresent).toBe(true);
+    expect(docs.files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.source).toBe('index');
   });
 
   it('lists, suggests and guards with an index named by CAREER_OPS_PDF_INDEX', async () => {

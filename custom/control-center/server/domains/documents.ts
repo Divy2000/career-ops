@@ -46,20 +46,29 @@ export function parsePdfIndex(text: string): PdfIndexRow[] {
 }
 
 /**
- * Where generate-pdf.mjs writes the manifest: tracker-utils.mjs resolvePdfIndexPath(rawTrackerPath(dataRoot)), that is
- * CAREER_OPS_PDF_INDEX, else data/pdf-index.tsv in the tracker's workspace (CAREER_OPS_TRACKER may move it out of the
- * data root). The scripts run with the code root as their cwd, so a relative value of either is resolved against it.
- * Kept in step by tests/unit/documents-index.test.ts.
+ * Where generate-pdf.mjs writes the manifest: tracker-utils.mjs resolvePdfIndexPath(resolveTrackerPath(dataRoot)), that
+ * is CAREER_OPS_PDF_INDEX, else data/pdf-index.tsv in the workspace of the realpathed tracker (CAREER_OPS_TRACKER or a
+ * symlinked tracker may move it out of the data root). The scripts run with the code root as their cwd, so a relative
+ * value of either is resolved against it. Kept in step by tests/unit/documents-index.test.ts.
  */
 export async function pdfIndexPath(codeRoot: string, dataRoot: string): Promise<string> {
   const env = process.env.CAREER_OPS_PDF_INDEX;
-  return env ? path.resolve(codeRoot, env) : path.join(await trackerWorkspace(codeRoot, dataRoot), 'data', 'pdf-index.tsv');
+  if (env) return path.resolve(codeRoot, env);
+  return path.join(workspaceOf((await resolveTrackerFile(codeRoot, dataRoot)).canonical), 'data', 'pdf-index.tsv');
 }
 
-/** tracker-utils.mjs resolveWorkspaceRoot(path-resolver.mjs rawTrackerPath(dataRoot)): the folder above the tracker's data/. */
-async function trackerWorkspace(codeRoot: string, dataRoot: string): Promise<string> {
-  const dir = path.dirname((await resolveTrackerFile(codeRoot, dataRoot)).lexical);
+/** tracker-utils.mjs resolveWorkspaceRoot(tracker): the folder above the tracker's data/. */
+function workspaceOf(tracker: string): string {
+  const dir = path.dirname(tracker);
   return path.basename(dir) === 'data' ? path.dirname(dir) : dir;
+}
+
+/**
+ * tracker-utils.mjs resolveWorkspaceRootFor(dataRoot), the base generate-pdf.mjs makes manifest rows relative to: the
+ * workspace of the lexical tracker, so a symlinked data/ does not move it.
+ */
+async function trackerWorkspace(codeRoot: string, dataRoot: string): Promise<string> {
+  return workspaceOf((await resolveTrackerFile(codeRoot, dataRoot)).lexical);
 }
 
 /**
