@@ -84,6 +84,8 @@ export function preparePolicyPass(codeRoot: string, dataRoot: string, now = new 
   } catch {
     throw new PendingUnreadableError('has a last_pass that is not a YYYY-MM-DD date', SEEN);
   }
+  // Read before the batch is written: a batch left by a pass that never started is one no pass acknowledges.
+  const template = fs.readFileSync(path.join(codeRoot, 'custom', 'immigration', 'daily-prompt.md'), 'utf8');
   // The shape watch.mjs prints and --ack reads (new_items[].id).
   const watchJson = JSON.stringify({ date: today, news_since: since, new_items: items }, null, 2);
   // Written even with nothing queued, as run-daily.sh does: acknowledging it is what records this pass's day as
@@ -91,7 +93,6 @@ export function preparePolicyPass(codeRoot: string, dataRoot: string, now = new 
   const batch = path.join(IMM, 'batches', `${stamp(now)}-cc-${crypto.randomBytes(4).toString('hex')}.json`);
   fs.mkdirSync(path.join(dataRoot, IMM, 'batches'), { recursive: true });
   fs.writeFileSync(path.join(dataRoot, batch), watchJson, { flag: 'wx' });
-  const template = fs.readFileSync(path.join(codeRoot, 'custom', 'immigration', 'daily-prompt.md'), 'utf8');
   // Replacer functions, as run-daily.sh does: a string replacement would expand $& and the like in the feed JSON or a path.
   const prompt = template
     .replaceAll('{{TODAY}}', () => today)

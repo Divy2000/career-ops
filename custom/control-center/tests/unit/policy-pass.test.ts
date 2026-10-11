@@ -72,6 +72,14 @@ describe('preparePolicyPass', () => {
     expect(prompt).toContain('"title": "Fee rule $& {{TODAY}} $1"');
   });
 
+  it('given a code root without daily-prompt.md, when a pass is prepared, then it is refused and leaves no batch file for a later pass to find as a leftover', () => {
+    const root = dataRoot(JSON.stringify(ITEMS));
+    const codeRoot = tempDir('cc-policy-pass-code-');
+    expect(() => preparePolicyPass(codeRoot, root, EVENING)).toThrow(/daily-prompt\.md/);
+    const batches = path.join(root, 'data', 'immigration', 'batches');
+    expect(fs.existsSync(batches) ? fs.readdirSync(batches) : []).toEqual([]);
+  });
+
   it('given nothing queued (no pending.json, or an empty list), when a pass is prepared, then it still runs the news search and writes a batch with no items, so a done pass records its day (R22-srv-dom-b-L2-01)', () => {
     for (const root of [dataRoot(), dataRoot('[]\n')]) {
       const pass = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);

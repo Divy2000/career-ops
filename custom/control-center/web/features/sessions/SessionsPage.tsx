@@ -9,6 +9,7 @@ import { DataState, Empty, TableScroll } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
+import { plainPostingUrl } from '@shared/posting-url';
 import { formatLocalMinute } from '../../lib/time';
 import { forgetDevSession } from '../../lib/devchatSession';
 
@@ -55,7 +56,7 @@ export function SessionsPage() {
               <input aria-label="New session target" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder={newMode === 'projects-ingest' ? 'projects/my-project.pdf' : 'optional'} />
             </label>
           </div>
-          <SessionPanel key={newMode} mode={newMode} target={targetFor(targetValue, newMode)} placeholder="What should this session do?" />
+          <NewSessionPanel key={newMode} mode={newMode} target={targetFor(targetValue, newMode)} />
         </div>
       )}
       <div className="toolbar row gap">
@@ -126,13 +127,33 @@ export function SessionsPage() {
   );
 }
 
+/** The New session panel, held back while its target is a URL the session route would refuse. */
+function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['target'] }) {
+  // Once this panel has started a session the target no longer reaches the route, so its controls stay usable.
+  const [started, setStarted] = useState(false);
+  const badUrl = !started && target.type === 'url' && !plainPostingUrl(target.value);
+  return (
+    <>
+      {badUrl && (
+        <p role="alert" className="danger-text">
+          Not a plain http(s) job posting URL: remove spaces and credentials, or enter a company name or row number instead.
+        </p>
+      )}
+      {/* Always wrapped, so a target being fixed does not remount the panel and drop the typed prompt. */}
+      <fieldset disabled={badUrl} className="turn-hold">
+        <SessionPanel mode={mode} target={target} placeholder="What should this session do?" onSessionId={() => setStarted(true)} />
+      </fieldset>
+    </>
+  );
+}
+
 /** projects-ingest reads a document under documents/, which the route takes as a text target. */
 export function targetFor(value: string, mode?: string): SessionMeta['target'] {
   const v = value.trim();
   if (!v) return { type: 'none', value: null };
   if (mode === 'projects-ingest') return { type: 'text', value: v };
   if (/^\d+$/.test(v)) return { type: 'app', value: v };
-  if (/^https?:\/\//.test(v)) return { type: 'url', value: v };
+  if (/^https?:\/\//i.test(v)) return { type: 'url', value: v };
   return { type: 'company', value: v };
 }
 
