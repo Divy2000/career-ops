@@ -3,17 +3,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { claimFile, readClaim, releaseClaim, retagClaim, tryClaim } from '../policy-claim.mjs';
+import { tempDir } from '../../test-support/tmp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MODULE = pathToFileURL(path.join(HERE, '..', 'policy-claim.mjs')).href;
 
 function root() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-claim-'));
+  const dir = tempDir('policy-claim-');
   fs.mkdirSync(path.join(dir, 'data', 'immigration'), { recursive: true });
   return dir;
 }
@@ -55,7 +55,7 @@ test('a live owner keeps the claim: a running, queued or paused session, or the 
 
 /** A bash running a script named run-daily.sh, as launchd starts the job; stopped by the returned function. */
 function fakeDailyJob() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-claim-job-'));
+  const dir = tempDir('policy-claim-job-');
   const script = path.join(dir, 'run-daily.sh');
   fs.writeFileSync(script, 'sleep 30\n');
   const job = spawn('/bin/bash', [script], { stdio: 'ignore' });
