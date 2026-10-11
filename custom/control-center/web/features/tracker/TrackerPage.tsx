@@ -57,8 +57,11 @@ function cell(r: TrackerRow, key: SortKey): string | number | null {
       return r.role;
     case 'score':
       return r.score;
-    case 'status':
-      return STATUS_ORDER.indexOf(r.status);
+    case 'status': {
+      // An unknown status ranks after every known one, as the server's statusRank does.
+      const i = STATUS_ORDER.indexOf(r.status);
+      return i === -1 ? STATUS_ORDER.length : i;
+    }
     case 'date':
       return r.date;
     case 'location':
