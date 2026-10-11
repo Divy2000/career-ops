@@ -9,6 +9,7 @@ import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY,
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, grepSecretExcludes, locateRead, narrowGrepInput, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { trackerDenyGlobs, writeGuardPolicy } from '../../server/claude/confinement.mjs';
+import { playwrightMcpArgs } from '../../server/claude/playwright-mcp-launcher.mjs';
 import { StreamParser } from '../../server/claude/stream-parse.js';
 import { extractEnvelopes } from '../../server/claude/envelopes.js';
 import { ASK_ACTION_SPECS } from '../../shared/ask-actions.js';
@@ -681,7 +682,8 @@ describe('guard hook', () => {
     ];
     for (const [name, input] of allowed) expect(pw(name, input).status, `${name} ${JSON.stringify(input)}`).toBe(0);
     // These are the tool shapes of the pinned MCP version; a version change needs this guard re-read.
-    expect(JSON.parse(fs.readFileSync(PLAYWRIGHT_MCP_PATH, 'utf8')).mcpServers.playwright.args).toContain('@playwright/mcp@0.0.41');
+    expect(JSON.parse(fs.readFileSync(PLAYWRIGHT_MCP_PATH, 'utf8')).mcpServers.playwright.args).toEqual(['custom/control-center/server/claude/playwright-mcp-launcher.mjs']);
+    expect(playwrightMcpArgs(1)).toContain('@playwright/mcp@0.0.41');
     // A session whose policy grants no Playwright gets none of it, whatever the tool.
     expect(pw('browser_snapshot', {}, policy).status).toBe(2);
     // The settings route every Playwright tool to the hook through a second group; the probed matcher stays as recorded.
