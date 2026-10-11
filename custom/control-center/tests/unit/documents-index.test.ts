@@ -22,10 +22,11 @@ const write = (file: string, text: string) => {
 };
 
 describe('the PDF index is read where generate-pdf.mjs writes it (R12-srv-dom-a-L2-02)', () => {
-  it('resolves the same manifest path as tracker-utils.mjs resolvePdfIndexPath(rawTrackerPath(root))', async () => {
+  it('resolves the same manifest path as tracker-utils.mjs resolvePdfIndexPath(resolveTrackerPath(root))', async () => {
     const root = copyFixtureRoot();
     const { resolvePdfIndexPath } = await importCore<{ resolvePdfIndexPath: (tracker: string) => string }>(DEFAULT_CODE_ROOT, 'tracker-utils.mjs');
-    const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(DEFAULT_CODE_ROOT, 'path-resolver.mjs');
+    // generate-pdf.mjs writes the manifest beside its realpathed tracker, resolveTrackerPath().
+    const { resolveTrackerPath } = await importCore<{ resolveTrackerPath: (root: string) => string }>(DEFAULT_CODE_ROOT, 'path-resolver.mjs');
     const cases: Partial<Record<(typeof ENV_KEYS)[number], string>>[] = [
       {},
       { CAREER_OPS_TRACKER: path.join(root, 'ws', 'data', 'applications.md') },
@@ -35,56 +36,71 @@ describe('the PDF index is read where generate-pdf.mjs writes it (R12-srv-dom-a-
     for (const env of cases) {
       for (const k of ENV_KEYS) delete process.env[k];
       Object.assign(process.env, env);
-      expect(pdfIndexPath(root), JSON.stringify(env)).toBe(path.resolve(resolvePdfIndexPath(rawTrackerPath(root))));
+      expect(await pdfIndexPath(DEFAULT_CODE_ROOT, root), JSON.stringify(env)).toBe(resolvePdfIndexPath(resolveTrackerPath(root)));
     }
     for (const k of ENV_KEYS) delete process.env[k];
     fs.rmSync(path.join(root, 'data', 'applications.md'));
-    expect(pdfIndexPath(root)).toBe(path.resolve(resolvePdfIndexPath(rawTrackerPath(root))));
+    expect(await pdfIndexPath(DEFAULT_CODE_ROOT, root)).toBe(resolvePdfIndexPath(resolveTrackerPath(root)));
   });
 
-  it('lists, suggests and guards with an index named by CAREER_OPS_PDF_INDEX', () => {
+  it('reads the index beside the realpath of a symlinked tracker, as generate-pdf.mjs writes it', async () => {
+    const root = copyFixtureRoot();
+    const jobs = path.join(root, 'synced', 'jobs');
+    write(path.join(jobs, 'applications.md'), fs.readFileSync(path.join(root, 'data', 'applications.md'), 'utf8'));
+    fs.rmSync(path.join(root, 'data', 'applications.md'));
+    fs.symlinkSync(path.join(jobs, 'applications.md'), path.join(root, 'data', 'applications.md'));
+    write(path.join(jobs, 'data', 'pdf-index.tsv'), fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8'));
+    fs.rmSync(path.join(root, 'data', 'pdf-index.tsv'));
+    expect(fs.realpathSync(await pdfIndexPath(DEFAULT_CODE_ROOT, root))).toBe(fs.realpathSync(path.join(jobs, 'data', 'pdf-index.tsv')));
+    // Row paths stay relative to the lexical workspace (generate-pdf.mjs resolveWorkspaceRootFor), the data root here.
+    const docs = await readDocuments(DEFAULT_CODE_ROOT, root, 1, 'Acme Robotics');
+    expect(docs.indexPresent).toBe(true);
+    expect(docs.files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.source).toBe('index');
+  });
+
+  it('lists, suggests and guards with an index named by CAREER_OPS_PDF_INDEX', async () => {
     const root = copyFixtureRoot();
     const moved = path.join(root, 'elsewhere', 'pdf-index.tsv');
     write(moved, fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8'));
     fs.rmSync(path.join(root, 'data', 'pdf-index.tsv'));
     process.env.CAREER_OPS_PDF_INDEX = moved;
-    const docs = readDocuments(root, 1, 'Acme Robotics');
+    const docs = await readDocuments(DEFAULT_CODE_ROOT, root, 1, 'Acme Robotics');
     expect(docs.indexPresent).toBe(true);
     expect(docs.files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.source).toBe('index');
-    expect(readPdfIndex(root).map((r) => r.report)).toEqual([1, 3]);
+    expect((await readPdfIndex(DEFAULT_CODE_ROOT, root)).map((r) => r.report)).toEqual([1, 3]);
   });
 
-  it('reads the index of a CAREER_OPS_TRACKER workspace, with its rows made relative to the data root', () => {
+  it('reads the index of a CAREER_OPS_TRACKER workspace, with its rows made relative to the data root', async () => {
     const root = copyFixtureRoot();
     process.env.CAREER_OPS_TRACKER = path.join(root, 'ws', 'data', 'applications.md');
     write(path.join(root, 'ws', 'output', 'cv-acme-robotics-v2.pdf'), '%PDF-1.4\n');
     write(path.join(root, 'ws', 'data', 'pdf-index.tsv'), '12\toutput/cv-acme-robotics-v2.pdf\toutput/cv-acme-robotics-v2.html\tletter\t2026-10-01\tcv\n');
-    expect(readPdfIndex(root)).toMatchObject([{ report: 12, pdf: 'ws/output/cv-acme-robotics-v2.pdf', html: 'ws/output/cv-acme-robotics-v2.html' }]);
+    expect(await readPdfIndex(DEFAULT_CODE_ROOT, root)).toMatchObject([{ report: 12, pdf: 'ws/output/cv-acme-robotics-v2.pdf', html: 'ws/output/cv-acme-robotics-v2.html' }]);
     // The re-render guard sees the row; Documents offers only what /api/files/serve can open (the data root's output/).
-    const docs = readDocuments(root, 12, 'Nobody');
+    const docs = await readDocuments(DEFAULT_CODE_ROOT, root, 12, 'Nobody');
     expect(docs.indexPresent).toBe(true);
     expect(docs.files).toEqual([]);
   });
 
-  it('offers an indexed PDF of a flat-layout tracker workspace, which is the data root', () => {
+  it('offers an indexed PDF of a flat-layout tracker workspace, which is the data root', async () => {
     const root = copyFixtureRoot();
     const index = fs.readFileSync(path.join(root, 'data', 'pdf-index.tsv'), 'utf8');
     fs.rmSync(path.join(root, 'data'), { recursive: true });
     write(path.join(root, 'applications.md'), '# Applications\n');
     write(path.join(root, 'data', 'pdf-index.tsv'), index);
     process.env.CAREER_OPS_TRACKER = path.join(root, 'applications.md');
-    expect(readDocuments(root, 1, 'Acme Robotics').files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.source).toBe('index');
+    expect((await readDocuments(DEFAULT_CODE_ROOT, root, 1, 'Acme Robotics')).files.find((f) => f.path === 'output/acme-robotics-cv.pdf')?.source).toBe('index');
   });
 });
 
 describe('index rows whose PDF is gone (R12-srv-dom-a-01)', () => {
-  it('are not offered as documents once outcome cleanup removed the PDF', () => {
+  it('are not offered as documents once outcome cleanup removed the PDF', async () => {
     const root = copyFixtureRoot();
     fs.rmSync(path.join(root, 'output', 'acme-robotics-cv.pdf'));
-    const docs = readDocuments(root, 1, 'Acme Robotics');
+    const docs = await readDocuments(DEFAULT_CODE_ROOT, root, 1, 'Acme Robotics');
     expect(docs.files.map((f) => f.path)).not.toContain('output/acme-robotics-cv.pdf');
     fs.mkdirSync(path.join(root, 'output', 'acme-robotics-cv.pdf'));
-    expect(readDocuments(root, 1, 'Acme Robotics').files.map((f) => f.path)).not.toContain('output/acme-robotics-cv.pdf');
-    expect(readApplyDocuments(root, { report: 1, company: 'Acme Robotics' }).suggestedPdf).not.toBe('output/acme-robotics-cv.pdf');
+    expect((await readDocuments(DEFAULT_CODE_ROOT, root, 1, 'Acme Robotics')).files.map((f) => f.path)).not.toContain('output/acme-robotics-cv.pdf');
+    expect((await readApplyDocuments(DEFAULT_CODE_ROOT, root, { report: 1, company: 'Acme Robotics' })).suggestedPdf).not.toBe('output/acme-robotics-cv.pdf');
   });
 });

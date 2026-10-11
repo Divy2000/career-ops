@@ -482,7 +482,7 @@ export const ACTIONS: ActionDef[] = [
       if (!row) return `There is no tracker row #${p.row}.`;
       if (row.report === null) return `Row #${p.row} has no evaluation report, so a re-rendered PDF has nowhere to be filed.`;
       if (row.report !== p.report) return `Row #${p.row} is filed under report ${row.report}, not report ${p.report}. Reload the Documents tab and try again.`;
-      return rerenderProblem(readPdfIndex(ctx.dataRoot), p.report, p.html, p.pdf);
+      return rerenderProblem(await readPdfIndex(ctx.codeRoot, ctx.dataRoot), p.report, p.html, p.pdf);
     },
     // No format: generate-pdf.mjs takes the profile's page_format, which an explicit --format would override.
     build: (p, ctx) => node(ctx, 'generatePdf', [path.join(ctx.dataRoot, p.html), path.join(ctx.dataRoot, p.pdf), ...(p.format ? [`--format=${p.format}`] : []), `--report=${p.report}`]),
