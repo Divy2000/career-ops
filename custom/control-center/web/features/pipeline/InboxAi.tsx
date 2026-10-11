@@ -174,7 +174,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {pipelineLive && <span className="muted small">Process inbox is processing the pending rows, so Evaluate visible is off until it ends.</span>}
-        {batchStarting && <span className="muted small">Batch evaluations are starting, so Evaluate visible is off until they have.</span>}
+        {batchStarting && !busy && <span className="muted small">Batch evaluations are starting, so Evaluate visible is off until they have.</span>}
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
         {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
         {savedJds > 0 && (

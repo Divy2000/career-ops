@@ -271,6 +271,16 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     expect(button('Batch evaluate')!.disabled).toBe(true);
   });
 
+  it('given only its own Evaluate visible fan-out in flight, the Inbox does not say Batch evaluations are starting', async () => {
+    holdUrl = '/api/sessions/fanout';
+    await mount();
+    await until(() => button('Evaluate visible (2)') && !button('Evaluate visible (2)')!.disabled, 'Evaluate visible');
+    await act(async () => button('Evaluate visible (2)')!.click());
+    await until(() => hold, 'the fan-out sent');
+    await settle();
+    expect(host.textContent).not.toContain('Batch evaluations are starting');
+  });
+
   it('given a Batch evaluate fan-out still in flight after the start window, Process inbox is still held back', async () => {
     holdUrl = '/api/sessions/fanout';
     const router = await mount('batch');
