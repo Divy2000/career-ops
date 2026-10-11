@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { EventBus } from '../watch/bus.js';
-import { CANCEL_FILE, RunStore, runsDir, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
+import { CANCEL_FILE, RunStore, runsDir, unended, type ExitMeaning, type RunMeta, type RunRequest } from './store.js';
 import { createWhole, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS } from '../../supervisor/instance-lock.js';
 import { childEnv } from '../system/child-env.js';
 import { removeTmpInputs } from '../actions/tmp-inputs.js';
@@ -89,11 +89,6 @@ const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2
 /** /bin/ps -o lstart= for one PID, in the C locale and UTC whatever this process's environment is. */
 const runPs = (pid: number): string =>
   execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } });
-
-/** A run whose command may still be running: running, or cancelled (marked so at once) before its end was recorded. */
-function unended(meta: RunMeta): boolean {
-  return meta.status === 'running' || (meta.status === 'cancelled' && meta.endedAt === null);
-}
 
 /**
  * When a process started, so a later check can tell a reused PID apart (PIDs are reused, after a reboot especially;

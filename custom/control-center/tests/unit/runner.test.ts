@@ -94,6 +94,22 @@ describe('RunStore', () => {
     expect(() => store.dirOf('../x')).toThrow(/bad run id/);
   });
 
+  it('never prunes a cancelled run whose command has not exited yet (no recorded end), only one that has ended', () => {
+    const root = tmpRoot();
+    const store = new RunStore(root, 1);
+    const base = { actionId: 'a', label: 'a', cost: 'free' as const, resources: [], claude: false, cmd: { bin: 'x', args: [], cwd: '/' }, params: {} };
+    const stopping = store.create(base);
+    store.write({ ...stopping, status: 'cancelled', startedAt: new Date().toISOString() });
+    const ended = store.create(base);
+    store.write({ ...ended, status: 'cancelled', endedAt: new Date().toISOString() });
+    const newest = store.create(base);
+    store.write({ ...newest, status: 'done', endedAt: new Date().toISOString() });
+    expect(store.prune()).toBe(1);
+    expect(store.list().map((r) => r.id)).toEqual([newest.id, stopping.id]);
+    expect(fs.existsSync(store.dirOf(stopping.id))).toBe(true);
+    expect(fs.existsSync(store.dirOf(ended.id))).toBe(false);
+  });
+
   it('ignores stray entries in the runs folder: Finder\'s .DS_Store and a plain file with a run-like name (SW-server-01)', () => {
     const root = tmpRoot();
     const store = new RunStore(root, 1);
