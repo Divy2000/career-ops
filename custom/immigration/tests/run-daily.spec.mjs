@@ -437,9 +437,9 @@ jobTest('a Keychain that cannot be read (locked, exit 36) says so with the exit 
 
 jobTest('a Keychain read that never answers (locked keychain, unlock prompt nobody answers) fails fast with the reason and frees the lock', () => {
   const w = dailyWorld();
-  // A security that waits forever, as one blocked on an unanswered unlock dialog does, with a child of its own.
-  const childPid = path.join(w.T, 'security-child.pid');
-  fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\nsleep 100000 &\necho $! > ${JSON.stringify(childPid)}\nwait\n`, { mode: 0o755 });
+  // A security that waits forever, as one blocked on an unanswered unlock dialog does (one process, as security is).
+  const childPid = path.join(w.T, 'security.pid');
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\necho $$ > ${JSON.stringify(childPid)}\nexec /bin/sleep 100000\n`, { mode: 0o755 });
   const started = Date.now();
   const r = w.run({ CC_KEYCHAIN_TIMEOUT: '2' });
   assert.ok(Date.now() - started < 30_000, `the run waited ${Date.now() - started} ms for the Keychain`);
@@ -456,12 +456,36 @@ jobTest('a Keychain read that never answers (locked keychain, unlock prompt nobo
   assert.notEqual(orphan.status, 0, 'nothing the Keychain read started is left running');
 });
 
-jobTest('a Keychain wait that is not a whole number of seconds is refused before the Keychain is read', () => {
+// 4294967296 wraps to alarm(0) in perl, which would wait forever: the wait is capped at an hour.
+for (const value of ['0', 'soon', '3601', '4294967296']) {
+  jobTest(`a Keychain wait of '${value}' (not a whole number of seconds from 1 to 3600) is refused before the Keychain is read`, () => {
+    const w = dailyWorld();
+    const read = path.join(w.T, 'security-ran');
+    fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\ntouch ${JSON.stringify(read)}\necho fake-keychain-token\n`, { mode: 0o755 });
+    const r = w.run({ CC_KEYCHAIN_TIMEOUT: value });
+    assert.equal(r.status, 1, r.log);
+    assert.match(r.log, new RegExp(`^!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '${value}'\\.$`, 'm'));
+    assert.equal(fs.existsSync(read), false);
+    assert.equal(r.steps, '');
+  });
+}
+
+jobTest('a run cancelled while the Keychain read waits stops the security it started too', async () => {
   const w = dailyWorld();
-  const r = w.run({ CC_KEYCHAIN_TIMEOUT: '0' });
-  assert.equal(r.status, 1, r.log);
-  assert.match(r.log, /^!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not '0'\.$/m);
-  assert.equal(r.steps, '');
+  const securityPid = path.join(w.T, 'security.pid');
+  fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\necho $$ > ${JSON.stringify(securityPid)}\nexec /bin/sleep 100000\n`, { mode: 0o755 });
+  const child = w.start();
+  const exited = new Promise((resolve) => child.on('exit', (status, sig) => resolve({ status, sig })));
+  for (let i = 0; i < 600 && !fs.existsSync(securityPid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(securityPid), 'the Keychain read never started');
+  const pid = Number(readFileSync(securityPid, 'utf8'));
+  // The Control Center's cancel: SIGTERM to the job's process group.
+  process.kill(-child.pid, 'SIGTERM');
+  await exited;
+  for (let i = 0; i < 100 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  const left = alive(pid);
+  if (left) process.kill(pid, 'SIGKILL');
+  assert.equal(left, false, 'the security the cancelled run started is still running');
 });
 
 jobTest('the pidfile the Control Center reads names the run while it holds the lock and is gone when the run ends, done or failed', () => {

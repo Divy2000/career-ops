@@ -133,10 +133,11 @@ if ! KEYCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/run-daily-keychain.XXXXXX")"; then
 fi
 # A locked login keychain can make security wait on an unlock dialog that an unattended run never answers, holding the
 # daily lock all the while: the read gets CC_KEYCHAIN_TIMEOUT seconds (default 60). Stock macOS has no timeout(1), so
-# perl runs security in its own process group and kills that group when the alarm fires, exiting 124 as timeout(1) does.
+# perl runs security and kills it when the alarm fires, exiting 124 as timeout(1) does. security stays in the job's
+# process group, so a cancel signalled to the group stops it too. perl's alarm wraps at 2^32, so the wait is capped at 3600.
 KEYCHAIN_TIMEOUT="${CC_KEYCHAIN_TIMEOUT:-60}"
-if ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
-  echo "!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds above 0, not '$KEYCHAIN_TIMEOUT'."
+if ! [[ "$KEYCHAIN_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$KEYCHAIN_TIMEOUT" -gt 3600 ]; then
+  echo "!!! CC_KEYCHAIN_TIMEOUT must be a whole number of seconds from 1 to 3600, not '$KEYCHAIN_TIMEOUT'."
   exit 1
 fi
 bounded() {
@@ -145,12 +146,11 @@ bounded() {
     my $pid = fork;
     die "cannot start $ARGV[0]: $!\n" unless defined $pid;
     if ($pid == 0) {
-      setpgrp(0, 0);
       exec { $ARGV[0] } @ARGV;
       print STDERR "$ARGV[0]: $!\n";
       exit($!{ENOENT} ? 127 : 126);
     }
-    $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid $pid, 0; exit 124 };
+    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid $pid, 0; exit 124 };
     alarm $limit;
     waitpid $pid, 0;
     alarm 0;
