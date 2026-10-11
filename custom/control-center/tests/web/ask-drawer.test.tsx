@@ -487,16 +487,36 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
     expect(posts).toHaveLength(1);
   });
 
-  it('starts nothing when the sessions list cannot be read at run time (R19-shared-comp-L1-01)', async () => {
+  const failSessionsRead = (post?: (url: string, init: RequestInit) => Response) => {
     // Only the sessions read fails; the drawer's other reads answer as before.
     const answer = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) =>
-      url === '/api/sessions' && !init?.method ? new Response(JSON.stringify({ error: 'sessions unreadable' }), { status: 500, headers: { 'content-type': 'application/json' } }) : answer(url, init),
-    );
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (url === '/api/sessions' && !init?.method) return new Response(JSON.stringify({ error: 'sessions unreadable' }), { status: 500, headers: { 'content-type': 'application/json' } });
+      if (post && init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return post(String(url), init);
+      }
+      return answer(url, init);
+    });
+  };
+
+  it('still starts the CV when the sessions list cannot be read at run time, since the server refuses a duplicate itself', async () => {
+    failSessionsRead();
     const item = await run();
-    expect(posts).toEqual([]);
+    expect(posts).toEqual([{ url: '/api/sessions', body: expect.objectContaining({ mode: 'pdf', target: { type: 'app', value: '2' } }) }]);
+    expect(navigations).toEqual([{ to: '/sessions/$id', params: { id: 's-new' } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('shows the server\'s refusal when the sessions list cannot be read and the row already has a live CV session', async () => {
+    const refusal = 'Not started: session s-live is already generating the tailored CV for tracker row #2. Open it instead.';
+    failSessionsRead(() => new Response(JSON.stringify({ error: refusal }), { status: 409, headers: { 'content-type': 'application/json' } }));
+    const item = await run();
+    expect(posts).toHaveLength(1);
+    expect(navigations).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');
-    expect(item.textContent).toContain('sessions unreadable');
+    expect(item.textContent).toContain(refusal);
+    expect(sessionStorage.getItem('cc.pdf.2:starting')).toBeNull();
   });
 
   it('a row with surrounding whitespace opens the live pdf session for that row (R18-shared-comp-L2-01)', async () => {
