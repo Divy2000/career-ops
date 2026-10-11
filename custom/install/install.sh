@@ -153,20 +153,22 @@ lexical_path() {
 # physical_path <absolute-path> [depth]: the path as the kernel would resolve it, even before it exists: its deepest
 # existing folder with symlinks resolved (a dangling one followed to its target), then the rest folded lexically.
 physical_path() {
-  local head tail="" target depth="${2:-0}"
-  head="$(dirname "$1")"
+  local p="$1" head tail="" target depth="${2:-0}"
+  # Trailing slashes off first, or the last part would be read as empty and the path as its parent.
+  while [ "${#p}" -gt 1 ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+  head="$(dirname "$p")"
   while [ ! -d "$head" ]; do
     # Bounded, so a dangling symlink loop ends.
     if [ -L "$head" ] && [ "$depth" -lt 40 ]; then
       target="$(readlink "$head")"
       case "$target" in /*) ;; *) target="$(dirname "$head")/$target" ;; esac
-      physical_path "$target$tail/${1##*/}" $((depth + 1))
+      physical_path "$target$tail/${p##*/}" $((depth + 1))
       return
     fi
     tail="/${head##*/}$tail"
     head="$(dirname "$head")"
   done
-  lexical_path "$(cd -P "$head" && pwd -P)$tail/${1##*/}"
+  lexical_path "$(cd -P "$head" && pwd -P)$tail/${p##*/}"
 }
 
 # The confinement refuses a data root that is the filesystem root or is (or contains) the home directory: a session

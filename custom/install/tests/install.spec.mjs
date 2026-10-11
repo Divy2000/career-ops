@@ -1787,6 +1787,15 @@ test('a data root next to the home directory is fine', () => {
   assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
 });
 
+test('a data root that does not exist yet, named with a trailing slash in CAREER_OPS_ROOT, is that folder, not its parent (review of R19-scripts-b-L3-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const root = path.join(w.home, 'new-root');
+  const r = w.run(['--dir', D, '--non-interactive', ...QUIET], { env: { CAREER_OPS_ROOT: `${root}/` } });
+  assert.equal(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /is your home directory or contains it/);
+  assert.ok(fs.existsSync(path.join(root, 'modes', '_custom.md')));
+});
+
 test('the test world finds no system copy of a tool the installer probes for, so a missing-tool spec means the same on every OS (SW3-tests-06)', () => {
   const w = makeWorld({ tools: ['uname'] });
   for (const tool of ['git', 'node', 'npm', 'npx', 'claude', 'brew', 'gh', 'pdftotext', 'go']) {
