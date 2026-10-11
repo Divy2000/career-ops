@@ -149,6 +149,39 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+const statOrNull = (dir) => fs.statSync(dir, { throwIfNoEntry: false }) ?? null;
+// The same directory, not one removed and made again at the path (pipeline-lock.mjs's sameLockDirectory).
+const sameLockDirectory = (a, b) => a.dev === b.dev && a.ino === b.ino && (a.ino !== 0 || a.birthtimeMs === b.birthtimeMs);
+const isStale = (stat) => Date.now() - stat.mtimeMs > LOCK_STALE_MS;
+
+/**
+ * Breaks the lock when it is stale; true when it was removed. The verdict and the removal run under a recover guard,
+ * and the lock is judged again under it and removed only when it is still the stale directory first judged: another
+ * claimant may have broken it meanwhile and taken a new one, which is live (pipeline-lock.mjs, same race).
+ */
+function breakStale(lock) {
+  const judged = statOrNull(lock);
+  if (!judged || !isStale(judged)) return false;
+  const guard = `${lock}.recover`;
+  try {
+    fs.mkdirSync(guard);
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    // A guard left by a claimant killed while breaking would block recovery for good; it ages out the same way.
+    const held = statOrNull(guard);
+    if (held && isStale(held)) fs.rmSync(guard, { recursive: true, force: true });
+    return false;
+  }
+  try {
+    const now = statOrNull(lock);
+    if (!now || !isStale(now) || !sameLockDirectory(judged, now)) return false;
+    fs.rmSync(lock, { recursive: true, force: true });
+    return true;
+  } finally {
+    fs.rmSync(guard, { recursive: true, force: true });
+  }
+}
+
 /** Runs fn under the claim's mkdir lock; a lock left by a crashed holder is broken after LOCK_STALE_MS. */
 function locked(dataRoot, fn) {
   const lock = `${claimFile(dataRoot)}.lock`;
@@ -160,16 +193,18 @@ function locked(dataRoot, fn) {
       break;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
-      const age = Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-      if (age > LOCK_STALE_MS) fs.rmSync(lock, { recursive: true, force: true });
-      else if (Date.now() > deadline) throw new Error(`${lock} is held by another claimant; try again`);
-      else sleep(25);
+      if (breakStale(lock)) continue;
+      if (Date.now() > deadline) throw new Error(`${lock} is held by another claimant; try again`);
+      sleep(25);
     }
   }
+  const mine = statOrNull(lock);
   try {
     return fn();
   } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
+    // Only the lock this claimant made: one held so long it was broken as stale may now be another claimant's.
+    const now = statOrNull(lock);
+    if (mine && now && sameLockDirectory(mine, now)) fs.rmSync(lock, { recursive: true, force: true });
   }
 }
 

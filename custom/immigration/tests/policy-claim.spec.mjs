@@ -185,6 +185,41 @@ test('many processes claiming at once: exactly one gets it', async () => {
   }
 });
 
+test('many processes finding a crashed claimant\'s stale lock at once: exactly one breaks it and gets the claim (R19-scripts-a-L1-02)', async () => {
+  for (let round = 0; round < 5; round++) {
+    const r = root();
+    // A claimant killed inside the lock left it behind, long enough ago to be broken.
+    const lock = `${claimFile(r)}.lock`;
+    fs.mkdirSync(lock);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const go = path.join(r, 'go');
+    // Every claimant waits for the same instant, so they all judge the old lock stale in the same poll, and each is
+    // descheduled for a moment between that verdict and its removal of the lock, the window in which another claimant
+    // can break the same lock and take a new one.
+    const code = `const fs = (await import('node:fs')).default; const rm = fs.rmSync; fs.rmSync = (p, o) => { if (String(p).endsWith('.lock')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); return rm(p, o); }; const { tryClaim } = await import(${JSON.stringify(MODULE)}); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((res) => setTimeout(res, 1)); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:' + process.pid, batch: null }).ok)); process.stdin.resume();`;
+    const children = [];
+    try {
+      const ready = [];
+      const outs = Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', code]);
+        children.push(child);
+        ready.push(new Promise((res) => child.on('spawn', res)));
+        child.stdout.once('data', (d) => resolve(String(d)));
+        child.on('error', reject);
+        child.on('close', () => resolve(''));
+      })));
+      await Promise.all(ready);
+      await new Promise((res) => setTimeout(res, 300));
+      fs.writeFileSync(go, '');
+      const answers = await outs;
+      assert.equal(answers.filter((o) => o === 'true').length, 1, `round ${round}: ${answers.join(',')}`);
+    } finally {
+      for (const child of children) child.stdin.end();
+    }
+  }
+});
+
 test('a fork takes the claim from the paused session it forks, never from another live owner', () => {
   const r = root();
   session(r, 's-src', 'awaiting_user');
