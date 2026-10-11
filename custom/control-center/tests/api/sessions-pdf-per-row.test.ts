@@ -65,3 +65,49 @@ describe('a tailored CV start for a row whose pdf session is live', () => {
     });
   });
 });
+
+describe('a reply to or fork of a tailored CV session while another for its row is live', () => {
+  const turn = (app: TestApp, id: string, kind: 'turns' | 'fork') => app.app.inject({ method: 'POST', url: `/api/sessions/${id}/${kind}`, headers: app.authedWrite, payload: { prompt: 'carry on' } });
+
+  it('a reply to a finished one is refused with 409 naming the live one', async () => {
+    await withApp(async (app) => {
+      const live = pdfSession(app, '12', 'running');
+      const done = pdfSession(app, '12', 'done');
+      const res = await turn(app, done.id, 'turns');
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toContain(live.id);
+    });
+  });
+
+  for (const status of ['queued', 'running'] as const) {
+    it(`a fork of the ${status} one is refused with 409, and nothing starts`, async () => {
+      await withApp(async (app) => {
+        const live = pdfSession(app, '12', status);
+        const res = await turn(app, live.id, 'fork');
+        expect(res.statusCode).toBe(409);
+        expect((res.json() as { error: string }).error).toContain(live.id);
+        expect(pdfCount(app)).toBe(1);
+      });
+    });
+  }
+
+  it('a reply to the one waiting for the user goes on: it is the live session', async () => {
+    await withApp(async (app) => {
+      const paused = pdfSession(app, '12', 'awaiting_user');
+      expect((await turn(app, paused.id, 'turns')).statusCode).toBe(202);
+    });
+  });
+});
+
+describe('a tailored CV start naming the row with spaces or leading zeros', () => {
+  for (const row of [' 12', '12 ', '012']) {
+    it(`"${row}" is refused while row 12's session is live`, async () => {
+      await withApp(async (app) => {
+        const live = pdfSession(app, '12', 'running');
+        const res = await startPdf(app, row);
+        expect(res.statusCode).toBe(409);
+        expect((res.json() as { error: string }).error).toContain(live.id);
+      });
+    });
+  }
+});

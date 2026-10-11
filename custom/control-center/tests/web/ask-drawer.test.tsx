@@ -472,13 +472,15 @@ describe('Ask drawer: generatePdf honors the per-row tailored-CV guard (R17-shar
   });
 
   it('starts nothing when the sessions list cannot be read at run time (R19-shared-comp-L1-01)', async () => {
-    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
-      if (init?.method === 'POST') posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
-      return new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'content-type': 'application/json' } });
-    });
+    // Only the sessions read fails; the drawer's other reads answer as before.
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) =>
+      url === '/api/sessions' && !init?.method ? new Response(JSON.stringify({ error: 'sessions unreadable' }), { status: 500, headers: { 'content-type': 'application/json' } }) : answer(url, init),
+    );
     const item = await run();
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('sessions unreadable');
   });
 
   it('a row with surrounding whitespace opens the live pdf session for that row (R18-shared-comp-L2-01)', async () => {
