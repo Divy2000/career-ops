@@ -117,6 +117,25 @@ describe('session manager: replaying an original request never duplicates a live
     });
   }
 
+  it('given an evaluation waiting for the user that never started a conversation, when it is forked, then the fork is refused with 409: the source still evaluates the posting', async () => {
+    const app = await makeTestApp();
+    try {
+      const url = 'https://jobs.example.com/synthetic/r19-dup-awaiting';
+      const body = { mode: 'oferta', target: { type: 'url', value: url }, prompt: `Evaluate this job posting following the mode file: ${url}` };
+      const noInit = scenarioFile({ events: [result('The posting needs a login; I could not read it.', 0.01)] });
+      const { id } = await withScenario(noInit, async () => (await call(app, 'POST', '/api/sessions', body)).json());
+      const src = (await settleOn(app, id)).meta;
+      expect(src.status).toBe('awaiting_user');
+      expect(src.conversationStarted ?? false).toBe(false);
+      const runsBefore = app.runner.store.list().length;
+      const res = await call(app, 'POST', `/api/sessions/${id}/fork`, { prompt: 'try again' });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(app.runner.store.list().length).toBe(runsBefore);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('given a reply replaying a failed evaluation that has not reached its run yet, when the same posting is started again, then the start is refused with 409', async () => {
     let release!: () => void;
     const state = { mode: 'fail' as 'fail' | 'hold' };

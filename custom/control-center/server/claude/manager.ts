@@ -241,7 +241,8 @@ export class SessionManager {
       const src = this.must(id);
       // A source whose turns never started a conversation has nothing to fork: the copy starts its own.
       if (!this.hasConversation(src)) {
-        const unclaim = this.claimReplay(src);
+        // Not excluded from the check: a source still waiting for the user evaluates the posting beside the copy.
+        const unclaim = this.claimReplay(src, null);
         try {
           const fresh = this.store.create({ mode: src.mode, policyClass: src.policyClass, target: src.target, model: src.model, forkedFrom: src.id });
           return await this.runTurn(fresh, policy, this.withOriginalRequest(src, prompt), { resume: false, fork: false, blacklistAllowed: opts.blacklistAllowed });
@@ -280,11 +281,11 @@ export class SessionManager {
   /**
    * A replayed original request starts the posting's evaluation again: refused while another session evaluates it, and
    * claimed (as a starting fan-out claims its URLs) until its turn is running, so no start slips in while it prepares.
-   * Returns the release.
+   * `exceptId` is the session doing the replay, which does not count against itself. Returns the release.
    */
-  private claimReplay(meta: SessionMeta): () => void {
+  private claimReplay(meta: SessionMeta, exceptId: string | null = meta.id): () => void {
     if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(`another evaluation is already starting ${meta.target.value}`);
-    const live = this.liveEvaluationFor(meta.mode, meta.target, meta.id);
+    const live = this.liveEvaluationFor(meta.mode, meta.target, exceptId ?? undefined);
     if (live) throw new BusyError(`session ${live} is already evaluating ${meta.target.value}`);
     if (meta.target.type !== 'url' || !meta.target.value) return () => {};
     const key = `${meta.mode}\0${meta.target.value}`;
