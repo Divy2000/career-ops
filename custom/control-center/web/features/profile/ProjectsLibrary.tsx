@@ -412,7 +412,9 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   // A preview remembers the source it was made for, so Append never pairs it with a newer one.
   const [previewed, setPreviewed] = useState<{ result: ConvertResult; source: string | null } | null>(null);
   const parse = useParseSession();
-  useUnsaved('the projects import', text.trim() !== '' || previewed !== null || parse.parsing);
+  // A parser result that landed after the user edited the draft: offered, never written over their edit.
+  const [heldResult, setHeldResult] = useState<{ markdown: string; source: string } | null>(null);
+  useUnsaved('the projects import', text.trim() !== '' || previewed !== null || parse.parsing || heldResult !== null);
   const preview = previewed?.result ?? null;
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
@@ -422,21 +424,32 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const currentUpload = useRef<string | null>(null);
   // Bumped by every change to the draft (file choice, parser fill); an async step that finishes under an older generation is dropped.
   const generation = useRef(0);
+  // Whether the user edited the draft since the parser last wrote it: a result (a follow-up turn too) is then held for
+  // them to apply rather than written over the edit.
+  const editedSinceParse = useRef(false);
   const showUpload = (p: string | null) => {
     currentUpload.current = p;
+    editedSinceParse.current = false;
+    setHeldResult(null);
     parse.begin(p);
     setUploadPath(p);
+  };
+  const applyParsed = (markdown: string, forPath: string) => {
+    editedSinceParse.current = false;
+    generation.current += 1;
+    setSource(forPath);
+    setFormat('markdown');
+    setText(markdown);
+    setPreviewed(null);
   };
   const parseDone = parse.done;
   const envelopeFor = useCallback(
     (forPath: string) => (kind: string, payload: unknown) => {
       if (kind !== 'projects' || currentUpload.current !== forPath) return;
       parseDone();
-      generation.current += 1;
-      setSource(forPath);
-      setFormat('markdown');
-      setText((payload as { markdown: string }).markdown);
-      setPreviewed(null);
+      const markdown = (payload as { markdown: string }).markdown;
+      if (editedSinceParse.current) setHeldResult({ markdown, source: forPath });
+      else applyParsed(markdown, forPath);
     },
     [parseDone],
   );
@@ -476,6 +489,7 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   // A manual edit or format change makes the draft the user's own: it no longer restates the document, so provenance goes.
   const editDraft = (patch: { text?: string; format?: 'json' | 'markdown' }) => {
     generation.current += 1;
+    editedSinceParse.current = true;
     if (patch.text !== undefined) setText(patch.text);
     if (patch.format !== undefined) setFormat(patch.format);
     setSource(null);
@@ -510,6 +524,8 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
       onAppended();
       if (generation.current !== mine) return;
       generation.current += 1;
+      editedSinceParse.current = false;
+      setHeldResult(null);
       setPreviewed(null);
       setText('');
       setSource(null);
@@ -548,6 +564,23 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           onEnvelope={onUploadEnvelope}
           startLabel="Parse"
         />
+      )}
+      {heldResult && (
+        <p role="status" className="row gap small">
+          <span className="muted">The parser finished, but you edited the draft meanwhile, so your text is kept.</span>
+          <button
+            type="button"
+            onClick={() => {
+              applyParsed(heldResult.markdown, heldResult.source);
+              setHeldResult(null);
+            }}
+          >
+            Replace the draft with the parsed projects
+          </button>
+          <button type="button" onClick={() => setHeldResult(null)}>
+            Keep my draft
+          </button>
+        </p>
       )}
       {source && (
         <p className="row gap small projects-source" aria-label="Import source">

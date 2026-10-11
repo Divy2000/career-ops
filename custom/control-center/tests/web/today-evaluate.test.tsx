@@ -74,7 +74,8 @@ async function today() {
   const rootRoute = createRootRoute();
   const index = createRoute({ getParentRoute: () => rootRoute, path: '/', component: TodayPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
-  router = createRouter({ routeTree: rootRoute.addChildren([index, session]), history: createMemoryHistory({ initialEntries: ['/'] }) });
+  const elsewhere = createRoute({ getParentRoute: () => rootRoute, path: '/tracker', component: () => createElement('p', null, 'Tracker page') });
+  router = createRouter({ routeTree: rootRoute.addChildren([index, session, elsewhere]), history: createMemoryHistory({ initialEntries: ['/'] }) });
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(RouterProvider, { router }))));
   await until(() => rowOf('Globex'), 'the shortlist rows');
@@ -82,6 +83,14 @@ async function today() {
 const rowOf = (company: string) => [...host.querySelectorAll('tbody tr')].find((tr) => tr.textContent?.includes(`${company} engineer`));
 const evaluateIn = (company: string) => [...(rowOf(company)?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim().startsWith('Evaluate'));
 const click = (el: HTMLElement) => act(async () => el.click());
+const quickButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === 'Evaluate URL')!;
+async function typeQuickUrl(value: string) {
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Posting URL to evaluate"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
 
 describe('a saved-JD shortlist row', () => {
   it('links to the saved file, not the literal local: reference', async () => {
@@ -196,5 +205,78 @@ describe('Evaluate waits for the sessions list (R17-feat-c-L3-01)', () => {
     await today();
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(evaluateIn('Globex')!.disabled).toBe(true);
+  });
+});
+
+describe('Quick evaluate waits for the sessions list (R18-feat-c-L3-01)', () => {
+  it('disables Evaluate URL while the sessions list is still loading, then offers it', async () => {
+    slowList = [];
+    await today();
+    await typeQuickUrl('https://jobs.example.com/globex/1');
+    expect(quickButton().disabled).toBe(true);
+    const waiting = slowList!;
+    slowList = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(quickButton().disabled).toBe(false);
+  });
+
+  it('disables Evaluate URL when the sessions list cannot be read, and a submit starts nothing', async () => {
+    sessionsError = true;
+    await today();
+    await typeQuickUrl('https://jobs.example.com/globex/1');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(quickButton().disabled).toBe(true);
+    const form = host.querySelector('[aria-label="Posting URL to evaluate"]')!.closest('form')!;
+    await act(async () => form.requestSubmit());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(posts).toHaveLength(0);
+  });
+});
+
+describe('a start that answers after the user left Today (R18-feat-c-L1-05)', () => {
+  it('the shortlist Evaluate does not pull the user back to the session page', async () => {
+    await today();
+    held = [];
+    await click(evaluateIn('Globex')!);
+    await until(() => held?.length === 1, 'the start on its way');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await until(() => host.textContent?.includes('Tracker page'), 'the Tracker page');
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => sessions.length === 1, 'the start to answer');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
+  });
+
+  it('a shortlist row that goes away while the user stays on Today still opens the session it started (review)', async () => {
+    await today();
+    held = [];
+    await click(evaluateIn('Globex')!);
+    await until(() => held?.length === 1, 'the start on its way');
+    shortlist = { kind: 'ok', path: 'data/shortlist.md', date: '2026-10-10', summary: null, etag: 's2', excluded: [], rows: [row(1, 'Acme', 'local:jds/acme.md')] };
+    await act(async () => qc.invalidateQueries({ queryKey: ['shortlist'] }));
+    await until(() => !rowOf('Globex'), 'the Globex row to go away');
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');
+  });
+
+  it('Quick evaluate does not pull the user back to the session page', async () => {
+    await today();
+    await typeQuickUrl('https://jobs.example.com/other/9');
+    held = [];
+    await click(quickButton());
+    await until(() => held?.length === 1, 'the start on its way');
+    await act(async () => router.navigate({ to: '/tracker' }));
+    await until(() => host.textContent?.includes('Tracker page'), 'the Tracker page');
+    const waiting = held!;
+    held = null;
+    await act(async () => waiting.forEach((r) => r()));
+    await until(() => sessions.length === 1, 'the start to answer');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.pathname).toBe('/tracker');
   });
 });
