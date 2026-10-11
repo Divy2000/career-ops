@@ -154,7 +154,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
    */
   const processInboxOwns = async (p: Proposal): Promise<boolean> => {
     if (p.action !== 'evaluate' && p.action !== 'evaluateCompany') return false;
-    const list = await qc.fetchQuery({ queryKey: ['sessions'], queryFn: () => apiGet<SessionMeta[]>('/api/sessions'), staleTime: 0 });
+    // Its own request: the shared query would join a poll sent before the run started, or be cancelled by a start.
+    const list = await apiGet<SessionMeta[]>('/api/sessions');
     if (!list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
     return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
   };

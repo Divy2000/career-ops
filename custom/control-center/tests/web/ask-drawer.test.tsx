@@ -709,6 +709,26 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
     }
   });
 
+  it('given a sessions poll sent before Process inbox started is still in flight, the check does not reuse its answer', async () => {
+    let releasePoll: (() => void) | null = null;
+    const fetchMock = vi.mocked(fetch);
+    const passThrough = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url, init) => {
+      if (String(url) === '/api/sessions' && init?.method !== 'POST' && releasePoll === null) {
+        const stale = new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Promise<Response>((r) => (releasePoll = () => r(stale)));
+      }
+      return passThrough(url, init);
+    });
+    await remountDrawer();
+    expect(releasePoll).not.toBeNull();
+    const item = await propose('evaluateCompany', { company: 'Acme' });
+    await act(async () => releasePoll!());
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+  });
+
   it('given the Process inbox run has ended, an evaluateCompany runs', async () => {
     listed = [{ ...PIPELINE, status: 'done' }];
     await remountDrawer();
