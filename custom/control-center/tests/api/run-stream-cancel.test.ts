@@ -106,6 +106,26 @@ describe('the run event stream (R18-srv-core-L3-01)', () => {
     }
   }, 45_000);
 
+  it('ends the stream of a run whose folder is deleted while it streams, instead of polling for it forever', async () => {
+    const t = await makeTestApp();
+    const run = t.runner.start({ actionId: 'test.slowstop', label: 'slow stop', cost: 'free', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: ['-e', SLOW_STOP], cwd: PACKAGE_ROOT } });
+    try {
+      let deleted = false;
+      const events = await readRunStream(t, run.id, 5_000, (e) => {
+        if (!deleted && e.type === 'line' && (e.data as { line: string }).line === 'ready') {
+          deleted = true;
+          fs.rmSync(t.runner.store.dirOf(run.id), { recursive: true, force: true });
+        }
+      });
+      expect(deleted).toBe(true);
+      expect(events.at(-1)).toEqual({ type: 'run.done', data: { status: 'gone', exitCode: null, signal: null } });
+    } finally {
+      t.runner.cancel(run.id);
+      await wait(1_500);
+      await t.close();
+    }
+  }, 30_000);
+
   it('settles a cancelled run whose wrapper is gone without an exit record and ends its stream', async () => {
     const t = await makeTestApp();
     // Marked cancelled by a process that is gone, and its wrapper is gone too without an exit record.

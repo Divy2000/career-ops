@@ -147,7 +147,14 @@ function streamRun(runner: Runner, id: string, afterSeq: number, reply: FastifyR
       send('line', l, l.seq);
     }
     const seen = runner.store.read(id);
-    if (!seen || seen.status === 'running' || seen.status === 'queued') return;
+    // The route found the run, so a missing meta means its folder was deleted: nothing more will be written to tail.
+    if (!seen) {
+      send('run.done', { status: 'gone', exitCode: null, signal: null });
+      stop();
+      reply.raw.end();
+      return;
+    }
+    if (seen.status === 'running' || seen.status === 'queued') return;
     // Cancel marks a run cancelled before its command exits: keep tailing its shutdown output until it has really ended.
     if (seen.endedAt === null && settling(id)) return;
     // Settling it may have just recorded its end.
