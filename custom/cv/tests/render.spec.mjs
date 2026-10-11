@@ -353,7 +353,9 @@ test('given a render and its final generate-pdf stopped together while publishin
   const before = fs.readFileSync(html, 'utf8');
   const { child, exited, tmp } = startRender(root, html, ['--max-pages=1']);
   await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
-  const kids = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
+  // The input is written before the final generate-pdf.mjs is spawned, so its child can lag the publish step.
+  let kids = [];
+  await waitFor(() => (kids = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number)).length > 0, 'the final generate-pdf.mjs');
   assert.equal(kids.length, 1, 'the final generate-pdf.mjs runs');
   process.kill(kids[0], 'SIGTERM');
   child.kill('SIGTERM');
