@@ -206,18 +206,28 @@ describe('session manager: a new session cancelled or deleted while its first tu
 
 describe('session manager: a turn whose run record vanished (HUNT follow-up, manager poll)', () => {
   it('given a Batch evaluate turn whose run folder is removed before the tracker sees it end, when the tracker polls, then the turn ends in error saying why and its report number goes back to the pool', async () => {
-    // A slow poll, so the run ends and its folder goes (a runs prune, a manual delete) before the tracker reads it.
-    const app = await makeTestApp({}, { sessionPollMs: 1500 });
+    const app = await makeTestApp({}, { sessionPollMs: 100 });
     try {
       const reports = path.join(app.cfg.dataRoot, 'reports');
       const sentinels = () => fs.readdirSync(reports).filter((f) => f.endsWith('-RESERVED.md'));
       const before = sentinels();
+      // Until its folder goes (a runs prune, a manual delete), the run (the only one here) reads as not ended yet, so no
+      // tick can see it end first, whenever the poll fires.
+      const read = app.runner.store.read.bind(app.runner.store);
+      let removed = false;
+      vi.spyOn(app.runner.store, 'read').mockImplementation((runId) => {
+        const run = read(runId);
+        return run && !removed ? { ...run, endedAt: null } : run;
+      });
       const fan = await withScenario(scenarioFile(NO_REPORT), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r20-run-vanished'] })).json());
       const id = fan.sessions[0].id as string;
       const runId = fan.sessions[0].turns[0].runId as string;
       const deadline = Date.now() + 10_000;
-      while (app.runner.store.read(runId)?.endedAt == null && Date.now() < deadline) await wait(20);
+      while (read(runId)?.endedAt == null && Date.now() < deadline) await wait(20);
+      expect(read(runId)?.endedAt).toEqual(expect.any(String));
+      expect(app.sessions.read(id)).toMatchObject({ status: 'running' });
       fs.rmSync(app.runner.store.dirOf(runId), { recursive: true, force: true });
+      removed = true;
       const { meta } = await settleOn(app, id, 10_000);
       expect(meta.status).toBe('error');
       expect(String(meta.error)).toMatch(/run record/);
@@ -225,6 +235,7 @@ describe('session manager: a turn whose run record vanished (HUNT follow-up, man
       expect(meta.turns[0]!).toHaveProperty('endedAt', expect.any(String));
       expect(sentinels()).toEqual(before);
     } finally {
+      vi.restoreAllMocks();
       await app.close();
     }
   }, 30_000);
