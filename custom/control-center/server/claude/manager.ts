@@ -856,7 +856,8 @@ export class SessionManager {
    */
   private creditedHolds(meta: SessionMeta, num: number): boolean {
     if (meta.creditedReport?.num !== num) return false;
-    for (const file of snapshotReports(this.cfg.dataRoot)) if (reportNumberOf(file) === num) return true;
+    // A name that is entirely a date (a digest) is no report, as the allocator reads it (reserve-report-num.mjs).
+    for (const file of snapshotReports(this.cfg.dataRoot)) if (!/^\d{4}-\d{2}-\d{2}\.md$/.test(file) && reportNumberOf(file) === num) return true;
     return false;
   }
 

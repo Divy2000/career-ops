@@ -110,6 +110,24 @@ describe('a credited report that holds its number (R27-mgr-rev-01)', () => {
       await app.close();
     }
   });
+  it('given a waiting session whose credited report was deleted and a bare-date digest shares its number, when the user deletes it, then the number reads as lost', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      app.sessions.store.setReportNum(meta.id, 2026);
+      app.sessions.store.setCreditedReport(meta.id, { num: 2026, file: '2026-acme-2026-10-11.md' });
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'reports'), { recursive: true });
+      fs.writeFileSync(reportPath(app, '2026-10-17.md'), '# Digest\n');
+
+      expect(await app.sessions.delete(meta.id)).toBe(true);
+      expect(warn.mock.calls.flat().join('\n')).toMatch(/report number 2026 was already lost/);
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  });
 });
 
 describe('a release that checks ownership only before it runs (R27-mgr-rev-03)', () => {
