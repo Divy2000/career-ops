@@ -192,13 +192,14 @@ test('given an update moved claude to a version the contract has not approved, w
   assert.equal(claudeBin({ onPath: ['2.1.289'], approved: ['2.1.289'] }).status, 0);
 });
 
-test('given node writes a warning to stderr, when the sync picks its claude, then the path it prints is still the bare real path (R27-scripts-b-L2-01 review)', () => {
+test('given node writes a warning to stderr, when the sync picks its claude, then the path it prints is still the bare real path and the warning is dropped (R27-scripts-b-L2-01 review)', () => {
   const r = claudeBin({ onPath: ['2.1.289'] });
   const noise = path.join(r.dir, 'noise.mjs');
   writeFileSync(noise, "process.stderr.write('(node) Warning: noise on stderr\\n');\n");
   const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [r.dirs[0], path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home'), NODE_OPTIONS: `--import=${noise}` }, encoding: 'utf8' });
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.equal(res.stdout, real(path.join(r.dirs[0], 'claude')));
+  assert.doesNotMatch(res.stderr, /noise on stderr/, 'the gate\'s node warnings are dropped, not passed on to the sync log');
 });
 
 test('given the live checkout has no confinement gate, when the sync picks its claude, then it refuses with the reason (R27-scripts-b-L2-01)', () => {
