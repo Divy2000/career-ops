@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
 import { findSnapshot, locate, matches, relativeToRoot, resolveReal, snapshotKey as turnSnapshotKey } from '../server/claude/guard-policy.mjs';
 import { processStartTime, type ProcessStart } from './instance-lock.js';
+import { replaceFile } from '../server/lib/atomic-write.js';
 
 export interface ChangeRecord {
   path: string;
@@ -511,11 +512,9 @@ export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
     if (!meta || meta.status !== 'queued') continue;
     if ((meta.params as { sessionId?: unknown } | undefined)?.sessionId !== sessionId) continue;
     if (!fs.existsSync(path.join(dir, 'request.json'))) continue;
-    const tmp = path.join(dir, 'meta.json.tmp');
     const lost = { ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'the server was down and this queued run was reverted before it started' };
     try {
-      fs.writeFileSync(tmp, JSON.stringify(lost, null, 2));
-      fs.renameSync(tmp, path.join(dir, 'meta.json'));
+      replaceFile(path.join(dir, 'meta.json'), JSON.stringify(lost, null, 2));
     } catch {
       /* Best effort: a run that cannot be marked still does not block the revert (runEnded already said it ended). */
     }

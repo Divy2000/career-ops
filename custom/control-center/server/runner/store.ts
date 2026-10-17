@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { replaceFile } from '../lib/atomic-write.js';
 
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'lost';
 export type Cost = 'free' | 'network' | 'tokens';
@@ -87,20 +88,6 @@ export function unended(meta: RunMeta): boolean {
 
 const RUN_ID = /^[\w-]+$/;
 
-/**
- * Replaces `p` through a temp file named for this process plus a random suffix: two server processes (blue/green)
- * writing one run at once must not share a temp file, or one rename finds it gone. A failed write removes its temp.
- */
-function replaceFile(p: string, text: string): void {
-  const tmp = `${p}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
-  try {
-    fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, p);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
-}
 /** The file in a run's folder that asks its wrapper to stop (wrapper.mjs reads the same name). */
 export const CANCEL_FILE = 'cancel';
 
