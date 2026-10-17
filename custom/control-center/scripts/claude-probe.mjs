@@ -16,7 +16,9 @@ if (token.status !== 0) {
   console.error('Keychain item career-ops-claude-token not found');
   process.exit(1);
 }
-const env = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token.stdout.trim(), ANTHROPIC_API_KEY: '' };
+// Same as claude-probe-reads.mjs: no nested-session or provider variables reach the CLI, and it never auto-updates past the approved version.
+const BASE_ENV = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k))), DISABLE_AUTOUPDATER: '1' };
+const env = { ...BASE_ENV, CLAUDE_CODE_OAUTH_TOKEN: token.stdout.trim(), ANTHROPIC_API_KEY: '' };
 const redact = (s) => String(s).split(env.CLAUDE_CODE_OAUTH_TOKEN).join('<redacted>');
 
 const hookLog = path.join(dir, 'hook-log.ndjson');
@@ -89,7 +91,7 @@ const bResult = b.events.find((e) => e.type === 'result');
 
 const summary = {
   probedAt: new Date().toISOString(),
-  claudeVersion: spawnSync(claudeBin, ['--version'], { encoding: 'utf8' }).stdout.trim(),
+  claudeVersion: spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: BASE_ENV }).stdout.trim(),
   probeA: {
     exitStatus: a.status,
     eventTypes: types(a.events),
