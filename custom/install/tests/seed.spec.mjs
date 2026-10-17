@@ -710,6 +710,28 @@ syncBuiltinESMExports();
   assert.deepEqual(runs.map((r) => r.stdout.trim()).sort(), ['added', 'present', 'present', 'present']);
 });
 
+test('given its lock is broken and retaken by another installer while local-paths runs, when it finishes, then it leaves that installer\'s lock in place (R28-scr-rev-01 review 4)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const lock = `${f}.lock`;
+  const preload = put(path.join(d, 'retaken.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRead = fs.readFileSync;
+fs.readFileSync = (p, ...rest) => {
+  if (typeof p === 'number') {
+    fs.rmSync(${JSON.stringify(lock)}, { recursive: true, force: true });
+    fs.mkdirSync(${JSON.stringify(lock)});
+  }
+  return realRead(p, ...rest);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.existsSync(lock), true, 'the other installer still holds its lock');
+});
+
 test('given local-paths.txt turns into a dangling symlink after local-paths resolves it, when it updates the file, then it fails naming the path instead of looping (R28-scr-rev-01 review 3)', () => {
   const d = tmp();
   const f = path.join(d, 'config', 'local-paths.txt');

@@ -62,12 +62,20 @@ const LOCK_WAIT_MS = 10_000;
 // The break guard lives for a stat and an rm, so one older than this was left by a run killed while breaking.
 const GUARD_STALE_MS = 5_000;
 
-// Holds a mkdir lock while fn runs. A lock older than LOCK_STALE_MS was left by a killed run and is broken.
+// Holds a mkdir lock, marked with an empty file named by this run's token, while fn runs. A lock older than
+// LOCK_STALE_MS was left by a killed run and is broken.
 function withLock(lock, fn) {
   const deadline = Date.now() + LOCK_WAIT_MS;
+  const token = randomBytes(8).toString('hex');
   for (;;) {
     try {
       fs.mkdirSync(lock);
+      try {
+        fs.closeSync(fs.openSync(path.join(lock, token), 'wx'));
+      } catch (err) {
+        fs.rmSync(lock, { recursive: true, force: true });
+        throw err;
+      }
       break;
     } catch (err) {
       // A folder that takes no new entries cannot hold anyone's lock, and the file in it may still be writable.
@@ -88,7 +96,8 @@ function withLock(lock, fn) {
   try {
     return fn();
   } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
+    // A run held up past LOCK_STALE_MS may have had its lock broken and retaken; that lock is not this run's to remove.
+    if (exists(path.join(lock, token))) fs.rmSync(lock, { recursive: true, force: true });
   }
 }
 
