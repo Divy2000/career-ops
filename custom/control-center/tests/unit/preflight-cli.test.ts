@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runPreflightCli } from '../../supervisor/preflight-cli.js';
+import { chooseClaudeBin } from '../../supervisor/preflight.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -53,6 +54,7 @@ describe('runPreflightCli', () => {
       const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: value, PATH: dir, NODE_ENV: 'test' }, nodeVersion: 'v26.0.0', ...host() });
       expect(r.code, JSON.stringify(value)).toBe(0);
       expect(r.output, JSON.stringify(value)).toContain('preflight ok');
+      expect(chooseClaudeBin({ CC_CLAUDE_BIN: value, PATH: dir }).claudeBin, JSON.stringify(value)).toBe(path.join(dir, 'claude'));
     }
   });
 
