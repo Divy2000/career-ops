@@ -361,7 +361,8 @@ export function installTutorial(opts) {
   if (opts.strictDims === true) for (const p of manifest.parts) checkPosters(source, p);
   if (manifest.guide !== undefined) {
     for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
-      const same = copies.find((o) => o.to === c.to);
+      // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
+      const same = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase());
       if (same && same.from !== c.from) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
       if (!same) copies.push(c);
     }

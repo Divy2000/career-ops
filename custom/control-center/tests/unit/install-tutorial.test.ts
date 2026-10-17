@@ -250,6 +250,15 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.existsSync(dest('guided'))).toBe(false);
   });
 
+  it('refuses a guide poster whose name differs from a tutorial file only in case', () => {
+    recording();
+    write('poster.jpg', 'TUTORIAL-POSTER');
+    write('guide/Poster.jpg', 'GUIDE-POSTER');
+    write('guide/guide.json', JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }));
+    expect(() => installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' })).toThrow(/"Poster\.jpg" is used by both the poster and the guide poster file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],
