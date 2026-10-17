@@ -71,6 +71,8 @@ function refuse(message, code = 1) {
 
 /** Signals a caller sends to stop the call; rank-pipeline.mjs's execFileSync timeout SIGTERMs only its direct child, this shim. */
 const FORWARDED = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
+/** Signals Node does not die of when raised on itself. */
+const NODE_SURVIVES = new Set(['SIGPIPE', 'SIGUSR1']);
 
 /**
  * Runs the real binary and ends with its exit code or signal. A stop signal sent to the shim is passed on, so a caller
@@ -88,8 +90,8 @@ function runReal(real, args, env) {
     if (signal) {
       // Die of the same signal, so the caller sees what it would have without the shim.
       for (const sig of FORWARDED) process.off(sig, forward);
-      process.kill(process.pid, signal);
-      // Node ignores SIGPIPE and turns SIGUSR1 into the inspector, so the kill can leave the shim alive to exit 0.
+      // Node ignores SIGPIPE and turns SIGUSR1 into the inspector, so those (or any kill the shim survives) exit 128+n.
+      if (!NODE_SURVIVES.has(signal)) process.kill(process.pid, signal);
       setImmediate(() => process.exit(128 + (os.constants.signals[signal] ?? 0)));
       return;
     }

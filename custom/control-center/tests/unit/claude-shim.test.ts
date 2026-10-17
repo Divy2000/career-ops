@@ -231,8 +231,12 @@ describe('claude shim: running the real binary', () => {
     const bin = path.join(dir, 'claude-real');
     // A shell, not Node: Node ignores SIGPIPE and handles SIGUSR1, so only a plain process dies of them as claude would.
     fs.writeFileSync(bin, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo ${JSON.stringify(`${APPROVED} (Claude Code)`)}; exit 0; fi\nkill -${sig.slice(3)} $$\nsleep 5\n`, { mode: 0o755 });
-    const r = shim(['-p', 'rank these'], { CC_CLAUDE_BIN: bin });
-    expect({ status: r.status, signal: r.signal }).not.toEqual({ status: 0, signal: null });
+    // Several runs: re-raised on the shim, SIGUSR1 opens a debugger port only when the inspector starts before the exit.
+    for (let run = 0; run < 5; run++) {
+      const r = shim(['-p', 'rank these'], { CC_CLAUDE_BIN: bin });
+      expect({ status: r.status, signal: r.signal }).not.toEqual({ status: 0, signal: null });
+      expect(r.stderr).not.toMatch(/Debugger listening/);
+    }
   });
 
   it('--version answers with the real version, autoupdater off', () => {
