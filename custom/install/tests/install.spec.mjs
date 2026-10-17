@@ -2411,6 +2411,27 @@ test('a token that was not stored (the Keychain prompt was cancelled) is a pendi
   assert.match(r.out, /\d+\. Store the Claude token yourself/);
 });
 
+test('a token stored empty (Enter at both hidden prompts) is a pending action and no daily job, not "stored" (R30-scripts-b-L2-02)', () => {
+  const { w, D } = fresh();
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-start', '--no-h1b-index', '--onboard', 'none'], { tty: 'y\ny\ny\ny\n', env: { FAKE_SECURITY_TOKEN: '' } });
+  assert.equal(r.status, 3, r.out);
+  assert.doesNotMatch(r.out, /Keychain item stored\./);
+  assert.match(r.out, /\d+\. Store the Claude token yourself/);
+  assert.equal(w.calls('launchd-install').length, 0, 'the daily job is not installed on an empty token');
+  const reads = w.calls('security').filter((l) => l.startsWith('security find-generic-password') && l.includes(' -w'));
+  assert.equal(reads.length, 1, 'only the item this run created is read, once');
+});
+
+test('a token stored by this run is read back once and counts as stored (R30-scripts-b-L2-02)', () => {
+  const { w, D } = fresh();
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-start', '--no-h1b-index', '--onboard', 'none'], { tty: 'y\ny\ny\ny\n' });
+  assert.match(r.out, /Keychain item stored\./);
+  assert.ok(!r.out.includes(SECRET));
+  assert.ok(w.calls('launchd-install').length > 0, r.out);
+});
+
 test('a headless onboarding run that fails says so and still prints how to finish interactively', () => {
   const { w, D } = fresh({ keychain: true });
   const resume = md(w, 'resume.md', '# Me\n');

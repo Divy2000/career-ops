@@ -1100,10 +1100,14 @@ else
         say "  Now paste the token at the hidden Keychain prompt (macOS asks twice)."
         security add-generic-password -U -a "${USER:-$(id -un)}" -s "$KEYCHAIN_SERVICE" -w <&3 >&4 2>&4 || true
         say "  Clear your terminal scrollback now (Cmd+K) so the token is not left on screen."
+        # Only the item this run just created is read back, so an empty paste counts as missing, as every consumer
+        # reads it. An item that existed before this run is never read.
+        keychain_read_token
+        KEYCHAIN_TOKEN=""
       else
         warn "  claude setup-token did not finish."
+        keychain_check
       fi
-      keychain_check
       if [ "$KEYCHAIN_RC" = 0 ]; then
         KEYCHAIN_OK=1
         say "  Keychain item stored."
