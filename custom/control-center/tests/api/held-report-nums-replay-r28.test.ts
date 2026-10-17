@@ -32,7 +32,7 @@ async function turnOutsideTheServer(app: TestApp, between: (guard: string, runId
   const log = path.join(guard, 'held-report-nums.log');
   return { meta: app.sessions.read(meta.id)!, held: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
 }
-const otherHolds61 = (app: TestApp) => fs.writeFileSync(path.join(app.cfg.dataRoot, 'reports', '061-RESERVED.md'), JSON.stringify({ pid: process.pid, token: 'another-evaluation', created_at: new Date().toISOString() }));
+const otherHolds61 = (app: TestApp, createdAt = new Date().toISOString()) => fs.writeFileSync(path.join(app.cfg.dataRoot, 'reports', '061-RESERVED.md'), JSON.stringify({ pid: process.pid, token: 'another-evaluation', created_at: createdAt }));
 
 describe('a turn read at a restart (R28-cl2-rev-01)', () => {
   it('given a reservation the previous server already handled and another evaluation now holding that number, when the turn is replayed, then no hold on it is recorded', async () => {
@@ -43,7 +43,8 @@ describe('a turn read at a restart (R28-cl2-rev-01)', () => {
         const turnDir = path.join(guard, 'turns', '1');
         fs.mkdirSync(turnDir, { recursive: true });
         fs.writeFileSync(path.join(turnDir, 'progress.json'), JSON.stringify({ rawSeq: raw.lines.at(-1)!.seq, rawOffset: raw.offset }));
-        otherHolds61(app);
+        // Written before the output line, so only the replay itself keeps the hold from being recorded.
+        otherHolds61(app, '2026-01-01T00:00:00.000Z');
       });
       expect(held).not.toMatch(/\+61=/);
     } finally {
@@ -57,6 +58,23 @@ describe('a turn read at a restart (R28-cl2-rev-01)', () => {
       const { held } = await turnOutsideTheServer(app, () => otherHolds61(app));
       expect(held).not.toMatch(/\+61=/);
     } finally {
+      await app.close();
+    }
+  });
+
+  it('given a session whose reserved number\'s sentinel cannot be read, when its turn starts, then the turn still runs', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const file = path.join(tempDir('cc-r28-start-'), 'scenario.json');
+    fs.writeFileSync(file, JSON.stringify({ events: [{ type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] }, { type: 'result', subtype: 'success', result: 'Done.', total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false }] }));
+    process.env.FAKE_CLAUDE_SCENARIO = file;
+    try {
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'reports', '069-RESERVED.md'));
+      const { id } = await app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 69 });
+      await until(() => !['queued', 'running'].includes(app.sessions.read(id)!.status));
+      expect(app.sessions.read(id)!.error ?? '').not.toMatch(/EISDIR/);
+      expect(app.sessions.read(id)!.turns[0]!.runId).toBeTruthy();
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCENARIO;
       await app.close();
     }
   });

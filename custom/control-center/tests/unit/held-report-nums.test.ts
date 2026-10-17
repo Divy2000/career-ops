@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bashCommandsIn } from '../../server/claude/manager.js';
+import { bashCommandsIn, printedReservation } from '../../server/claude/manager.js';
 
 // R28-cl2-rev-01 review: the tool.use event keeps only a command's first 200 characters, so the manager reads which
 // reserve-report-num.mjs runs a session made from the whole command in the stream line.
@@ -15,5 +15,17 @@ describe('bashCommandsIn', () => {
     for (const l of ['not json', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'node reserve-report-num.mjs' } }] } }), line([{ type: 'tool_use', id: 'y', name: 'Write', input: { file_path: '/x' } }]), line([{ type: 'tool_use', id: 'z', name: 'Bash', input: {} }])]) {
       expect(bashCommandsIn(l), l).toEqual(new Map());
     }
+  });
+});
+
+// R28-cl2-rev-01 review: the CLI's Bash result puts stderr after stdout, so the reservation is not always the last line.
+describe('printedReservation', () => {
+  it('given a reserve run whose output ends in a stderr line, when read, then the printed numbers still come back', () => {
+    expect(printedReservation('exit 0\n061\n(node:123) ExperimentalWarning: something')).toEqual([61]);
+    expect(printedReservation('042-044\nnote: lock waited 20ms')).toEqual([42, 43, 44]);
+  });
+
+  it('given output with no reservation line, when read, then nothing comes back', () => {
+    for (const out of ['', 'exit 1\nreserve-report-num: lock busy', '061 reserved']) expect(printedReservation(out), out).toEqual([]);
   });
 });

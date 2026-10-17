@@ -244,8 +244,12 @@ function reservesReportNums(command: string): boolean {
 }
 
 /** The numbers a reserve run printed: its last output line, `042` or `042-049`. */
-function printedReservation(output: string): number[] {
-  const m = output.trim().split('\n').at(-1)?.trim().match(/^(\d+)(?:-(\d+))?$/);
+export function printedReservation(output: string): number[] {
+  // The CLI puts a run's stderr after its stdout: a warning may follow the line the allocator printed.
+  const m = output
+    .split('\n')
+    .map((l) => l.trim().match(/^(\d+)(?:-(\d+))?$/))
+    .findLast((x) => x !== null);
   if (!m) return [];
   const start = Number(m[1]);
   const end = m[2] === undefined ? start : Number(m[2]);
@@ -1214,7 +1218,12 @@ export class SessionManager {
       if (n > 1) meta = await this.reassertReservation(meta);
       // Only a sentinel written no later than the session got the number is its reservation: a first turn that waited past
       // the GC may find another evaluation's sentinel under it.
-      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot, this.ownedSince(meta, meta.reportNum));
+      // A hold that cannot be recorded only means the hook refuses that release: the turn goes on.
+      try {
+        if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot, this.ownedSince(meta, meta.reportNum));
+      } catch (err) {
+        console.warn(`[sessions] session ${meta.id}: could not record the report number it holds: ${(err as Error).message}`);
+      }
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
