@@ -58,6 +58,10 @@ const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const HELD_LOCK_FILE = 'held-report-nums.lock';
 // A lock whose content never got written (its hook died between creating and writing it) is replaced this old.
 const HELD_LOCK_UNREADABLE_MS = 10_000;
+// A hook holds the lock for milliseconds: one this old is a dead hook's, even if its pid now names another process.
+const HELD_LOCK_MAX_MS = 30_000;
+// Held while one waiter replaces a dead hook's lock, so two never replace it at once; stale as an unreadable lock is.
+const HELD_TAKEOVER_FILE = 'held-report-nums.lock.takeover';
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
 const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
 const RELEASE_MAX = 50;
@@ -122,7 +126,9 @@ function lockHolderGone(lock, text) {
   } catch {
     /* written only partly */
   }
-  if (!Number.isInteger(pid) || pid <= 0) return Date.now() - fs.statSync(lock).mtimeMs >= HELD_LOCK_UNREADABLE_MS;
+  const age = Date.now() - fs.statSync(lock).mtimeMs;
+  if (!Number.isInteger(pid) || pid <= 0) return age >= HELD_LOCK_UNREADABLE_MS;
+  if (age >= HELD_LOCK_MAX_MS) return true;
   try {
     process.kill(pid, 0);
     return false;
@@ -142,21 +148,24 @@ function readIfPresent(file) {
 }
 
 /**
- * Removes a dead holder's lock `seen`. It is moved aside first and checked there, since a peer may have replaced it
- * since it was read; a live lock moved by mistake goes back unless a new one already took its place.
+ * Removes a dead holder's lock `seen`, holding the takeover marker so no other waiter replaces it meanwhile: while the
+ * marker is held the lock changes only by its holder, and a dead holder never removes it.
  */
-function takeOverLock(lock, seen) {
-  const aside = `${lock}.${process.pid}.${crypto.randomUUID()}`;
-  fs.renameSync(lock, aside);
+function takeOverLock(dir, lock, seen) {
+  const marker = path.join(dir, HELD_TAKEOVER_FILE);
+  const mine = JSON.stringify({ pid: process.pid, nonce: crypto.randomUUID() });
   try {
-    if (fs.readFileSync(aside, 'utf8') === seen) return;
-    try {
-      fs.linkSync(aside, lock);
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    }
+    fs.writeFileSync(marker, mine, { flag: 'wx' });
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    const other = readIfPresent(marker);
+    if (other !== null && Date.now() - fs.statSync(marker).mtimeMs >= HELD_LOCK_UNREADABLE_MS && readIfPresent(marker) === other) fs.rmSync(marker, { force: true });
+    return;
+  }
+  try {
+    if (readIfPresent(lock) === seen) fs.rmSync(lock, { force: true });
   } finally {
-    fs.rmSync(aside, { force: true });
+    if (readIfPresent(marker) === mine) fs.rmSync(marker, { force: true });
   }
 }
 
@@ -173,7 +182,7 @@ async function withHeldLock(dir, fn) {
     }
     try {
       const seen = fs.readFileSync(lock, 'utf8');
-      if (lockHolderGone(lock, seen)) takeOverLock(lock, seen);
+      if (lockHolderGone(lock, seen)) takeOverLock(dir, lock, seen);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }

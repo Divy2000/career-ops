@@ -511,6 +511,18 @@ describe('guard hook', () => {
     expect(release('toolu_e')).toBe(2);
   }, 20_000);
 
+  it('given a hold lock left by a hook that died, its pid since reused by a live process, when a release runs, then the old lock is replaced (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-reused-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(74, '2026-10-17T10:01:14.000Z');
+    recordHeldReportNums(dir, [74], realRoot);
+    const lock = path.join(dir, 'held-report-nums.lock');
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, nonce: 'dead-hook' }));
+    const old = new Date(Date.now() - 120_000);
+    fs.utimesSync(lock, old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 074' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+  }, 20_000);
+
   it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-gone-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
