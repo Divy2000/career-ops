@@ -800,6 +800,40 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.dataset.proposalState).toBe('done');
   });
 
+  it('holds Process inbox back while the fan-out starts, and refreshes the sessions list before letting go (R27-shared-comp-L1-01)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    const calls: string[] = [];
+    let answerFanout!: () => void;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      if (String(url) === '/api/sessions/fanout') await new Promise<void>((r) => (answerFanout = r));
+      return answer(url as string, init);
+    });
+    try {
+      const item = await runProposal('Acme');
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => answerFanout());
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(item.dataset.proposalState).toBe('done');
+      expect(seen.at(-1)).toBe(false);
+      expect(calls.slice(calls.indexOf('POST /api/sessions/fanout'))).toContain('GET /api/sessions');
+    } finally {
+      // A failed run must not leave the shared mark set for the next test.
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
 });
 
 describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-comp-L3-01)', () => {

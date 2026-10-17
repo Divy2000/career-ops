@@ -18,6 +18,7 @@ import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
+import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -278,7 +279,14 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'evaluateCompany': {
-          const outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
+          // Counted like a Batch fan-out, so Process inbox waits for these sessions instead of evaluating the rows again.
+          markBatchStarting(true);
+          let outcome: ReturnType<typeof fanoutOutcome>;
+          try {
+            outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
+          } finally {
+            await endBatchStarting(qc);
+          }
           // A posting that did not start stays pending in the Inbox; the note names it, and the page stays to say why.
           if (outcome.failedUrls.length > 0) {
             update(p.id, { state: 'failed', note: `${outcome.text}. Not started: ${outcome.failedUrls.join(', ')}${companyLeftOut ? ` ${companyLeftOut}` : ''}` });
