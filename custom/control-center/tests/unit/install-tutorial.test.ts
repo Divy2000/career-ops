@@ -366,6 +366,7 @@ describe('installTutorial with a quick guide', () => {
     ['a final and a medial sigma', '\u03c3.jpg', '\u03c2.jpg'],
     ['a long s', 's.jpg', '\u017f.jpg'],
     ['a Greek letter that case mapping decomposes', '\u0390.jpg', '\u03aa\u0301.jpg'],
+    ['a capital and a small sharp s', '\u00df.jpg', '\u1e9e.jpg'],
   ])('refuses two different files whose names differ only in %s', (_label, nfc, nfd) => {
     folder({ manifest: { ...manifest, poster: nfc }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: nfd }] }) });
     write(nfc, 'TUTORIAL-POSTER');

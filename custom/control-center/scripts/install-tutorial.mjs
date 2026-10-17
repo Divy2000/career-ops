@@ -299,10 +299,10 @@ function partCopies(manifest) {
 
 /**
  * How a case- and normalization-insensitive disk (APFS) compares names: "Poster.jpg" is "poster.jpg", NFC "é" is NFD "é".
- * Upper-casing first folds what lower-casing alone keeps apart, such as "ς" and "σ", "ſ" and "s" or "ß" and "ss"; case
- * mapping can decompose a letter ("ΐ"), so the result is normalized again.
+ * Upper-casing folds what lower-casing alone keeps apart, such as "ς" and "σ", "ſ" and "s" or "ß" and "ss"; lower-casing
+ * first brings "ẞ" to "ß" so it folds too. Case mapping can decompose a letter ("ΐ"), so the result is normalized again.
  */
-const diskKey = (name) => name.normalize('NFC').toUpperCase().toLowerCase().normalize('NFC');
+const diskKey = (name) => name.normalize('NFC').toLowerCase().toUpperCase().toLowerCase().normalize('NFC');
 
 /** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
 function sameFile(a, b) {
