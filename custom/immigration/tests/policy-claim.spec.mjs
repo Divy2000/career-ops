@@ -262,7 +262,7 @@ test('a start claim in the earlier format written in another zone holds while it
 
 test('a start claim in the earlier format holds when ps cannot run, however old (R28-tests-custom-L1-01 review 2)', () => {
   const r = root();
-  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
   const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok));`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, PATH: tempDir('no-ps-') }, encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);

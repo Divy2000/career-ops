@@ -9,7 +9,8 @@
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
 // (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
 // .run-daily.pid names or no longer bash running run-daily.sh, or a start whose process has exited (a start can wait on a Keychain prompt
-// for as long as it is left open, so no time limit applies while that process runs). Every read-decide-write of the
+// for as long as it is left open, so no time limit applies while that process runs; an earlier-format claim, whose
+// zone-ambiguous start can match a reused pid by chance, holds for at most a day). Every read-decide-write of the
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
