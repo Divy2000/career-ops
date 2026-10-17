@@ -146,29 +146,35 @@ function cvWrite(data, resume, replace) {
 }
 
 // Moves a fully written temp file to a name that must not exist yet: a hard link fails with EEXIST rather than
-// replace a file created meanwhile. A volume without hard links gets a rename after a last check instead.
+// replace a file created meanwhile. A volume without hard links gets an exclusive copy instead, which fails the same
+// way, and so does a dangling symlink in the name's place.
 function linkNew(tmp, file) {
   try {
     fs.linkSync(tmp, file);
   } catch (err) {
     if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP'].includes(err.code)) throw err;
-    // lstat, not exists: a dangling symlink in cv.md's place blocks the link, so it blocks the rename too.
-    let taken = true;
-    try {
-      fs.lstatSync(file);
-    } catch (e) {
-      if (e.code !== 'ENOENT') throw e;
-      taken = false;
-    }
-    if (taken) throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
-    fs.renameSync(tmp, file);
-    return;
+    copyNew(tmp, file);
   }
-  // cv.md is in place: a temp name that cannot be removed must not turn the write into a reported failure.
+  // The file is in place: a temp name that cannot be removed must not turn the write into a reported failure.
   try {
     fs.rmSync(tmp, { force: true });
   } catch {
-    /* a leftover temp link, not a failed write */
+    /* a leftover temp file, not a failed write */
+  }
+}
+
+function copyNew(tmp, file) {
+  try {
+    fs.copyFileSync(tmp, file, fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    if (err.code === 'EEXIST') throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
+    // The exclusive create made it ours, so a copy that failed part way leaves no partial file behind.
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      /* the copy error is the one to report */
+    }
+    throw err;
   }
 }
 

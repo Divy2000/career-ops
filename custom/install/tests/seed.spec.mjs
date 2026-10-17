@@ -457,6 +457,33 @@ syncBuiltinESMExports();
   assert.doesNotMatch(res.stderr, /EBUSY/);
 });
 
+test('given the volume refuses hard links and cv.md appears just before the temp file is published, when cv-write seeds it, then the other writer\'s cv.md is kept (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const preload = put(path.join(d, 'late-race.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realLink = fs.linkSync, realRename = fs.renameSync, realCopy = fs.copyFileSync;
+fs.linkSync = (...args) => {
+  if (!String(args[0]).includes('.tmp-')) return realLink(...args);
+  const err = new Error('EPERM: operation not permitted, link'); err.code = 'EPERM'; throw err;
+};
+// Whatever moves the temp file to cv.md, another writer gets there first, after every check was made.
+const racing = (real) => (...args) => {
+  if (String(args[0]).includes('.tmp-') && String(args[1]).endsWith('cv.md')) fs.writeFileSync(args[1], 'THEIRS\\n');
+  return real(...args);
+};
+fs.renameSync = racing(realRename);
+fs.copyFileSync = racing(realCopy);
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /appeared while it was being written/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
+  assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
+});
+
 test('given the replace fails and the backup it made cannot be removed, when cv-write --replace runs, then it reports the write failure, not the cleanup (R27 merge review)', () => {
   const d = tmp();
   const data = path.join(d, 'data');
