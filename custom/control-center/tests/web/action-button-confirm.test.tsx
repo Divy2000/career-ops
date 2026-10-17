@@ -29,6 +29,14 @@ const press = async (el: HTMLElement) => {
   await act(async () => el.click());
   await settle();
 };
+// A browser moves focus off a focused button that becomes disabled, with no focusin anywhere; jsdom keeps it there and
+// ignores blur() on a disabled button, so the button is blurred while briefly re-enabled behind React's back.
+const dropFocusToPage = (button: HTMLButtonElement) => {
+  button.disabled = false;
+  button.blur();
+  button.disabled = true;
+  expect(document.activeElement).toBe(document.body);
+};
 const inDialog = (name: string) => [...dialog()!.querySelectorAll('button')].find((b) => b.textContent?.trim() === name)!;
 
 async function render(confirm: string | null) {
@@ -93,12 +101,7 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     const { releases, button } = await renderPending();
     button.focus();
     await press(button);
-    // A browser moves focus off a focused button that becomes disabled; jsdom does not (and ignores blur() on one), so
-    // the test drops focus to the page through an element that goes away.
-    const gone = document.createElement('input');
-    document.body.append(gone);
-    gone.focus();
-    gone.remove();
+    dropFocusToPage(button);
     expect(document.activeElement).toBe(document.body);
     await act(async () => releases[0]!(true));
     await settle();
@@ -109,10 +112,7 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     const { onRun, releases, button } = await renderPending();
     button.focus();
     await press(button);
-    const gone = document.createElement('input');
-    document.body.append(gone);
-    gone.focus();
-    gone.remove();
+    dropFocusToPage(button);
     // The run's answer gave the caller a run id it now watches: the button stays off until that run ends.
     await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: true }))));
     await act(async () => releases[0]!(true));
@@ -122,6 +122,106 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: false }))));
     await settle();
     expect(document.activeElement).toBe(button);
+  });
+
+  it('given the user clicked a non-focusable part of the page during the run, then the settled run does not pull focus back (R27-comp-rev-01)', async () => {
+    const { releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    dropFocusToPage(button);
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given the user pressed the disabled button\'s own label during the run, then focus is still back on it once the run settles (R27-comp-rev-01)', async () => {
+    const { releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    dropFocusToPage(button);
+    await act(async () => button.querySelector('span')!.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('given the user focused something during the run that is gone by the time it settles, then the settled run does not pull focus back (R27-comp-rev-01)', async () => {
+    const { releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    dropFocusToPage(button);
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given the button unmounts before its run settles, then the run leaves no listener on the page (R27-comp-rev-01)', async () => {
+    const added = vi.spyOn(document, 'addEventListener');
+    const removed = vi.spyOn(document, 'removeEventListener');
+    try {
+      const { releases, button } = await renderPending();
+      button.focus();
+      await press(button);
+      await act(async () => root.render(createElement(ConfirmProvider, null)));
+      await act(async () => releases[0]!(true));
+      await settle();
+      const watched = (spy: typeof added) => spy.mock.calls.filter(([type]) => type === 'pointerdown' || type === 'focusin').map(([type, fn]) => [type, fn]);
+      expect(watched(added)).toHaveLength(2);
+      expect(watched(removed)).toEqual(expect.arrayContaining(watched(added)));
+    } finally {
+      added.mockRestore();
+      removed.mockRestore();
+    }
+  });
+
+  async function settleWhileCallerKeepsItOff() {
+    const { onRun, releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    dropFocusToPage(button);
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: true }))));
+    await act(async () => releases[0]!(true));
+    await settle();
+    const turnOn = async () => {
+      await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: false }))));
+      await settle();
+    };
+    return { button, turnOn };
+  }
+
+  it('given the user clicked a non-focusable part of the page after the run settled while the caller kept the button off, then turning it on does not pull focus back (R27-comp-rev-01)', async () => {
+    const { turnOn } = await settleWhileCallerKeepsItOff();
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    await turnOn();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given the user focused something after the run settled while the caller kept the button off, then turning it on does not pull focus back even once that element is gone (R27-comp-rev-01)', async () => {
+    const { turnOn } = await settleWhileCallerKeepsItOff();
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    await turnOn();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given focus goes back to the button, then the page does not scroll to it (R27-comp-rev-01)', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      const { button, turnOn } = await settleWhileCallerKeepsItOff();
+      focus.mockClear();
+      await turnOn();
+      expect(document.activeElement).toBe(button);
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      focus.mockRestore();
+    }
   });
 
   it('given the button did not have focus when its run started (a mouse click in Safari), then the settled run does not focus it', async () => {

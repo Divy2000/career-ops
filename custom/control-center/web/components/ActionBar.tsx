@@ -35,15 +35,45 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
   const [running, setRunning] = useState(false);
   // A browser drops focus to the page from a focused button that becomes disabled: once the run ends and the button is
   // enabled again, focus goes back to it if it had focus at the click, unless the user has put it somewhere else meanwhile.
-  // A caller can keep it off past the run (the run it started is still going), so this waits for the button to be on.
+  // A caller can keep it off past the run (the run it started is still going), so this waits for the button to be on,
+  // but any click or focus elsewhere on the page from the run's start on means the user has moved on, even if focus
+  // ends on the page again.
   const button = useRef<HTMLButtonElement>(null);
   const ran = useRef(false);
+  const mounted = useRef(true);
+  const stopWatching = useRef<(() => void) | null>(null);
+  const forget = () => {
+    ran.current = false;
+    stopWatching.current?.();
+    stopWatching.current = null;
+  };
+  const remember = () => {
+    forget();
+    if (!mounted.current) return;
+    ran.current = true;
+    const movedOn = (event: Event) => {
+      if (!(event.target instanceof Node && button.current?.contains(event.target))) forget();
+    };
+    document.addEventListener('pointerdown', movedOn, true);
+    document.addEventListener('focusin', movedOn, true);
+    stopWatching.current = () => {
+      document.removeEventListener('pointerdown', movedOn, true);
+      document.removeEventListener('focusin', movedOn, true);
+    };
+  };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      forget();
+    };
+  }, []);
   const off = Boolean(disabled) || running;
   useEffect(() => {
     if (off || !ran.current) return;
-    ran.current = false;
+    forget();
     const active = document.activeElement;
-    if (active === null || active === document.body) button.current?.focus();
+    if (active === null || active === document.body) button.current?.focus({ preventScroll: true });
   }, [off]);
   if (!meta) return null;
   return (
@@ -62,13 +92,14 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
           try {
             if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
             started = true;
+            if (hadFocus) remember();
             setRunning(true);
             await withinRunLockLimit(onRun(params ?? {}, { confirmed: Boolean(meta.confirm) }));
           } catch (err) {
             console.error(`${meta.id} failed:`, err);
           } finally {
             asking.current = false;
-            ran.current = started && hadFocus;
+            if (!started || !hadFocus) forget();
             setRunning(false);
           }
         })();
