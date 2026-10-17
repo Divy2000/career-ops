@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isReservedReportFile, reportNumberOf, readReport } from '../domains/reports.js';
 import { englishModeOf, type PolicyClass } from './modes.js';
+import type { EnvelopeKind } from './envelopes.js';
 import type { SessionStatus } from './sessions.js';
 
 export interface NewReport {
@@ -67,11 +68,11 @@ export function isReportGated(modeId: string): boolean {
 }
 
 /**
- * Modes whose contract demands a terminal envelope (invocation.ts ENVELOPE_CONTRACT). Advisor proposes an action
- * only when one fits and ai-search emits one line per posting it found, so both may end in prose and follow the
- * question rule like any other mode.
+ * Modes whose contract demands a terminal envelope, and its kind (invocation.ts ENVELOPE_CONTRACT): an offer or act
+ * line is not what they owe. Advisor proposes an action only when one fits and ai-search emits one line per posting
+ * it found, so both may end in prose and follow the question rule like any other mode.
  */
-export const ENVELOPE_MODES = new Set(['apply', 'cv-ingest', 'projects-ingest']);
+export const TERMINAL_ENVELOPE_KINDS: Readonly<Record<string, EnvelopeKind>> = { apply: 'answers', 'cv-ingest': 'cv', 'projects-ingest': 'projects' };
 /**
  * Envelope modes whose envelope is owed once per conversation: apply drafts its answers first, and the fill turn the
  * user sends after confirming them reports in prose. Until answers have been delivered, every turn still owes them.
@@ -97,6 +98,8 @@ export interface TurnOutcomeInput {
   sawResult: boolean;
   finalText: string;
   envelopeCount: number;
+  /** Valid envelopes of the turn by kind. */
+  envelopeKinds: Partial<Record<EnvelopeKind, number>>;
   newReports: NewReport[];
   /** The turn resumed an existing conversation (--resume) instead of opening one. */
   resumed: boolean;
@@ -120,8 +123,9 @@ export function decideTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
     return { status: 'done', reason: `report ${i.newReports.map((r) => r.file).join(', ')} created` };
   }
   const mode = englishModeOf(i.modeId);
-  if (ENVELOPE_MODES.has(mode) && !(i.resumed && i.answersSeen && ONCE_PER_CONVERSATION_ENVELOPE_MODES.has(mode))) {
-    return i.envelopeCount > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
+  const terminal = Object.hasOwn(TERMINAL_ENVELOPE_KINDS, mode) ? TERMINAL_ENVELOPE_KINDS[mode]! : null;
+  if (terminal && !(i.resumed && i.answersSeen && ONCE_PER_CONVERSATION_ENVELOPE_MODES.has(mode))) {
+    return (i.envelopeKinds[terminal] ?? 0) > 0 ? { status: 'done', reason: 'terminal envelope received' } : { status: 'awaiting_user', reason: 'no terminal envelope in the output' };
   }
   // Envelopes are output too (an AI search may answer only with offer lines); a turn with neither said nothing.
   if (!i.finalText.trim() && i.envelopeCount === 0) return { status: 'awaiting_user', reason: 'clean exit but the turn produced no output' };

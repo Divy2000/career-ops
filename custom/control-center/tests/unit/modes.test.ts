@@ -5,7 +5,7 @@ import { deriveModes } from '../../scripts/derive-mode-policies.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, MODES, POLICY_CLASSES, VIRTUAL_MODES, classForMode, getModePolicy, listLaunchableModeIds, listModeIds, sessionRefusal } from '../../server/claude/modes.js';
 import { AGENT_SPAWNING_SCRIPTS, matches } from '../../server/claude/guard-policy.mjs';
-import { ENVELOPE_MODES } from '../../server/claude/honesty.js';
+import { TERMINAL_ENVELOPE_KINDS } from '../../server/claude/honesty.js';
 import { checkWrite } from '../../server/claude/guard-policy.mjs';
 import { writePolicyFile } from '../../server/claude/invocation.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -128,7 +128,7 @@ describe('mode registry', () => {
     const p = getModePolicy('projects-ingest');
     expect(p?.policyClass).toBe('read-only');
     expect(p?.writeGlobs).toEqual([]);
-    expect(ENVELOPE_MODES.has('projects-ingest')).toBe(true);
+    expect(TERMINAL_ENVELOPE_KINDS['projects-ingest']).toBe('projects');
   });
 
   it('projects-ingest runs no command at all: the app hands it the extracted text', () => {

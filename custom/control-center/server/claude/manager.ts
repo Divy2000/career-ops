@@ -16,6 +16,7 @@ import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
+import type { EnvelopeKind } from './envelopes.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
@@ -1118,7 +1119,7 @@ export class SessionManager {
     let seq = 0;
     let offset = 0;
     let envelopes = 0;
-    let answers = 0;
+    const envelopeKinds: Partial<Record<EnvelopeKind, number>> = {};
     let denials = 0;
     let sawResult = false;
     let turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null = null;
@@ -1145,8 +1146,11 @@ export class SessionManager {
     const handleLine = (l: RawLine, emit: boolean) => {
       const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
       for (const ev of events) {
-        if (ev.type === 'envelope') envelopes++;
-        if (ev.type === 'envelope' && ev.kind === 'answers') answers++;
+        if (ev.type === 'envelope') {
+          envelopes++;
+          const kind = ev.kind as EnvelopeKind;
+          envelopeKinds[kind] = (envelopeKinds[kind] ?? 0) + 1;
+        }
         if (ev.type === 'permission.denied') denials++;
         if (ev.type === 'turn.done') {
           turnDone = ev;
@@ -1226,7 +1230,7 @@ export class SessionManager {
       clearInterval(timer);
       safePull();
       const ended = run;
-      this.finalize(id, n, ended, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
+      this.finalize(id, n, ended, policy, state, { envelopes, envelopeKinds, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
         .catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err))
         .finally(() => this.active.delete(id));
     }, this.deps.pollMs ?? 250);
@@ -1367,7 +1371,7 @@ export class SessionManager {
     return Boolean(this.store.read(id)?.turns.find((t) => t.n === n)?.endedAt);
   }
 
-  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; answers: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
+  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; envelopeKinds: Partial<Record<EnvelopeKind, number>>; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
     const meta = this.store.read(id);
     // Already finalized (by another server, or before a restart): its cost and report number were settled then.
     if (!meta || this.turnEnded(id, n)) return;
@@ -1395,13 +1399,14 @@ export class SessionManager {
       sawResult: r.sawResult,
       finalText: r.finalText,
       envelopeCount: r.envelopes,
+      envelopeKinds: r.envelopeKinds,
       newReports,
       resumed: state.resumed ?? n > 1,
       // Read before this turn's own answers are recorded: a turn that delivers them is done by its envelope.
       answersSeen: meta.answersSeen === true,
       reportProduced: meta.creditedReport !== undefined,
     });
-    if (r.answers > 0) this.store.markAnswersSeen(id);
+    if ((r.envelopeKinds.answers ?? 0) > 0) this.store.markAnswersSeen(id);
     if (newReports[0]) this.store.setCreditedReport(id, newReports[0]);
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;

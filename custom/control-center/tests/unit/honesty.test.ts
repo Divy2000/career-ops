@@ -6,7 +6,7 @@ import { parseReservedRange, readOutputLanguage } from '../../server/claude/mana
 import { applyRememberedFact, NOTES_END, NOTES_START } from '../../server/domains/memory.js';
 import { copyFixtureRoot } from '../helpers/app.js';
 
-const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, newReports: [], resumed: false, answersSeen: false, reportProduced: false };
+const base = { modeId: 'oferta', policyClass: 'evaluate' as const, cancelled: false, exitCode: 0, isError: false, sawResult: true, finalText: 'Scored 4.1/5.', envelopeCount: 0, envelopeKinds: {}, newReports: [], resumed: false, answersSeen: false, reportProduced: false };
 
 describe('evaluation honesty gate', () => {
   it('snapshots real reports only and detects new ones with their header score', () => {
@@ -83,7 +83,7 @@ describe('evaluation honesty gate', () => {
   it('a localized apply mode is envelope-gated like apply: no answers envelope, no done', () => {
     for (const modeId of ['de/bewerben', 'fr/postuler', 'ru/apply', 'zh-TW/apply']) {
       expect(decideTurnOutcome({ ...base, modeId, policyClass: 'apply', finalText: 'Filled the form.' }), modeId).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
-      expect(decideTurnOutcome({ ...base, modeId, policyClass: 'apply', envelopeCount: 1 }).status, modeId).toBe('done');
+      expect(decideTurnOutcome({ ...base, modeId, policyClass: 'apply', envelopeCount: 1, envelopeKinds: { answers: 1 } }).status, modeId).toBe('done');
     }
   });
 
@@ -101,6 +101,17 @@ describe('evaluation honesty gate', () => {
     for (const modeId of ['cv-ingest', 'projects-ingest']) expect(decideTurnOutcome({ ...base, modeId, policyClass: 'read-only', resumed: true, answersSeen: true }).status, modeId).toBe('awaiting_user');
   });
 
+  it('given an envelope mode, when the turn emits only an envelope of another kind, then it waits: the mode owes its own terminal kind (R28-claude-L2-01)', () => {
+    const owed = { apply: 'answers', 'de/bewerben': 'answers', 'cv-ingest': 'cv', 'projects-ingest': 'projects' } as const;
+    for (const [modeId, kind] of Object.entries(owed)) {
+      const turn = { ...base, modeId, policyClass: 'read-only' as const, finalText: '' };
+      for (const other of ['offer', 'act', 'answers', 'cv', 'projects'].filter((k) => k !== kind)) {
+        expect(decideTurnOutcome({ ...turn, envelopeCount: 1, envelopeKinds: { [other]: 1 } }), `${modeId} ${other}`).toEqual({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+      }
+      expect(decideTurnOutcome({ ...turn, envelopeCount: 2, envelopeKinds: { offer: 1, [kind]: 1 } }), modeId).toEqual({ status: 'done', reason: 'terminal envelope received' });
+    }
+  });
+
   it('a question in Chinese, Japanese or Arabic ends with its own question mark (full-width or Arabic) and still waits for the user (SW5-claude-02)', () => {
     for (const q of ['どの会社の面接ですか？', '你想准备哪家公司的面试？', '你想準備哪家公司的面試？\n', 'لأي شركة تستعد للمقابلة؟', '**どの会社ですか？**', '**لأي شركة؟** ']) expect(endsWithQuestion(q), q).toBe(true);
     for (const done of ['準備ができました。', '准备好了。', 'تم التحضير.', '？は質問の記号です。']) expect(endsWithQuestion(done), done).toBe(false);
@@ -116,7 +127,7 @@ describe('evaluation honesty gate', () => {
   });
 
   it('envelope modes need a terminal envelope; other modes wait when the turn ends with a question', () => {
-    expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply', envelopeCount: 1 }).status).toBe('done');
+    expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply', envelopeCount: 1, envelopeKinds: { answers: 1 } }).status).toBe('done');
     expect(decideTurnOutcome({ ...base, modeId: 'apply', policyClass: 'apply' }).status).toBe('awaiting_user');
     expect(decideTurnOutcome({ ...base, modeId: 'interview/practice', policyClass: 'interview', finalText: 'Ready.\nWhich company is this for?' }).status).toBe('awaiting_user');
     expect(decideTurnOutcome({ ...base, modeId: 'interview/practice', policyClass: 'interview', finalText: 'All set. Good luck.' }).status).toBe('done');

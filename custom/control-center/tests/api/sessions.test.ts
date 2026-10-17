@@ -903,6 +903,13 @@ describe('read confinement (BUG-06)', () => {
     expect(evs(events).find((e) => e.type === 'tool.result')).toMatchObject({ ok: true, summary: expect.stringContaining('%PDF-1.4 synthetic upload') });
   });
 
+  it('given a cv-ingest turn whose only envelope is an offer line, when it ends, then it waits: no parsed CV arrived (R28-claude-L2-01)', async () => {
+    const scenario = scenarioFile({ events: [INIT, result('Parsed.\n<<cc:offer {"url":"https://jobs.example.com/1","company":"Acme","title":"Engineer"}>>', 0.01)] });
+    const { meta, events } = await withScenario(scenario, async () => settle((await post('/api/sessions', { mode: 'cv-ingest', target: { type: 'text', value: 'cv' }, prompt: 'Parse my CV' })).json().id));
+    expect(meta.status).toBe('awaiting_user');
+    expect(evs(events).filter((e) => e.type === 'status').at(-1)).toMatchObject({ status: 'awaiting_user', reason: 'no terminal envelope in the output' });
+  });
+
   describe('an uploaded CV (personal data) lives as long as a session that reads it (SW4-server-02)', () => {
     const upload = async (app: TestApp, text: string) => (await app.app.inject({ method: 'POST', url: '/api/cv/upload?name=cv', headers: { ...app.authedWrite, 'content-type': 'application/pdf' }, payload: Buffer.from(text) })).json().path as string;
     const parsed = result('Parsed.\n<<cc:cv {"markdown":"# Alex Example"}>>', 0.01);
