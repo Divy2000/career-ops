@@ -685,6 +685,37 @@ describe('launchd schedule through the injectable executor (never the real launc
       await app.close();
     }
   });
+  it('a disable rollback loads a job that was loaded while disabled again, and leaves it disabled (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    let phase: 'setup' | 'bootout' | 'after' = 'setup';
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'bootout' && phase === 'bootout') {
+        await base.exec(cmd, args, opts);
+        phase = 'after';
+        return { code: 5, stdout: '', stderr: 'fake launchctl: bootout reported failure' };
+      }
+      if (cmd === 'launchctl' && args[0] === 'print' && phase === 'after') {
+        phase = 'setup';
+        return { code: 5, stdout: '', stderr: 'fake launchctl: print timed out' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      base.disabled.add(label);
+      phase = 'bootout';
+      const res = await put({ hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/previous schedule was restored/);
+      expect(base.loaded.has(label)).toBe(true);
+      expect(base.disabled.has(label)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
   it('a failed disable rollback does not enable a job whose prior disabled flag it could not read (R28-srv-core-X-01)', async () => {
     const base = fakeLaunchdExec();
     const exec: typeof base.exec = async (cmd, args, opts) => {

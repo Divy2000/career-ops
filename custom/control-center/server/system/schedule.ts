@@ -285,7 +285,8 @@ export class ScheduleService {
     const failed = async (error: string, stderr: string): Promise<ScheduleWriteResult> => {
       // A flag this save changed without knowing its prior value cannot be put back, so the restore does not claim it was.
       const flagUnknown = (enabledNow || disabledNow) && !disabledKnown;
-      const restored = (await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled, reEnable: disabledNow && disabledKnown && !wasDisabled })) && !flagUnknown;
+      const disabledAfterSave = disabledNow || (!enabledNow && wasDisabled);
+      const restored = (await this.restore({ plistPath, target, previous, wasLoaded, disabledAfterSave, disabledBefore: disabledKnown ? wasDisabled : disabledAfterSave })) && !flagUnknown;
       return { ok: false, status: 502, error: `${error}; ${restored ? 'the previous schedule was restored' : 'restoring the previous schedule also failed'}`, stderr };
     };
     if (input.enabled) {
@@ -312,10 +313,10 @@ export class ScheduleService {
   }
 
   /**
-   * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the disabled flag the
-   * save cleared or set, and the loaded job the save booted out. Answers whether every step worked.
+   * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the loaded job the save
+   * booted out, and the disabled flag the save cleared or set. Answers whether every step worked.
    */
-  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; reDisable: boolean; reEnable: boolean }): Promise<boolean> {
+  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; disabledAfterSave: boolean; disabledBefore: boolean }): Promise<boolean> {
     if (s.previous === null) fs.rmSync(s.plistPath, { force: true });
     else {
       const tmp = `${s.plistPath}.restore-${process.pid}`;
@@ -323,15 +324,22 @@ export class ScheduleService {
       fs.renameSync(tmp, s.plistPath);
     }
     let ok = true;
-    // launchd refuses to bootstrap a disabled job, so the disabled flag is put back before the job is loaded again.
-    if (s.reEnable) ok = (await this.deps.exec('launchctl', ['enable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+    let disabled = s.disabledAfterSave;
+    const setDisabled = async (want: boolean) => {
+      if (disabled === want) return;
+      ok = (await this.deps.exec('launchctl', [want ? 'disable' : 'enable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+      disabled = want;
+    };
     const loaded = (await this.deps.exec('launchctl', ['print', s.target], { timeoutMs: 10_000 })).code === 0;
     if (s.wasLoaded && !loaded && s.previous !== null) {
+      // launchd refuses to bootstrap a disabled job, so the flag is cleared first; a job that was loaded while disabled
+      // gets its flag back below.
+      await setDisabled(false);
       ok = (await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, s.plistPath], { timeoutMs: 20_000 })).code === 0 && ok;
     } else if (!s.wasLoaded && loaded) {
       ok = (await this.deps.exec('launchctl', ['bootout', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     }
-    if (s.reDisable) ok = (await this.deps.exec('launchctl', ['disable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+    await setDisabled(s.disabledBefore);
     return ok;
   }
 }
