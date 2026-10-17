@@ -643,8 +643,9 @@ syncBuiltinESMExports();
   assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
 });
 
-const seedAsync = (args) => new Promise((resolve) => {
-  const child = spawn(process.execPath, [SEED, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+const seedAsync = (args, preload) => new Promise((resolve) => {
+  const pre = preload ? ['--import', pathToFileURL(preload).href] : [];
+  const child = spawn(process.execPath, [...pre, SEED, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (c) => { stdout += c; });
@@ -677,6 +678,55 @@ test('given a local-paths.txt lock a crashed installer left long ago, when local
   assert.equal(res.stdout.trim(), 'added', res.stderr);
   assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
   assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given a stale local-paths.txt lock, when several installers find it at once, then only one breaks it and custom/ is added once (R28-scr-rev-01 review 3)', async () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(`${f}.lock`);
+  const old = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(`${f}.lock`, old, old);
+  // Every look at the lock's age is slow, so all installers judge the same lock stale before any breaks it.
+  const preload = put(path.join(d, 'slow-stat.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realStat = fs.statSync;
+fs.statSync = (p, ...rest) => {
+  const st = realStat(p, ...rest);
+  if (String(p) === ${JSON.stringify(`${f}.lock`)}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+  return st;
+};
+// And each holds the lock a while, reading the file, so a lock broken under its holder lets two read at once.
+const realRead = fs.readFileSync;
+fs.readFileSync = (p, ...rest) => {
+  const text = realRead(p, ...rest);
+  if (typeof p === 'number') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+  return text;
+};
+syncBuiltinESMExports();
+`);
+  const runs = await Promise.all(Array.from({ length: 4 }, () => seedAsync(['local-paths', '--dir', d], preload)));
+  for (const r of runs) assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(runs.map((r) => r.stdout.trim()).sort(), ['added', 'present', 'present', 'present']);
+});
+
+test('given local-paths.txt turns into a dangling symlink after local-paths resolves it, when it updates the file, then it fails naming the path instead of looping (R28-scr-rev-01 review 3)', () => {
+  const d = tmp();
+  const f = path.join(d, 'config', 'local-paths.txt');
+  const preload = put(path.join(d, 'dangle.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realMkdir = fs.mkdirSync;
+fs.mkdirSync = (p, ...rest) => {
+  const r = realMkdir(p, ...rest);
+  if (String(p) === ${JSON.stringify(`${f}.lock`)}) fs.symlinkSync('nowhere', ${JSON.stringify(f)});
+  return r;
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.notEqual(res.status, null, 'local-paths did not finish');
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /local-paths\.txt/);
 });
 
 test('given no local-paths.txt, when another writer creates it just before local-paths publishes its own, then theirs is kept and custom/ is appended to it (R28-scr-rev-01 review 2)', () => {

@@ -33,7 +33,7 @@ function localPaths(dir) {
 // Runs under the lock, so two installers never both add custom/; a writer that skips the lock still never has its
 // file replaced.
 function updateLocalPaths(target) {
-  for (;;) {
+  for (let tries = 0; tries < 3; tries++) {
     let fd;
     try {
       fd = fs.openSync(target, fs.constants.O_RDWR | fs.constants.O_APPEND);
@@ -54,10 +54,13 @@ function updateLocalPaths(target) {
       fs.closeSync(fd);
     }
   }
+  throw new Error(`${target} is neither a file to add custom/ to nor a free name to create it at; check what is there`);
 }
 
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
+// The break guard lives for a stat and an rm, so one older than this was left by a run killed while breaking.
+const GUARD_STALE_MS = 5_000;
 
 // Holds a mkdir lock while fn runs. A lock older than LOCK_STALE_MS was left by a killed run and is broken.
 function withLock(lock, fn) {
@@ -78,10 +81,7 @@ function withLock(lock, fn) {
       if (err.code === 'ENOENT') continue;
       throw err;
     }
-    if (age > LOCK_STALE_MS) {
-      fs.rmSync(lock, { recursive: true, force: true });
-      continue;
-    }
+    if (age > LOCK_STALE_MS) breakStale(lock);
     if (Date.now() > deadline) throw new Error(`${lock} is held by another install; if none is running, remove it and re-run`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
@@ -89,6 +89,30 @@ function withLock(lock, fn) {
     return fn();
   } finally {
     fs.rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+// Removes a stale lock under a guard, judging its age again there: two runs that both saw it stale must not have the
+// second remove the fresh lock the first took after breaking it.
+function breakStale(lock) {
+  const guard = `${lock}.break`;
+  try {
+    fs.mkdirSync(guard);
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    try {
+      if (Date.now() - fs.statSync(guard).mtimeMs > GUARD_STALE_MS) fs.rmSync(guard, { recursive: true, force: true });
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    return;
+  }
+  try {
+    if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { recursive: true, force: true });
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  } finally {
+    fs.rmSync(guard, { recursive: true, force: true });
   }
 }
 
