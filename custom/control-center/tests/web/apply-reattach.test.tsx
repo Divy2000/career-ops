@@ -270,6 +270,20 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme.pdf', 'the tailored CV preselected');
   });
 
+  it('Given the CV PDF a draft named was removed from output/, When the page comes back, Then Fill does not attach the missing file (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-gone.pdf', cover: 'output/cover-gone.md' }));
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]'), 'the CV PDF select');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('output/cv-acme.pdf');
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    await act(async () => applyPanel()!.onEnvelope!('answers', ANSWERS, 1));
+    await until(() => fillButton() && !fillButton()!.disabled && fillButton(), 'Fill real form enabled');
+    await act(async () => fillButton()!.click());
+    const call = vi.mocked(fetch).mock.calls.find(([u, init]) => u === '/api/sessions/s-apply-12/turns' && init?.method === 'POST');
+    expect(String(call![1]!.body)).not.toContain('gone');
+  });
+
   it('Given New draft after picking documents, When the next draft starts, Then the earlier draft\'s picks are let go with it (R28-feat-a-L2-01)', async () => {
     sessionStorage.setItem('cc.apply.12', 's-apply-12');
     sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-old.pdf', cover: '' }));

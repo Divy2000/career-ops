@@ -194,9 +194,12 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const [pickedPdf, setPickedPdf] = useState<string | null>(null);
   const [pickedCover, setPickedCover] = useState<string | null>(null);
   const storedDocs = readDraftDocs(sessionId);
-  // A draft that named no document leaves the choice open, so a CV or cover letter generated since is preselected.
-  const pdf = pickedPdf ?? (storedDocs?.pdf || null) ?? docs.data?.suggestedPdf ?? '';
-  const cover = pickedCover ?? (storedDocs?.cover || null) ?? docs.data?.suggestedCover ?? '';
+  // A draft that named no document, or one no longer in output/, leaves the choice open, so the listing's suggestion is
+  // preselected rather than a file Fill could not attach.
+  const storedPdf = storedDocs?.pdf && docs.data?.pdfs.includes(storedDocs.pdf) ? storedDocs.pdf : null;
+  const storedCover = storedDocs?.cover && docs.data?.covers.includes(storedDocs.cover) ? storedDocs.cover : null;
+  const pdf = pickedPdf ?? storedPdf ?? docs.data?.suggestedPdf ?? '';
+  const cover = pickedCover ?? storedCover ?? docs.data?.suggestedCover ?? '';
   // The panel's start holds the callback of the render it was sent from, so the link and documents kept are the ones its
   // prompt used, also when the id comes back after this form unmounted.
   const rememberSessionId = remembered.panel.onSessionId;
