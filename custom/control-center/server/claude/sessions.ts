@@ -306,14 +306,18 @@ export class SessionStore {
   /** Appends one normalized event; the returned seq is the SSE event id. */
   appendEvent(id: string, event: SessionEvent): number {
     const file = path.join(this.dirOf(id), 'events.ndjson');
-    const tail = this.tailOf(file);
-    const seq = tail.seq + 1;
-    const line = JSON.stringify({ seq, ts: new Date().toISOString(), event } satisfies StoredEvent) + '\n';
-    // A line a crash tore has no newline: the event starts a line of its own instead of joining it.
-    const text = tail.torn ? `\n${line}` : line;
-    fs.appendFileSync(file, text);
-    this.tails.set(file, { size: tail.size + Buffer.byteLength(text), seq, torn: false });
-    return seq;
+    // Another server (blue/green overlap) may append to the same file: reading the tail and appending the next seq is
+    // one step under a lock both hold, or both would read seq N and write N + 1.
+    return withAppendLock(`${file}.lock`, () => {
+      const tail = this.tailOf(file);
+      const seq = tail.seq + 1;
+      const line = JSON.stringify({ seq, ts: new Date().toISOString(), event } satisfies StoredEvent) + '\n';
+      // A line a crash tore has no newline: the event starts a line of its own instead of joining it.
+      const text = tail.torn ? `\n${line}` : line;
+      fs.appendFileSync(file, text);
+      this.tails.set(file, { size: tail.size + Buffer.byteLength(text), seq, torn: false });
+      return seq;
+    });
   }
 
   readEvents(id: string, afterSeq = 0): StoredEvent[] {
@@ -367,3 +371,90 @@ export class SessionStore {
 }
 
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
+
+/** How long an append waits for another server's append; the lock is held for one stat, append and (rarely) scan. */
+const APPEND_LOCK_TIMEOUT_MS = 10_000;
+/** A lock this old is left by a holder that stopped (its pid may since belong to another process). */
+const APPEND_LOCK_STALE_MS = 30_000;
+
+/**
+ * Runs fn holding an interprocess lock file (`pid token`). The lock is created complete or not at all (a hard link of
+ * a written temp file), so a reader never sees it empty; one whose holder is gone or that outlived any append is broken.
+ */
+function withAppendLock<T>(lock: string, fn: () => T): T {
+  const token = `${process.pid} ${crypto.randomUUID()}`;
+  const tmp = `${lock}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, token, { flag: 'wx' });
+  try {
+    const deadline = Date.now() + APPEND_LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        fs.linkSync(tmp, lock);
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      breakIfStale(lock);
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the session events lock ${lock}; remove it if no server is running`);
+      sleepSync(2);
+    }
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  try {
+    return fn();
+  } finally {
+    if (readLock(lock)?.text === token) fs.rmSync(lock, { force: true });
+  }
+}
+
+function readLock(lock: string): { text: string; mtimeMs: number } | null {
+  try {
+    const { mtimeMs } = fs.statSync(lock);
+    return { text: fs.readFileSync(lock, 'utf8'), mtimeMs };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function breakIfStale(lock: string): void {
+  const seen = readLock(lock);
+  if (!seen) return;
+  const pid = Number(seen.text.split(' ')[0]);
+  if (pidAlive(pid) && Date.now() - seen.mtimeMs < APPEND_LOCK_STALE_MS) return;
+  // Moved aside first, so a waiter that broke the same lock a moment ago cannot remove the fresh one taken since.
+  const aside = `${lock}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.stale`;
+  try {
+    fs.renameSync(lock, aside);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  try {
+    // Not the lock judged stale (it was replaced in between): put the live one back unless a new one exists already.
+    if (fs.readFileSync(aside, 'utf8') !== seen.text) {
+      try {
+        fs.linkSync(aside, lock);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+    }
+  } finally {
+    fs.rmSync(aside, { force: true });
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
