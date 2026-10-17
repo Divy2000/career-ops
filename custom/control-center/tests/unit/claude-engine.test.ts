@@ -452,6 +452,12 @@ describe('guard hook', () => {
     expect(writesFor(modes, rels)).toEqual(Object.fromEntries(modes.flatMap((m) => rels.map((rel, i) => [`${m} ${rel}`, i === 0 ? 0 : 2]))));
   });
 
+  it('given any session whose scope grants reports/**, when it writes a reservation sentinel, then it is refused, Dev Chat included (R28-cl2-rev-02)', () => {
+    const modes = ['devchat', 'oferta', 'apply', 'tracker', 'patterns'];
+    expect(writesFor(modes, ['reports/042-RESERVED.md'])).toEqual(Object.fromEntries(modes.map((m) => [`${m} reports/042-RESERVED.md`, 2])));
+    expect(writesFor(['devchat'], ['reports/042-acme.md'])).toEqual({ 'devchat reports/042-acme.md': 0 });
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));

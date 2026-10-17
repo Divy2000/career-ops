@@ -58,8 +58,6 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
       'data/immigration/company-alerts.tsv',
       'interview-prep/story-bank.md',
     ],
-    // reports/** covers the allocator's sentinels too: reserve-report-num.mjs writes them itself, a session never does.
-    denyWrites: ['reports/*-RESERVED.md'],
     network: ['WebFetch', 'WebSearch'],
     extraBash: [
       'reserve-report-num.mjs',
@@ -271,11 +269,8 @@ const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   tracker: ['data/salary-observations.tsv', 'reports/*.md'],
 };
 
-/** What a mode's extra writes still exclude: a reports/*.md grant updates reports, never the allocator's reservation sentinels. */
-const MODE_EXTRA_DENIES: Readonly<Record<string, readonly string[]>> = {
-  apply: ['reports/*-RESERVED.md'],
-  tracker: ['reports/*-RESERVED.md'],
-};
+/** What no session writes, whatever its scope grants: the allocator's reservation sentinels (reserve-report-num.mjs writes them itself, outside the hook). */
+const SESSION_DENIED_WRITES: readonly string[] = ['reports/*-RESERVED.md'];
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
@@ -433,7 +428,7 @@ export function getModePolicy(id: string): ModePolicy | null {
   const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].filter(sessionRunnable).sort();
   const explicit = def.bashPrefixes?.filter((p) => p.every(sessionRunnable));
   const bashPrefixes = explicit ?? scripts.map(bashPrefixFor);
-  const denyWrites = [...new Set([...(def.denyWrites ?? []), ...(Object.hasOwn(MODE_EXTRA_DENIES, englishModeOf(id)) ? MODE_EXTRA_DENIES[englishModeOf(id)]! : [])])];
+  const denyWrites = [...new Set([...(def.denyWrites ?? []), ...SESSION_DENIED_WRITES])];
   return {
     id,
     title: derived?.title ?? virtual!.title,
